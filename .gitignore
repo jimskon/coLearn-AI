@@ -1,0 +1,54 @@
+# Node.js
+server/node_modules/
+client/node_modules
+client/node_modules/
+server/.env
+client/.env
+*.log
+dist/
+build/
+*~
+*-save
+*\#
+
+# Vite / React
+.vite/
+/client/.vite/
+*.local
+
+# OS junk
+Thumbs.db
+
+# Python/Node
+.venv/
+node_modules/
+*.log
+
+# Build & artifacts
+_output/
+client/.jupyterlite.doit.db
+.jupyterlite.doit.db
+
+# Env & secrets
+server/.env*
+server/utils/service-account.json
+
+# Lock/Editor junk
+*~
+\#*\#
+.DS_Store
+
+# Python caches / venv variants
+__pycache__/
+**/__pycache__/
+venv/
+**/venv/
+
+# Database dumps / backups
+*.sql
+pogil_db_*.sql
+*_backup.sql
+*_pre_repair_*.sql
+
+# Local artifacts
+client/hash

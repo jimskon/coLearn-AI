@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_e2e:
+        description: Run the end-to-end scaffold job
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 20
+
+jobs:
+  server:
+    name: Server tests
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install server dependencies
+        run: npm install
+
+      - name: Run server CI tests
+        run: npm run test:ci
+
+  client:
+    name: Client build
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install client dependencies
+        run: npm ci
+
+      - name: Run client CI checks
+        run: npm run test:ci
+
+  end-to-end:
+    name: End-to-end
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    needs:
+      - server
+      - client
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_e2e) || vars.RUN_E2E == 'true' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install server dependencies
+        working-directory: server
+        run: npm install
+
+      - name: Install client dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Run end-to-end tests when configured
+        run: |
+          if npm --prefix client run | grep -q 'e2e'; then
+            npm --prefix client run e2e
+          elif npm --prefix server run | grep -q 'e2e'; then
+            npm --prefix server run e2e
+          else
+            echo "::notice::No e2e script is configured yet. Add client or server npm script named e2e to activate this job."
+          fi

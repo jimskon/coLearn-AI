@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  cxx-runner:
+    image: cxx-runner:stable
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cxx-runner
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:5055:8000"
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - SESSION_TTL_SEC=900
+      - WALL_LIMIT_SEC=20
+      - IDLE_LIMIT_SEC=10
+      - MAX_CODE_BYTES=20000
+    read_only: true
+    volumes:
+      - cxx_tmp:/tmp
+      - ./app.py:/srv/app.py:ro     # hot-swap your app.py from repo
+    tmpfs:
+      - /run:rw,noexec,nosuid,nodev,size=16m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    mem_limit: 512m
+    pids_limit: 128
+    restart: unless-stopped
+    command: >
+      uvicorn app:app --host 0.0.0.0 --port 8000 --workers 2
+
+  redis:
+    image: redis:7-alpine
+    container_name: cxx-redis
+    command: ["redis-server", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+
+volumes:
+  cxx_tmp:

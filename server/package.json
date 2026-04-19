@@ -1,0 +1,31 @@
+{
+  "name": "colearn-ai-server",
+  "version": "1.0.0",
+  "description": "Express API server for coLearn-AI",
+  "main": "index.js",
+  "scripts": {
+    "lint:syntax": "node scripts/check-syntax.js",
+    "test": "npm run lint:syntax",
+    "test:ci": "npm test",
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.9.0",
+    "bcrypt": "^5.1.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "express-session": "^1.18.1",
+    "googleapis": "^148.0.0",
+    "jsdom": "^26.1.0",
+    "mariadb": "^3.4.2",
+    "mysql2": "^3.14.1",
+    "nodemailer": "^7.0.4",
+    "openai": "^4.103.0",
+    "react-router-bootstrap": "^0.26.3",
+    "socket.io": "^4.8.1"
+  }
+}

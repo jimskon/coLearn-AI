@@ -1,9 +1,9 @@
-// server/tests/makeDemoClass.js
+// server/scripts/makeDemoClass.js
 // Create (or reuse) a demo creator/instructor, one class, one course, and a bunch of students.
 // If the user/class/course already exists, reuse it and keep going.
 // All accounts share the same password so you can easily log in as them.
 //
-// Run with: node server/tests/makeDemoClass.js
+// Run with: node server/scripts/makeDemoClass.js
 
 const axios = require('axios');
 const readline = require('readline');

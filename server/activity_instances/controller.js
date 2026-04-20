@@ -930,13 +930,22 @@ async function getInstancesForActivityInCourse(req, res) {
 // NEW route: GET /api/responses/:instanceId
 async function getInstanceResponses(req, res) {
   const { instanceId } = req.params;
+  const answeredBy = req.query?.answeredBy;
 
   try {
+    const params = [instanceId];
+    let where = 'WHERE activity_instance_id = ?';
+
+    if (answeredBy != null && String(answeredBy).trim() !== '') {
+      where += ' AND answered_by_user_id = ?';
+      params.push(answeredBy);
+    }
+
     const [rows] = await db.query(
       `SELECT question_id, response, response_type
        FROM responses
-       WHERE activity_instance_id = ?`,
-      [instanceId]
+       ${where}`,
+      params
     );
 
     const responses = {};

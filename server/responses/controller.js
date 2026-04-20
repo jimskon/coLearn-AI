@@ -69,6 +69,7 @@ exports.createOrUpdateCodeResponse = async (req, res) => {
         instanceId: activity_instance_id,
         responseKey: question_id,
         feedback: feedbackText,
+        answeredBy: user_id,
       });
     }
 
@@ -287,4 +288,3 @@ exports.markActivityInstanceComplete = async (req, res) => {
     res.status(500).json({ error: "Failed to mark instance as complete" });
   }
 };
-

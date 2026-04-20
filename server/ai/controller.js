@@ -328,7 +328,57 @@ function looksGibberish(ans) {
   if (GIBBERISH_PATTERNS.some((r) => r.test(a))) return true;
   if (/^(true|false)$/i.test(a)) return false;
   if (/^[\d\s.+\-*/%()=<>!]+$/.test(a)) return false;
+  const compact = a.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (compact.length >= 6) {
+    if (/([a-z]{3,4})\1/.test(compact)) return true;
+    if (/^[a-z]+$/.test(compact) && new Set(compact).size <= 3) return true;
+    if (/(qwe|wer|ert|asd|sdf|dfg|zxc|xcv|abc|xyz){2,}/.test(compact)) return true;
+  }
   return a.length < 2;
+}
+
+const TOPIC_STOP_WORDS = new Set([
+  "about", "above", "after", "again", "below", "could", "every", "first",
+  "following", "from", "have", "into", "more", "only", "other", "please",
+  "program", "question", "require", "requires", "response", "second",
+  "should", "some", "states", "student", "that", "their", "there", "these",
+  "they", "this", "value", "what", "when", "where", "which", "will", "with",
+  "would", "your",
+]);
+
+function contentTokens(text = "") {
+  return stripHtml(text)
+    .toLowerCase()
+    .split(/[^a-z0-9_]+/)
+    .filter((token) => token.length >= 4 && !TOPIC_STOP_WORDS.has(token));
+}
+
+function numberTokens(text = "") {
+  return stripHtml(text).match(/\b\d+(?:\.\d+)?\b/g) || [];
+}
+
+function lacksTopicalEvidence({ questionText, studentAnswer, sampleResponse, feedbackPrompt, codeContext }) {
+  const answerWords = new Set(contentTokens(studentAnswer));
+  const answerNumbers = new Set(numberTokens(studentAnswer));
+
+  // Short answers like "nothing" can be valid for some prompts, so only apply this
+  // guard when the submitted answer has enough text to compare meaningfully.
+  if ((answerWords.size + answerNumbers.size) < 2) return false;
+
+  const context = [
+    questionText,
+    sampleResponse,
+    feedbackPrompt,
+    codeContext,
+  ].join("\n");
+
+  const contextWords = new Set(contentTokens(context));
+  const contextNumbers = new Set(numberTokens(context));
+
+  const overlapsWord = [...answerWords].some((word) => contextWords.has(word));
+  const overlapsNumber = [...answerNumbers].some((num) => contextNumbers.has(num));
+
+  return contextWords.size + contextNumbers.size > 0 && !overlapsWord && !overlapsNumber;
 }
 
 function detectLangFromCode(src = "") {
@@ -517,30 +567,17 @@ async function evaluateStudentResponse(req, res) {
       return await applyGateAndSend();
     }
 
-    const q = stripHtml(questionText || "").toLowerCase();
-    const s = stripHtml(answerRaw).toLowerCase();
-    const sample = stripHtml(sampleResponse || "").toLowerCase();
-
-    const words = (t) => t.split(/\W+/).filter((w) => w.length >= 5);
-    const qWords = words(q);
-    const sampleWords = words(sample);
-    const overlaps = (arr) => arr.some((w) => s.includes(w));
-
-    // Only reject truly bad answers
-    if (!answerRaw || looksGibberish(answerRaw)) {
+    if (lacksTopicalEvidence({
+      questionText,
+      studentAnswer: answerRaw,
+      sampleResponse,
+      feedbackPrompt,
+      codeContext,
+    })) {
       accepted = false;
       feedback = followupQ;
       return await applyGateAndSend();
     }
-
-    // Otherwise accept — do NOT enforce keyword overlap
-    accepted = true;
-    feedback = null;
-    return await applyGateAndSend();
-
-    accepted = true;
-    feedback = null;
-    return await applyGateAndSend();
   }
 
   const obviouslyBad = !answerRaw || looksGibberish(answerRaw);
@@ -554,6 +591,9 @@ async function evaluateStudentResponse(req, res) {
     "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
     "Do NOT mention grading, points, rubrics, or scoring.",
+    policy.requirementsOnly
+      ? "Requirements-only mode: accept partial or approximate answers that show reasoning. Reject only gibberish, completely wrong/off-prompt answers, missing answers, or answers with no evidence of thinking."
+      : "",
   ].join("\n");
 
   const schema = `Return JSON only:
@@ -571,6 +611,9 @@ async function evaluateStudentResponse(req, res) {
       : "",
     followupRaw && !followupIsNone
       ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
+      : "",
+    policy.requirementsOnly
+      ? "Activity policy: requirements-only. Do not nitpick wording or completeness, but do reject gibberish, off-prompt, or no-thinking submissions."
       : "",
     `Student submission:\n${stripHtml(studentAnswer)}`,
     "",
@@ -600,6 +643,11 @@ async function evaluateStudentResponse(req, res) {
     try {
       obj = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(raw);
     } catch {
+      if (policy.failOpen) {
+        accepted = true;
+        feedback = null;
+        return await applyGateAndSend();
+      }
       accepted = false;
       feedback =
         "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
@@ -634,6 +682,12 @@ async function evaluateStudentResponse(req, res) {
     return await applyGateAndSend();
   } catch (err) {
     console.error("❌ OpenAI evaluateStudentResponse failed:", err);
+
+    if (policy.failOpen) {
+      accepted = true;
+      feedback = null;
+      return await applyGateAndSend();
+    }
 
     accepted = false;
     feedback =

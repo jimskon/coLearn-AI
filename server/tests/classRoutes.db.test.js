@@ -233,7 +233,7 @@ test('enrollment routes enroll a student by course code and list enrollments', a
     },
   });
   assert.equal(duplicate.status, 400);
-  assert.deepEqual(duplicate.body, { error: 'Already enrolled' });
+  assert.deepEqual(duplicate.body, { error: 'Already joined this instance' });
 
   const enrollments = await requestJson(`/api/classes/user/${studentId}/enrollments`);
   assert.equal(enrollments.status, 200);
@@ -252,5 +252,5 @@ test('enroll by code returns 404 for an unknown course code', async () => {
   });
 
   assert.equal(response.status, 404);
-  assert.deepEqual(response.body, { error: 'Course not found' });
+  assert.deepEqual(response.body, { error: 'Join code not found' });
 });

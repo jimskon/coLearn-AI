@@ -3,6 +3,7 @@ const router = express.Router();
 const controller = require('./controller');
 const { google } = require('googleapis');
 const { authorize } = require('../utils/googleAuth');
+const { extractGoogleFileId } = require('../utils/googleIds');
 
 // ==========================
 // Activity CRUD Endpoints
@@ -22,11 +23,15 @@ router.post('/', controller.createActivity);
 // GET /activities/preview?sheetUrl=...
 router.get('/preview', async (req, res) => {
   const { sheetUrl } = req.query;
+  const sheetId = extractGoogleFileId(sheetUrl);
+  if (!sheetId) {
+    return res.status(400).json({ error: 'Invalid sheetUrl format' });
+  }
+
   try {
     const auth = await authorize();
     const sheets = google.sheets({ version: 'v4', auth });
 
-    const sheetId = new URL(sheetUrl).pathname.split('/')[3];
     const range = 'Sheet1'; // or auto-detect
 
     const result = await sheets.spreadsheets.values.get({
@@ -61,8 +66,7 @@ router.get('/preview-doc', async (req, res) => {
 
   let docId;
   try {
-    const url = new URL(rawUrl);
-    docId = url.pathname.split('/')[3];   // ✅ extract docId correctly
+    docId = extractGoogleFileId(rawUrl);
     if (!docId) {
       throw new Error("Could not extract documentId from URL");
     }
@@ -97,9 +101,13 @@ router.get('/check-access', async (req, res) => {
   const { url } = req.query;
   if (!url) return res.json({ access: true });
 
+  const docId = extractGoogleFileId(url);
+  if (!docId) {
+    return res.json({ access: false });
+  }
+
   try {
     const auth = await authorize();
-    const docId = new URL(url).pathname.split('/')[3];
     const docs = google.docs({ version: 'v1', auth });
     await docs.documents.get({ documentId: docId });
     res.json({ access: true });

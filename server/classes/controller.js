@@ -1,5 +1,6 @@
 const db = require('../db');
 const { toPlain } = require('../utils/dbHelpers');
+const { extractGoogleFileId } = require('../utils/googleIds');
 
 // Get all classes
 exports.getAllClasses = async (req, res) => {
@@ -226,12 +227,11 @@ exports.importFolderActivities = async (req, res) => {
 
 
   try {
-    const folderIdMatch = folderUrl.match(/[-\w]{25,}/);
-    if (!folderIdMatch) {
+    const folderId = extractGoogleFileId(folderUrl);
+    if (!folderId) {
       return res.status(400).json({ error: "Invalid folder URL" });
     }
 
-    const folderId = folderIdMatch[0];
     const files = await getFilesInFolder(folderId);
     console.log(`Found ${files.length} files in folder ${folderId}`);
 

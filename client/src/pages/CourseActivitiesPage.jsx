@@ -94,14 +94,14 @@ export default function CourseActivitiesPage() {
 
   return (
     <Container className="mt-4">
-      <h2>{courseName ? `Course: ${courseName}` : 'Available Activities'}</h2>
+      <h2>{courseName ? `Instance: ${courseName}` : 'Available Activities'}</h2>
 
       {loading ? (
         <Spinner animation="border" />
       ) : error ? (
         <Alert variant="danger">{error}</Alert>
       ) : activities.length === 0 ? (
-        <Alert variant="info">No activities available for this course.</Alert>
+        <Alert variant="info">No activities available for this instance.</Alert>
       ) : (
         <Table striped bordered hover>
           <thead>

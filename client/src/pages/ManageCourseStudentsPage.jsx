@@ -36,7 +36,7 @@ export default function ManageCourseStudentsPage() {
     }, [courseId]);
 
     const handleRemove = async (studentId) => {
-        if (!window.confirm("Remove this user from the course?")) return;
+        if (!window.confirm("Remove this user from the instance?")) return;
         await fetch(`${API_BASE_URL}/api/courses/${courseId}/unenroll/${studentId}`, {
             method: "DELETE",
         });
@@ -49,7 +49,7 @@ export default function ManageCourseStudentsPage() {
 
     return (
         <Container className="mt-4">
-            <h3>Enrolled Students for {courseInfo?.name || "..."}</h3>
+            <h3>Joined Students for {courseInfo?.name || "..."}</h3>
             <Table striped bordered hover>
                 <thead>
                     <tr>
@@ -77,4 +77,4 @@ export default function ManageCourseStudentsPage() {
         </Container>
     );
 }
-//       
+//

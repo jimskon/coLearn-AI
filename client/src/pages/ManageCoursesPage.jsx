@@ -79,7 +79,7 @@ export default function ManageCoursesPage() {
       !newCourse.semester ||
       !newCourse.year
     ) {
-      alert("Please fill in all course details.");
+      alert("Please fill in all instance details.");
       return;
     }
     console.log(
@@ -91,11 +91,18 @@ export default function ManageCoursesPage() {
       newCourse.year
     );
     const body = { ...newCourse, instructor_id: user.id };
-    await fetch(`${API_BASE_URL}/api/courses`, {
+    const res = await fetch(`${API_BASE_URL}/api/courses`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || "Failed to add instance.");
+      return;
+    }
+
     setNewCourse({
       name: "",
       code: "",
@@ -114,13 +121,13 @@ export default function ManageCoursesPage() {
 
   return (
     <Container className="mt-4">
-      <h2>Manage Courses for {user?.name}</h2>
+      <h2>Manage Instances for {user?.name}</h2>
 
       <Table striped bordered hover>
         <thead>
           <tr>
             <th>Name</th>
-            <th>Code</th>
+            <th>Join Code</th>
             <th>Section</th>
             <th>Semester</th>
             <th>Year</th>
@@ -181,12 +188,12 @@ export default function ManageCoursesPage() {
         </tbody>
       </Table>
 
-      <h4 className="mt-4">Add New Course</h4>
+      <h4 className="mt-4">Add New Instance</h4>
       <Form className="mb-3">
         <Row>
           <Col md={4}>
             <Form.Group>
-              <Form.Label>Name</Form.Label>
+              <Form.Label>Instance Name</Form.Label>
               <Form.Control
                 value={newCourse.name}
                 onChange={(e) => handleChange("name", e.target.value)}
@@ -195,7 +202,7 @@ export default function ManageCoursesPage() {
           </Col>
           <Col md={2}>
             <Form.Group>
-              <Form.Label>Code</Form.Label>
+              <Form.Label>Join Code</Form.Label>
               <Form.Control
                 value={newCourse.code}
                 onChange={(e) => handleChange("code", e.target.value)}
@@ -256,7 +263,7 @@ export default function ManageCoursesPage() {
           </Col>
         </Row>
         <Button className="mt-3" onClick={handleAddCourse}>
-          Add Course
+          Add Instance
         </Button>
       </Form>
     </Container>

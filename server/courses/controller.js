@@ -73,7 +73,7 @@ async function createCourse(req, res) {
 
     if (isDuplicateCourse) {
       return res.status(409).json({
-        error: "A course with that code, section, semester, and year already exists",
+        error: "An instance with that join code, section, semester, and year already exists",
       });
     }
 
@@ -122,7 +122,7 @@ async function deleteCourse(req, res) {
     );
 
     if (result.length === 0) {
-      return res.status(404).json({ error: "Course not found" });
+      return res.status(404).json({ error: "Instance not found" });
     }
 
     const course = result[0];
@@ -134,7 +134,7 @@ async function deleteCourse(req, res) {
     if (!isOwner && !isAdmin) {
       return res
         .status(403)
-        .json({ error: "Unauthorized to delete this course" });
+        .json({ error: "Unauthorized to delete this instance" });
     }
 
     // Step 3: Proceed to delete
@@ -339,7 +339,7 @@ async function getUserEnrollments(req, res) {
     res.json(rows.map(r => ({ ...r }))); // ✅ Flatten enrollment rows
   } catch (err) {
     console.error("Error fetching enrolled courses:", err);
-    res.status(500).json({ error: "Failed to load enrolled courses" });
+    res.status(500).json({ error: "Failed to load joined instances" });
   }
 }
 
@@ -355,7 +355,7 @@ async function enrollByCode(req, res) {
     console.log("Courses:", courses);
 
     if (!Array.isArray(courses) || courses.length === 0) {
-      return res.status(404).json({ error: "Course code not found" });
+      return res.status(404).json({ error: "Join code not found" });
     }
 
     const course = { ...courses[0] }; // ✅ Flatten single course immediately
@@ -367,7 +367,7 @@ async function enrollByCode(req, res) {
     console.log("Enrollments:", enrollments);
 
     if (enrollments.length > 0) {
-      return res.status(400).json({ error: "Already enrolled in this course" });
+      return res.status(400).json({ error: "Already joined this instance" });
     }
 
     // Enroll the user
@@ -389,7 +389,7 @@ async function enrollByCode(req, res) {
     });
   } catch (err) {
     console.error("Error enrolling in course:", err);
-    res.status(500).json({ error: "Failed to enroll" });
+    res.status(500).json({ error: "Failed to join instance" });
   }
 }
 
@@ -423,7 +423,7 @@ async function unenrollStudentFromCourse(req, res) {
   );
 
   if (!result.length) {
-    return res.status(404).json({ error: "Course not found" });
+    return res.status(404).json({ error: "Instance not found" });
   }
 
   const course = result[0];
@@ -456,13 +456,13 @@ async function getCourseInfo(req, res) {
     console.log("getCourseInfo for courseId:", courseId, "Result:", rows);
 
     if (rows.length === 0) {
-      return res.status(404).json({ error: "Course not found" });
+      return res.status(404).json({ error: "Instance not found" });
     }
 
     res.json(rows[0]);
   } catch (err) {
     console.error("❌ Error fetching course info:", err);
-    res.status(500).json({ error: "Failed to get course info" });
+    res.status(500).json({ error: "Failed to get instance info" });
   }
 }
 
@@ -866,7 +866,7 @@ async function getGroupsConfigForActivity(req, res) {
 
     if (rows.length === 0) {
       return res.status(404).json({
-        error: "No saved groups found for that activity in this course."
+        error: "No saved groups found for that activity in this instance."
       });
     }
 

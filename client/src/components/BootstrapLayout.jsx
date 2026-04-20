@@ -25,7 +25,7 @@ export default function BootstrapLayout({ children }) {
               )}
 
               {canManageCourses && (
-                <Nav.Link as={Link} to="/manage-courses">Manage Courses</Nav.Link>
+                <Nav.Link as={Link} to="/manage-courses">Manage Instances</Nav.Link>
               )}
 
               <Nav.Link as={Link} to="/register">Register</Nav.Link>

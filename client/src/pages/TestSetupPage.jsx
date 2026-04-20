@@ -128,7 +128,7 @@ export default function TestSetupPage() {
   return (
     <Container className="mt-4">
       <h2>Test Setup</h2>
-      {courseName && <div className="text-muted mb-2">Course: {courseName}</div>}
+      {courseName && <div className="text-muted mb-2">Instance: {courseName}</div>}
 
       {loading ? (
         <Spinner animation="border" />
@@ -194,7 +194,7 @@ export default function TestSetupPage() {
                   </Col>
                 ))
             ) : (
-              <p>No students enrolled.</p>
+              <p>No students have joined this instance.</p>
             )}
           </Row>
 

@@ -1,10 +1,21 @@
-cd /opt/coLearn-AI
+#!/usr/bin/env bash
+set -euo pipefail
 
-git pull
+APP_DIR="${APP_DIR:-/opt/coLearn-AI}"
+
+cd "$APP_DIR"
+
+if [[ "${SKIP_UPDATE:-0}" != "1" ]]; then
+  git pull
+fi
 
 cd server
-npm install
-npm run test:ci
+if [[ "${SKIP_SERVER_INSTALL:-0}" != "1" ]]; then
+  npm install
+fi
+if [[ "${SKIP_SERVER_TESTS:-0}" != "1" ]]; then
+  npm run test:ci
+fi
 
 cd ../client
 npm ci

@@ -1,8 +1,6 @@
 const { google } = require('googleapis');
 const { authorize } = require('./googleAuth');
 
-const drive = google.drive({ version: 'v3', auth: authorize() });
-
 exports.getFilesInFolder = async function getFilesInFolder(folderId) {
   const auth = await authorize();
   const drive = google.drive({ version: 'v3', auth });
@@ -18,6 +16,9 @@ exports.getFilesInFolder = async function getFilesInFolder(folderId) {
 
 
 exports.getFileMetadata = async (fileId) => {
+  const auth = await authorize();
+  const drive = google.drive({ version: 'v3', auth });
+
   const res = await drive.files.get({
     fileId,
     fields: 'id, name',

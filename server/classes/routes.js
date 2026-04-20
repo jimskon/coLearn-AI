@@ -10,6 +10,10 @@ router.get('/', classController.getAllClasses);
 // Create a new class
 router.post('/', classController.createClass);
 
+// Enrollment related
+router.get('/user/:userId/enrollments', classController.getUserEnrollments);
+router.post('/enroll-by-code', classController.enrollByCode);
+
 // Update a class
 router.put('/:id', classController.updateClass);
 
@@ -25,13 +29,8 @@ router.delete('/:classId/activities/:activityId', classController.deleteActivity
 // ✅ NEW: Get single class info
 router.get('/:id', classController.getClassById);
 
-// Enrollment related
-router.get('/user/:userId/enrollments', classController.getUserEnrollments);
-router.post('/enroll-by-code', classController.enrollByCode);
-
 // ✅ NEW: Import activities from a folder
 router.post('/:id/import-folder', requireAuth, classController.importFolderActivities);
 
 
 module.exports = router;
-

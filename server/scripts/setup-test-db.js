@@ -43,6 +43,15 @@ async function main() {
         code VARCHAR(6) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS pogil_classes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        name VARCHAR(191) NOT NULL UNIQUE,
+        description TEXT DEFAULT NULL,
+        created_by INT DEFAULT NULL,
+        CONSTRAINT pogil_classes_created_by_fk
+          FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+      );
     `);
 
     console.log(`Prepared test database ${DB_NAME}.`);

@@ -133,7 +133,7 @@ export default function ManageCourseTestsPage() {
       )}
 
       {tests.length === 0 ? (
-        <p className="mt-3">No tests found for this course.</p>
+        <p className="mt-3">No tests found for this instance.</p>
       ) : (
         <Table bordered className="mt-3">
           <thead>

@@ -165,7 +165,7 @@ exports.getUserEnrollments = async (req, res) => {
     res.json(toPlain(rows));
   } catch (err) {
     console.error("Error fetching enrollments:", err.message);
-    res.status(500).json({ error: "Error fetching enrolled classes" });
+    res.status(500).json({ error: "Error fetching joined instances" });
   }
 };
 
@@ -175,7 +175,7 @@ exports.enrollByCode = async (req, res) => {
   try {
     const [results] = await db.query(`SELECT * FROM courses WHERE code = ?`, [code]);
     if (!results || results.length === 0) {
-      return res.status(404).json({ error: "Course not found" });
+      return res.status(404).json({ error: "Join code not found" });
     }
 
     const course = { ...results[0] }; // ✅ Flatten
@@ -186,7 +186,7 @@ exports.enrollByCode = async (req, res) => {
     );
 
     if (existing.length > 0) {
-      return res.status(400).json({ error: "Already enrolled" });
+      return res.status(400).json({ error: "Already joined this instance" });
     }
 
     await db.query(
@@ -197,7 +197,7 @@ exports.enrollByCode = async (req, res) => {
     res.json({ success: true, newCourse: course });
   } catch (err) {
     console.error("Enrollment error:", err.message);
-    res.status(500).json({ error: "Enrollment failed" });
+    res.status(500).json({ error: "Join failed" });
   }
 };
 

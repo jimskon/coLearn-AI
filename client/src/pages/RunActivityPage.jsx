@@ -3051,7 +3051,7 @@ export default function RunActivityPage({
           {activity?.title
             ? `Activity: ${activity.title}`
             : courseName
-              ? `Course: ${courseName}`
+              ? `Instance: ${courseName}`
               : 'Untitled Activity'}
         </h2>
 

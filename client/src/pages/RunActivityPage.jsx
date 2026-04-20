@@ -327,6 +327,7 @@ export default function RunActivityPage({
   const [localCode, setLocalCode] = useState({});
 
   const [activity, setActivity] = useState(null);
+  const [sheetMode, setSheetMode] = useState({ mode: 'group', explicit: false });
 
 
   const [unansweredShown, setUnansweredShown] = useState({}); // { "1e": "Unanswered: ..." }
@@ -433,6 +434,10 @@ export default function RunActivityPage({
 
 
   const isTestMode = useMemo(() => {
+    if (sheetMode?.explicit) {
+      return sheetMode.mode === 'test';
+    }
+
     // Primary: any instance with a time window is a test
     if (
       activity?.test_start_at &&
@@ -457,7 +462,9 @@ export default function RunActivityPage({
           Object.keys(b.scores).length > 0
       )
     );
-  }, [activity, groups]);
+  }, [activity, groups, sheetMode]);
+
+  const isDemoMode = sheetMode?.explicit && sheetMode.mode === 'demo';
 
   // ✅ Non-legacy test if its test_start_at is on/after 2026-01-01 UTC
   const isNonLegacyTest = useMemo(() => {
@@ -528,12 +535,12 @@ export default function RunActivityPage({
     user?.role === 'creator';
   const isStudent = user?.role === 'student';
 
-  // In test mode, every student is their own "active" user.
+  // In test/demo mode, every student is their own "active" user.
   // In POGIL mode, only the activeStudentId is editable.
   const isActive =
     !!user &&
     (
-      (isTestMode && isStudent) ||
+      ((isTestMode || isDemoMode) && isStudent) ||
       (activeStudentId != null && String(user.id) === String(activeStudentId))
     );
 
@@ -787,6 +794,7 @@ export default function RunActivityPage({
     const handleUpdate = ({ responseKey, value, followupPrompt, answeredBy }) => {
       // Ignore our own echoes
       if (answeredBy && String(answeredBy) === String(user?.id)) return;
+      if ((isTestMode || isDemoMode) && isStudent) return;
 
       // Always mirror the updated response into prefill
       setExistingAnswers((prev) => ({
@@ -830,7 +838,11 @@ export default function RunActivityPage({
 
     socket.on('response:update', handleUpdate);
 
-    socket.on('feedback:update', ({ responseKey, feedback, followup }) => {
+    socket.on('feedback:update', ({ responseKey, feedback, followup, answeredBy }) => {
+      if ((isTestMode || isDemoMode) && isStudent && String(answeredBy) !== String(user?.id)) {
+        return;
+      }
+
       setCodeFeedbackShown((prev) => ({
         ...prev,
         [responseKey]: feedback ?? null,
@@ -864,7 +876,7 @@ export default function RunActivityPage({
       socket.off('response:update', handleUpdate);
       socket.off('feedback:update');
     };
-  }, [socket, groups, user?.id]);
+  }, [socket, groups, user?.id, isTestMode, isDemoMode, isStudent]);
 
 
   useEffect(() => {
@@ -1233,9 +1245,58 @@ export default function RunActivityPage({
         });
         setNonLegacyForUI(!!isNonLegacyNow);
 
-        const blocks = parseSheetToBlocks(lines, {
+        const parsedSheet = parseSheetToBlocks(lines, {
           legacyTestNumbering: !isNonLegacyNow,
+          returnIssues: true,
         });
+        const blocks = parsedSheet.blocks;
+        const parsedMode = parsedSheet.meta?.mode || 'group';
+        setSheetMode({
+          mode: parsedMode,
+          explicit: parsedSheet.meta?.modeExplicit === true,
+        });
+
+        const needsPersonalSandbox =
+          isStudent &&
+          (isTestNow || (
+            parsedSheet.meta?.modeExplicit === true &&
+            (parsedMode === 'test' || parsedMode === 'demo')
+          ));
+
+        if (needsPersonalSandbox && user?.id) {
+          const personalAnswersRes = await fetch(
+            `${API_BASE_URL}/api/activity-instances/${instanceId}/responses?answeredBy=${encodeURIComponent(user.id)}`,
+            { credentials: 'include' }
+          );
+          const personalAnswersData = await personalAnswersRes.json();
+
+          setExistingAnswers((prev) => {
+            const next = {};
+
+            for (const [k, v] of Object.entries(personalAnswersData || {})) {
+              next[k] = dirtyKeysRef.current.has(k) ? prev[k] : v;
+            }
+
+            for (const k of dirtyKeysRef.current) {
+              if (prev[k]) next[k] = prev[k];
+            }
+
+            return next;
+          });
+
+          if (!isRequirementsOnly) {
+            const restoredTextFeedback = {};
+            for (const [key, entry] of Object.entries(personalAnswersData || {})) {
+              if (!key.endsWith('F1')) continue;
+              const qid = key.slice(0, -2);
+              if (dirtyTextQidsRef.current.has(qid)) continue;
+
+              const text = (entry?.response || '').trim();
+              if (text) restoredTextFeedback[qid] = text;
+            }
+            setTextFeedbackShown(restoredTextFeedback);
+          }
+        }
 
         const activityContextBlock = blocks.find(
           (b) => b.type === 'header' && b.tag === 'activitycontext'
@@ -3035,11 +3096,14 @@ export default function RunActivityPage({
             !timeExpired &&
             !testLockState.lockedBefore;
 
+          const demoEditable = isDemoMode && isStudent;
 
 
-          const editable = isTestMode
-            ? testEditable
-            : (isActive && isCurrent && !isComplete);
+          const editable = isDemoMode
+            ? demoEditable
+            : (isTestMode
+              ? testEditable
+              : (isActive && isCurrent && !isComplete));
 
 
           /*console.log('[RUN] group', index, {
@@ -3057,7 +3121,7 @@ export default function RunActivityPage({
           //  return null;
           //}
           const showGroup =
-            isTestMode
+            (isTestMode || isDemoMode)
               ? true
               : (isInstructor || isComplete || isCurrent);
 
@@ -3221,8 +3285,8 @@ export default function RunActivityPage({
               })}
 
 
-              {/* ✅ Per-group buttons ONLY in non-test mode */}
-              {editable && !isTestMode && (
+              {/* ✅ Per-group buttons ONLY in normal group mode */}
+              {editable && !isTestMode && !isDemoMode && (
                 <div className="mt-2">
                   <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
                     {isSubmitting ? (

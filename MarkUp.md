@@ -12,6 +12,7 @@ The system supports:
 
 - Collaborative learning mode (AI-guided)
 - Test / quiz mode (graded)
+- Demo mode (all groups visible, per-student sandbox)
 - Runnable Python blocks (with optional timeout)
 - Runnable C++ blocks (with optional timeout)
 - Runnable Python Turtle blocks (with window size + timeout)
@@ -35,12 +36,18 @@ All interactive content must appear inside a `\questiongroup`.
 | `\studentlevel{...}` | Target audience | `\studentlevel{Second Year}` |
 | `\activitycontext{...}` | Introductory paragraph | `\activitycontext{This activity explores...}` |
 | `\aicodeguidance{...}` | Global AI behavior rules | See AI Guidance section below |
+| `\mode{group}` | Normal in-class group activity. This is also the default when no mode is set. | `\mode{group}` |
+| `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
+| `\mode{demo}` | In-class demonstration mode. All question groups are visible, there is no submit button, and each student edits their own saved sandbox. | `\mode{demo}` |
 | `\test` | Marks activity as graded assessment | `\test` |
 | `\section{...}` | Structural heading (non-interactive) | `\section{Introduction}` |
 
 Notes:
 
-- `\test` switches the activity into grading mode.
+- If no mode is set, the activity runs as `\mode{group}`.
+- `\mode{group}` is the normal collaborative activity mode: each question group must be submitted before the next one opens.
+- `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
+- `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
 - `\section` is structural only.
 

@@ -79,7 +79,7 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
 // Keeps everything else as-is. Works for any \SomeTag{ ... } (including section*, link, image, etc.)
 function collapseBracedCommands(rawLines) {
   const startsTag = (s) =>
-    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|table|image|link|file|pythonturtle|cpp|include)\{/.test(s);
+    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|table|image|link|file|pythonturtle|cpp|include)\{/.test(s);
   const out = [];
   let buf = null;
   let depth = 0;
@@ -283,6 +283,8 @@ export function parseSheetToBlocks(lines, options = {}) {
     });
   };
   let isTest = false;
+  let activityMode = 'group';
+  let modeExplicit = false;
   const legacyTestNumbering = options.legacyTestNumbering === true;
   // default true unless explicitly set to false
 
@@ -294,6 +296,8 @@ export function parseSheetToBlocks(lines, options = {}) {
   let currentGroupRetriesRequired = 0;    // ✅ current group effective value
   const meta = {
     isTest: false,
+    mode: 'group',
+    modeExplicit: false,
     retriesDefault: 0,
     groupRetries: {}
   };
@@ -412,7 +416,27 @@ export function parseSheetToBlocks(lines, options = {}) {
     // mark this activity as a test
     if (trimmed === '\\test') {
       isTest = true;
+      activityMode = 'test';
+      modeExplicit = true;
       meta.isTest = true;
+      meta.mode = 'test';
+      meta.modeExplicit = true;
+      continue;
+    }
+
+    const modeMatch = trimmed.match(/^\\mode\{([\s\S]+?)\}$/);
+    if (modeMatch) {
+      const nextMode = String(modeMatch[1] || '').trim().toLowerCase();
+      if (['group', 'test', 'demo'].includes(nextMode)) {
+        activityMode = nextMode;
+        modeExplicit = true;
+        isTest = nextMode === 'test';
+        meta.mode = nextMode;
+        meta.modeExplicit = true;
+        meta.isTest = isTest;
+      } else {
+        pushIssue('warn', lineNo, `Unknown \\mode value "${nextMode}". Expected group, test, or demo.`, line);
+      }
       continue;
     }
     // --- inside a \score ... \endscore block ---
@@ -1128,6 +1152,8 @@ export function parseSheetToBlocks(lines, options = {}) {
 
   // ✅ backward compatible return
   meta.isTest = !!isTest;
+  meta.mode = activityMode;
+  meta.modeExplicit = modeExplicit;
   meta.retriesDefault = globalRetriesRequired;
 
   if (options.returnIssues) {

@@ -116,6 +116,37 @@ test('course routes create a course and auto-enroll the instructor', async () =>
   assert.ok(students.body.some(student => student.id === instructor.id && student.role === 'instructor'));
 });
 
+test('course creation rejects duplicate code section semester and year', async () => {
+  const instructor = await createUser('instructor');
+  const classId = await createClassRecord();
+  const code = uniqueValue('CS101').toUpperCase();
+  const body = {
+    name: 'Intro to Collaborative Computing',
+    code,
+    section: 'A',
+    semester: 'fall',
+    year: 2026,
+    instructor_id: instructor.id,
+    class_id: classId,
+  };
+
+  const created = await requestJson(instructor, '/api/courses', {
+    method: 'POST',
+    body,
+  });
+  assert.equal(created.status, 201);
+
+  const duplicate = await requestJson(instructor, '/api/courses', {
+    method: 'POST',
+    body,
+  });
+
+  assert.equal(duplicate.status, 409);
+  assert.deepEqual(duplicate.body, {
+    error: 'A course with that code, section, semester, and year already exists',
+  });
+});
+
 test('root user can list courses with class and instructor names', async () => {
   const root = await createUser('root');
   const instructor = await createUser('instructor');

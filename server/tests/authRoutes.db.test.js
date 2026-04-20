@@ -61,6 +61,39 @@ async function requestJson(path, { method = 'POST', body, headers = {} } = {}) {
   }
 }
 
+function createCookieJar() {
+  let cookie = '';
+
+  return {
+    headers() {
+      return cookie ? { Cookie: cookie } : {};
+    },
+    store(response) {
+      const setCookie = response.headers.get('set-cookie');
+      if (setCookie) {
+        cookie = setCookie.split(';')[0];
+      }
+    },
+  };
+}
+
+async function requestJsonWithServer(baseUrl, path, { method = 'GET', body, headers = {} } = {}) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method,
+    headers: {
+      ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      ...headers,
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const responseBody = await response.json();
+  return {
+    status: response.status,
+    headers: response.headers,
+    body: responseBody,
+  };
+}
+
 test.after(async () => {
   await db.end();
 });
@@ -149,4 +182,74 @@ test('login rejects an incorrect password for an existing user', async () => {
 
   assert.equal(login.status, 400);
   assert.deepEqual(login.body, { error: 'Invalid email or password' });
+});
+
+test('whoami rejects requests without a session', async () => {
+  const response = await requestJson('/api/auth/whoami', {
+    method: 'GET',
+  });
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(response.body, { error: 'Not logged in' });
+});
+
+test('login session can be read by whoami and cleared by logout', async () => {
+  const server = await createTestServer();
+  const jar = createCookieJar();
+  const email = uniqueEmail('session');
+  const password = 'SessionPassword123';
+
+  try {
+    const register = await requestJsonWithServer(server.baseUrl, '/api/auth/register', {
+      method: 'POST',
+      body: {
+        name: 'Annie Easley',
+        email,
+        password,
+      },
+    });
+    assert.equal(register.status, 201);
+
+    const loggedOutWhoami = await requestJsonWithServer(server.baseUrl, '/api/auth/whoami');
+    assert.equal(loggedOutWhoami.status, 401);
+    assert.deepEqual(loggedOutWhoami.body, { error: 'Not logged in' });
+
+    const login = await requestJsonWithServer(server.baseUrl, '/api/auth/login', {
+      method: 'POST',
+      body: {
+        email,
+        password,
+      },
+    });
+    jar.store(login);
+
+    assert.equal(login.status, 200);
+    assert.match(login.headers.get('set-cookie') || '', /connect\.sid=/);
+
+    const loggedInWhoami = await requestJsonWithServer(server.baseUrl, '/api/auth/whoami', {
+      headers: jar.headers(),
+    });
+
+    assert.equal(loggedInWhoami.status, 200);
+    assert.equal(loggedInWhoami.body.name, 'Annie Easley');
+    assert.equal(loggedInWhoami.body.email, email);
+    assert.equal(loggedInWhoami.body.role, 'student');
+
+    const logout = await requestJsonWithServer(server.baseUrl, '/api/auth/logout', {
+      method: 'POST',
+      headers: jar.headers(),
+    });
+    jar.store(logout);
+
+    assert.equal(logout.status, 200);
+    assert.deepEqual(logout.body, { message: 'Logged out' });
+
+    const afterLogoutWhoami = await requestJsonWithServer(server.baseUrl, '/api/auth/whoami', {
+      headers: jar.headers(),
+    });
+    assert.equal(afterLogoutWhoami.status, 401);
+    assert.deepEqual(afterLogoutWhoami.body, { error: 'Not logged in' });
+  } finally {
+    await server.close();
+  }
 });

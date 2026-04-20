@@ -1,11 +1,11 @@
-// server/tests/enrollStudentsByCourseCode.js
+// server/scripts/enrollStudentsByCourseCode.js
 // Given a course code, generate (or reuse) N demo students and enroll them.
 // - If student exists, reuse.
 // - Else register.
 // - Ensure role is "student".
 // - Enroll is idempotent (ignore already-enrolled).
 //
-// Run with: node server/tests/enrollStudentsByCourseCode.js
+// Run with: node server/scripts/enrollStudentsByCourseCode.js
 
 const axios = require('axios');
 const readline = require('readline');

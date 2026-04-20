@@ -1,5 +1,5 @@
 // Script to generate test data for the application
-// server/tests/makeacc.js
+// server/scripts/makeacc.js
 const axios = require('axios');
 const readline = require('readline');
 

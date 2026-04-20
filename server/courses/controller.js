@@ -66,6 +66,17 @@ async function createCourse(req, res) {
     res.status(201).json({ success: true, courseId });
   } catch (err) {
     await conn.rollback();
+
+    const isDuplicateCourse =
+      err?.code === 'ER_DUP_ENTRY' &&
+      String(err?.message || '').includes('unique_course');
+
+    if (isDuplicateCourse) {
+      return res.status(409).json({
+        error: "A course with that code, section, semester, and year already exists",
+      });
+    }
+
     console.error(
       "❌ Error creating course or enrolling instructor:",
       err.message

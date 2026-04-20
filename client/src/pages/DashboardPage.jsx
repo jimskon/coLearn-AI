@@ -24,7 +24,7 @@ export default function DashboardPage() {
         setEnrolledCourses(data);
       } catch (err) {
         console.error('Failed to fetch enrollments', err);
-        setError('Unable to load enrolled courses');
+        setError('Unable to load joined instances');
       } finally {
         setLoading(false);
       }
@@ -46,15 +46,15 @@ export default function DashboardPage() {
       const data = await res.json();
 
       if (res.ok) {
-        setSuccess('Successfully enrolled!');
+        setSuccess('Successfully joined!');
         setCourseCode('');
         setEnrolledCourses(prev => [...prev, data.newCourse]);
       } else {
-        setError(data.error || 'Failed to enroll');
+        setError(data.error || 'Failed to join');
       }
     } catch (err) {
       console.error('Enrollment error:', err);
-      setError('Failed to enroll in course');
+      setError('Failed to join instance');
     }
   };
 
@@ -71,12 +71,12 @@ export default function DashboardPage() {
             <Spinner animation="border" />
           ) : enrolledCourses.length > 0 ? (
             <>
-              <h4>{nonStudent ? 'Your Managed Courses' : 'Your Enrolled Courses'}</h4>
+              <h4>{nonStudent ? 'Your Managed Instances' : 'Your Joined Instances'}</h4>
               <Table striped bordered hover>
                 <thead>
                   <tr>
-                    <th>Course Name</th>
-                    <th>Course Code</th>
+                    <th>Instance Name</th>
+                    <th>Join Code</th>
                     <th>Section</th>
                     <th>Semester</th>
                     <th>Year</th>
@@ -106,14 +106,14 @@ export default function DashboardPage() {
               </Table>
             </>
           ) : (
-            <p>You are not enrolled in any courses yet.</p>
+            <p>You have not joined any instances yet.</p>
           )}
 
-          <h5 className="mt-5">Join a Course by Code</h5>
+          <h5 className="mt-5">Join an Instance</h5>
           <Form className="d-flex" onSubmit={(e) => { e.preventDefault(); handleJoinCourse(); }}>
             <Form.Control
               type="text"
-              placeholder="Enter Course Code"
+              placeholder="Enter join code"
               value={courseCode}
               onChange={(e) => setCourseCode(e.target.value)}
             />

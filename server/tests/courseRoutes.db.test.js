@@ -143,7 +143,7 @@ test('course creation rejects duplicate code section semester and year', async (
 
   assert.equal(duplicate.status, 409);
   assert.deepEqual(duplicate.body, {
-    error: 'A course with that code, section, semester, and year already exists',
+    error: 'An instance with that join code, section, semester, and year already exists',
   });
 });
 
@@ -193,7 +193,7 @@ test('enroll-by-code enrolls a student, lists enrollment, and rejects duplicates
     },
   });
   assert.equal(duplicate.status, 400);
-  assert.deepEqual(duplicate.body, { error: 'Already enrolled in this course' });
+  assert.deepEqual(duplicate.body, { error: 'Already joined this instance' });
 
   const enrollments = await requestJson(student, `/api/courses/user/${student.id}/enrollments`);
   assert.equal(enrollments.status, 200);
@@ -216,7 +216,7 @@ test('enroll-by-code returns 404 for an unknown course code', async () => {
   });
 
   assert.equal(response.status, 404);
-  assert.deepEqual(response.body, { error: 'Course code not found' });
+  assert.deepEqual(response.body, { error: 'Join code not found' });
 });
 
 test('course owner can unenroll a student from a course', async () => {
@@ -256,7 +256,7 @@ test('non-owner cannot delete a course, but owner can delete it', async () => {
     method: 'DELETE',
   });
   assert.equal(forbidden.status, 403);
-  assert.deepEqual(forbidden.body, { error: 'Unauthorized to delete this course' });
+  assert.deepEqual(forbidden.body, { error: 'Unauthorized to delete this instance' });
 
   const remove = await requestJson(instructor, `/api/courses/${courseId}`, {
     method: 'DELETE',
@@ -266,5 +266,5 @@ test('non-owner cannot delete a course, but owner can delete it', async () => {
 
   const info = await requestJson(instructor, `/api/courses/${courseId}/info`);
   assert.equal(info.status, 404);
-  assert.deepEqual(info.body, { error: 'Course not found' });
+  assert.deepEqual(info.body, { error: 'Instance not found' });
 });

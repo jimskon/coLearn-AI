@@ -81,7 +81,7 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
                   </Nav.Link>
                   {["root", "creator", "instructor"].includes(user.role) && (
                     <Nav.Link as={Link} to="/manage-courses" className="px-2">
-                      Manage Courses
+                      Manage Instances
                     </Nav.Link>
                   )}
                   {(user.role === "root" || user.role === "creator") && (

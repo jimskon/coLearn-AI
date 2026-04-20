@@ -314,7 +314,7 @@ export default function GroupSetupPage() {
             </Col>
           ))
         ) : (
-          <p>No students enrolled.</p>
+          <p>No students have joined this instance.</p>
         )}
       </Row>
 
@@ -389,7 +389,7 @@ export default function GroupSetupPage() {
       </Row>
       {!isTest && (<Row className="mt-3">
         <Col md={6}>
-          <Form.Label>Clone groups from another activity (same course)</Form.Label>
+          <Form.Label>Clone groups from another activity in this instance</Form.Label>
           <Form.Select
             value={cloneFromActivityId}
             onChange={(e) => setCloneFromActivityId(e.target.value)}

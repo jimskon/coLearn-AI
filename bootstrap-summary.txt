@@ -1,0 +1,12 @@
+coLearn-AI stage 1 bootstrap complete
+Domain: jimskon.com
+WWW domain: www.jimskon.com
+Application user: skon
+Application directory: /opt/coLearn-AI
+Node port: 4000
+Database: colearn_db
+Database user: colearn_user
+Database password: Book$worm707
+MariaDB root auth mode: socket
+nginx site config: /etc/nginx/sites-available/jimskon.com.conf
+Stage-2 template: /opt/coLearn-AI/deploy.conf.template

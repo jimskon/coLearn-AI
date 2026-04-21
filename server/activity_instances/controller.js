@@ -713,6 +713,16 @@ async function submitGroupResponses(req, res) {
       [instanceId, `${groupNum}state`, studentId]
     );
 
+    const submitCountKey = `${groupNum}submitCount`;
+    await conn.query(
+      `INSERT INTO responses (activity_instance_id, question_id, response_type, response, answered_by_user_id)
+       VALUES (?, ?, 'text', '1', ?)
+       ON DUPLICATE KEY UPDATE
+         response = CAST(COALESCE(NULLIF(response, ''), '0') AS UNSIGNED) + 1,
+         updated_at = CURRENT_TIMESTAMP`,
+      [instanceId, submitCountKey, studentId]
+    );
+
     // ---- 4) Recompute cached progress from i=1..total_groups using istate ----
     const [[meta]] = await conn.query(
       `SELECT total_groups FROM activity_instances WHERE id = ?`,
@@ -888,6 +898,20 @@ async function getInstancesForActivityInCourse(req, res) {
       }
 
       const roleLabels = { qc: 'Quality Control' };
+      const [submitRows] = await db.query(
+        `SELECT question_id, response
+         FROM responses
+         WHERE activity_instance_id = ?
+           AND question_id REGEXP '^[0-9]+submitCount$'`,
+        [inst.instance_id]
+      );
+      const submitCounts = {};
+      for (const row of submitRows) {
+        const match = String(row.question_id || '').match(/^([0-9]+)submitCount$/);
+        if (!match) continue;
+        submitCounts[match[1]] = Number(row.response) || 0;
+      }
+
       groups.push({
         instance_id: inst.instance_id,
         group_number: inst.group_number,
@@ -897,6 +921,7 @@ async function getInstancesForActivityInCourse(req, res) {
         total_groups: inst.total_groups,
         completed_groups: inst.completed_groups,
         progress_status: inst.progress_status,
+        group_submit_counts: submitCounts,
 
         // Optional convenience label for UI (derived *from* DB truth)
         // progress: progress,  // you can keep or delete this

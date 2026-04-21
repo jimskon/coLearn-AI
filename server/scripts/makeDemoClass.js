@@ -11,7 +11,7 @@ const readline = require('readline');
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
 const BASE_URL = 'http://localhost:4000/api';
-const PASSWORD = 'LearnKi';   // Shared demo password
+const PASSWORD = 'LearnKenyon';   // Shared demo password
 
 function prompt(q) {
   return new Promise(resolve => rl.question(q, resolve));

@@ -4,9 +4,9 @@ WWW domain: www.jimskon.com
 Application user: skon
 Application directory: /opt/coLearn-AI
 Node port: 4000
-Database: colearn_db
-Database user: colearn_user
-Database password: Book$worm707
+Database: colearnai_db
+Database user: colearnai_user
+Database password: KenyonPhilander707Chase
 MariaDB root auth mode: socket
 nginx site config: /etc/nginx/sites-available/jimskon.com.conf
 Stage-2 template: /opt/coLearn-AI/deploy.conf.template

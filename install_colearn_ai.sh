@@ -338,8 +338,8 @@ maybe_set_mariadb_root_password() {
     *) die "SET_DB_ROOT_PASSWORD must be ask, 1, or 0" ;;
   esac
 
-  [[ "$should_set" -eq 1 ]] || return
-
+  [[ "$should_set" -eq 1 ]] || return 0
+  
   if [[ -z "$DB_ROOT_PASSWORD" ]]; then
     if [[ "$NONINTERACTIVE" == "1" ]]; then
       die "DB_ROOT_PASSWORD must be set when SET_DB_ROOT_PASSWORD=1 in noninteractive mode."
@@ -417,6 +417,11 @@ ensure_repo() {
   [[ -n "$REPO_URL" ]] || die "REPO_URL is required."
   mkdir -p "$(dirname "$APP_DIR")"
 
+  if [[ -d "$APP_DIR" ]]; then
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR" || true
+    sudo -u "$APP_USER" git config --global --add safe.directory "$APP_DIR" >/dev/null 2>&1 || true
+  fi
+
   if [[ -d "$APP_DIR/.git" ]]; then
     info "Updating existing app repo in $APP_DIR"
     sudo -u "$APP_USER" git -C "$APP_DIR" fetch --all --prune
@@ -428,6 +433,8 @@ ensure_repo() {
     info "Cloning app repo into $APP_DIR"
     rm -rf "$APP_DIR"
     sudo -u "$APP_USER" git clone --branch "$REPO_BRANCH" "$REPO_URL" "$APP_DIR"
+    chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+    sudo -u "$APP_USER" git config --global --add safe.directory "$APP_DIR" >/dev/null 2>&1 || true
   fi
 
   chown -R "$APP_USER:$APP_USER" "$APP_DIR"

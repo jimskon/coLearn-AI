@@ -1999,8 +1999,9 @@ export default function RunActivityPage({
 
     // ---------- ORIGINAL LEARNING-MODE PATH ----------
     const answers = {};
-    const unanswered = [];
-    const unansweredMap = {};
+    const missingRequired = [];
+    const missingRequiredMap = {};
+    const pendingRevision = [];
 
     for (let block of blocks) {
       if (block.type !== 'question') continue;
@@ -2143,8 +2144,8 @@ export default function RunActivityPage({
           }
 
           answers[`${qid}S`] = 'inprogress';
-          unanswered.push(`${qid} (code not changed)`);
-          unansweredMap[qid] = 'Unanswered: modify the code before submitting.';
+          missingRequired.push(`${qid} (code not changed)`);
+          missingRequiredMap[qid] = 'Unanswered: modify the code before submitting.';
 
           codeCells.forEach(({ key, code }) => (answers[key] = code));
           continue;
@@ -2174,8 +2175,8 @@ export default function RunActivityPage({
             'Please write or modify the starter code, then submit again.';
           setFollowupsShown((prev) => ({ ...prev, [qid]: msg }));
           answers[`${qid}S`] = 'inprogress';
-          unanswered.push(`${qid} (no code)`);
-          unansweredMap[qid] = 'Unanswered: add or modify code before submitting.';
+          missingRequired.push(`${qid} (no code)`);
+          missingRequiredMap[qid] = 'Unanswered: add or modify code before submitting.';
           continue;
         }
 
@@ -2356,7 +2357,7 @@ export default function RunActivityPage({
           // ✅ compute !accepted even if server returns only accepted/comment
           if (!accepted) {
             answers[`${qid}S`] = 'inprogress';
-            unanswered.push(`${qid} (needs revision)`);
+            pendingRevision.push(`${qid} (needs revision)`);
           } else {
             answers[`${qid}S`] = 'complete';
 
@@ -2395,7 +2396,7 @@ export default function RunActivityPage({
           const msg = 'Couldn’t check your program. Try again.';
           setFollowupsShown((prev) => ({ ...prev, [qid]: msg }));
           answers[`${qid}S`] = 'inprogress';
-          unanswered.push(`${qid} (evaluation error)`);
+          pendingRevision.push(`${qid} (evaluation error)`);
         }
 
         continue;
@@ -2466,8 +2467,8 @@ export default function RunActivityPage({
 
       // If nothing at all was entered → required
       if (!aiInput) {
-        unanswered.push(`${qid} (base)`);
-        unansweredMap[qid] = 'Unanswered: enter a response before submitting.';
+        missingRequired.push(`${qid} (base)`);
+        missingRequiredMap[qid] = 'Unanswered: enter a response before submitting.';
         answers[`${qid}S`] = 'inprogress';
 
         setTextFeedbackShown((prev) => {
@@ -2533,7 +2534,7 @@ export default function RunActivityPage({
         answers[`${qid}S`] = progressAllowed ? 'complete' : 'inprogress';
 
         if (!progressAllowed) {
-          unanswered.push(`${qid} (AI)`);
+          pendingRevision.push(`${qid} (AI)`);
         }
 
         // If backend says retries threshold reached for this group, enable bypass button
@@ -2547,9 +2548,6 @@ export default function RunActivityPage({
           progressAllowed,
         });*/
 
-        if (!progressAllowed) {
-          unanswered.push(`${qid} (AI)`);
-        }
         // If backend says retries threshold reached for this group, enable bypass button
         if (ai?.canContinue === true) {
           setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
@@ -2609,7 +2607,7 @@ export default function RunActivityPage({
       })
     );
 
-    const pendingBase = unanswered.length > 0;
+    const pendingBase = missingRequired.length > 0;
 
     // ✅ Group number is derived only from instance progress
     const completedCount = Number(activity?.completed_groups ?? 0);
@@ -2639,7 +2637,7 @@ export default function RunActivityPage({
 
     /*console.log('[RUNDBG] gate vars', {
       pendingBase,
-      unanswered,
+      missingRequired,
       pendingByStatus,
       overrideThisGroup,
       computedState,
@@ -2649,12 +2647,12 @@ export default function RunActivityPage({
       }),
     });*/
 
-    setUnansweredShown(unansweredMap);
+    setUnansweredShown(missingRequiredMap);
     if (computedState === 'inprogress') {
       /*console.warn('[RUNDBG] BLOCKING GROUP ADVANCE', {
         pendingBase,
         pendingByStatus,
-        unanswered,
+        missingRequired,
         overrideThisGroup,
         statuses: qBlocks.map(b => {
           const qid = `${b.groupId}${b.id}`;

@@ -2,6 +2,7 @@
 const OpenAI = require("openai");
 require("dotenv").config();
 
+const { randomUUID } = require('crypto');
 const db = require("../db");
 const crypto = require("crypto");
 
@@ -127,12 +128,35 @@ function retryKeys(groupNum) {
 }
 
 async function upsertResp(conn, instanceId, qid, value, answeredByUserId) {
-  await conn.query(
-    `INSERT INTO responses (activity_instance_id, question_id, response_type, response, answered_by_user_id)
-     VALUES (?, ?, 'text', ?, ?)
-     ON DUPLICATE KEY UPDATE response = VALUES(response), updated_at = CURRENT_TIMESTAMP`,
-    [instanceId, qid, String(value ?? ""), answeredByUserId]
+  const s = String(value ?? "");
+
+  const [[existing]] = await conn.query(
+    `SELECT id
+     FROM responses
+     WHERE activity_instance_id = ? AND question_id = ?
+     ORDER BY id DESC
+     LIMIT 1`,
+    [instanceId, qid]
   );
+
+  if (existing?.id) {
+    await conn.query(
+      `UPDATE responses
+       SET response = ?,
+           response_type = 'text',
+           answered_by_user_id = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [s, answeredByUserId, existing.id]
+    );
+  } else {
+    await conn.query(
+      `INSERT INTO responses
+         (activity_instance_id, question_id, submit_id, response_type, response, answered_by_user_id)
+       VALUES (?, ?, ?, 'text', ?, ?)`,
+      [instanceId, qid, randomUUID(), s, answeredByUserId]
+    );
+  }
 }
 
 /**

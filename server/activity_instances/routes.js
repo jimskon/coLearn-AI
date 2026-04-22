@@ -44,6 +44,9 @@ router.post('/:instanceId/rotate-active-student', controller.rotateActiveStudent
 // ✅ Submit group answers for a question group
 router.post('/:instanceId/submit-group', controller.submitGroupResponses);
 
+// ✅ Get full submit history for an activity instance
+router.get('/:instanceId/responses/history', controller.getInstanceResponseHistory);
+
 // ✅ Get all saved responses for a specific group in an instance
 router.get('/:instanceId/responses', controller.getInstanceResponses);
 

@@ -656,6 +656,7 @@ async function submitGroupResponses(req, res) {
   const studentId = Number(req.body?.studentId);
   const groupNum = Number(req.body?.groupNum);
   const retriesRequired = Number(req.body?.retriesRequired || 1);
+
   const forceOverride = !!req.body?.forceOverride;
   const ROTATION_MODE = 'questiongroup';
   const attempt = req.body?.attempt || {};
@@ -671,7 +672,7 @@ async function submitGroupResponses(req, res) {
       : (req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : {});
   let emitPatch = null;
   const submitId = randomUUID();
-
+    
   if (!instanceId || !studentId || !answers || typeof answers !== 'object') {
     return res.status(400).json({ error: 'Missing instanceId, studentId, or answers' });
   }

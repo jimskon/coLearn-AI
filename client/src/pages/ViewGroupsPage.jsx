@@ -1,5 +1,5 @@
 // client/src/pages/ViewGroupsPage.jsx
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   Container,
@@ -37,76 +37,6 @@ function isCompleteFromInstanceRow(g) {
   return String(g.progress_status || '').toLowerCase() === 'completed';
 }
 
-function groupProgressItems(group) {
-  const completed = Math.max(Number(group.completed_groups || 0), 0);
-  const counts = group.group_submit_counts || {};
-  const isActivityComplete = String(group.progress_status || '').toLowerCase() === 'completed';
-  const countedGroups = Object.keys(counts)
-    .map((key) => Number(key))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  const fallbackTotal = isActivityComplete ? completed : completed + 1;
-  const total = Math.max(Number(group.total_groups || 0), fallbackTotal, ...countedGroups, 1);
-
-  return Array.from({ length: total }, (_, i) => {
-    const questionGroup = i + 1;
-    const count = Number(counts[String(questionGroup)] || 0);
-    const isDone = questionGroup <= completed;
-    const isActive = !isDone && questionGroup === Math.min(completed + 1, total);
-
-    return {
-      questionGroup,
-      count,
-      isDone,
-      isActive,
-    };
-  });
-}
-
-function GroupProgressBars({ group }) {
-  const items = groupProgressItems(group);
-  if (items.length === 0) return null;
-
-  const maxCount = Math.max(1, ...items.map((item) => item.count));
-
-  return (
-    <div className="border-top pt-3 mt-3">
-      <div
-        className="d-flex flex-row-reverse align-items-end gap-2"
-        aria-label="Question group submission counts"
-      >
-        {items.map((item) => {
-          const height = Math.max(22, Math.round((item.count / maxCount) * 58));
-          const background = item.isActive ? '#198754' : item.isDone ? '#0d6efd' : '#adb5bd';
-
-          return (
-            <div
-              key={item.questionGroup}
-              className="d-flex flex-column align-items-center flex-fill"
-              style={{ minWidth: 36 }}
-            >
-              <div
-                className="w-100 text-white text-center rounded-top d-flex align-items-center justify-content-center"
-                style={{
-                  height,
-                  background,
-                  fontWeight: 700,
-                  fontSize: '0.85rem',
-                }}
-                title={`Question Group ${item.questionGroup}: ${item.count} submissions`}
-              >
-                {item.count}
-              </div>
-              <div className="small text-muted text-center mt-1">
-                QG {item.questionGroup}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 export default function ViewGroupsPage() {
   const { courseId, activityId } = useParams();
   const location = useLocation();
@@ -126,8 +56,8 @@ export default function ViewGroupsPage() {
   const [selectedAdd, setSelectedAdd] = useState('');
   const [selectedRemove, setSelectedRemove] = useState('');
 
-  const fetchGroups = useCallback(async ({ showLoading = true } = {}) => {
-    if (showLoading) setLoading(true);
+  const fetchGroups = async () => {
+    setLoading(true);
     setError('');
 
     try {
@@ -150,14 +80,15 @@ export default function ViewGroupsPage() {
       console.error('❌ Error loading groups:', err);
       setError(err?.message || 'Could not load groups.');
     } finally {
-      if (showLoading) setLoading(false);
+      setLoading(false);
     }
-  }, [activityId, courseId, incomingCourseName]);
+  };
 
   useEffect(() => {
     if (!courseId || !activityId) return;
     fetchGroups();
-  }, [courseId, activityId, fetchGroups]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseId, activityId]);
 
   const refreshStudents = async () => {
     try {
@@ -180,18 +111,6 @@ export default function ViewGroupsPage() {
     if (courseId && activityId) refreshStudents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, activityId]);
-
-  useEffect(() => {
-    if (!courseId || !activityId) return undefined;
-
-    const timer = setInterval(() => {
-      fetchGroups({ showLoading: false });
-      refreshStudents();
-    }, 10000);
-
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [courseId, activityId, fetchGroups]);
 
   const clearGroupAnswers = async (instanceId) => {
     if (!window.confirm('Clear all saved answers for this group? This cannot be undone.')) return;
@@ -411,7 +330,6 @@ export default function ViewGroupsPage() {
                         </li>
                       ))}
                     </ul>
-                    <GroupProgressBars group={group} />
                   </Card.Body>
                 </Card>
               </Col>

@@ -42,6 +42,22 @@ function getBaseQid(questionIdRaw) {
   return null;
 }
 
+
+function groupTranscriptRowsBySubmit(rows = []) {
+  const groups = new Map();
+
+  for (const row of rows) {
+    const submitId = row?.submit_id || `row-${row.id}`;
+    if (!groups.has(submitId)) groups.set(submitId, []);
+    groups.get(submitId).push(row);
+  }
+
+  return Array.from(groups.entries()).map(([submitId, rows]) => ({
+    submitId,
+    rows: rows.sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0)),
+  }));
+}
+
 function isHiddenMetadataKey(questionIdRaw) {
   const qid = String(questionIdRaw || '').trim();
   if (!qid) return true;
@@ -153,7 +169,6 @@ function uniqueOriginalCode(block) {
 
   return out;
 }
-
 function buildRowsByQuestion(historyRows = []) {
   const map = new Map();
   const sorted = [...historyRows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
@@ -191,7 +206,10 @@ function dedupeTranscriptRows(rows = [], originalCode = []) {
   for (const row of rows) {
     if (row.transcriptType === 'student_code') {
       const now = normalizeCode(row.value);
+
+      // Only show code if it changed from the previous code state
       if (now === lastCodeState) continue;
+
       out.push(row);
       lastCodeState = now;
       continue;
@@ -241,34 +259,23 @@ function TranscriptEntry({ row, userNameById = {} }) {
   if (row.transcriptType === 'code_feedback') {
     return (
       <div className="mb-3">
-        <div className="fw-semibold">AI code feedback</div>
-        <div className="small text-muted mb-1">{row.submitted_at || row.updated_at || ''}</div>
-        <div className="border rounded p-2 bg-light">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{row.value}</ReactMarkdown>
+        <div className="fw-semibold">AI (code feedback):</div>
+        <div className="small text-muted mb-1">
+          {row.submitted_at || row.updated_at || ''}
         </div>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {row.value}
+        </ReactMarkdown>
       </div>
     );
   }
-
-  if (row.transcriptType === 'ai_feedback') {
-    return (
-      <div className="mb-3">
-        <div className="fw-semibold">AI:</div>
-        <div className="small text-muted mb-1">{row.submitted_at || row.updated_at || ''}</div>
-        <div className="border rounded p-2 bg-light">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{row.value}</ReactMarkdown>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="mb-3">
       <div className="fw-semibold">{who}:</div>
       <div className="small text-muted mb-1">{row.submitted_at || row.updated_at || ''}</div>
-      <div className="border rounded p-2 bg-light" style={{ whiteSpace: 'pre-wrap' }}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>
         {row.value}
-      </div>
+      </ReactMarkdown>
     </div>
   );
 }
@@ -276,59 +283,77 @@ function TranscriptEntry({ row, userNameById = {} }) {
 export default function RunActivityHistoryView({
   historyRows = [],
   groups = [],
+  title = 'Full Submission History',
   userNameById = {},
-  title = 'Submission History',
 }) {
-  const questions = useMemo(() => buildQuestionList(groups), [groups]);
+  const questionList = useMemo(() => buildQuestionList(groups), [groups]);
   const rowsByQuestion = useMemo(() => buildRowsByQuestion(historyRows), [historyRows]);
 
   if (!historyRows.length) {
-    return <Alert variant="info">No response history has been recorded for this instance yet.</Alert>;
+    return (
+      <Alert variant="secondary">
+        No history rows found for this activity instance.
+      </Alert>
+    );
   }
 
   return (
-    <div>
+    <div className="mt-3">
       <h4 className="mb-3">{title}</h4>
-      {questions.map(({ qid, block }) => {
-        const originalCode = uniqueOriginalCode(block);
-        const rows = dedupeTranscriptRows(rowsByQuestion.get(qid) || [], originalCode);
 
-        if (!rows.length && originalCode.length === 0) return null;
+      {questionList.map(({ qid, block }) => {
+        const prompt = getQuestionPrompt(block, qid);
+        const originalCode = uniqueOriginalCode(block);
+        const transcriptRows = dedupeTranscriptRows(
+          rowsByQuestion.get(qid) || [],
+          originalCode
+        );
+        const transcriptAttempts = groupTranscriptRowsBySubmit(transcriptRows);
 
         return (
           <Card key={qid} className="mb-4">
             <Card.Body>
-              <Card.Title className="mb-2">
-                {qid}. {getQuestionPrompt(block, qid)}
-              </Card.Title>
+              <h5 className="mb-3">
+                {qid}. {prompt}
+              </h5>
 
               {originalCode.length > 0 && (
-                <div className="mb-3">
-                  <div className="fw-semibold">Original starter code</div>
-                  {originalCode.map((item, idx) => (
+                <div className="mb-4">
+                  <div className="fw-semibold mb-2">Original code</div>
+                  {originalCode.map((code, i) => (
                     <pre
-                      key={`${qid}-orig-${idx}`}
-                      className="border rounded p-2 bg-light mt-2 mb-0"
+                      key={`${qid}-orig-${i}`}
+                      className="border rounded p-2 bg-light"
                       style={{ whiteSpace: 'pre-wrap' }}
                     >
-                      <code>{item.content}</code>
+                      <code>{code.content}</code>
                     </pre>
                   ))}
                 </div>
               )}
 
-              {rows.length === 0 ? (
-                <Alert variant="secondary" className="mb-0">
-                  No transcript entries recorded for this question.
-                </Alert>
+              {transcriptRows.length > 0 ? (
+                <div>
+                  {transcriptAttempts.map((attempt, index) => (
+                    <div key={attempt.submitId} className="mb-4">
+                      <div className="fw-semibold mb-2">
+                        Attempt {index + 1}
+                      </div>
+
+                      {attempt.rows.map((row) => (
+                        <TranscriptEntry
+                          key={row.id}
+                          row={row}
+                          userNameById={userNameById}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
               ) : (
-                rows.map((row) => (
-                  <TranscriptEntry
-                    key={`${row.id}-${row.question_id}`}
-                    row={row}
-                    userNameById={userNameById}
-                  />
-                ))
+                <Alert variant="light" className="mb-0">
+                  No transcript activity was recorded for this question.
+                </Alert>
               )}
             </Card.Body>
           </Card>

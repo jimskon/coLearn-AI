@@ -656,23 +656,21 @@ async function submitGroupResponses(req, res) {
   const studentId = Number(req.body?.studentId);
   const groupNum = Number(req.body?.groupNum);
   const retriesRequired = Number(req.body?.retriesRequired || 1);
-
   const forceOverride = !!req.body?.forceOverride;
-  const ROTATION_MODE = 'questiongroup';
+
   const attempt = req.body?.attempt || {};
-  const submissionString = String(attempt?.submissionString || req.body?.submissionString || '');
-  const blocked = !!(attempt?.blocked ?? req.body?.blocked);
-  const canAdvance = !!(attempt?.canAdvance ?? req.body?.canAdvance);
-  const unanswered = Array.isArray(attempt?.unanswered)
-    ? attempt.unanswered
-    : (Array.isArray(req.body?.unanswered) ? req.body.unanswered : []);
+  const submissionString = String(attempt?.submissionString || '');
+  const blocked = !!attempt?.blocked;
+  const canAdvance = !!attempt?.canAdvance;
+  const unanswered = Array.isArray(attempt?.unanswered) ? attempt.unanswered : [];
   const answers =
     attempt?.answers && typeof attempt.answers === 'object'
       ? attempt.answers
-      : (req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : {});
+      : {};
+
   let emitPatch = null;
   const submitId = randomUUID();
-    
+
   if (!instanceId || !studentId || !answers || typeof answers !== 'object') {
     return res.status(400).json({ error: 'Missing instanceId, studentId, or answers' });
   }
@@ -684,18 +682,21 @@ async function submitGroupResponses(req, res) {
   try {
     await conn.beginTransaction();
 
+    // ---- 1) insert all submitted answer fields as-is ----
+    // (These include: 2a, 2aF1, 2aFA1, etc.)
     for (const [qidRaw, valueRaw] of Object.entries(answers)) {
       const qid = String(qidRaw || '').trim();
       if (!qid) continue;
 
       const value = valueRaw == null ? '' : String(valueRaw);
+
       await appendResponse(conn, instanceId, submitId, qid, value, {
         type: 'text',
         answeredBy: studentId,
         allowEmpty: true,
       });
     }
-
+    // ---- 1a) append one marker row for this attempt click ----
     await appendResponse(
       conn,
       instanceId,
@@ -719,6 +720,7 @@ async function submitGroupResponses(req, res) {
     );
 
     const shouldAdvance = canAdvance || forceOverride;
+    // ---- 1b) always write the current group state for this attempt ----
     await appendResponse(
       conn,
       instanceId,
@@ -732,6 +734,7 @@ async function submitGroupResponses(req, res) {
       }
     );
 
+    // ---- 4) Recompute cached progress from i=1..total_groups using istate ----
     const [[meta]] = await conn.query(
       `SELECT total_groups FROM activity_instances WHERE id = ?`,
       [instanceId]
@@ -742,16 +745,16 @@ async function submitGroupResponses(req, res) {
     if (totalGroups > 0) {
       const [stateRows] = await conn.query(
         `SELECT r.question_id, r.response
-         FROM responses r
-         JOIN (
-           SELECT question_id, MAX(id) AS max_id
-           FROM responses
-           WHERE activity_instance_id = ?
-             AND question_id REGEXP '^[0-9]+state$'
-           GROUP BY question_id
-         ) latest
-           ON r.question_id = latest.question_id AND r.id = latest.max_id
-         WHERE r.activity_instance_id = ?`,
+   FROM responses r
+   JOIN (
+     SELECT question_id, MAX(id) AS max_id
+     FROM responses
+     WHERE activity_instance_id = ?
+       AND question_id REGEXP '^[0-9]+state$'
+     GROUP BY question_id
+   ) latest
+     ON r.question_id = latest.question_id AND r.id = latest.max_id
+   WHERE r.activity_instance_id = ?`,
         [instanceId, instanceId]
       );
 
@@ -777,36 +780,34 @@ async function submitGroupResponses(req, res) {
 
     emitPatch = { completed_groups: completedGroups, progress_status: progressStatus };
 
-    const shouldRotate =
-      ROTATION_MODE === 'submission' ||
-      (ROTATION_MODE === 'questiongroup' && shouldAdvance);
 
-    if (shouldRotate) {
-      const [connected] = await conn.query(
-        `SELECT student_id
-         FROM group_members
-         WHERE activity_instance_id = ? AND connected = TRUE`,
-        [instanceId]
+    // ---- 5) Rotate active student among connected members ----
+    const [connected] = await conn.query(
+      `SELECT student_id
+       FROM group_members
+       WHERE activity_instance_id = ? AND connected = TRUE`,
+      [instanceId]
+    );
+
+    if (connected.length > 0) {
+      const eligible = connected.filter(m => Number(m.student_id) !== studentId);
+      const pickFrom = eligible.length ? eligible : connected;
+      const next = pickFrom[Math.floor(Math.random() * pickFrom.length)].student_id;
+
+      await conn.query(
+        `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
+        [next, instanceId]
       );
 
-      if (connected.length > 0) {
-        const eligible = connected.filter(m => Number(m.student_id) !== studentId);
-        const pickFrom = eligible.length ? eligible : connected;
-        const next = pickFrom[Math.floor(Math.random() * pickFrom.length)].student_id;
-
-        await conn.query(
-          `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
-          [next, instanceId]
-        );
-
-        emitPatch = { ...(emitPatch || {}), activeStudentId: next };
-      }
+      emitPatch = { ...(emitPatch || {}), activeStudentId: next };
     }
 
     await conn.commit();
+
+    // 🔥 NEW: clear drafts after successful submit
     await db.query(
       `DELETE FROM response_drafts
-       WHERE activity_instance_id = ?`,
+   WHERE activity_instance_id = ?`,
       [instanceId]
     );
 
@@ -922,20 +923,6 @@ async function getInstancesForActivityInCourse(req, res) {
       }
 
       const roleLabels = { qc: 'Quality Control' };
-      const [submitRows] = await db.query(
-        `SELECT question_id, response
-         FROM responses
-         WHERE activity_instance_id = ?
-           AND question_id REGEXP '^[0-9]+submitCount$'`,
-        [inst.instance_id]
-      );
-      const submitCounts = {};
-      for (const row of submitRows) {
-        const match = String(row.question_id || '').match(/^([0-9]+)submitCount$/);
-        if (!match) continue;
-        submitCounts[match[1]] = Number(row.response) || 0;
-      }
-
       groups.push({
         instance_id: inst.instance_id,
         group_number: inst.group_number,
@@ -945,7 +932,6 @@ async function getInstancesForActivityInCourse(req, res) {
         total_groups: inst.total_groups,
         completed_groups: inst.completed_groups,
         progress_status: inst.progress_status,
-        group_submit_counts: submitCounts,
 
         // Optional convenience label for UI (derived *from* DB truth)
         // progress: progress,  // you can keep or delete this
@@ -979,43 +965,31 @@ async function getInstancesForActivityInCourse(req, res) {
 // NEW route: GET /api/responses/:instanceId
 async function getInstanceResponses(req, res) {
   const { instanceId } = req.params;
-  const answeredBy = req.query?.answeredBy;
 
   try {
-    const latestParams = [instanceId];
-    const draftParams = [instanceId];
-    let latestWhere = 'WHERE activity_instance_id = ?';
-    let draftWhere = 'WHERE activity_instance_id = ?';
-
-    if (answeredBy != null && String(answeredBy).trim() !== '') {
-      latestWhere += ' AND answered_by_user_id = ?';
-      draftWhere += ' AND answered_by_user_id = ?';
-      latestParams.push(answeredBy);
-      draftParams.push(answeredBy);
-    }
-
     const [submittedRows] = await db.query(
       `SELECT r.question_id, r.response, r.response_type
        FROM responses r
        JOIN (
          SELECT question_id, MAX(id) AS max_id
          FROM responses
-         ${latestWhere}
+         WHERE activity_instance_id = ?
          GROUP BY question_id
        ) latest
          ON r.question_id = latest.question_id AND r.id = latest.max_id
        WHERE r.activity_instance_id = ?`,
-      [...latestParams, instanceId]
+      [instanceId, instanceId]
     );
 
     const [draftRows] = await db.query(
       `SELECT question_id, response, response_type
        FROM response_drafts
-       ${draftWhere}`,
-      draftParams
+       WHERE activity_instance_id = ?`,
+      [instanceId]
     );
 
     const responses = {};
+
     for (const row of submittedRows) {
       responses[row.question_id] = {
         response: row.response,
@@ -1405,23 +1379,6 @@ async function submitTest(req, res) {
     let totalMaxPoints = 0;
     const questionResults = [];
 
-    async function upsert(conn, instanceId, qid, value, {
-      type = 'text',
-      answeredBy,
-      allowEmpty = false
-    } = {}) {
-      const s = (value == null) ? '' : String(value);
-
-      if (!allowEmpty && s.trim() === '') return;
-
-      await appendResponse(conn, instanceId, submitId, qid, s, {
-        type,
-        answeredBy,
-        allowEmpty: true,
-      });
-    }
-
-
     // -------- grade each question --------
     for (const q of questions) {
       // Your client sends {qid, questionText, ...}
@@ -1482,16 +1439,23 @@ async function submitTest(req, res) {
       }
 
       // Persist raw artifacts
-      if (written) {
-        await upsert(conn, instanceId, baseId, written, { type: 'text', answeredBy: studentId });
-      }
+      await appendResponse(conn, instanceId, submitId, baseId, written, {
+        type: 'text',
+        answeredBy: studentId
+      });
 
       for (const cell of codeCells) {
-        await upsert(conn, instanceId, cell.qid, cell.code, { type: 'code', answeredBy: studentId });
+        await appendResponse(conn, instanceId, submitId, cell.qid, cell.code, {
+          type: 'code',
+          answeredBy: studentId
+        });
       }
 
       if (outputText) {
-        await upsert(conn, instanceId, `${baseId}Output`, outputText, { type: 'run_output', answeredBy: studentId });
+        await appendResponse(conn, instanceId, submitId, `${baseId}Output`, outputText, {
+          type: 'run_output',
+          answeredBy: studentId
+        });
       }
 
       console.log('[SUBMIT_TEST] artifacts', {
@@ -1548,34 +1512,36 @@ async function submitTest(req, res) {
       });
 
       // Store per-band grading outputs (all as text)
-      await upsert(conn, instanceId, `${baseId}CodeScore`, codeScore, {
+      await appendResponse(conn, instanceId, submitId, `${baseId}CodeScore`, codeScore, {
         type: 'text',
         answeredBy: studentId,
         allowEmpty: true,
       });
-      await upsert(conn, instanceId, `${baseId}CodeFeedback`, codeFeedback, {
-        type: 'text',
-        answeredBy: studentId,
-        allowEmpty: true,
-      });
-
-      await upsert(conn, instanceId, `${baseId}RunScore`, runScore, {
-        type: 'text',
-        answeredBy: studentId,
-        allowEmpty: true,
-      });
-      await upsert(conn, instanceId, `${baseId}RunFeedback`, runFeedback, {
+      await appendResponse(conn, instanceId, submitId, `${baseId}CodeFeedback`, codeFeedback, {
         type: 'text',
         answeredBy: studentId,
         allowEmpty: true,
       });
 
-      await upsert(conn, instanceId, `${baseId}ResponseScore`, responseScore, {
+      await appendResponse(conn, instanceId, submitId, `${baseId}RunScore`, runScore, {
         type: 'text',
         answeredBy: studentId,
         allowEmpty: true,
       });
-      await upsert(conn, instanceId, `${baseId}ResponseFeedback`, responseFeedback, {
+
+      await appendResponse(conn, instanceId, submitId, `${baseId}RunFeedback`, runFeedback, {
+        type: 'text',
+        answeredBy: studentId,
+        allowEmpty: true,
+      });
+
+      await appendResponse(conn, instanceId, submitId, `${baseId}ResponseScore`, responseScore, {
+        type: 'text',
+        answeredBy: studentId,
+        allowEmpty: true,
+      });
+
+      await appendResponse(conn, instanceId, submitId, `${baseId}ResponseFeedback`, responseFeedback, {
         type: 'text',
         answeredBy: studentId,
         allowEmpty: true,
@@ -1624,17 +1590,17 @@ async function submitTest(req, res) {
     const summaryText = lines.join('\n');
 
     // Test summary
-    await upsert(conn, instanceId, 'testTotalScore', totalEarnedPoints, {
+    await appendResponse(conn, instanceId, submitId, 'testTotalScore', totalEarnedPoints, {
       type: 'text',
       answeredBy: studentId,
       allowEmpty: true,
     });
-    await upsert(conn, instanceId, 'testMaxScore', totalMaxPoints, {
+    await appendResponse(conn, instanceId, submitId, 'testMaxScore', totalMaxPoints, {
       type: 'text',
       answeredBy: studentId,
       allowEmpty: true,
     });
-    await upsert(conn, instanceId, 'testSummary', summaryText, {
+    await appendResponse(conn, instanceId, submitId, 'testSummary', summaryText, {
       type: 'text',
       answeredBy: studentId,
       allowEmpty: true,
@@ -1679,11 +1645,19 @@ async function submitTest(req, res) {
     });
 
     await conn.commit();
+
+    // clear drafts after successful submit/regrade
     await db.query(
       `DELETE FROM response_drafts
-       WHERE activity_instance_id = ?`,
+   WHERE activity_instance_id = ?`,
       [instanceId]
     );
+
+    global.emitInstanceState?.(Number(instanceId), {
+      points_earned: totalEarnedPoints,
+      points_possible: totalMaxPoints,
+      progress_status: 'completed',
+    });
 
     console.log('[SUBMIT_TEST] EXIT OK', {
       instanceId,
@@ -1718,7 +1692,19 @@ async function recomputeTestTotals(req, res) {
   if (!ok) return res.status(403).json({ error: 'Forbidden' });
 
   const conn = await db.getConnection();
+  const submitId = randomUUID();
+  const lockName = `recomputeTestTotals:${instanceId}`;
+
+
   try {
+    const [[lockRow]] = await conn.query(`SELECT GET_LOCK(?, 5) AS got`, [lockName]);
+    if (!lockRow?.got) {
+      return res.status(409).json({
+        error: 'This test is currently being recomputed by someone else. Try again in a moment.',
+      });
+    }
+    await conn.beginTransaction();
+
     // 1) Pick an answer owner (must be non-null)
     const [[inst]] = await conn.query(
       `SELECT submitted_by_user_id, points_possible
@@ -1726,7 +1712,11 @@ async function recomputeTestTotals(req, res) {
        WHERE id = ?`,
       [instanceId]
     );
-    if (!inst) return res.status(404).json({ error: 'Instance not found' });
+
+    if (!inst) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Instance not found' });
+    }
 
     let answererId = inst.submitted_by_user_id;
 
@@ -1743,15 +1733,23 @@ async function recomputeTestTotals(req, res) {
     }
 
     if (!answererId) {
+      await conn.rollback();
       return res.status(400).json({ error: 'Cannot determine answered_by_user_id for totals' });
     }
 
-    // 2) Load all responses
+    // 2) Load latest responses
     const [rows] = await conn.query(
-      `SELECT question_id, response
-       FROM responses
-       WHERE activity_instance_id = ?`,
-      [instanceId]
+      `SELECT r.question_id, r.response, r.response_type
+   FROM responses r
+   JOIN (
+     SELECT question_id, MAX(id) AS max_id
+     FROM responses
+     WHERE activity_instance_id = ?
+     GROUP BY question_id
+   ) latest
+     ON r.question_id = latest.question_id AND r.id = latest.max_id
+   WHERE r.activity_instance_id = ?`,
+      [instanceId, instanceId]
     );
 
     const map = Object.create(null);
@@ -1784,27 +1782,33 @@ async function recomputeTestTotals(req, res) {
     );
 
     // 5) Mirror totals into responses table (optional, but you’re doing it)
-    await conn.query(
-      `INSERT INTO responses (activity_instance_id, question_id, response_type, response, answered_by_user_id)
-       VALUES (?, 'testTotalScore', 'text', ?, ?)
-       ON DUPLICATE KEY UPDATE
-         response = VALUES(response),
-         answered_by_user_id = VALUES(answered_by_user_id),
-         updated_at = CURRENT_TIMESTAMP`,
-      [instanceId, String(earned), answererId]
-    );
+    await appendResponse(conn, instanceId, submitId, 'testTotalScore', String(earned), {
+      type: 'text',
+      answeredBy: answererId,
+      allowEmpty: true,
+    });
 
+    await appendResponse(conn, instanceId, submitId, 'testMaxScore', String(possible), {
+      type: 'text',
+      answeredBy: answererId,
+      allowEmpty: true,
+    });
+
+    await conn.commit();
     global.emitInstanceState?.(Number(instanceId), {
       points_earned: earned,
       points_possible: possible,
       // don’t lie about graded_at: DB sets it; this is fine as “changed now”
     });
 
+
     return res.json({ ok: true, earned, possible });
   } catch (e) {
+    try { await conn.rollback(); } catch { }
     console.error('recomputeTestTotals failed:', e);
     return res.status(500).json({ error: 'recompute failed' });
   } finally {
+    try { await conn.query(`SELECT RELEASE_LOCK(?)`, [lockName]); } catch { }
     conn.release();
   }
 }
@@ -1835,7 +1839,6 @@ async function getInstanceResponseHistory(req, res) {
     res.status(500).json({ error: 'Failed to fetch response history' });
   }
 }
-
 
 // Export it as part of the module
 module.exports = {

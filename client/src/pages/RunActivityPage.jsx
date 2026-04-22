@@ -339,6 +339,7 @@ export default function RunActivityPage({
 
 
   const [unansweredShown, setUnansweredShown] = useState({}); // { "1e": "Unanswered: ..." }
+  const [submitAlert, setSubmitAlert] = useState(null);
 
 
 
@@ -672,6 +673,7 @@ export default function RunActivityPage({
   }, [isTestMode, groups, existingAnswers]);
 
   const handleUpdateFileContents = (updaterFn) => {
+    setSubmitAlert(null);
     setLastEditTs(Date.now()); // ✅ prevents periodic loadActivity() from clobbering local file edits
     setFileContents((prev) => {
       const updated = updaterFn(prev);
@@ -684,6 +686,7 @@ export default function RunActivityPage({
 
   // For manual edits in <FileBlock> textareas
   const handleFileChange = (fileKey, newText, meta = {}) => {
+    setSubmitAlert(null);
     setLastEditTs(Date.now()); // ✅ prevents periodic loadActivity() from clobbering local file edits
 
     const raw = meta.filename || fileKey || '';
@@ -1853,6 +1856,7 @@ export default function RunActivityPage({
     let retriesRequired = 1;
     let groupNum;
     if (isSubmitting) return;
+    setSubmitAlert(null);
     setIsSubmitting(true);
 
     let groupSubmissionString = null;
@@ -2146,6 +2150,12 @@ export default function RunActivityPage({
           answers[`${qid}S`] = 'inprogress';
           missingRequired.push(`${qid} (code not changed)`);
           missingRequiredMap[qid] = 'Unanswered: modify the code before submitting.';
+          answers[`${qid}CodeFeedback`] = msg;
+          answers[`${qid}CodeAccepted`] = 'false';
+          answers[`${qid}CodeCanContinue`] = 'false';
+          answers[`${qid}CodeRetryCount`] = '';
+          answers[`${qid}CodeRetriesRequired`] = '';
+          answers[`${qid}CodeSubmissionString`] = groupSubmissionString;
 
           codeCells.forEach(({ key, code }) => (answers[key] = code));
           continue;
@@ -2177,6 +2187,12 @@ export default function RunActivityPage({
           answers[`${qid}S`] = 'inprogress';
           missingRequired.push(`${qid} (no code)`);
           missingRequiredMap[qid] = 'Unanswered: add or modify code before submitting.';
+          answers[`${qid}CodeFeedback`] = msg;
+          answers[`${qid}CodeAccepted`] = 'false';
+          answers[`${qid}CodeCanContinue`] = 'false';
+          answers[`${qid}CodeRetryCount`] = '';
+          answers[`${qid}CodeRetriesRequired`] = '';
+          answers[`${qid}CodeSubmissionString`] = groupSubmissionString;
           continue;
         }
 
@@ -2321,6 +2337,14 @@ export default function RunActivityPage({
 
           let feedback = String(data?.feedback ?? '').trim();
           let followup = String(data?.followup ?? '').trim();
+          answers[`${qid}CodeFeedback`] = feedback || '';
+          answers[`${qid}CodeAccepted`] = accepted ? 'true' : 'false';
+          answers[`${qid}CodeCanContinue`] = data?.canContinue ? 'true' : 'false';
+          answers[`${qid}CodeRetryCount`] =
+            data?.retryCount != null ? String(data.retryCount) : '';
+          answers[`${qid}CodeRetriesRequired`] =
+            data?.retriesRequired != null ? String(data.retriesRequired) : '';
+          answers[`${qid}CodeSubmissionString`] = groupSubmissionString;
 
           if (!feedback && followup) {
             feedback = followup;
@@ -2648,33 +2672,16 @@ export default function RunActivityPage({
     });*/
 
     setUnansweredShown(missingRequiredMap);
-    if (computedState === 'inprogress') {
-      /*console.warn('[RUNDBG] BLOCKING GROUP ADVANCE', {
-        pendingBase,
-        pendingByStatus,
-        missingRequired,
-        overrideThisGroup,
-        statuses: qBlocks.map(b => {
-          const qid = `${b.groupId}${b.id}`;
-          return {
-            qid,
-            S_new: answers[`${qid}S`],
-            S_old: existingAnswers[`${qid}S`]?.response,
-            hasAnswer: String(answers[qid] ?? '').trim().length > 0,
-          };
-        }),
-      });*/
+    if (pendingBase) {
+      const missingList = Object.keys(missingRequiredMap).length
+        ? Object.keys(missingRequiredMap).join(', ')
+        : missingRequired.join(', ');
 
+      setSubmitAlert(
+        `You cannot continue yet. Please answer all required questions before submitting. Missing: ${missingList}`
+      );
       setIsSubmitting(false);
       return;
-    }
-
-
-    if (computedState === 'complete' && overrideThisGroup && pendingBase) {
-      alert(
-        'You chose to continue without addressing AI feedback. ' +
-        'Your instructor may review this later.'
-      );
     }
     const blocked = computedState === 'inprogress';
     const canAdvance = computedState === 'complete';
@@ -2702,10 +2709,9 @@ export default function RunActivityPage({
             retriesRequired,
             forceOverride: !!forceOverride,
             attempt,
-          })
+          }),
         }
       );
-
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -2713,7 +2719,7 @@ export default function RunActivityPage({
         return;
       }
 
-      await response.json().catch(() => ({}));
+      const result = await response.json().catch(() => ({}));
       await loadActivity();
 
       if (blocked) {
@@ -2726,7 +2732,7 @@ export default function RunActivityPage({
         return next;
       });
 
-      if (!isTestMode && overrideThisGroup) {
+      if (!isTestMode && forceOverride) {
         const qBlocksForGroup = blocks.filter((b) => b.type === 'question');
         setTextFeedbackShown((prev) => {
           const next = { ...prev };
@@ -2751,6 +2757,13 @@ export default function RunActivityPage({
       alert('An error occurred during submission.');
     } finally {
       setIsSubmitting(false);
+    }
+
+    if (computedState === 'complete' && overrideThisGroup && pendingBase) {
+      alert(
+        'You chose to continue without addressing AI feedback. ' +
+        'Your instructor may review this later.'
+      );
     }
   } // END handleSubmit
 
@@ -2924,6 +2937,8 @@ export default function RunActivityPage({
   }
 
   async function handleCodeChange(responseKey, updatedCode, meta = {}) {
+
+    setSubmitAlert(null);
 
     console.log('[CODECHANGE] fired', {
       responseKey,
@@ -3269,9 +3284,10 @@ export default function RunActivityPage({
                   codeViewMode,
                   onToggleViewMode: toggleCodeViewMode,
                   localCode,
-                  onLocalCodeChange: updateLocalCode,
-                  onTextChange: (responseKey, value) => {
-                    dirtyKeysRef.current.add(responseKey);
+                    onLocalCodeChange: updateLocalCode,
+                    onTextChange: (responseKey, value) => {
+                      setSubmitAlert(null);
+                      dirtyKeysRef.current.add(responseKey);
                     const qid = baseQidFromResponseKey(responseKey);
                     if (qid) {
                       setUnansweredShown((prev) => {

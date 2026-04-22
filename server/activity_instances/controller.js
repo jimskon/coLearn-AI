@@ -656,20 +656,23 @@ async function submitGroupResponses(req, res) {
   const studentId = Number(req.body?.studentId);
   const groupNum = Number(req.body?.groupNum);
   const retriesRequired = Number(req.body?.retriesRequired || 1);
+
   const forceOverride = !!req.body?.forceOverride;
   const ROTATION_MODE = 'questiongroup';
   const attempt = req.body?.attempt || {};
-  const submissionString = String(attempt?.submissionString || '');
-  const blocked = !!attempt?.blocked;
-  const canAdvance = !!attempt?.canAdvance;
-  const unanswered = Array.isArray(attempt?.unanswered) ? attempt.unanswered : [];
+  const submissionString = String(attempt?.submissionString || req.body?.submissionString || '');
+  const blocked = !!(attempt?.blocked ?? req.body?.blocked);
+  const canAdvance = !!(attempt?.canAdvance ?? req.body?.canAdvance);
+  const unanswered = Array.isArray(attempt?.unanswered)
+    ? attempt.unanswered
+    : (Array.isArray(req.body?.unanswered) ? req.body.unanswered : []);
   const answers =
     attempt?.answers && typeof attempt.answers === 'object'
       ? attempt.answers
-      : {};
+      : (req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : {});
   let emitPatch = null;
   const submitId = randomUUID();
-
+    
   if (!instanceId || !studentId || !answers || typeof answers !== 'object') {
     return res.status(400).json({ error: 'Missing instanceId, studentId, or answers' });
   }

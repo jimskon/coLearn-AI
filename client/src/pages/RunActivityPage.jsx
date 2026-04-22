@@ -2678,19 +2678,20 @@ export default function RunActivityPage({
         'Your instructor may review this later.'
       );
     }
+    const blocked = computedState === 'inprogress';
+    const canAdvance = computedState === 'complete';
 
-
+    const attempt = {
+      submissionString: groupSubmissionString,
+      blocked,
+      canAdvance,
+      unanswered: [...missingRequired, ...pendingRevision],
+      missingRequired,
+      pendingRevision,
+      answers,
+    };
 
     try {
-      //console.log('[RUNDBG] retries for group', { groupNum, retriesRequired });
-
-      /*console.log('[RUNDBG] ABOUT TO SUBMIT-GROUP', {
-        groupNum,
-        retriesRequired,
-        computedState,
-        stateKey,
-        stateVal: answers[stateKey]
-      });*/
       const response = await fetch(
         `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
         {
@@ -2701,48 +2702,51 @@ export default function RunActivityPage({
             studentId: user.id,
             groupNum,
             retriesRequired,
-            answers,
+            forceOverride: !!forceOverride,
+            attempt,
           })
         }
       );
-      //console.log('[RUNDBG] submit-group response', { ok: response.ok, status: response.status });
 
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         alert(`Submission failed: ${errorData.error || 'Unknown error'}`);
-      } else {
-        //console.log('[RUNDBG] after submit, about to reload', { loading: loadingRef.current, t: Date.now() });
-        await loadActivity();
-        //console.log('[RUNDBG] after submit, reload done');
-        // ✅ CLEAR BYPASS STATE AFTER SUCCESSFUL SUBMIT
-        setCanBypassGroups((prev) => {
+        return;
+      }
+
+      await response.json().catch(() => ({}));
+      await loadActivity();
+
+      if (blocked) {
+        return;
+      }
+
+      setCanBypassGroups((prev) => {
+        const next = { ...prev };
+        delete next[currentGroupIndex];
+        return next;
+      });
+
+      if (!isTestMode && overrideThisGroup) {
+        const qBlocksForGroup = blocks.filter((b) => b.type === 'question');
+        setTextFeedbackShown((prev) => {
           const next = { ...prev };
-          delete next[currentGroupIndex];   // cleaner than setting false
+          qBlocksForGroup.forEach((b) => {
+            const qid = `${b.groupId}${b.id}`;
+            delete next[qid];
+          });
           return next;
         });
+      }
 
-        if (!isTestMode && overrideThisGroup) {
-          // Clear any lingering AI suggestions for this group on the client side
-          const qBlocksForGroup = blocks.filter((b) => b.type === 'question');
-          setTextFeedbackShown((prev) => {
-            const next = { ...prev };
-            qBlocksForGroup.forEach((b) => {
-              const qid = `${b.groupId}${b.id}`;
-              delete next[qid];
-            });
-            return next;
-          });
-        }
-
-        if (currentGroupIndex + 1 === groups.length) {
-          await fetch(`${API_BASE_URL}/api/responses/mark-complete`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ instanceId }),
-          });
-        }
+      if (currentGroupIndex + 1 === groups.length) {
+        await fetch(`${API_BASE_URL}/api/responses/mark-complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ instanceId }),
+        });
       }
     } catch (err) {
       console.error('❌ Submission failed:', err);

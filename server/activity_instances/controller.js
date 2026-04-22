@@ -922,6 +922,23 @@ async function getInstancesForActivityInCourse(req, res) {
         }
       }
 
+      const [submitCounts] = await db.query(
+        `SELECT CAST(SUBSTRING_INDEX(question_id, ':', -1) AS UNSIGNED) AS question_group,
+                COUNT(*) AS submit_count
+         FROM responses
+         WHERE activity_instance_id = ?
+           AND question_id LIKE 'attempt:%'
+         GROUP BY CAST(SUBSTRING_INDEX(question_id, ':', -1) AS UNSIGNED)
+         ORDER BY question_group`,
+        [inst.instance_id]
+      );
+
+      const groupSubmitCounts = {};
+      submitCounts.forEach((row) => {
+        if (!Number.isFinite(Number(row.question_group))) return;
+        groupSubmitCounts[String(Number(row.question_group))] = Number(row.submit_count) || 0;
+      });
+
       const roleLabels = { qc: 'Quality Control' };
       groups.push({
         instance_id: inst.instance_id,
@@ -945,6 +962,7 @@ async function getInstancesForActivityInCourse(req, res) {
         reviewed_at: inst.reviewed_at,
         points_earned: inst.points_earned,
         points_possible: inst.points_possible,
+        group_submit_counts: groupSubmitCounts,
         members: members.map(m => ({
           student_id: m.student_id,
           name: m.student_name,

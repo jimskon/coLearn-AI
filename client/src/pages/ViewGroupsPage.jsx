@@ -37,6 +37,89 @@ function isCompleteFromInstanceRow(g) {
   return String(g.progress_status || '').toLowerCase() === 'completed';
 }
 
+function groupProgressItems(group) {
+  const completed = Math.max(Number(group.completed_groups || 0), 0);
+  const totalGroups = Math.max(Number(group.total_groups || 0), 0);
+  const counts = group.group_submit_counts || {};
+  const isActivityComplete = String(group.progress_status || '').toLowerCase() === 'completed';
+
+  const countKeys = Object.keys(counts)
+    .map((key) => Number(key))
+    .filter((value) => Number.isFinite(value) && value > 0);
+
+  const inferredTotal = isActivityComplete ? completed : completed + 1;
+  const total = Math.max(totalGroups, inferredTotal, ...countKeys, 0);
+  if (total <= 0) return [];
+
+  const activeGroup = isActivityComplete ? 0 : Math.min(completed + 1, total);
+
+  return Array.from({ length: total }, (_, index) => {
+    const questionGroup = index + 1;
+    const count = Number(counts[String(questionGroup)] || 0);
+    const isDone = questionGroup <= completed;
+    const isActive = activeGroup > 0 && questionGroup === activeGroup;
+
+    return {
+      questionGroup,
+      count,
+      isDone,
+      isActive,
+    };
+  });
+}
+
+function GroupProgressBars({ group }) {
+  const items = groupProgressItems(group);
+  if (!items.length) return null;
+
+  const maxCount = Math.max(1, ...items.map((item) => item.count));
+
+  return (
+    <div className="border-top pt-3 mt-3">
+      <div className="d-flex align-items-end gap-2 flex-wrap" aria-label="Question group submission counts">
+        {items.map((item) => {
+          const height = Math.max(20, Math.round((item.count / maxCount) * 48));
+          const background = item.isActive ? '#198754' : item.isDone ? '#0d6efd' : '#ced4da';
+          const textColor = item.isDone || item.isActive ? '#fff' : '#212529';
+
+          return (
+            <div
+              key={item.questionGroup}
+              className="d-flex flex-column align-items-center"
+              style={{ minWidth: 24 }}
+              title={`Question Group ${item.questionGroup}: ${item.count} submissions`}
+            >
+              <div className="small text-muted mb-1">Q{item.questionGroup}</div>
+              <div
+                className="d-flex align-items-center justify-content-center rounded"
+                style={{
+                  width: 12,
+                  height,
+                  background,
+                  color: textColor,
+                  fontSize: '0.65rem',
+                  fontWeight: 700,
+                  lineHeight: 1,
+                  padding: 0,
+                }}
+              >
+                <span
+                  style={{
+                    writingMode: 'vertical-rl',
+                    transform: 'rotate(180deg)',
+                  }}
+                >
+                  {item.count}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function ViewGroupsPage() {
   const { courseId, activityId } = useParams();
   const location = useLocation();
@@ -330,6 +413,7 @@ export default function ViewGroupsPage() {
                         </li>
                       ))}
                     </ul>
+                    <GroupProgressBars group={group} />
                   </Card.Body>
                 </Card>
               </Col>

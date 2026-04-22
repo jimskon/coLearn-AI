@@ -2,6 +2,7 @@
 const db = require('../db');
 const { evaluateCode } = require('../ai/controller');
 
+
 exports.createResponse = async (req, res) => {
   const { instanceId, questionId, responseText, answeredBy } = req.body;
 
@@ -71,6 +72,8 @@ exports.createOrUpdateCodeResponse = async (req, res) => {
   }
 };
 
+
+
 exports.getResponsesByInstanceId = async (req, res) => {
   const { instanceId } = req.params;
 
@@ -121,6 +124,7 @@ exports.getResponsesByInstanceId = async (req, res) => {
   }
 };
 
+
 exports.getResponsesByAnsweredBy = async (req, res) => {
   const { instanceId, answeredBy } = req.params;
 
@@ -137,6 +141,7 @@ exports.getResponsesByAnsweredBy = async (req, res) => {
   }
 };
 
+// Updated getGroupResponses function to remove old group_id reference
 exports.getGroupResponses = async (req, res) => {
   const { instanceId } = req.params;
 
@@ -264,3 +269,4 @@ exports.markActivityInstanceComplete = async (req, res) => {
     res.status(500).json({ error: "Failed to mark instance as complete" });
   }
 };
+

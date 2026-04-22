@@ -1282,7 +1282,7 @@ export default function RunActivityPage({
 
         if (needsPersonalSandbox && user?.id) {
           const personalAnswersRes = await fetch(
-            `${API_BASE_URL}/api/activity-instances/${instanceId}/responses?answeredBy=${encodeURIComponent(user.id)}`,
+            `${API_BASE_URL}/api/activity-instances/${instanceId}/responses`,
             { credentials: 'include' }
           );
           const personalAnswersData = await personalAnswersRes.json();

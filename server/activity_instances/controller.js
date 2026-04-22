@@ -656,23 +656,20 @@ async function submitGroupResponses(req, res) {
   const studentId = Number(req.body?.studentId);
   const groupNum = Number(req.body?.groupNum);
   const retriesRequired = Number(req.body?.retriesRequired || 1);
-
   const forceOverride = !!req.body?.forceOverride;
   const ROTATION_MODE = 'questiongroup';
   const attempt = req.body?.attempt || {};
-  const submissionString = String(attempt?.submissionString || req.body?.submissionString || '');
-  const blocked = !!(attempt?.blocked ?? req.body?.blocked);
-  const canAdvance = !!(attempt?.canAdvance ?? req.body?.canAdvance);
-  const unanswered = Array.isArray(attempt?.unanswered)
-    ? attempt.unanswered
-    : (Array.isArray(req.body?.unanswered) ? req.body.unanswered : []);
+  const submissionString = String(attempt?.submissionString || '');
+  const blocked = !!attempt?.blocked;
+  const canAdvance = !!attempt?.canAdvance;
+  const unanswered = Array.isArray(attempt?.unanswered) ? attempt.unanswered : [];
   const answers =
     attempt?.answers && typeof attempt.answers === 'object'
       ? attempt.answers
-      : (req.body?.answers && typeof req.body.answers === 'object' ? req.body.answers : {});
+      : {};
   let emitPatch = null;
   const submitId = randomUUID();
-    
+
   if (!instanceId || !studentId || !answers || typeof answers !== 'object') {
     return res.status(400).json({ error: 'Missing instanceId, studentId, or answers' });
   }
@@ -979,40 +976,27 @@ async function getInstancesForActivityInCourse(req, res) {
 // NEW route: GET /api/responses/:instanceId
 async function getInstanceResponses(req, res) {
   const { instanceId } = req.params;
-  const answeredBy = req.query?.answeredBy;
 
   try {
-    const latestParams = [instanceId];
-    const draftParams = [instanceId];
-    let latestWhere = 'WHERE activity_instance_id = ?';
-    let draftWhere = 'WHERE activity_instance_id = ?';
-
-    if (answeredBy != null && String(answeredBy).trim() !== '') {
-      latestWhere += ' AND answered_by_user_id = ?';
-      draftWhere += ' AND answered_by_user_id = ?';
-      latestParams.push(answeredBy);
-      draftParams.push(answeredBy);
-    }
-
     const [submittedRows] = await db.query(
       `SELECT r.question_id, r.response, r.response_type
        FROM responses r
        JOIN (
          SELECT question_id, MAX(id) AS max_id
          FROM responses
-         ${latestWhere}
+         WHERE activity_instance_id = ?
          GROUP BY question_id
        ) latest
          ON r.question_id = latest.question_id AND r.id = latest.max_id
        WHERE r.activity_instance_id = ?`,
-      [...latestParams, instanceId]
+      [instanceId, instanceId]
     );
 
     const [draftRows] = await db.query(
       `SELECT question_id, response, response_type
        FROM response_drafts
-       ${draftWhere}`,
-      draftParams
+       WHERE activity_instance_id = ?`,
+      [instanceId]
     );
 
     const responses = {};

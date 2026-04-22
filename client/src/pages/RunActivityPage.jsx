@@ -1,7 +1,7 @@
 // client/src/pages/RunActivityPage.jsx
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import { Container, Alert, Button, Spinner } from 'react-bootstrap';
+import { Container, Alert, Button, ButtonGroup, Spinner } from 'react-bootstrap';
 import Prism from 'prismjs';
 import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-python';
@@ -15,6 +15,7 @@ import { parseUtcDbDatetime } from '../utils/time';
 import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBanner';
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
 import QuestionScorePanel from '../components/QuestionScorePanel';
+import RunActivityHistoryView from '../components/RunActivityHistoryView';
 
 function lowerResp(obj, key) {
   return String(obj?.[key]?.response ?? '').trim().toLowerCase();
@@ -223,6 +224,7 @@ export default function RunActivityPage({
   activeStudentId,
   setActiveStudentId,
 }) {
+  const [viewMode, setViewMode] = useState('latest');
   const codeByKeyRef = useRef(Object.create(null));
 
   const dirtyKeysRef = useRef(new Set());
@@ -313,6 +315,12 @@ export default function RunActivityPage({
   const location = useLocation();
   const courseName = location.state?.courseName;
   const { user, loading } = useUser();
+  const canViewHistory =
+    user?.role === 'root' ||
+    user?.role === 'creator' ||
+    user?.role === 'instructor';
+  const [historyRows, setHistoryRows] = useState([]);
+  const effectiveViewMode = canViewHistory ? viewMode : 'latest';
   const [followupsShown, setFollowupsShown] = useState({});
   const [followupAnswers, setFollowupAnswers] = useState({});
 
@@ -777,6 +785,12 @@ export default function RunActivityPage({
       loadActivity();
     }
   }, [user?.id, instanceId]);
+
+  useEffect(() => {
+    if (effectiveViewMode === 'history' && canViewHistory && instanceId) {
+      loadHistory();
+    }
+  }, [effectiveViewMode, canViewHistory, instanceId]);
 
   // NOTE: findQuestionBlockByQid moved inside component so it can see `groups`
   function findQuestionBlockByQid(qid) {
@@ -1402,6 +1416,25 @@ export default function RunActivityPage({
     } finally {
       loadingRef.current = false;
       //console.log('[RUNDBG] loadActivity EXIT', { t: Date.now() });
+    }
+  }
+
+  async function loadHistory() {
+    try {
+      const url = `${API_BASE_URL}/api/activity-instances/${instanceId}/responses/history`;
+      const res = await fetch(url, {
+        credentials: 'include',
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to load history: ${res.status}`);
+      }
+
+      const data = await res.json();
+      setHistoryRows(Array.isArray(data?.rows) ? data.rows : []);
+    } catch (err) {
+      console.error('Failed to load response history', err);
+      setHistoryRows([]);
     }
   }
 
@@ -3064,26 +3097,58 @@ export default function RunActivityPage({
           formatRemainingSeconds={formatRemainingSeconds}
         />
 
+        {canViewHistory && (
+          <div className="d-flex align-items-center justify-content-between mb-3">
+            <div>
+              <strong>View:</strong>
+            </div>
+            <ButtonGroup size="sm">
+              <Button
+                variant={viewMode === 'latest' ? 'primary' : 'outline-primary'}
+                onClick={() => setViewMode('latest')}
+              >
+                Current View
+              </Button>
+              <Button
+                variant={viewMode === 'history' ? 'primary' : 'outline-primary'}
+                onClick={() => setViewMode('history')}
+              >
+                History View
+              </Button>
+            </ButtonGroup>
+          </div>
+        )}
 
-        {renderBlocks(preamble, {
-          editable: false,
-          isActive: false,
-          mode: 'run',
-          codeFeedbackShown,
-          isInstructor,
-          allowLocalToggle: true,
-          isObserver: !isActive,
-          codeViewMode,
-          onToggleViewMode: toggleCodeViewMode,
-          localCode,
-          onLocalCodeChange: updateLocalCode,
-          prefill: existingAnswers,
-          fileContents,
-          setFileContents: handleUpdateFileContents,
-          onFileChange: handleFileChange,
-        })}
+        {effectiveViewMode === 'history' ? (
+          <RunActivityHistoryView
+            historyRows={historyRows}
+            groups={groups}
+            userNameById={Object.fromEntries(
+              (groupMembers || []).map((m) => [m.student_id, m.name])
+            )}
+            title="Full Submission History"
+          />
+        ) : (
+          <>
+            {renderBlocks(preamble, {
+              editable: false,
+              isActive: false,
+              mode: 'run',
+              codeFeedbackShown,
+              isInstructor,
+              allowLocalToggle: true,
+              isObserver: !isActive,
+              codeViewMode,
+              onToggleViewMode: toggleCodeViewMode,
+              localCode,
+              onLocalCodeChange: updateLocalCode,
+              prefill: existingAnswers,
+              fileContents,
+              setFileContents: handleUpdateFileContents,
+              onFileChange: handleFileChange,
+            })}
 
-        {groups.map((group, index) => {
+            {groups.map((group, index) => {
           const completedCount = Number(activity?.completed_groups ?? 0);
           const isComplete = index < completedCount;
           const isCurrent = index === completedCount;
@@ -3314,8 +3379,8 @@ export default function RunActivityPage({
               )}
             </div>
           );
-        })}
-        {isTestMode && isStudent && timeExpired && !isSubmitted && (
+            })}
+            {isTestMode && isStudent && timeExpired && !isSubmitted && (
           <Alert variant="warning" className="mt-3">
             <div className="d-flex justify-content-between align-items-center">
               <div>
@@ -3326,10 +3391,10 @@ export default function RunActivityPage({
               </Button>
             </div>
           </Alert>
-        )}
+            )}
 
-        {/* ✅ Single Submit Test button (ONLY once, after all groups) */}
-        {isTestMode && isStudent && !timeExpired && !isSubmitted && (
+            {/* ✅ Single Submit Test button (ONLY once, after all groups) */}
+            {isTestMode && isStudent && !timeExpired && !isSubmitted && (
           <div className="mt-3">
             <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
               {isSubmitting ? (
@@ -3342,9 +3407,9 @@ export default function RunActivityPage({
               )}
             </Button>
           </div>
-        )}
+            )}
 
-        {isTestMode && isInstructor && isSubmitted && (
+            {isTestMode && isInstructor && isSubmitted && (
           <div className="mt-3 d-flex gap-2">
             <Button
               variant="warning"
@@ -3354,16 +3419,15 @@ export default function RunActivityPage({
               {isSubmitting ? 'Regrading…' : 'Regrade Test'}
             </Button>
           </div>
-        )}
+            )}
 
-        {groups.length > 0 && Number(activity?.completed_groups ?? 0) >= groups.length && (
+            {groups.length > 0 && Number(activity?.completed_groups ?? 0) >= groups.length && (
           <Alert variant="success" className="mt-3">
             Activity is complete! Review your responses above.
           </Alert>
-        )}
+            )}
 
-
-        {isTestMode && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
+            {isTestMode && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
           <Alert variant="info" className="mt-3">
             Overall test score:{' '}
             <strong>
@@ -3376,6 +3440,8 @@ export default function RunActivityPage({
             ).toFixed(1)}
             %)
           </Alert>
+            )}
+          </>
         )}
       </Container>
 

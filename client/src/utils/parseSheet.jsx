@@ -282,9 +282,8 @@ export function parseSheetToBlocks(lines, options = {}) {
       context: context || null
     });
   };
+  const VALID_MODES = new Set(['normal', 'playground', 'test']);
   let isTest = false;
-  let activityMode = 'group';
-  let modeExplicit = false;
   const legacyTestNumbering = options.legacyTestNumbering === true;
   // default true unless explicitly set to false
 
@@ -296,10 +295,9 @@ export function parseSheetToBlocks(lines, options = {}) {
   let currentGroupRetriesRequired = 0;    // ✅ current group effective value
   const meta = {
     isTest: false,
-    mode: 'group',
-    modeExplicit: false,
     retriesDefault: 0,
-    groupRetries: {}
+    groupRetries: {},
+    mode: 'normal',
   };
   let currentQuestion = null;
   let currentField = 'prompt';
@@ -416,27 +414,8 @@ export function parseSheetToBlocks(lines, options = {}) {
     // mark this activity as a test
     if (trimmed === '\\test') {
       isTest = true;
-      activityMode = 'test';
-      modeExplicit = true;
       meta.isTest = true;
       meta.mode = 'test';
-      meta.modeExplicit = true;
-      continue;
-    }
-
-    const modeMatch = trimmed.match(/^\\mode\{([\s\S]+?)\}$/);
-    if (modeMatch) {
-      const nextMode = String(modeMatch[1] || '').trim().toLowerCase();
-      if (['group', 'test', 'demo'].includes(nextMode)) {
-        activityMode = nextMode;
-        modeExplicit = true;
-        isTest = nextMode === 'test';
-        meta.mode = nextMode;
-        meta.modeExplicit = true;
-        meta.isTest = isTest;
-      } else {
-        pushIssue('warn', lineNo, `Unknown \\mode value "${nextMode}". Expected group, test, or demo.`, line);
-      }
       continue;
     }
     // --- inside a \score ... \endscore block ---
@@ -800,11 +779,22 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // Start of a header (now always single logical line thanks to collapseBracedCommands)
-    const headerStart = trimmed.match(/^\\(title|name|activitycontext|studentlevel|aicodeguidance)\{([\s\S]*?)\}$/);
+    const headerStart = trimmed.match(/^\\(title|name|activitycontext|studentlevel|aicodeguidance|mode)\{([\s\S]*?)\}$/);
     if (headerStart) {
       flushCurrentBlock();
       const tag = headerStart[1];
       const content = headerStart[2];
+      if (tag === 'mode') {
+        const parsedMode = content.trim().toLowerCase();
+        meta.mode = VALID_MODES.has(parsedMode) ? parsedMode : 'normal';
+
+        if (meta.mode === 'test') {
+          meta.isTest = true;
+        }
+
+        blocks.push({ type: 'header', tag, content: format(meta.mode) });
+        continue;
+      }
       blocks.push({ type: 'header', tag, content: format(content) });
       continue;
     }
@@ -1152,8 +1142,6 @@ export function parseSheetToBlocks(lines, options = {}) {
 
   // ✅ backward compatible return
   meta.isTest = !!isTest;
-  meta.mode = activityMode;
-  meta.modeExplicit = modeExplicit;
   meta.retriesDefault = globalRetriesRequired;
 
   if (options.returnIssues) {
@@ -1174,6 +1162,7 @@ const HIDE_FROM_STUDENTS_HEADERS = new Set([
   'aicodeguidance',
   'activitycontext',
   'studentlevel',
+  'mode',
 ]);
 
 export function renderBlocks(blocks, options = {}) {
@@ -2057,19 +2046,6 @@ export function renderBlocks(blocks, options = {}) {
                       options.onTextChange?.(responseKey, val, meta);
                     }}
                   />
-
-
-                  {/* 🔶 AI Guidance: visible to active student, observers, and instructor */}
-                  {guidance && (
-                    <Alert
-                      variant="warning"
-                      className="mt-2"
-                      style={{ whiteSpace: 'pre-wrap' }}
-                    >
-                      <strong>AI Guidance</strong>
-                      <div>{guidance}</div>
-                    </Alert>
-                  )}
                 </>
               );
             })()
@@ -2084,6 +2060,18 @@ export function renderBlocks(blocks, options = {}) {
               {block.feedback?.length > 0 && <p className="text-muted"><em>Feedback: {block.feedback.join('; ')}</em></p>}
               {block.followups?.length > 0 && <p className="text-muted"><em>Follow-up: {block.followups.join('; ')}</em></p>}
             </>
+          )}
+
+          {/* 🔶 AI Guidance (ALL question types) */}
+          {textFeedbackShown?.[responseKey] && (
+            <Alert
+              variant="warning"
+              className="mt-2"
+              style={{ whiteSpace: 'pre-wrap' }}
+            >
+              <strong>AI Guidance</strong>
+              <div>{textFeedbackShown[responseKey]}</div>
+            </Alert>
           )}
 
           {/* Show saved followup Q&A in read-only format */}

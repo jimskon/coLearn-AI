@@ -2530,11 +2530,11 @@ export default function RunActivityPage({
       });
 
       answers[`${qid}F1`] = '';
-      answers[`${qid}FM`] = 'accepted';   // default; may flip to needsRevision
-      answers[`${qid}AF`] = 'resolved';   // default; may flip to active
+      delete answers[`${qid}FM`];
+      delete answers[`${qid}AF`];
 
-      // Tell observers to clear the yellow box too
-      emitTextAIState(qid, { f1: '', fm: 'accepted', af: 'resolved' });
+      // Only clear the visible feedback box before re-eval
+      emitTextAIState(qid, { f1: '' });
       if (!looksCodeOnlyNow && !isTestMode) {
         const dbgInput = String(aiInput ?? '').trim();
         /*console.log('[EVALDBG]', {
@@ -2584,27 +2584,21 @@ export default function RunActivityPage({
         const newHasFeedback = typeof feedback === 'string' && feedback.trim().length > 0;
         const becomingAccepted = (prevAF === 'active') && accepted;
 
-        if (newHasFeedback) {
-          const f = feedback.trim();
-
-          setTextFeedbackShown((prev) => ({ ...prev, [qid]: f }));
-
-          answers[`${qid}F1`] = f;
-          answers[`${qid}FM`] = accepted ? 'accepted' : 'needsRevision';
-        } else {
-          if (becomingAccepted && prevFM === 'needsrevision') {
-            setTextFeedbackShown((prev) => {
-              const next = { ...prev };
-              delete next[qid];
-              return next;
-            });
-
-            answers[`${qid}F1`] = '';
-            answers[`${qid}FM`] = 'accepted';
-          }
-        }
-
         answers[`${qid}AF`] = accepted ? 'resolved' : 'active';
+        answers[`${qid}FM`] = accepted ? 'accepted' : 'needsRevision';
+
+        if (feedback && feedback.trim()) {
+          const f = feedback.trim();
+          answers[`${qid}F1`] = f;
+          setTextFeedbackShown((prev) => ({ ...prev, [qid]: f }));
+        } else {
+          answers[`${qid}F1`] = '';
+          setTextFeedbackShown((prev) => {
+            const next = { ...prev };
+            delete next[qid];
+            return next;
+          });
+        }
 
         emitTextAIState(qid, {
           af: answers[`${qid}AF`],
@@ -2716,6 +2710,7 @@ export default function RunActivityPage({
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         alert(`Submission failed: ${errorData.error || 'Unknown error'}`);
+        setIsSubmitting(false);
         return;
       }
 
@@ -2723,6 +2718,7 @@ export default function RunActivityPage({
       await loadActivity();
 
       if (blocked) {
+        setIsSubmitting(false);
         return;
       }
 

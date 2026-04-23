@@ -1,10 +1,24 @@
 // /server/responses/controller.js
 const db = require('../db');
 const { evaluateCode } = require('../ai/controller');
+const { isValidQuestionId } = require('../utils/questionId');
 
+function isPositiveInteger(value) {
+  return Number.isInteger(value) && value > 0;
+}
 
 exports.createResponse = async (req, res) => {
   const { instanceId, questionId, responseText, answeredBy } = req.body;
+
+  if (!questionId) {
+    return res.status(400).json({ error: 'Missing question_id' });
+  }
+
+  if (!isValidQuestionId(questionId)) {
+    return res.status(400).json({
+      error: `Invalid question_id: ${questionId}`,
+    });
+  }
 
   try {
     await db.query(
@@ -21,13 +35,23 @@ exports.createResponse = async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("❌ Error saving response draft:", err);
-    res.status(500).json({ error: "Failed to save response draft" });
+    console.error('❌ Error saving response draft:', err);
+    res.status(500).json({ error: 'Failed to save response draft' });
   }
 };
 
 exports.createOrUpdateCodeResponse = async (req, res) => {
   const { activity_instance_id, question_id, user_id, response } = req.body;
+
+  if (!question_id) {
+    return res.status(400).json({ error: 'Missing question_id' });
+  }
+
+  if (!isValidQuestionId(question_id)) {
+    return res.status(400).json({
+      error: `Invalid question_id: ${question_id}`,
+    });
+  }
 
   const conn = await db.getConnection();
   try {
@@ -64,15 +88,13 @@ exports.createOrUpdateCodeResponse = async (req, res) => {
     await conn.commit();
     res.json({ success: true, feedback: feedbackText });
   } catch (err) {
-    console.error("❌ Error saving code draft or feedback:", err);
+    console.error('❌ Error saving code draft or feedback:', err);
     await conn.rollback();
-    res.status(500).json({ error: "Failed to save code draft or feedback" });
+    res.status(500).json({ error: 'Failed to save code draft or feedback' });
   } finally {
     conn.release();
   }
 };
-
-
 
 exports.getResponsesByInstanceId = async (req, res) => {
   const { instanceId } = req.params;
@@ -119,11 +141,10 @@ exports.getResponsesByInstanceId = async (req, res) => {
 
     res.json(result);
   } catch (err) {
-    console.error("❌ Error fetching merged responses:", err);
-    res.status(500).json({ error: "Failed to fetch responses" });
+    console.error('❌ Error fetching merged responses:', err);
+    res.status(500).json({ error: 'Failed to fetch responses' });
   }
 };
-
 
 exports.getResponsesByAnsweredBy = async (req, res) => {
   const { instanceId, answeredBy } = req.params;
@@ -136,8 +157,8 @@ exports.getResponsesByAnsweredBy = async (req, res) => {
 
     res.json(rows);
   } catch (err) {
-    console.error("❌ Error fetching responses:", err);
-    res.status(500).json({ error: "Failed to fetch responses" });
+    console.error('❌ Error fetching responses:', err);
+    res.status(500).json({ error: 'Failed to fetch responses' });
   }
 };
 
@@ -171,19 +192,19 @@ exports.getGroupResponses = async (req, res) => {
     for (const row of submittedRows) {
       result[row.question_id] = {
         response: row.response,
-        type: row.response_type
+        type: row.response_type,
       };
     }
     for (const row of draftRows) {
       result[row.question_id] = {
         response: row.response,
-        type: row.response_type
+        type: row.response_type,
       };
     }
 
     res.json(result);
   } catch (err) {
-    console.error("❌ Failed to get merged group responses:", err);
+    console.error('❌ Failed to get merged group responses:', err);
     res.status(500).json({ error: 'Failed to fetch group responses' });
   }
 };
@@ -193,8 +214,16 @@ exports.bulkSaveResponses = async (req, res) => {
   const userId = Number(req.body?.userId);
   const answers = req.body?.answers;
 
-  if (!instanceId || !userId || !answers || typeof answers !== 'object') {
-    return res.status(400).json({ error: 'Missing/invalid instanceId, userId, or answers' });
+  if (
+    !isPositiveInteger(instanceId) ||
+    !isPositiveInteger(userId) ||
+    !answers ||
+    typeof answers !== 'object' ||
+    Array.isArray(answers)
+  ) {
+    return res.status(400).json({
+      error: 'Missing/invalid instanceId, userId, or answers',
+    });
   }
 
   const entries = Object.entries(answers)
@@ -202,7 +231,17 @@ exports.bulkSaveResponses = async (req, res) => {
     .filter(([qid]) => qid.length > 0)
     .sort((a, b) => a[0].localeCompare(b[0]));
 
-  if (entries.length === 0) return res.json({ success: true, saved: 0 });
+  for (const [qid] of entries) {
+    if (!isValidQuestionId(qid)) {
+      return res.status(400).json({
+        error: `Invalid question_id: ${qid}`,
+      });
+    }
+  }
+
+  if (entries.length === 0) {
+    return res.json({ success: true, saved: 0 });
+  }
 
   const conn = await db.getConnection();
   try {
@@ -213,10 +252,12 @@ exports.bulkSaveResponses = async (req, res) => {
         await conn.beginTransaction();
 
         const values = [];
-        const placeholders = entries.map(([questionId, responseText]) => {
-          values.push(instanceId, questionId, 'text', responseText, userId);
-          return '(?, ?, ?, ?, ?)';
-        }).join(',');
+        const placeholders = entries
+          .map(([questionId, responseText]) => {
+            values.push(instanceId, questionId, 'text', responseText, userId);
+            return '(?, ?, ?, ?, ?)';
+          })
+          .join(',');
 
         const sql = `
           INSERT INTO response_drafts
@@ -236,10 +277,11 @@ exports.bulkSaveResponses = async (req, res) => {
       } catch (err) {
         await conn.rollback();
 
-        const deadlock = err && (err.code === 'ER_LOCK_DEADLOCK' || err.errno === 1213);
+        const deadlock =
+          err && (err.code === 'ER_LOCK_DEADLOCK' || err.errno === 1213);
         if (!deadlock || attempt === MAX_RETRIES) throw err;
 
-        await new Promise(r => setTimeout(r, 30 * attempt));
+        await new Promise((r) => setTimeout(r, 30 * attempt));
       }
     }
   } catch (err) {
@@ -265,8 +307,7 @@ exports.markActivityInstanceComplete = async (req, res) => {
 
     res.json({ success: true });
   } catch (err) {
-    console.error("❌ Error marking instance complete:", err);
-    res.status(500).json({ error: "Failed to mark instance as complete" });
+    console.error('❌ Error marking instance complete:', err);
+    res.status(500).json({ error: 'Failed to mark instance as complete' });
   }
 };
-

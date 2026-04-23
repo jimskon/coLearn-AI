@@ -28,6 +28,7 @@ node_modules/
 _output/
 client/.jupyterlite.doit.db
 .jupyterlite.doit.db
+bootstrap-summary.txt
 
 # Env & secrets
 server/.env*

@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "lint:syntax": "node scripts/check-syntax.js",
-    "test:unit": "node --test tests/*.validation.test.js tests/googleIds.test.js",
+      "test:unit": "node --test tests",
     "test:db": "node --test tests/*.db.test.js",
     "test": "npm run lint:syntax && npm run test:unit",
     "test:ci": "npm test && npm run test:db",

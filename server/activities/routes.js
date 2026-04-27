@@ -82,10 +82,19 @@ router.get('/preview-doc', async (req, res) => {
 
     const doc = await docs.documents.get({ documentId: docId });
 
+    // Keep each Google Docs paragraph as one logical authored line.
+    // Splitting by element breaks commands that Docs fragments across runs,
+    // such as \section{Title}{10} when the title has mixed formatting.
     const lines = doc.data.body.content
-      .flatMap(item => item.paragraph?.elements || [])
-      .map(e => e.textRun?.content?.replace(/\r?\n$/, ''))  // strip trailing newlines
-      .filter(Boolean); // remove undefined
+      .map((item) => {
+        if (!item.paragraph?.elements) return null;
+        return item.paragraph.elements
+          .map((e) => e.textRun?.content || '')
+          .join('')
+          .replace(/\r?\n$/, '')
+          .trim();
+      })
+      .filter(Boolean);
 
     res.json({ lines });
   } catch (err) {

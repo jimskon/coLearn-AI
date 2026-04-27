@@ -2666,6 +2666,16 @@ export default function RunActivityPage({
 
     // ---- completion logic ----
     const qBlocks = blocks.filter((b) => b.type === 'question');
+    const debugQidState = qBlocks.map((b) => {
+      const qid = `${b.groupId}${b.id}`;
+      return {
+        qid,
+        localStatus: answers[`${qid}S`],
+        savedStatus: existingAnswers[`${qid}S`]?.response,
+        hasAnswer: Object.prototype.hasOwnProperty.call(answers, qid),
+        savedAnswer: existingAnswers[qid]?.response ?? null,
+      };
+    });
 
     const isCodeOnlyMap = Object.fromEntries(
       qBlocks.map((b) => {
@@ -2700,6 +2710,20 @@ export default function RunActivityPage({
         ? 'complete'
         : 'inprogress';
 
+    console.log('[SUBMIT DEBUG] pre-submit gate', {
+      currentGroupIndex,
+      groupNum,
+      qids: qBlocks.map((b) => `${b.groupId}${b.id}`),
+      missingRequired,
+      missingRequiredMap,
+      pendingRevision,
+      pendingBase,
+      pendingByStatus,
+      overrideThisGroup,
+      computedState,
+      qidState: debugQidState,
+    });
+
 
 
     const stateKey = `${groupNum}state`;
@@ -2720,6 +2744,15 @@ export default function RunActivityPage({
     setUnansweredShown(missingRequiredMap);
 
     if (pendingBase) {
+      console.log('[SUBMIT DEBUG] blocked before submit-group due to missing required', {
+        currentGroupIndex,
+        groupNum,
+        missingRequired,
+        missingRequiredMap,
+        pendingRevision,
+        computedState,
+        qidState: debugQidState,
+      });
       const missingList = Object.keys(missingRequiredMap).length
         ? Object.keys(missingRequiredMap).join(', ')
         : missingRequired.join(', ');
@@ -2745,6 +2778,17 @@ export default function RunActivityPage({
     };
 
     try {
+      console.log('[SUBMIT DEBUG] sending submit-group', {
+        instanceId,
+        studentId: user.id,
+        groupNum,
+        retriesRequired,
+        forceOverride: !!forceOverride,
+        blocked,
+        canAdvance,
+        unanswered: [...missingRequired, ...pendingRevision],
+        qidState: debugQidState,
+      });
       const response = await fetch(
         `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
         {
@@ -2769,6 +2813,11 @@ export default function RunActivityPage({
       }
 
       const result = await response.json().catch(() => ({}));
+      console.log('[SUBMIT DEBUG] submit-group result', {
+        instanceId,
+        groupNum,
+        result,
+      });
       const priorCompletedGroups = Number(activity?.completed_groups ?? 0);
       const resultCompletedGroups =
         result?.completed_groups != null ? Number(result.completed_groups) : null;

@@ -2804,7 +2804,13 @@ export default function RunActivityPage({
         await loadActivity();
       }
 
-      if (blocked) {
+      const blockedByServer = !advancedByServer;
+
+      if (blockedByServer) {
+        //alert(
+        //  `Your attempt was saved, but this group cannot advance yet.\n\n` +
+        //  `Open the instructor history later to review the full attempt transcript.`
+        //);
         setIsSubmitting(false);
         return;
       }

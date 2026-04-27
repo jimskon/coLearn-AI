@@ -805,18 +805,37 @@ export function parseSheetToBlocks(lines, options = {}) {
 
     // Backward-compatible section timing:
     // \section{Title} or \section{Title}{10}
-    const timedSectionMatch = trimmed.match(/^\\section\*?\{([\s\S]+?)\}\s*\{\s*(\d+)\s*\}$/);
-    const plainSectionMatch = trimmed.match(/^\\section\*?\{([\s\S]+?)\}$/);
-    if (timedSectionMatch || plainSectionMatch) {
+    const sectionPrefixMatch = trimmed.match(/^\\section\*?\{/);
+    if (sectionPrefixMatch) {
       flushCurrentBlock();
-      sectionNumber += 1;
-      const title = timedSectionMatch ? timedSectionMatch[1] : plainSectionMatch[1];
-      const minutes = timedSectionMatch ? Math.max(1, parseInt(timedSectionMatch[2], 10) || 0) : null;
+      const timedSectionMatch = trimmed.match(/^\\section\*?\{([\s\S]*)\}\s*\{\s*(\d+)\s*\}$/);
+      if (timedSectionMatch) {
+        sectionNumber += 1;
+        blocks.push({
+          type: 'section',
+          key: `section-${sectionNumber}`,
+          title: format(timedSectionMatch[1]),
+          minutes: Math.max(1, parseInt(timedSectionMatch[2], 10) || 0),
+        });
+        continue;
+      }
+
+      const plainSectionMatch = trimmed.match(/^\\section\*?\{([\s\S]*)\}$/);
+      if (plainSectionMatch && !/\}\s*\{/.test(plainSectionMatch[1])) {
+        sectionNumber += 1;
+        blocks.push({
+          type: 'section',
+          key: `section-${sectionNumber}`,
+          title: format(plainSectionMatch[1]),
+          minutes: null,
+        });
+        continue;
+      }
+
+      pushIssue('error', lineNo, 'Malformed \\section command. Use \\section{Title} or \\section{Title}{10}.', line);
       blocks.push({
-        type: 'section',
-        key: `section-${sectionNumber}`,
-        title: format(title),
-        minutes,
+        type: 'text',
+        content: format(trimmed),
       });
       continue;
     }

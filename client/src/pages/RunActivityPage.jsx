@@ -2769,18 +2769,24 @@ export default function RunActivityPage({
       }
 
       const result = await response.json().catch(() => ({}));
+      const priorCompletedGroups = Number(activity?.completed_groups ?? 0);
+      const resultCompletedGroups =
+        result?.completed_groups != null ? Number(result.completed_groups) : null;
+      const advancedByServer =
+        Number.isFinite(resultCompletedGroups) &&
+        resultCompletedGroups > priorCompletedGroups;
 
       setActivity((prev) => (
         prev
           ? {
-            ...prev,
-            ...(result?.completed_groups != null
-              ? { completed_groups: Number(result.completed_groups) }
-              : {}),
-            ...(result?.progress_status
-              ? { progress_status: result.progress_status }
-              : {}),
-          }
+              ...prev,
+              ...(Number.isFinite(resultCompletedGroups)
+                ? { completed_groups: resultCompletedGroups }
+                : {}),
+              ...(result?.progress_status
+                ? { progress_status: result.progress_status }
+                : {}),
+            }
           : prev
       ));
 
@@ -2788,7 +2794,15 @@ export default function RunActivityPage({
         setActiveStudentId(Number(result.activeStudentId));
       }
 
-      await loadActivity();
+      if (advancedByServer) {
+        window.setTimeout(() => {
+          loadActivity().catch((err) => {
+            console.error('❌ Background reload after submit failed:', err);
+          });
+        }, 250);
+      } else {
+        await loadActivity();
+      }
 
       if (blocked) {
         //alert(

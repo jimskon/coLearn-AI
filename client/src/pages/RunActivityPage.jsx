@@ -739,10 +739,6 @@ export default function RunActivityPage({
   }, [instanceId, isTestMode]);
 
   useEffect(() => {
-    console.log('[MODE DEBUG]', activity);
-  }, [activity]);
-
-  useEffect(() => {
     const sendHeartbeat = async () => {
       if (!user?.id || !instanceId) return;
       try {
@@ -1543,16 +1539,6 @@ export default function RunActivityPage({
         ? Number(data.retriesRequired)
         : null;
 
-      console.log('[****EVAL RESULT]', {
-        qid,
-        accepted,
-        feedback,
-        canContinue,
-        retryCount,
-        retriesRequiredOut,
-        latencyMs: Math.round(performance.now() - t0),
-      });
-
       return {
         accepted,
         feedback,
@@ -2262,16 +2248,6 @@ export default function RunActivityPage({
           String(existingAnswers?.[`${qid}output`]?.response ?? '').trim();
 
         try {
-          console.log('[EVAL1] BEFORE FETCH', {
-            qid,
-            lang,
-            hasLeft45: studentCode.includes('left(45)'),
-            first120: studentCode.slice(0, 120),
-            codeLen: studentCode.length,
-            outputLen: outputText.length,
-            outputPreview: outputText.slice(0, 120),
-          });
-
           const evalUrl = `${API_BASE_URL}/api/ai/evaluate-code`;
 
           const payload = {
@@ -2299,14 +2275,6 @@ export default function RunActivityPage({
           };
 
           const t0 = performance.now();
-          console.log('[EVAL1] FETCH start', {
-            qid,
-            evalUrl,
-            apiBase: API_BASE_URL,
-            payloadKeys: Object.keys(payload),
-            codeLen: studentCode?.length,
-            outputLen: outputText.length,
-          });
 
           const controller = new AbortController();
           const timeoutMs = 20000;
@@ -2324,10 +2292,6 @@ export default function RunActivityPage({
             });
 
             rawText = await aiRes.text();
-            console.log('[EVAL1] FETCH raw (first 300)', {
-              qid,
-              first300: (rawText || '').slice(0, 300),
-            });
 
             if (!aiRes.ok) {
               throw new Error(`evaluate-code ${aiRes.status}: ${(rawText || '').slice(0, 200)}`);
@@ -2364,15 +2328,6 @@ export default function RunActivityPage({
                 followup,
               };
             }
-
-            console.log('[EVAL1] PARSED+NORMALIZED', {
-              qid,
-              accepted: data?.accepted,
-              feedbackLen: data?.feedback?.length || 0,
-              feedbackPreview: (data?.feedback || '').slice(0, 120),
-              hasComment: false,
-              hasFollowupQuestion: false,
-            });
 
             if (data?.canContinue === true) {
               setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
@@ -2666,17 +2621,6 @@ export default function RunActivityPage({
 
     // ---- completion logic ----
     const qBlocks = blocks.filter((b) => b.type === 'question');
-    const debugQidState = qBlocks.map((b) => {
-      const qid = `${b.groupId}${b.id}`;
-      return {
-        qid,
-        localStatus: answers[`${qid}S`],
-        savedStatus: existingAnswers[`${qid}S`]?.response,
-        hasAnswer: Object.prototype.hasOwnProperty.call(answers, qid),
-        savedAnswer: existingAnswers[qid]?.response ?? null,
-      };
-    });
-
     const isCodeOnlyMap = Object.fromEntries(
       qBlocks.map((b) => {
         const qidB = `${b.groupId}${b.id}`;
@@ -2710,22 +2654,6 @@ export default function RunActivityPage({
         ? 'complete'
         : 'inprogress';
 
-    console.log('[SUBMIT DEBUG] pre-submit gate', {
-      currentGroupIndex,
-      groupNum,
-      qids: qBlocks.map((b) => `${b.groupId}${b.id}`),
-      missingRequired,
-      missingRequiredMap,
-      pendingRevision,
-      pendingBase,
-      pendingByStatus,
-      overrideThisGroup,
-      computedState,
-      qidState: debugQidState,
-    });
-
-
-
     const stateKey = `${groupNum}state`;
     answers[stateKey] = computedState;
 
@@ -2744,15 +2672,6 @@ export default function RunActivityPage({
     setUnansweredShown(missingRequiredMap);
 
     if (pendingBase) {
-      console.log('[SUBMIT DEBUG] blocked before submit-group due to missing required', {
-        currentGroupIndex,
-        groupNum,
-        missingRequired,
-        missingRequiredMap,
-        pendingRevision,
-        computedState,
-        qidState: debugQidState,
-      });
       const missingList = Object.keys(missingRequiredMap).length
         ? Object.keys(missingRequiredMap).join(', ')
         : missingRequired.join(', ');
@@ -2778,17 +2697,6 @@ export default function RunActivityPage({
     };
 
     try {
-      console.log('[SUBMIT DEBUG] sending submit-group', {
-        instanceId,
-        studentId: user.id,
-        groupNum,
-        retriesRequired,
-        forceOverride: !!forceOverride,
-        blocked,
-        canAdvance,
-        unanswered: [...missingRequired, ...pendingRevision],
-        qidState: debugQidState,
-      });
       const response = await fetch(
         `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
         {
@@ -2813,11 +2721,6 @@ export default function RunActivityPage({
       }
 
       const result = await response.json().catch(() => ({}));
-      console.log('[SUBMIT DEBUG] submit-group result', {
-        instanceId,
-        groupNum,
-        result,
-      });
       const priorCompletedGroups = Number(activity?.completed_groups ?? 0);
       const resultCompletedGroups =
         result?.completed_groups != null ? Number(result.completed_groups) : null;
@@ -3079,13 +2982,6 @@ export default function RunActivityPage({
   async function handleCodeChange(responseKey, updatedCode, meta = {}) {
 
     setSubmitAlert(null);
-
-    console.log('[CODECHANGE] fired', {
-      responseKey,
-      len: (updatedCode || '').length,
-      head: (updatedCode || '').slice(0, 40),
-      t: Date.now(),
-    });
 
     const baseQid = baseQidFromResponseKey(responseKey);
     if (baseQid) {

@@ -173,7 +173,6 @@ async function applyGroupRetryGate({
   accepted,
   submissionString,
 }) {
-  console.log("[RETRIES]", retriesRequired, accepted, "hash:", sha256Hex(String(submissionString ?? "")));
   const max = Number(retriesRequired) || 0;
 
   // If no retry policy, never block progression

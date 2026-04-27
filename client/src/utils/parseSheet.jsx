@@ -107,6 +107,36 @@ function collapseBracedCommands(rawLines) {
   return out;
 }
 
+function parseCommandArgs(line, commandName) {
+  const commandMatch = line.match(new RegExp(`^\\\\${commandName}\\*?`));
+  if (!commandMatch) return null;
+
+  let i = commandMatch[0].length;
+  const args = [];
+
+  while (i < line.length && /\s/.test(line[i])) i += 1;
+
+  while (i < line.length && line[i] === '{') {
+    i += 1;
+    const start = i;
+    let depth = 1;
+
+    while (i < line.length && depth > 0) {
+      if (line[i] === '{') depth += 1;
+      else if (line[i] === '}') depth -= 1;
+      i += 1;
+    }
+
+    if (depth !== 0) return null;
+
+    args.push(line.slice(start, i - 1));
+
+    while (i < line.length && /\s/.test(line[i])) i += 1;
+  }
+
+  return i === line.length ? args : null;
+}
+
 export default function FileBlock({
   filename,
   fileKey,
@@ -290,6 +320,7 @@ export function parseSheetToBlocks(lines, options = {}) {
 
   const blocks = [];
   let groupNumber = 0;
+  let sectionNumber = 0;
   let questionLetterCode = 97;
   let responseId = 1;
   let globalRetriesRequired = 0;          // ✅ sheet default
@@ -802,10 +833,44 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    const sectionMatch = trimmed.match(/^\\section\*?\{([\s\S]+?)\}$/);
-    if (sectionMatch) {
+    // Backward-compatible section timing:
+    // \section{Title} or \section{Title}{10}
+    const sectionArgs = parseCommandArgs(trimmed, 'section');
+    if (sectionArgs) {
       flushCurrentBlock();
-      blocks.push({ type: 'section', title: format(sectionMatch[1]) });
+      const [title, minutesRaw] = sectionArgs;
+
+      if (sectionArgs.length === 1) {
+        sectionNumber += 1;
+        blocks.push({
+          type: 'section',
+          key: `section-${sectionNumber}`,
+          title: format(title),
+          minutes: null,
+        });
+        continue;
+      }
+
+      if (sectionArgs.length === 2 && /^\d+$/.test((minutesRaw || '').trim())) {
+        sectionNumber += 1;
+        blocks.push({
+          type: 'section',
+          key: `section-${sectionNumber}`,
+          title: format(title),
+          minutes: Math.max(1, parseInt(minutesRaw.trim(), 10) || 0),
+        });
+        continue;
+      }
+    }
+
+    const sectionPrefixMatch = trimmed.match(/^\\section\*?\{/);
+    if (sectionPrefixMatch) {
+      flushCurrentBlock();
+      pushIssue('error', lineNo, 'Malformed \\section command. Use \\section{Title} or \\section{Title}{10}.', line);
+      blocks.push({
+        type: 'text',
+        content: format(trimmed),
+      });
       continue;
     }
 
@@ -1249,6 +1314,11 @@ export function renderBlocks(blocks, options = {}) {
       return (
         <h2 key={`section-${index}`} className="my-3">
           {block.title}
+          {block.minutes ? (
+            <small className="text-muted ms-2 fw-normal">
+              ({block.minutes} minute{block.minutes === 1 ? '' : 's'})
+            </small>
+          ) : null}
         </h2>
       );
     }

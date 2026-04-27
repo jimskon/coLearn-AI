@@ -8,7 +8,31 @@ export default function RunActivityFloatingTimer({
   testLockState,
   submittedAt,
   formatRemainingSeconds,
+  sectionTimer,
 }) {
+  if (sectionTimer?.visible) {
+    return (
+      <div
+        style={{
+          position: 'fixed',
+          top: '70px',
+          right: '16px',
+          zIndex: 1050,
+        }}
+      >
+        <div
+          className="px-3 py-2 rounded shadow-sm small fw-semibold"
+          style={{
+            background: sectionTimer.background,
+            color: sectionTimer.color,
+          }}
+        >
+          {sectionTimer.label}
+        </div>
+      </div>
+    );
+  }
+
   if (!isTestMode || !isStudent || !testWindow) return null;
 
   const { lockedBefore, lockedAfter, remainingSeconds } = testLockState || {};

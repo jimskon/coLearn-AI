@@ -805,15 +805,18 @@ export function parseSheetToBlocks(lines, options = {}) {
 
     // Backward-compatible section timing:
     // \section{Title} or \section{Title}{10}
-    const sectionMatch = trimmed.match(/^\\section\*?\{([\s\S]+?)\}(?:\{(\d+)\})?$/);
-    if (sectionMatch) {
+    const timedSectionMatch = trimmed.match(/^\\section\*?\{([\s\S]+?)\}\s*\{\s*(\d+)\s*\}$/);
+    const plainSectionMatch = trimmed.match(/^\\section\*?\{([\s\S]+?)\}$/);
+    if (timedSectionMatch || plainSectionMatch) {
       flushCurrentBlock();
       sectionNumber += 1;
+      const title = timedSectionMatch ? timedSectionMatch[1] : plainSectionMatch[1];
+      const minutes = timedSectionMatch ? Math.max(1, parseInt(timedSectionMatch[2], 10) || 0) : null;
       blocks.push({
         type: 'section',
         key: `section-${sectionNumber}`,
-        title: format(sectionMatch[1]),
-        minutes: sectionMatch[2] ? Math.max(1, parseInt(sectionMatch[2], 10) || 0) : null,
+        title: format(title),
+        minutes,
       });
       continue;
     }

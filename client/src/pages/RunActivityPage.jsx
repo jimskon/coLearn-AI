@@ -2776,7 +2776,7 @@ export default function RunActivityPage({
         Number.isFinite(resultCompletedGroups) &&
         resultCompletedGroups > priorCompletedGroups;
 
-      setActivity((prev) => (
+       setActivity((prev) => (
         prev
           ? {
               ...prev,
@@ -2805,13 +2805,10 @@ export default function RunActivityPage({
       }
 
       if (blocked) {
-        //alert(
-        //  `Your attempt was saved, but this group cannot advance yet.\n\n` +
-        //  `Open the instructor history later to review the full attempt transcript.`
-        //);
         setIsSubmitting(false);
         return;
       }
+
 
       setCanBypassGroups((prev) => {
         const next = { ...prev };

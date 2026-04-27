@@ -2769,17 +2769,46 @@ export default function RunActivityPage({
       }
 
       const result = await response.json().catch(() => ({}));
+      const priorCompletedGroups = Number(activity?.completed_groups ?? 0);
+      const resultCompletedGroups =
+        result?.completed_groups != null ? Number(result.completed_groups) : null;
+      const advancedByServer =
+        Number.isFinite(resultCompletedGroups) &&
+        resultCompletedGroups > priorCompletedGroups;
 
-      await loadActivity();
+       setActivity((prev) => (
+        prev
+          ? {
+              ...prev,
+              ...(Number.isFinite(resultCompletedGroups)
+                ? { completed_groups: resultCompletedGroups }
+                : {}),
+              ...(result?.progress_status
+                ? { progress_status: result.progress_status }
+                : {}),
+            }
+          : prev
+      ));
+
+      if (result?.activeStudentId != null) {
+        setActiveStudentId(Number(result.activeStudentId));
+      }
+
+      if (advancedByServer) {
+        window.setTimeout(() => {
+          loadActivity().catch((err) => {
+            console.error('❌ Background reload after submit failed:', err);
+          });
+        }, 250);
+      } else {
+        await loadActivity();
+      }
 
       if (blocked) {
-        //alert(
-        //  `Your attempt was saved, but this group cannot advance yet.\n\n` +
-        //  `Open the instructor history later to review the full attempt transcript.`
-        //);
         setIsSubmitting(false);
         return;
       }
+
 
       setCanBypassGroups((prev) => {
         const next = { ...prev };

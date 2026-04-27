@@ -53,3 +53,5 @@ pogil_db_*.sql
 
 # Local artifacts
 client/hash
+
+bootstrap-summary.txt

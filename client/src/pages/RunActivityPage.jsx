@@ -816,7 +816,7 @@ export default function RunActivityPage({
 
   useEffect(() => {
     const sendHeartbeat = async () => {
-      if (!user?.id || !instanceId) return;
+      if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
       try {
         await fetch(
           `${API_BASE_URL}/api/activity-instances/${instanceId}/heartbeat`,
@@ -839,6 +839,7 @@ export default function RunActivityPage({
   }, [
     user?.id,
     instanceId,
+    groups,
     currentTimedSection?.key,
     currentTimedSection?.minutes,
   ]);

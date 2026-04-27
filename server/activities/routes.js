@@ -91,8 +91,7 @@ router.get('/preview-doc', async (req, res) => {
         return item.paragraph.elements
           .map((e) => e.textRun?.content || '')
           .join('')
-          .replace(/\r?\n$/, '')
-          .trim();
+          .replace(/\r?\n$/, '');
       })
       .filter(Boolean);
 

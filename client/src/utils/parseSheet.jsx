@@ -1313,6 +1313,11 @@ export function renderBlocks(blocks, options = {}) {
       return (
         <h2 key={`section-${index}`} className="my-3">
           {block.title}
+          {block.minutes ? (
+            <small className="text-muted ms-2 fw-normal">
+              ({block.minutes} minute{block.minutes === 1 ? '' : 's'})
+            </small>
+          ) : null}
         </h2>
       );
     }

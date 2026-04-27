@@ -212,6 +212,13 @@ function formatRemainingSeconds(sec) {
   return `${m}m ${s}s`;
 }
 
+function formatSectionMinutesLabel(remainingMs) {
+  if (remainingMs <= 0) return 'Time out';
+
+  const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+  return `${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left`;
+}
+
 function stripHtml(s = '') {
   return String(s)
     .replace(/<br\s*\/?>/gi, '\n')
@@ -399,11 +406,66 @@ export default function RunActivityPage({
   const [timeExpired, setTimeExpired] = useState(false);
   // ✅ add this (prevents repeat auto-submit calls)
   const [autoSubmitted, setAutoSubmitted] = useState(false);
+  const [sectionTimerNowMs, setSectionTimerNowMs] = useState(() => Date.now());
 
 
   const [nonLegacyForUI, setNonLegacyForUI] = useState(false);
 
   const isLockedFU = (qid) => qidsNoFURef.current?.has(qid);
+
+  const currentTimedSection = useMemo(() => {
+    if (!Array.isArray(groups) || currentGroupIndex >= groups.length) return null;
+
+    const group = groups[currentGroupIndex];
+    const section = group?.section || null;
+    if (!section?.key || !section?.minutes) return null;
+
+    return {
+      key: section.key,
+      minutes: Number(section.minutes),
+    };
+  }, [groups, currentGroupIndex]);
+
+  const sectionTimer = useMemo(() => {
+    const startedAt = activity?.section_timer_started_at
+      ? parseUtcDbDatetime(activity.section_timer_started_at)
+      : null;
+
+    if (
+      !currentTimedSection?.key ||
+      !currentTimedSection?.minutes ||
+      activity?.section_timer_key !== currentTimedSection.key ||
+      !startedAt
+    ) {
+      return { visible: false };
+    }
+
+    const durationMs = currentTimedSection.minutes * 60 * 1000;
+    const elapsedMs = sectionTimerNowMs - startedAt.getTime();
+    const remainingMs = durationMs - elapsedMs;
+    const ratio = durationMs > 0 ? remainingMs / durationMs : 0;
+
+    let background = '#198754';
+    let color = '#fff';
+    if (remainingMs <= 0) {
+      background = '#dc3545';
+    } else if (ratio <= 0.2) {
+      background = '#ffc107';
+      color = '#212529';
+    }
+
+    return {
+      visible: true,
+      label: formatSectionMinutesLabel(remainingMs),
+      background,
+      color,
+    };
+  }, [
+    activity?.section_timer_key,
+    activity?.section_timer_started_at,
+    currentTimedSection,
+    sectionTimerNowMs,
+  ]);
 
 
 
@@ -539,6 +601,16 @@ export default function RunActivityPage({
   useEffect(() => {
     console.log('[RUN] isTestMode:', isTestMode);
   }, [isTestMode]);
+
+  useEffect(() => {
+    if (!sectionTimer.visible) return undefined;
+
+    const interval = setInterval(() => {
+      setSectionTimerNowMs(Date.now());
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [sectionTimer.visible]);
 
   const isInstructor =
     user?.role === 'instructor' ||
@@ -752,7 +824,11 @@ export default function RunActivityPage({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ userId: user.id }),
+            body: JSON.stringify({
+              userId: user.id,
+              sectionTimerKey: currentTimedSection?.key || null,
+              sectionTimerDurationMinutes: currentTimedSection?.minutes || null,
+            }),
           }
         );
       } catch { }
@@ -760,7 +836,12 @@ export default function RunActivityPage({
     sendHeartbeat();
     const interval = setInterval(sendHeartbeat, 20000);
     return () => clearInterval(interval);
-  }, [user?.id, instanceId]);
+  }, [
+    user?.id,
+    instanceId,
+    currentTimedSection?.key,
+    currentTimedSection?.minutes,
+  ]);
 
   useEffect(() => {
     const loadScript = (src) =>
@@ -1310,11 +1391,27 @@ export default function RunActivityPage({
         let seenAnyGroup = false;
         let currentGroup = null;
         let betweenGroups = [];
+        let activeSection = null;
 
         for (const block of blocks) {
+          // Sections act as context markers for later groups; they do not own
+          // a nested subtree in the parsed document model.
+          if (block.type === 'section') {
+            activeSection = {
+              key: block.key || null,
+              title: block.title || '',
+              minutes: Number(block.minutes) || null,
+            };
+          }
+
           if (block.type === 'groupIntro') {
             if (currentGroup) grouped.push(currentGroup);
-            currentGroup = { intro: block, prelude: [], content: [] };
+            currentGroup = {
+              intro: block,
+              prelude: [],
+              content: [],
+              section: activeSection ? { ...activeSection } : null,
+            };
             if (seenAnyGroup && betweenGroups.length) {
               currentGroup.prelude.push(...betweenGroups);
               betweenGroups = [];
@@ -3496,6 +3593,7 @@ export default function RunActivityPage({
         testLockState={testLockState}
         submittedAt={activity?.submitted_at}
         formatRemainingSeconds={formatRemainingSeconds}
+        sectionTimer={sectionTimer}
       />
 
     </>

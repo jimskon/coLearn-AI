@@ -290,6 +290,7 @@ export function parseSheetToBlocks(lines, options = {}) {
 
   const blocks = [];
   let groupNumber = 0;
+  let sectionNumber = 0;
   let questionLetterCode = 97;
   let responseId = 1;
   let globalRetriesRequired = 0;          // ✅ sheet default
@@ -802,10 +803,18 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    const sectionMatch = trimmed.match(/^\\section\*?\{([\s\S]+?)\}$/);
+    // Backward-compatible section timing:
+    // \section{Title} or \section{Title}{10}
+    const sectionMatch = trimmed.match(/^\\section\*?\{([\s\S]+?)\}(?:\{(\d+)\})?$/);
     if (sectionMatch) {
       flushCurrentBlock();
-      blocks.push({ type: 'section', title: format(sectionMatch[1]) });
+      sectionNumber += 1;
+      blocks.push({
+        type: 'section',
+        key: `section-${sectionNumber}`,
+        title: format(sectionMatch[1]),
+        minutes: sectionMatch[2] ? Math.max(1, parseInt(sectionMatch[2], 10) || 0) : null,
+      });
       continue;
     }
 

@@ -10,6 +10,23 @@ function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function normalizeSectionTimerPayload(raw = {}) {
+  const key = String(raw.sectionTimerKey || '').trim();
+  const minutes = Number(raw.sectionTimerDurationMinutes);
+
+  if (!key || !Number.isFinite(minutes) || minutes <= 0) {
+    return {
+      key: null,
+      durationMinutes: null,
+    };
+  }
+
+  return {
+    key,
+    durationMinutes: Math.round(minutes),
+  };
+}
+
 async function appendResponse(conn, instanceId, submitId, qid, value, {
   type = 'text',
   answeredBy,
@@ -141,17 +158,20 @@ async function clearResponsesForInstance(req, res) {
 
     // Reset submission + reopen state so instructor can restart
     await db.query(
-      `UPDATE activity_instances
-   SET submitted_at      = NULL,
-       graded_at         = NULL,
-       review_complete   = 0,
-       reviewed_at       = NULL,
-       points_earned     = NULL,
-       points_possible   = NULL,
-       progress_status   = 'in_progress',
-       test_reopen_until = NULL,
-       completed_groups  = 0
-   WHERE id = ?`,
+	      `UPDATE activity_instances
+	   SET submitted_at      = NULL,
+	       graded_at         = NULL,
+	       review_complete   = 0,
+	       reviewed_at       = NULL,
+	       points_earned     = NULL,
+	       points_possible   = NULL,
+	       progress_status   = 'in_progress',
+	       section_timer_key = NULL,
+	       section_timer_duration_minutes = NULL,
+	       section_timer_started_at = NULL,
+	       test_reopen_until = NULL,
+	       completed_groups  = 0
+	   WHERE id = ?`,
       [instanceId]
     );
     global.emitInstanceState?.(instanceId, {
@@ -159,10 +179,13 @@ async function clearResponsesForInstance(req, res) {
       graded_at: null,
       review_complete: 0,
       reviewed_at: null,
-      points_earned: null,
-      points_possible: null,
-      progress_status: 'in_progress',
-      test_reopen_until: null,
+	      points_earned: null,
+	      points_possible: null,
+	      progress_status: 'in_progress',
+	      section_timer_key: null,
+	      section_timer_duration_minutes: null,
+	      section_timer_started_at: null,
+	      test_reopen_until: null,
       completed_groups: 0, // only if you also want to reset it; if not, omit
     });
 
@@ -239,6 +262,9 @@ async function getActivityInstanceById(req, res) {
          ai.total_groups,
          ai.completed_groups,
          ai.progress_status,
+         ai.section_timer_key,
+         ai.section_timer_duration_minutes,
+         ai.section_timer_started_at,
          ai.test_start_at,
          ai.test_duration_minutes,
          ai.test_reopen_until,
@@ -291,6 +317,7 @@ async function getEnrolledStudents(req, res) {
 async function recordHeartbeat(req, res) {
   const { instanceId } = req.params;
   const { userId } = req.body;
+  const timerInfo = normalizeSectionTimerPayload(req.body || {});
 
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
@@ -298,8 +325,71 @@ async function recordHeartbeat(req, res) {
 
   try {
     const [[userRow]] = await db.query(`SELECT role FROM users WHERE id = ?`, [userId]);
-    if (!userRow || userRow.role !== 'student') {
+    if (!userRow) {
       return res.json({ success: true, becameActive: false });
+    }
+
+    const [[inst]] = await db.query(
+      `SELECT active_student_id,
+              section_timer_key,
+              section_timer_duration_minutes,
+              section_timer_started_at
+       FROM activity_instances
+       WHERE id = ?`,
+      [instanceId]
+    );
+    if (!inst) return res.status(404).json({ error: 'Instance not found' });
+
+    let timerPatch = null;
+    const currentKey = String(inst.section_timer_key || '').trim() || null;
+    const currentDuration = Number(inst.section_timer_duration_minutes) || null;
+    const currentStartedAt = inst.section_timer_started_at || null;
+
+    // The timer is DB-backed instance state: store only the section key,
+    // duration, and the shared UTC start anchor. Clients derive display text.
+    if (timerInfo.key) {
+      const timerChanged =
+        currentKey !== timerInfo.key ||
+        currentDuration !== timerInfo.durationMinutes;
+
+      if (timerChanged || !currentStartedAt) {
+        await db.query(
+          `UPDATE activity_instances
+           SET section_timer_key = ?,
+               section_timer_duration_minutes = ?,
+               section_timer_started_at = UTC_TIMESTAMP()
+           WHERE id = ?`,
+          [timerInfo.key, timerInfo.durationMinutes, instanceId]
+        );
+
+        timerPatch = {
+          section_timer_key: timerInfo.key,
+          section_timer_duration_minutes: timerInfo.durationMinutes,
+          section_timer_started_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        };
+      }
+    } else if (currentKey || currentDuration || currentStartedAt) {
+      await db.query(
+        `UPDATE activity_instances
+         SET section_timer_key = NULL,
+             section_timer_duration_minutes = NULL,
+             section_timer_started_at = NULL
+         WHERE id = ?`,
+        [instanceId]
+      );
+
+      timerPatch = {
+        section_timer_key: null,
+        section_timer_duration_minutes: null,
+        section_timer_started_at: null,
+      };
+    }
+
+    if (userRow.role !== 'student') {
+      if (timerPatch) {
+        global.emitInstanceState?.(Number(instanceId), timerPatch);
+      }
+      return res.json({ success: true, becameActive: false, ...(timerPatch || {}) });
     }
 
     const [[isMember]] = await db.query(
@@ -308,7 +398,10 @@ async function recordHeartbeat(req, res) {
       [instanceId, userId]
     );
     if (!isMember) {
-      return res.json({ success: true, becameActive: false });
+      if (timerPatch) {
+        global.emitInstanceState?.(Number(instanceId), timerPatch);
+      }
+      return res.json({ success: true, becameActive: false, ...(timerPatch || {}) });
     }
 
     await db.query(
@@ -317,12 +410,6 @@ async function recordHeartbeat(req, res) {
        WHERE activity_instance_id = ? AND student_id = ?`,
       [instanceId, userId]
     );
-
-    const [[inst]] = await db.query(
-      `SELECT active_student_id FROM activity_instances WHERE id = ?`,
-      [instanceId]
-    );
-    if (!inst) return res.status(404).json({ error: 'Instance not found' });
 
     let activePresent = false;
     if (inst.active_student_id) {
@@ -363,12 +450,29 @@ async function recordHeartbeat(req, res) {
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [newActiveId, instanceId]
         );
-        global.emitInstanceState?.(Number(instanceId), { activeStudentId: newActiveId });
-        return res.json({ success: true, becameActive: true, activeStudentId: newActiveId });
+        global.emitInstanceState?.(Number(instanceId), {
+          ...(timerPatch || {}),
+          activeStudentId: newActiveId,
+        });
+        return res.json({
+          success: true,
+          becameActive: true,
+          activeStudentId: newActiveId,
+          ...(timerPatch || {}),
+        });
       }
     }
 
-    return res.json({ success: true, becameActive: false, activeStudentId: inst.active_student_id });
+    if (timerPatch) {
+      global.emitInstanceState?.(Number(instanceId), timerPatch);
+    }
+
+    return res.json({
+      success: true,
+      becameActive: false,
+      activeStudentId: inst.active_student_id,
+      ...(timerPatch || {}),
+    });
   } catch (err) {
     console.error("❌ recordHeartbeat error:", err);
     return res.status(500).json({ error: 'Failed to record heartbeat' });
@@ -872,13 +976,16 @@ async function getInstancesForActivityInCourse(req, res) {
     const activityTitle = activity?.title || '';
 
     const [instances] = await db.query(
-      `SELECT id AS instance_id,
-              group_number,
-              active_student_id,
-              total_groups,
-              completed_groups,
-              progress_status,
-              test_start_at,
+	      `SELECT id AS instance_id,
+	              group_number,
+	              active_student_id,
+	              total_groups,
+	              completed_groups,
+	              progress_status,
+	              section_timer_key,
+	              section_timer_duration_minutes,
+	              section_timer_started_at,
+	              test_start_at,
               test_duration_minutes,
               test_reopen_until,
               submitted_at,
@@ -946,9 +1053,12 @@ async function getInstancesForActivityInCourse(req, res) {
         active_student_id: activeId,
 
         // ✅ THE DB TRUTH FIELDS YOUR UI WANTS
-        total_groups: inst.total_groups,
-        completed_groups: inst.completed_groups,
-        progress_status: inst.progress_status,
+	        total_groups: inst.total_groups,
+	        completed_groups: inst.completed_groups,
+	        progress_status: inst.progress_status,
+	        section_timer_key: inst.section_timer_key,
+	        section_timer_duration_minutes: inst.section_timer_duration_minutes,
+	        section_timer_started_at: inst.section_timer_started_at,
 
         // Optional convenience label for UI (derived *from* DB truth)
         // progress: progress,  // you can keep or delete this

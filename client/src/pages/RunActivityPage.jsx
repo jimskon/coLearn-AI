@@ -2770,6 +2770,24 @@ export default function RunActivityPage({
 
       const result = await response.json().catch(() => ({}));
 
+      setActivity((prev) => (
+        prev
+          ? {
+            ...prev,
+            ...(result?.completed_groups != null
+              ? { completed_groups: Number(result.completed_groups) }
+              : {}),
+            ...(result?.progress_status
+              ? { progress_status: result.progress_status }
+              : {}),
+          }
+          : prev
+      ));
+
+      if (result?.activeStudentId != null) {
+        setActiveStudentId(Number(result.activeStudentId));
+      }
+
       await loadActivity();
 
       if (blocked) {

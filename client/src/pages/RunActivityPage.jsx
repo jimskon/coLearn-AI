@@ -3199,6 +3199,7 @@ export default function RunActivityPage({
               isActive: false,
               mode: 'run',
               codeFeedbackShown,
+              unansweredShown,
               isInstructor,
               allowLocalToggle: true,
               isObserver: !isActive,
@@ -3249,6 +3250,7 @@ export default function RunActivityPage({
                       prefill: existingAnswers,
                       currentGroupIndex: index,
                       codeFeedbackShown,
+                      unansweredShown,
                     })}
 
                   <p>
@@ -3274,6 +3276,7 @@ export default function RunActivityPage({
                       prefill: existingAnswers,
                       currentGroupIndex: index,
                       textFeedbackShown,
+                      unansweredShown,
                       socket,
                       instanceId,
                       answeredBy: user?.id,

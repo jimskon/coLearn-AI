@@ -84,8 +84,8 @@ router.get('/preview-doc', async (req, res) => {
 
     const lines = doc.data.body.content
       .flatMap(item => item.paragraph?.elements || [])
-      .map(e => e.textRun?.content?.replace(/\r?\n$/, ''))  // strip trailing newlines
-      .filter(Boolean); // remove undefined
+      .map(e => e.textRun?.content?.replace(/\r?\n$/, ''))
+      .filter(Boolean);
 
     res.json({ lines });
   } catch (err) {

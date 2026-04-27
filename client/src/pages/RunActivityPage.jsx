@@ -212,6 +212,13 @@ function formatRemainingSeconds(sec) {
   return `${m}m ${s}s`;
 }
 
+function formatSectionMinutesLabel(remainingMs) {
+  if (remainingMs <= 0) return 'Time out';
+
+  const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+  return `${remainingMinutes} minute${remainingMinutes === 1 ? '' : 's'} left`;
+}
+
 function stripHtml(s = '') {
   return String(s)
     .replace(/<br\s*\/?>/gi, '\n')
@@ -399,11 +406,66 @@ export default function RunActivityPage({
   const [timeExpired, setTimeExpired] = useState(false);
   // ✅ add this (prevents repeat auto-submit calls)
   const [autoSubmitted, setAutoSubmitted] = useState(false);
+  const [sectionTimerNowMs, setSectionTimerNowMs] = useState(() => Date.now());
 
 
   const [nonLegacyForUI, setNonLegacyForUI] = useState(false);
 
   const isLockedFU = (qid) => qidsNoFURef.current?.has(qid);
+
+  const currentTimedSection = useMemo(() => {
+    if (!Array.isArray(groups) || currentGroupIndex >= groups.length) return null;
+
+    const group = groups[currentGroupIndex];
+    const section = group?.section || null;
+    if (!section?.key || !section?.minutes) return null;
+
+    return {
+      key: section.key,
+      minutes: Number(section.minutes),
+    };
+  }, [groups, currentGroupIndex]);
+
+  const sectionTimer = useMemo(() => {
+    const startedAt = activity?.section_timer_started_at
+      ? parseUtcDbDatetime(activity.section_timer_started_at)
+      : null;
+
+    if (
+      !currentTimedSection?.key ||
+      !currentTimedSection?.minutes ||
+      activity?.section_timer_key !== currentTimedSection.key ||
+      !startedAt
+    ) {
+      return { visible: false };
+    }
+
+    const durationMs = currentTimedSection.minutes * 60 * 1000;
+    const elapsedMs = sectionTimerNowMs - startedAt.getTime();
+    const remainingMs = durationMs - elapsedMs;
+    const ratio = durationMs > 0 ? remainingMs / durationMs : 0;
+
+    let background = '#198754';
+    let color = '#fff';
+    if (remainingMs <= 0) {
+      background = '#dc3545';
+    } else if (ratio <= 0.2) {
+      background = '#ffc107';
+      color = '#212529';
+    }
+
+    return {
+      visible: true,
+      label: formatSectionMinutesLabel(remainingMs),
+      background,
+      color,
+    };
+  }, [
+    activity?.section_timer_key,
+    activity?.section_timer_started_at,
+    currentTimedSection,
+    sectionTimerNowMs,
+  ]);
 
 
 
@@ -539,6 +601,16 @@ export default function RunActivityPage({
   useEffect(() => {
     console.log('[RUN] isTestMode:', isTestMode);
   }, [isTestMode]);
+
+  useEffect(() => {
+    if (!sectionTimer.visible) return undefined;
+
+    const interval = setInterval(() => {
+      setSectionTimerNowMs(Date.now());
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [sectionTimer.visible]);
 
   const isInstructor =
     user?.role === 'instructor' ||
@@ -739,12 +811,8 @@ export default function RunActivityPage({
   }, [instanceId, isTestMode]);
 
   useEffect(() => {
-    console.log('[MODE DEBUG]', activity);
-  }, [activity]);
-
-  useEffect(() => {
     const sendHeartbeat = async () => {
-      if (!user?.id || !instanceId) return;
+      if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
       try {
         await fetch(
           `${API_BASE_URL}/api/activity-instances/${instanceId}/heartbeat`,
@@ -752,7 +820,11 @@ export default function RunActivityPage({
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
-            body: JSON.stringify({ userId: user.id }),
+            body: JSON.stringify({
+              userId: user.id,
+              sectionTimerKey: currentTimedSection?.key || null,
+              sectionTimerDurationMinutes: currentTimedSection?.minutes || null,
+            }),
           }
         );
       } catch { }
@@ -760,7 +832,13 @@ export default function RunActivityPage({
     sendHeartbeat();
     const interval = setInterval(sendHeartbeat, 20000);
     return () => clearInterval(interval);
-  }, [user?.id, instanceId]);
+  }, [
+    user?.id,
+    instanceId,
+    groups,
+    currentTimedSection?.key,
+    currentTimedSection?.minutes,
+  ]);
 
   useEffect(() => {
     const loadScript = (src) =>
@@ -1310,11 +1388,27 @@ export default function RunActivityPage({
         let seenAnyGroup = false;
         let currentGroup = null;
         let betweenGroups = [];
+        let activeSection = null;
 
         for (const block of blocks) {
+          // Sections act as context markers for later groups; they do not own
+          // a nested subtree in the parsed document model.
+          if (block.type === 'section') {
+            activeSection = {
+              key: block.key || null,
+              title: block.title || '',
+              minutes: Number(block.minutes) || null,
+            };
+          }
+
           if (block.type === 'groupIntro') {
             if (currentGroup) grouped.push(currentGroup);
-            currentGroup = { intro: block, prelude: [], content: [] };
+            currentGroup = {
+              intro: block,
+              prelude: [],
+              content: [],
+              section: activeSection ? { ...activeSection } : null,
+            };
             if (seenAnyGroup && betweenGroups.length) {
               currentGroup.prelude.push(...betweenGroups);
               betweenGroups = [];
@@ -1542,16 +1636,6 @@ export default function RunActivityPage({
       const retriesRequiredOut = Number.isFinite(Number(data?.retriesRequired))
         ? Number(data.retriesRequired)
         : null;
-
-      console.log('[****EVAL RESULT]', {
-        qid,
-        accepted,
-        feedback,
-        canContinue,
-        retryCount,
-        retriesRequiredOut,
-        latencyMs: Math.round(performance.now() - t0),
-      });
 
       return {
         accepted,
@@ -2262,16 +2346,6 @@ export default function RunActivityPage({
           String(existingAnswers?.[`${qid}output`]?.response ?? '').trim();
 
         try {
-          console.log('[EVAL1] BEFORE FETCH', {
-            qid,
-            lang,
-            hasLeft45: studentCode.includes('left(45)'),
-            first120: studentCode.slice(0, 120),
-            codeLen: studentCode.length,
-            outputLen: outputText.length,
-            outputPreview: outputText.slice(0, 120),
-          });
-
           const evalUrl = `${API_BASE_URL}/api/ai/evaluate-code`;
 
           const payload = {
@@ -2299,14 +2373,6 @@ export default function RunActivityPage({
           };
 
           const t0 = performance.now();
-          console.log('[EVAL1] FETCH start', {
-            qid,
-            evalUrl,
-            apiBase: API_BASE_URL,
-            payloadKeys: Object.keys(payload),
-            codeLen: studentCode?.length,
-            outputLen: outputText.length,
-          });
 
           const controller = new AbortController();
           const timeoutMs = 20000;
@@ -2324,10 +2390,6 @@ export default function RunActivityPage({
             });
 
             rawText = await aiRes.text();
-            console.log('[EVAL1] FETCH raw (first 300)', {
-              qid,
-              first300: (rawText || '').slice(0, 300),
-            });
 
             if (!aiRes.ok) {
               throw new Error(`evaluate-code ${aiRes.status}: ${(rawText || '').slice(0, 200)}`);
@@ -2364,15 +2426,6 @@ export default function RunActivityPage({
                 followup,
               };
             }
-
-            console.log('[EVAL1] PARSED+NORMALIZED', {
-              qid,
-              accepted: data?.accepted,
-              feedbackLen: data?.feedback?.length || 0,
-              feedbackPreview: (data?.feedback || '').slice(0, 120),
-              hasComment: false,
-              hasFollowupQuestion: false,
-            });
 
             if (data?.canContinue === true) {
               setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
@@ -2666,7 +2719,6 @@ export default function RunActivityPage({
 
     // ---- completion logic ----
     const qBlocks = blocks.filter((b) => b.type === 'question');
-
     const isCodeOnlyMap = Object.fromEntries(
       qBlocks.map((b) => {
         const qidB = `${b.groupId}${b.id}`;
@@ -2699,8 +2751,6 @@ export default function RunActivityPage({
       overrideThisGroup || (!pendingBase && !pendingByStatus)
         ? 'complete'
         : 'inprogress';
-
-
 
     const stateKey = `${groupNum}state`;
     answers[stateKey] = computedState;
@@ -2804,7 +2854,13 @@ export default function RunActivityPage({
         await loadActivity();
       }
 
-      if (blocked) {
+      const blockedByServer = !advancedByServer;
+
+      if (blockedByServer) {
+        //alert(
+        //  `Your attempt was saved, but this group cannot advance yet.\n\n` +
+        //  `Open the instructor history later to review the full attempt transcript.`
+        //);
         setIsSubmitting(false);
         return;
       }
@@ -3025,13 +3081,6 @@ export default function RunActivityPage({
 
     setSubmitAlert(null);
 
-    console.log('[CODECHANGE] fired', {
-      responseKey,
-      len: (updatedCode || '').length,
-      head: (updatedCode || '').slice(0, 40),
-      t: Date.now(),
-    });
-
     const baseQid = baseQidFromResponseKey(responseKey);
     if (baseQid) {
       setUnansweredShown((prev) => {
@@ -3248,6 +3297,7 @@ export default function RunActivityPage({
               isActive: false,
               mode: 'run',
               codeFeedbackShown,
+              unansweredShown,
               isInstructor,
               allowLocalToggle: true,
               isObserver: !isActive,
@@ -3298,6 +3348,7 @@ export default function RunActivityPage({
                       prefill: existingAnswers,
                       currentGroupIndex: index,
                       codeFeedbackShown,
+                      unansweredShown,
                     })}
 
                   <p>
@@ -3323,6 +3374,7 @@ export default function RunActivityPage({
                       prefill: existingAnswers,
                       currentGroupIndex: index,
                       textFeedbackShown,
+                      unansweredShown,
                       socket,
                       instanceId,
                       answeredBy: user?.id,
@@ -3525,6 +3577,7 @@ export default function RunActivityPage({
         testLockState={testLockState}
         submittedAt={activity?.submitted_at}
         formatRemainingSeconds={formatRemainingSeconds}
+        sectionTimer={sectionTimer}
       />
 
     </>

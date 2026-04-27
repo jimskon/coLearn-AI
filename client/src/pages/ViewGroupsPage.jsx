@@ -73,10 +73,19 @@ function GroupProgressBars({ group }) {
   if (!items.length) return null;
 
   const maxCount = Math.max(1, ...items.map((item) => item.count));
+  const columns = Math.min(items.length, 9);
 
   return (
     <div className="border-top pt-3 mt-3">
-      <div className="d-flex align-items-end gap-2 flex-wrap" aria-label="Question group submission counts">
+      <div
+        className="d-grid align-items-end"
+        style={{
+          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+          columnGap: 8,
+          rowGap: 12,
+        }}
+        aria-label="Question group submission counts"
+      >
         {items.map((item) => {
           const height = Math.max(20, Math.round((item.count / maxCount) * 48));
           const background = item.isActive ? '#198754' : item.isDone ? '#0d6efd' : '#ced4da';
@@ -85,15 +94,16 @@ function GroupProgressBars({ group }) {
           return (
             <div
               key={item.questionGroup}
-              className="d-flex flex-column align-items-center"
-              style={{ minWidth: 24 }}
+              className="d-flex flex-column align-items-center justify-content-end"
+              style={{ minWidth: 0 }}
               title={`Question Group ${item.questionGroup}: ${item.count} submissions`}
             >
-              <div className="small text-muted mb-1">Q{item.questionGroup}</div>
+              <div className="small text-muted mb-1 text-nowrap">Q{item.questionGroup}</div>
               <div
                 className="d-flex align-items-center justify-content-center rounded"
                 style={{
-                  width: 12,
+                  width: '100%',
+                  maxWidth: 28,
                   height,
                   background,
                   color: textColor,

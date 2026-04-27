@@ -786,11 +786,27 @@ async function submitGroupResponses(req, res) {
   try {
     await conn.beginTransaction();
 
+    const normalizeStatus = (raw) => {
+      const s = String(raw ?? '').trim().toLowerCase();
+      if (s === 'complete' || s === 'completed') return 'complete';
+      if (s === 'inprogress' || s === 'in_progress') return 'inprogress';
+      return s || 'inprogress';
+    };
+
+    const submittedStatusEntries = Object.entries(answers).filter(([qidRaw]) => {
+      const qid = String(qidRaw || '').trim();
+      return new RegExp(`^${groupNum}[A-Za-z][A-Za-z0-9_]*S$`).test(qid);
+    });
+
     // ---- 1) insert all submitted answer fields as-is ----
     // (These include: 2a, 2aF1, 2aFA1, etc.)
     for (const [qidRaw, valueRaw] of Object.entries(answers)) {
       const qid = String(qidRaw || '').trim();
       if (!qid) continue;
+
+      // Group state is derived on the server from submitted question status rows.
+      // Do not persist a client-computed `${groupNum}state` row.
+      if (/^[0-9]+state$/i.test(qid)) continue;
 
       const value = valueRaw == null ? '' : String(valueRaw);
 
@@ -823,7 +839,13 @@ async function submitGroupResponses(req, res) {
       }
     );
 
-    const shouldAdvance = canAdvance || forceOverride;
+    const shouldAdvance =
+      !!forceOverride ||
+      (
+        submittedStatusEntries.length > 0 &&
+        submittedStatusEntries.every(([, response]) => normalizeStatus(response) === 'complete')
+      );
+
     // ---- 1b) always write the current group state for this attempt ----
     await appendResponse(
       conn,

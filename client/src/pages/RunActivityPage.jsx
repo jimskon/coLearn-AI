@@ -811,10 +811,6 @@ export default function RunActivityPage({
   }, [instanceId, isTestMode]);
 
   useEffect(() => {
-    console.log('[MODE DEBUG]', activity);
-  }, [activity]);
-
-  useEffect(() => {
     const sendHeartbeat = async () => {
       if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
       try {
@@ -1641,16 +1637,6 @@ export default function RunActivityPage({
         ? Number(data.retriesRequired)
         : null;
 
-      console.log('[****EVAL RESULT]', {
-        qid,
-        accepted,
-        feedback,
-        canContinue,
-        retryCount,
-        retriesRequiredOut,
-        latencyMs: Math.round(performance.now() - t0),
-      });
-
       return {
         accepted,
         feedback,
@@ -2360,16 +2346,6 @@ export default function RunActivityPage({
           String(existingAnswers?.[`${qid}output`]?.response ?? '').trim();
 
         try {
-          console.log('[EVAL1] BEFORE FETCH', {
-            qid,
-            lang,
-            hasLeft45: studentCode.includes('left(45)'),
-            first120: studentCode.slice(0, 120),
-            codeLen: studentCode.length,
-            outputLen: outputText.length,
-            outputPreview: outputText.slice(0, 120),
-          });
-
           const evalUrl = `${API_BASE_URL}/api/ai/evaluate-code`;
 
           const payload = {
@@ -2397,14 +2373,6 @@ export default function RunActivityPage({
           };
 
           const t0 = performance.now();
-          console.log('[EVAL1] FETCH start', {
-            qid,
-            evalUrl,
-            apiBase: API_BASE_URL,
-            payloadKeys: Object.keys(payload),
-            codeLen: studentCode?.length,
-            outputLen: outputText.length,
-          });
 
           const controller = new AbortController();
           const timeoutMs = 20000;
@@ -2422,10 +2390,6 @@ export default function RunActivityPage({
             });
 
             rawText = await aiRes.text();
-            console.log('[EVAL1] FETCH raw (first 300)', {
-              qid,
-              first300: (rawText || '').slice(0, 300),
-            });
 
             if (!aiRes.ok) {
               throw new Error(`evaluate-code ${aiRes.status}: ${(rawText || '').slice(0, 200)}`);
@@ -2462,15 +2426,6 @@ export default function RunActivityPage({
                 followup,
               };
             }
-
-            console.log('[EVAL1] PARSED+NORMALIZED', {
-              qid,
-              accepted: data?.accepted,
-              feedbackLen: data?.feedback?.length || 0,
-              feedbackPreview: (data?.feedback || '').slice(0, 120),
-              hasComment: false,
-              hasFollowupQuestion: false,
-            });
 
             if (data?.canContinue === true) {
               setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
@@ -2764,7 +2719,6 @@ export default function RunActivityPage({
 
     // ---- completion logic ----
     const qBlocks = blocks.filter((b) => b.type === 'question');
-
     const isCodeOnlyMap = Object.fromEntries(
       qBlocks.map((b) => {
         const qidB = `${b.groupId}${b.id}`;
@@ -2797,8 +2751,6 @@ export default function RunActivityPage({
       overrideThisGroup || (!pendingBase && !pendingByStatus)
         ? 'complete'
         : 'inprogress';
-
-
 
     const stateKey = `${groupNum}state`;
     answers[stateKey] = computedState;
@@ -2867,10 +2819,44 @@ export default function RunActivityPage({
       }
 
       const result = await response.json().catch(() => ({}));
+      const priorCompletedGroups = Number(activity?.completed_groups ?? 0);
+      const resultCompletedGroups =
+        result?.completed_groups != null ? Number(result.completed_groups) : null;
+      const advancedByServer =
+        Number.isFinite(resultCompletedGroups) &&
+        resultCompletedGroups > priorCompletedGroups;
 
-      await loadActivity();
+       setActivity((prev) => (
+        prev
+          ? {
+              ...prev,
+              ...(Number.isFinite(resultCompletedGroups)
+                ? { completed_groups: resultCompletedGroups }
+                : {}),
+              ...(result?.progress_status
+                ? { progress_status: result.progress_status }
+                : {}),
+            }
+          : prev
+      ));
 
-      if (blocked) {
+      if (result?.activeStudentId != null) {
+        setActiveStudentId(Number(result.activeStudentId));
+      }
+
+      if (advancedByServer) {
+        window.setTimeout(() => {
+          loadActivity().catch((err) => {
+            console.error('❌ Background reload after submit failed:', err);
+          });
+        }, 250);
+      } else {
+        await loadActivity();
+      }
+
+      const blockedByServer = !advancedByServer;
+
+      if (blockedByServer) {
         //alert(
         //  `Your attempt was saved, but this group cannot advance yet.\n\n` +
         //  `Open the instructor history later to review the full attempt transcript.`
@@ -2878,6 +2864,7 @@ export default function RunActivityPage({
         setIsSubmitting(false);
         return;
       }
+
 
       setCanBypassGroups((prev) => {
         const next = { ...prev };
@@ -3093,13 +3080,6 @@ export default function RunActivityPage({
   async function handleCodeChange(responseKey, updatedCode, meta = {}) {
 
     setSubmitAlert(null);
-
-    console.log('[CODECHANGE] fired', {
-      responseKey,
-      len: (updatedCode || '').length,
-      head: (updatedCode || '').slice(0, 40),
-      t: Date.now(),
-    });
 
     const baseQid = baseQidFromResponseKey(responseKey);
     if (baseQid) {
@@ -3317,6 +3297,7 @@ export default function RunActivityPage({
               isActive: false,
               mode: 'run',
               codeFeedbackShown,
+              unansweredShown,
               isInstructor,
               allowLocalToggle: true,
               isObserver: !isActive,
@@ -3367,6 +3348,7 @@ export default function RunActivityPage({
                       prefill: existingAnswers,
                       currentGroupIndex: index,
                       codeFeedbackShown,
+                      unansweredShown,
                     })}
 
                   <p>
@@ -3392,6 +3374,7 @@ export default function RunActivityPage({
                       prefill: existingAnswers,
                       currentGroupIndex: index,
                       textFeedbackShown,
+                      unansweredShown,
                       socket,
                       instanceId,
                       answeredBy: user?.id,

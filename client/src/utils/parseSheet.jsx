@@ -1251,6 +1251,7 @@ export function renderBlocks(blocks, options = {}) {
     fileContents,
     setFileContents,
     textFeedbackShown = {},
+    unansweredShown = {},
     onFileChange = null,
   } = options;
 
@@ -1819,6 +1820,7 @@ export function renderBlocks(blocks, options = {}) {
       const responseKey = `${block.groupId}${block.id}`;
       const followupAppeared = !!followupsShown?.[responseKey];
       const groupComplete = prefill?.[`${responseKey}S`] === 'complete';
+      const unansweredMessage = unansweredShown?.[responseKey];
 
       const hasPython = (block.pythonBlocks?.length || 0) > 0;
       const hasCpp = (block.cppBlocks?.length || 0) > 0;
@@ -2133,6 +2135,17 @@ export function renderBlocks(blocks, options = {}) {
               {block.feedback?.length > 0 && <p className="text-muted"><em>Feedback: {block.feedback.join('; ')}</em></p>}
               {block.followups?.length > 0 && <p className="text-muted"><em>Follow-up: {block.followups.join('; ')}</em></p>}
             </>
+          )}
+
+          {unansweredMessage && (
+            <Alert
+              variant="warning"
+              className="mt-2 border border-warning"
+              style={{ whiteSpace: 'pre-wrap', backgroundColor: '#fff3cd' }}
+            >
+              <strong>This question has not been answered</strong>
+              <div>{unansweredMessage}</div>
+            </Alert>
           )}
 
           {/* 🔶 AI Guidance (ALL question types) */}

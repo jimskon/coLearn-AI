@@ -719,7 +719,31 @@ async function submitGroupResponses(req, res) {
       }
     );
 
-    const shouldAdvance = canAdvance || forceOverride;
+    // The database is the source of truth for advancement.
+    // AI/status rows decide completion; we do not trust the client-level blocked/canAdvance flag.
+    const [statusRows] = await conn.query(
+      `SELECT question_id, response
+       FROM responses
+       WHERE activity_instance_id = ?
+         AND submit_id = ?
+         AND question_id REGEXP '^[0-9]+[A-Za-z][A-Za-z0-9_]*S$'`,
+      [instanceId, submitId]
+    );
+
+    const normalizeStatus = (raw) => {
+      const s = String(raw ?? '').trim().toLowerCase();
+      if (s === 'complete' || s === 'completed') return 'complete';
+      if (s === 'inprogress' || s === 'in_progress') return 'inprogress';
+      return s || 'inprogress';
+    };
+
+    const shouldAdvance =
+      !!forceOverride ||
+      (
+        statusRows.length > 0 &&
+        statusRows.every((row) => normalizeStatus(row.response) === 'complete')
+      );
+
     // ---- 1b) always write the current group state for this attempt ----
     await appendResponse(
       conn,

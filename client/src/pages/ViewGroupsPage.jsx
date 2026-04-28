@@ -368,6 +368,7 @@ export default function ViewGroupsPage() {
           value={selectedAdd}
           onChange={(e) => setSelectedAdd(e.target.value)}
           style={{ maxWidth: 320 }}
+          disabled={timerPaused}
         >
           <option value="">Add student...</option>
           {available.map((s) => (
@@ -378,10 +379,10 @@ export default function ViewGroupsPage() {
         </Form.Select>
 
         <div className="d-flex gap-2">
-          <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd}>
+          <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd || timerPaused}>
             Add to group
           </Button>
-          <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd}>
+          <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd || timerPaused}>
             Group of one
           </Button>
         </div>
@@ -390,6 +391,7 @@ export default function ViewGroupsPage() {
           value={selectedRemove}
           onChange={(e) => setSelectedRemove(e.target.value)}
           style={{ maxWidth: 380 }}
+          disabled={timerPaused}
         >
           <option value="">Remove student...</option>
           {active.map((s) => (
@@ -403,7 +405,7 @@ export default function ViewGroupsPage() {
           ))}
         </Form.Select>
 
-        <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove}>
+        <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove || timerPaused}>
           Remove
         </Button>
 
@@ -440,7 +442,7 @@ export default function ViewGroupsPage() {
                       <Button
                         variant="outline-danger"
                         size="sm"
-                        disabled={clearing.has(group.instance_id)}
+                        disabled={clearing.has(group.instance_id) || timerPaused}
                         onClick={() => clearGroupAnswers(group.instance_id)}
                       >
                         {clearing.has(group.instance_id) ? 'Clearing…' : 'Clear Answers'}

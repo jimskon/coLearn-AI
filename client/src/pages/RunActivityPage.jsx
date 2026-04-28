@@ -452,7 +452,11 @@ export default function RunActivityPage({
 
     let background = '#198754';
     let color = '#fff';
-    if (remainingMs <= 0) {
+    let label = formatSectionMinutesLabel(remainingMs);
+    if (isPaused) {
+      background = '#6c757d';
+      label = 'Paused';
+    } else if (remainingMs <= 0) {
       background = '#dc3545';
     } else if (ratio <= 0.2) {
       background = '#ffc107';
@@ -461,7 +465,7 @@ export default function RunActivityPage({
 
     return {
       visible: true,
-      label: formatSectionMinutesLabel(remainingMs),
+      label,
       background,
       color,
       paused: isPaused,
@@ -636,6 +640,15 @@ export default function RunActivityPage({
     );
 
   const isObserver = !isActive;
+  const activityPaused = Number(activity?.section_timer_paused) === 1;
+
+  useEffect(() => {
+    if (!activityPaused) return;
+    const activeEl = document.activeElement;
+    if (activeEl && typeof activeEl.blur === 'function') {
+      activeEl.blur();
+    }
+  }, [activityPaused]);
   // NEW: compute test window from activity fields (if present)
   const testWindow = useMemo(() => {
     if (!isTestMode) return null;
@@ -3299,7 +3312,27 @@ export default function RunActivityPage({
             title="Full Submission History"
           />
         ) : (
-          <>
+          <div style={{ position: 'relative' }}>
+            {activityPaused && (
+              <div
+                className="d-flex align-items-center justify-content-center"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 20,
+                  background: 'rgba(255,255,255,0.45)',
+                  backdropFilter: 'grayscale(0.15)',
+                }}
+              >
+                <div className="px-3 py-2 rounded border bg-light text-muted fw-semibold shadow-sm">
+                  Paused
+                </div>
+              </div>
+            )}
+            <div
+              aria-disabled={activityPaused ? 'true' : undefined}
+              style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
+            >
             {renderBlocks(preamble, {
               editable: false,
               isActive: false,
@@ -3561,7 +3594,8 @@ export default function RunActivityPage({
                 %)
               </Alert>
             )}
-          </>
+            </div>
+          </div>
         )}
       </Container>
 

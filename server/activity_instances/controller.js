@@ -381,14 +381,12 @@ async function recordHeartbeat(req, res) {
           section_timer_started_at: toDbNowString(),
         };
       }
-    } else if (currentKey || currentDuration || currentStartedAt || currentPaused) {
+    } else if (currentKey || currentDuration || currentStartedAt) {
       await db.query(
         `UPDATE activity_instances
          SET section_timer_key = NULL,
              section_timer_duration_minutes = NULL,
-             section_timer_started_at = NULL,
-             section_timer_paused = 0,
-             section_timer_paused_at = NULL
+             section_timer_started_at = NULL
          WHERE id = ?`,
         [instanceId]
       );
@@ -397,8 +395,6 @@ async function recordHeartbeat(req, res) {
         section_timer_key: null,
         section_timer_duration_minutes: null,
         section_timer_started_at: null,
-        section_timer_paused: 0,
-        section_timer_paused_at: null,
       };
     }
 

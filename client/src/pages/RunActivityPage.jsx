@@ -435,6 +435,16 @@ export default function RunActivityPage({
       : null;
     const isPaused = Number(activity?.section_timer_paused) === 1;
 
+    if (isPaused && !startedAt) {
+      return {
+        visible: true,
+        label: 'Paused',
+        background: '#6c757d',
+        color: '#fff',
+        paused: true,
+      };
+    }
+
     if (
       !currentTimedSection?.key ||
       !currentTimedSection?.minutes ||

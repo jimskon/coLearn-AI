@@ -430,6 +430,10 @@ export default function RunActivityPage({
     const startedAt = activity?.section_timer_started_at
       ? parseUtcDbDatetime(activity.section_timer_started_at)
       : null;
+    const pausedAt = activity?.section_timer_paused_at
+      ? parseUtcDbDatetime(activity.section_timer_paused_at)
+      : null;
+    const isPaused = Number(activity?.section_timer_paused) === 1;
 
     if (
       !currentTimedSection?.key ||
@@ -441,7 +445,8 @@ export default function RunActivityPage({
     }
 
     const durationMs = currentTimedSection.minutes * 60 * 1000;
-    const elapsedMs = sectionTimerNowMs - startedAt.getTime();
+    const effectiveNowMs = isPaused && pausedAt ? pausedAt.getTime() : sectionTimerNowMs;
+    const elapsedMs = effectiveNowMs - startedAt.getTime();
     const remainingMs = durationMs - elapsedMs;
     const ratio = durationMs > 0 ? remainingMs / durationMs : 0;
 
@@ -459,9 +464,12 @@ export default function RunActivityPage({
       label: formatSectionMinutesLabel(remainingMs),
       background,
       color,
+      paused: isPaused,
     };
   }, [
     activity?.section_timer_key,
+    activity?.section_timer_paused,
+    activity?.section_timer_paused_at,
     activity?.section_timer_started_at,
     currentTimedSection,
     sectionTimerNowMs,
@@ -603,7 +611,7 @@ export default function RunActivityPage({
   }, [isTestMode]);
 
   useEffect(() => {
-    if (!sectionTimer.visible) return undefined;
+    if (!sectionTimer.visible || sectionTimer.paused) return undefined;
 
     const interval = setInterval(() => {
       setSectionTimerNowMs(Date.now());

@@ -148,6 +148,7 @@ export default function ViewGroupsPage() {
   const [active, setActive] = useState([]);
   const [selectedAdd, setSelectedAdd] = useState('');
   const [selectedRemove, setSelectedRemove] = useState('');
+  const [togglingPause, setTogglingPause] = useState(false);
 
   const fetchGroups = async () => {
     setLoading(true);
@@ -318,6 +319,44 @@ export default function ViewGroupsPage() {
     }
   };
 
+  const anyStudentsActive = groups.some((group) =>
+    (group.members || []).some((member) => member.connected)
+  );
+  const timerPaused = groups.some((group) => Number(group.section_timer_paused) === 1);
+
+  let timerButtonVariant = 'warning';
+  let timerButtonLabel = 'Waiting';
+  if (timerPaused) {
+    timerButtonVariant = 'danger';
+    timerButtonLabel = 'Paused';
+  } else if (anyStudentsActive) {
+    timerButtonVariant = 'success';
+    timerButtonLabel = 'Running';
+  }
+
+  const handleTogglePause = async () => {
+    setTogglingPause(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${courseId}/${activityId}/timer-pause`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ paused: !timerPaused }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to update timer pause state');
+      await fetchGroups();
+    } catch (err) {
+      console.error('❌ Error toggling timer pause:', err);
+      alert(err?.message || 'Failed to update timer pause state');
+    } finally {
+      setTogglingPause(false);
+    }
+  };
+
   return (
     <Container className="mt-4">
       <h2>{activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}</h2>
@@ -366,6 +405,14 @@ export default function ViewGroupsPage() {
 
         <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove}>
           Remove
+        </Button>
+
+        <Button
+          variant={timerButtonVariant}
+          onClick={handleTogglePause}
+          disabled={togglingPause}
+        >
+          {togglingPause ? 'Updating…' : timerButtonLabel}
         </Button>
       </div>
 

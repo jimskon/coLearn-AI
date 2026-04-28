@@ -27,6 +27,10 @@ function normalizeSectionTimerPayload(raw = {}) {
   };
 }
 
+function toDbNowString(date = new Date()) {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 async function appendResponse(conn, instanceId, submitId, qid, value, {
   type = 'text',
   answeredBy,
@@ -169,6 +173,8 @@ async function clearResponsesForInstance(req, res) {
 	       section_timer_key = NULL,
 	       section_timer_duration_minutes = NULL,
 	       section_timer_started_at = NULL,
+	       section_timer_paused = 0,
+	       section_timer_paused_at = NULL,
 	       test_reopen_until = NULL,
 	       completed_groups  = 0
 	   WHERE id = ?`,
@@ -185,6 +191,8 @@ async function clearResponsesForInstance(req, res) {
 	      section_timer_key: null,
 	      section_timer_duration_minutes: null,
 	      section_timer_started_at: null,
+	      section_timer_paused: 0,
+	      section_timer_paused_at: null,
 	      test_reopen_until: null,
       completed_groups: 0, // only if you also want to reset it; if not, omit
     });
@@ -265,6 +273,8 @@ async function getActivityInstanceById(req, res) {
          ai.section_timer_key,
          ai.section_timer_duration_minutes,
          ai.section_timer_started_at,
+         ai.section_timer_paused,
+         ai.section_timer_paused_at,
          ai.test_start_at,
          ai.test_duration_minutes,
          ai.test_reopen_until,
@@ -333,7 +343,9 @@ async function recordHeartbeat(req, res) {
       `SELECT active_student_id,
               section_timer_key,
               section_timer_duration_minutes,
-              section_timer_started_at
+              section_timer_started_at,
+              section_timer_paused,
+              section_timer_paused_at
        FROM activity_instances
        WHERE id = ?`,
       [instanceId]
@@ -344,6 +356,7 @@ async function recordHeartbeat(req, res) {
     const currentKey = String(inst.section_timer_key || '').trim() || null;
     const currentDuration = Number(inst.section_timer_duration_minutes) || null;
     const currentStartedAt = inst.section_timer_started_at || null;
+    const currentPaused = Number(inst.section_timer_paused) === 1;
 
     // The timer is DB-backed instance state: store only the section key,
     // duration, and the shared UTC start anchor. Clients derive display text.
@@ -352,7 +365,7 @@ async function recordHeartbeat(req, res) {
         currentKey !== timerInfo.key ||
         currentDuration !== timerInfo.durationMinutes;
 
-      if (timerChanged || !currentStartedAt) {
+      if (!currentPaused && (timerChanged || !currentStartedAt)) {
         await db.query(
           `UPDATE activity_instances
            SET section_timer_key = ?,
@@ -365,15 +378,17 @@ async function recordHeartbeat(req, res) {
         timerPatch = {
           section_timer_key: timerInfo.key,
           section_timer_duration_minutes: timerInfo.durationMinutes,
-          section_timer_started_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+          section_timer_started_at: toDbNowString(),
         };
       }
-    } else if (currentKey || currentDuration || currentStartedAt) {
+    } else if (currentKey || currentDuration || currentStartedAt || currentPaused) {
       await db.query(
         `UPDATE activity_instances
          SET section_timer_key = NULL,
              section_timer_duration_minutes = NULL,
-             section_timer_started_at = NULL
+             section_timer_started_at = NULL,
+             section_timer_paused = 0,
+             section_timer_paused_at = NULL
          WHERE id = ?`,
         [instanceId]
       );
@@ -382,6 +397,8 @@ async function recordHeartbeat(req, res) {
         section_timer_key: null,
         section_timer_duration_minutes: null,
         section_timer_started_at: null,
+        section_timer_paused: 0,
+        section_timer_paused_at: null,
       };
     }
 
@@ -1007,6 +1024,8 @@ async function getInstancesForActivityInCourse(req, res) {
 	              section_timer_key,
 	              section_timer_duration_minutes,
 	              section_timer_started_at,
+                section_timer_paused,
+                section_timer_paused_at,
 	              test_start_at,
               test_duration_minutes,
               test_reopen_until,
@@ -1081,6 +1100,8 @@ async function getInstancesForActivityInCourse(req, res) {
 	        section_timer_key: inst.section_timer_key,
 	        section_timer_duration_minutes: inst.section_timer_duration_minutes,
 	        section_timer_started_at: inst.section_timer_started_at,
+          section_timer_paused: Number(inst.section_timer_paused) === 1,
+          section_timer_paused_at: inst.section_timer_paused_at,
 
         // Optional convenience label for UI (derived *from* DB truth)
         // progress: progress,  // you can keep or delete this
@@ -1109,6 +1130,75 @@ async function getInstancesForActivityInCourse(req, res) {
   } catch (err) {
     console.error("❌ getInstancesForActivityInCourse:", err);
     res.status(500).json({ error: 'Failed to fetch instances' });
+  }
+}
+
+async function setTimerPauseForActivity(req, res) {
+  const { courseId, activityId } = req.params;
+  const paused = !!req.body?.paused;
+
+  try {
+    const [instances] = await db.query(
+      `SELECT id
+       FROM activity_instances
+       WHERE course_id = ? AND activity_id = ?`,
+      [courseId, activityId]
+    );
+
+    if (!instances.length) {
+      return res.json({ ok: true, paused, updated: 0 });
+    }
+
+    if (paused) {
+      await db.query(
+        `UPDATE activity_instances
+         SET section_timer_paused = 1,
+             section_timer_paused_at = COALESCE(section_timer_paused_at, UTC_TIMESTAMP())
+         WHERE course_id = ? AND activity_id = ?`,
+        [courseId, activityId]
+      );
+    } else {
+      await db.query(
+        `UPDATE activity_instances
+         SET section_timer_started_at = CASE
+               WHEN section_timer_paused = 1
+                AND section_timer_paused_at IS NOT NULL
+                AND section_timer_started_at IS NOT NULL
+               THEN DATE_ADD(
+                 section_timer_started_at,
+                 INTERVAL TIMESTAMPDIFF(SECOND, section_timer_paused_at, UTC_TIMESTAMP()) SECOND
+               )
+               ELSE section_timer_started_at
+             END,
+             section_timer_paused = 0,
+             section_timer_paused_at = NULL
+         WHERE course_id = ? AND activity_id = ?`,
+        [courseId, activityId]
+      );
+    }
+
+    const [updatedRows] = await db.query(
+      `SELECT id,
+              section_timer_started_at,
+              section_timer_paused,
+              section_timer_paused_at
+       FROM activity_instances
+       WHERE course_id = ? AND activity_id = ?`,
+      [courseId, activityId]
+    );
+
+    updatedRows.forEach((inst) => {
+      global.emitInstanceState?.(Number(inst.id), {
+        section_timer_started_at: inst.section_timer_started_at,
+        section_timer_paused: Number(inst.section_timer_paused) === 1 ? 1 : 0,
+        section_timer_paused_at: inst.section_timer_paused_at,
+      });
+    });
+
+    res.json({ ok: true, paused, updated: instances.length });
+  } catch (err) {
+    console.error('❌ setTimerPauseForActivity:', err);
+    res.status(500).json({ error: 'Failed to update timer pause state' });
   }
 }
 
@@ -2004,6 +2094,7 @@ module.exports = {
   submitGroupResponses,
   getInstanceGroups,
   getInstancesForActivityInCourse,
+  setTimerPauseForActivity,
   getInstanceResponses,
   refreshTotalGroups,
   reopenInstance,

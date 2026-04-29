@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PROJECT_ROOT="/opt/POGIL-ITS"
+PROJECT_ROOT="/opt/coLearn-AI/"
 ENV_FILE="$PROJECT_ROOT/server/.env"
 
 if [ ! -f "$ENV_FILE" ]; then

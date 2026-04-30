@@ -16,6 +16,7 @@ import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBann
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
 import QuestionScorePanel from '../components/QuestionScorePanel';
 import RunActivityHistoryView from '../components/RunActivityHistoryView';
+import ActivityLoadingOverlay from '../components/ActivityLoadingOverlay';
 
 
 function lowerResp(obj, key) {
@@ -3263,6 +3264,10 @@ export default function RunActivityPage({
 
   return (
     <>
+      <ActivityLoadingOverlay
+        show={isSubmitting}
+        label={isTestMode ? 'Submitting activity...' : 'Generating AI feedback...'}
+      />
       <Container className="pt-3 mt-2">
         <h2>
           {activity?.title

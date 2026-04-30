@@ -31,6 +31,10 @@ function toDbNowString(date = new Date()) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+function normalizeActiveRotationMode(raw) {
+  return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
+}
+
 async function appendResponse(conn, instanceId, submitId, qid, value, {
   type = 'text',
   answeredBy,
@@ -246,7 +250,7 @@ async function createActivityInstance(req, res) {
   const { activityId, courseId } = req.body;
   try {
     const [result] = await db.query(
-      `INSERT INTO activity_instances (activity_id, course_id) VALUES (?, ?)`,
+      `INSERT INTO activity_instances (activity_id, course_id, active_rotation_mode) VALUES (?, ?, 'submit')`,
       [activityId, courseId]
     );
     res.status(201).json({ instanceId: result.insertId });
@@ -682,8 +686,8 @@ async function setupMultipleGroupInstances(req, res) {
       const [instanceResult] = await conn.query(
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
-            test_start_at, test_duration_minutes, locked_before_start, locked_after_end)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?)`,
+            test_start_at, test_duration_minutes, locked_before_start, locked_after_end, active_rotation_mode)
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, 'submit')`,
         [
           courseId,
           activityId,
@@ -875,10 +879,11 @@ async function submitGroupResponses(req, res) {
 
     // ---- 4) Recompute cached progress from i=1..total_groups using istate ----
     const [[meta]] = await conn.query(
-      `SELECT total_groups FROM activity_instances WHERE id = ?`,
+      `SELECT total_groups, active_rotation_mode FROM activity_instances WHERE id = ?`,
       [instanceId]
     );
     const totalGroups = Number(meta?.total_groups) || 0;
+    const activeRotationMode = normalizeActiveRotationMode(meta?.active_rotation_mode);
 
     let completedGroups = 0;
     if (totalGroups > 0) {
@@ -920,6 +925,10 @@ async function submitGroupResponses(req, res) {
     emitPatch = { completed_groups: completedGroups, progress_status: progressStatus };
 
 
+    const shouldRotateActive =
+      activeRotationMode === 'submit' ||
+      (activeRotationMode === 'group' && shouldAdvance);
+
     // ---- 5) Rotate active student among connected members ----
     const [connected] = await conn.query(
       `SELECT student_id
@@ -928,7 +937,7 @@ async function submitGroupResponses(req, res) {
       [instanceId]
     );
 
-    if (connected.length > 0) {
+    if (shouldRotateActive && connected.length > 0) {
       const eligible = connected.filter(m => Number(m.student_id) !== studentId);
       const pickFrom = eligible.length ? eligible : connected;
       const next = pickFrom[Math.floor(Math.random() * pickFrom.length)].student_id;
@@ -1013,6 +1022,7 @@ async function getInstancesForActivityInCourse(req, res) {
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
 	              group_number,
+                active_rotation_mode,
 	              active_student_id,
 	              total_groups,
 	              completed_groups,
@@ -1087,6 +1097,7 @@ async function getInstancesForActivityInCourse(req, res) {
       groups.push({
         instance_id: inst.instance_id,
         group_number: inst.group_number,
+        active_rotation_mode: normalizeActiveRotationMode(inst.active_rotation_mode),
         active_student_id: activeId,
 
         // ✅ THE DB TRUTH FIELDS YOUR UI WANTS
@@ -1195,6 +1206,25 @@ async function setTimerPauseForActivity(req, res) {
   } catch (err) {
     console.error('❌ setTimerPauseForActivity:', err);
     res.status(500).json({ error: 'Failed to update timer pause state' });
+  }
+}
+
+async function setActiveRotationModeForActivity(req, res) {
+  const { courseId, activityId } = req.params;
+  const mode = normalizeActiveRotationMode(req.body?.mode);
+
+  try {
+    const [result] = await db.query(
+      `UPDATE activity_instances
+       SET active_rotation_mode = ?
+       WHERE course_id = ? AND activity_id = ?`,
+      [mode, courseId, activityId]
+    );
+
+    res.json({ ok: true, mode, updated: result.affectedRows || 0 });
+  } catch (err) {
+    console.error('❌ setActiveRotationModeForActivity:', err);
+    res.status(500).json({ error: 'Failed to update active rotation mode' });
   }
 }
 
@@ -2091,6 +2121,7 @@ module.exports = {
   getInstanceGroups,
   getInstancesForActivityInCourse,
   setTimerPauseForActivity,
+  setActiveRotationModeForActivity,
   getInstanceResponses,
   refreshTotalGroups,
   reopenInstance,

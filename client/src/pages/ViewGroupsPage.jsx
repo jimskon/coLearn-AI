@@ -7,6 +7,7 @@ import {
   Spinner,
   Alert,
   Button,
+  ButtonGroup,
   Row,
   Col,
   Form,
@@ -149,6 +150,8 @@ export default function ViewGroupsPage() {
   const [selectedAdd, setSelectedAdd] = useState('');
   const [selectedRemove, setSelectedRemove] = useState('');
   const [togglingPause, setTogglingPause] = useState(false);
+  const [rotationMode, setRotationMode] = useState('submit');
+  const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
 
   const fetchGroups = async () => {
     setLoading(true);
@@ -170,6 +173,9 @@ export default function ViewGroupsPage() {
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
       setGroups(data.groups);
+      if (Array.isArray(data.groups) && data.groups.length > 0) {
+        setRotationMode(String(data.groups[0].active_rotation_mode || 'submit'));
+      }
     } catch (err) {
       console.error('❌ Error loading groups:', err);
       setError(err?.message || 'Could not load groups.');
@@ -357,6 +363,31 @@ export default function ViewGroupsPage() {
     }
   };
 
+  const handleSetRotationMode = async (mode) => {
+    if (!mode || mode === rotationMode) return;
+    setUpdatingRotationMode(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${courseId}/${activityId}/active-rotation-mode`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ mode }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to update active rotation mode');
+      setRotationMode(data?.mode || mode);
+      await fetchGroups();
+    } catch (err) {
+      console.error('❌ Error updating active rotation mode:', err);
+      alert(err?.message || 'Failed to update active rotation mode');
+    } finally {
+      setUpdatingRotationMode(false);
+    }
+  };
+
   return (
     <Container className="mt-4">
       <h2>{activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}</h2>
@@ -364,6 +395,26 @@ export default function ViewGroupsPage() {
 
       {/* Add / Remove UI */}
       <div className="my-4 d-flex gap-3 align-items-center flex-wrap">
+        <div className="d-flex align-items-center gap-2">
+          <span className="text-muted small">Change active on</span>
+          <ButtonGroup size="sm">
+            <Button
+              variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
+              disabled={updatingRotationMode}
+              onClick={() => handleSetRotationMode('submit')}
+            >
+              Submit
+            </Button>
+            <Button
+              variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
+              disabled={updatingRotationMode}
+              onClick={() => handleSetRotationMode('group')}
+            >
+              Q Group
+            </Button>
+          </ButtonGroup>
+        </div>
+
         <Form.Select
           value={selectedAdd}
           onChange={(e) => setSelectedAdd(e.target.value)}

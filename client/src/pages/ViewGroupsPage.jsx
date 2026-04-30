@@ -195,10 +195,13 @@ export default function ViewGroupsPage() {
   const [rotationMode, setRotationMode] = useState('submit');
   const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
-  const fetchGroups = async () => {
-    setLoading(true);
-    setError('');
+  const fetchGroups = async ({ quiet = false } = {}) => {
+    if (!quiet) {
+      setLoading(true);
+      setError('');
+    }
 
     try {
       const res = await fetch(
@@ -219,19 +222,20 @@ export default function ViewGroupsPage() {
       if (Array.isArray(data.groups) && data.groups.length > 0) {
         setRotationMode(String(data.groups[0].active_rotation_mode || 'submit'));
       }
+      setHasLoadedOnce(true);
     } catch (err) {
       console.error('❌ Error loading groups:', err);
       setError(err?.message || 'Could not load groups.');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
     if (!courseId || !activityId) return;
-    fetchGroups();
+    fetchGroups({ quiet: false });
     const interval = setInterval(() => {
-      fetchGroups();
+      fetchGroups({ quiet: true });
     }, 5000);
     return () => clearInterval(interval);
   }, [courseId, activityId]);
@@ -467,7 +471,7 @@ export default function ViewGroupsPage() {
         </div>
       </div>
 
-      {loading ? (
+      {loading && !hasLoadedOnce ? (
         <Spinner animation="border" />
       ) : error ? (
         <Alert variant="danger">{error}</Alert>

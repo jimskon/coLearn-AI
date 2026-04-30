@@ -148,6 +148,7 @@ export default function ViewGroupsPage() {
   const [active, setActive] = useState([]);
   const [selectedAdd, setSelectedAdd] = useState('');
   const [selectedRemove, setSelectedRemove] = useState('');
+  const [togglingPause, setTogglingPause] = useState(false);
 
   const fetchGroups = async () => {
     setLoading(true);
@@ -318,6 +319,44 @@ export default function ViewGroupsPage() {
     }
   };
 
+  const anyStudentsActive = groups.some((group) =>
+    (group.members || []).some((member) => member.connected)
+  );
+  const timerPaused = groups.some((group) => Number(group.section_timer_paused) === 1);
+
+  let timerButtonVariant = 'warning';
+  let timerButtonLabel = 'Waiting';
+  if (timerPaused) {
+    timerButtonVariant = 'danger';
+    timerButtonLabel = 'Paused';
+  } else if (anyStudentsActive) {
+    timerButtonVariant = 'success';
+    timerButtonLabel = 'Running';
+  }
+
+  const handleTogglePause = async () => {
+    setTogglingPause(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${courseId}/${activityId}/timer-pause`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ paused: !timerPaused }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to update timer pause state');
+      await fetchGroups();
+    } catch (err) {
+      console.error('❌ Error toggling timer pause:', err);
+      alert(err?.message || 'Failed to update timer pause state');
+    } finally {
+      setTogglingPause(false);
+    }
+  };
+
   return (
     <Container className="mt-4">
       <h2>{activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}</h2>
@@ -329,6 +368,7 @@ export default function ViewGroupsPage() {
           value={selectedAdd}
           onChange={(e) => setSelectedAdd(e.target.value)}
           style={{ maxWidth: 320 }}
+          disabled={timerPaused}
         >
           <option value="">Add student...</option>
           {available.map((s) => (
@@ -339,10 +379,10 @@ export default function ViewGroupsPage() {
         </Form.Select>
 
         <div className="d-flex gap-2">
-          <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd}>
+          <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd || timerPaused}>
             Add to group
           </Button>
-          <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd}>
+          <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd || timerPaused}>
             Group of one
           </Button>
         </div>
@@ -351,6 +391,7 @@ export default function ViewGroupsPage() {
           value={selectedRemove}
           onChange={(e) => setSelectedRemove(e.target.value)}
           style={{ maxWidth: 380 }}
+          disabled={timerPaused}
         >
           <option value="">Remove student...</option>
           {active.map((s) => (
@@ -364,8 +405,16 @@ export default function ViewGroupsPage() {
           ))}
         </Form.Select>
 
-        <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove}>
+        <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove || timerPaused}>
           Remove
+        </Button>
+
+        <Button
+          variant={timerButtonVariant}
+          onClick={handleTogglePause}
+          disabled={togglingPause}
+        >
+          {togglingPause ? 'Updating…' : timerButtonLabel}
         </Button>
       </div>
 
@@ -393,7 +442,7 @@ export default function ViewGroupsPage() {
                       <Button
                         variant="outline-danger"
                         size="sm"
-                        disabled={clearing.has(group.instance_id)}
+                        disabled={clearing.has(group.instance_id) || timerPaused}
                         onClick={() => clearGroupAnswers(group.instance_id)}
                       >
                         {clearing.has(group.instance_id) ? 'Clearing…' : 'Clear Answers'}

@@ -430,6 +430,20 @@ export default function RunActivityPage({
     const startedAt = activity?.section_timer_started_at
       ? parseUtcDbDatetime(activity.section_timer_started_at)
       : null;
+    const pausedAt = activity?.section_timer_paused_at
+      ? parseUtcDbDatetime(activity.section_timer_paused_at)
+      : null;
+    const isPaused = Number(activity?.section_timer_paused) === 1;
+
+    if (isPaused && !startedAt) {
+      return {
+        visible: true,
+        label: 'Paused',
+        background: '#6c757d',
+        color: '#fff',
+        paused: true,
+      };
+    }
 
     if (
       !currentTimedSection?.key ||
@@ -441,13 +455,18 @@ export default function RunActivityPage({
     }
 
     const durationMs = currentTimedSection.minutes * 60 * 1000;
-    const elapsedMs = sectionTimerNowMs - startedAt.getTime();
+    const effectiveNowMs = isPaused && pausedAt ? pausedAt.getTime() : sectionTimerNowMs;
+    const elapsedMs = effectiveNowMs - startedAt.getTime();
     const remainingMs = durationMs - elapsedMs;
     const ratio = durationMs > 0 ? remainingMs / durationMs : 0;
 
     let background = '#198754';
     let color = '#fff';
-    if (remainingMs <= 0) {
+    let label = formatSectionMinutesLabel(remainingMs);
+    if (isPaused) {
+      background = '#6c757d';
+      label = 'Paused';
+    } else if (remainingMs <= 0) {
       background = '#dc3545';
     } else if (ratio <= 0.2) {
       background = '#ffc107';
@@ -456,12 +475,15 @@ export default function RunActivityPage({
 
     return {
       visible: true,
-      label: formatSectionMinutesLabel(remainingMs),
+      label,
       background,
       color,
+      paused: isPaused,
     };
   }, [
     activity?.section_timer_key,
+    activity?.section_timer_paused,
+    activity?.section_timer_paused_at,
     activity?.section_timer_started_at,
     currentTimedSection,
     sectionTimerNowMs,
@@ -603,7 +625,7 @@ export default function RunActivityPage({
   }, [isTestMode]);
 
   useEffect(() => {
-    if (!sectionTimer.visible) return undefined;
+    if (!sectionTimer.visible || sectionTimer.paused) return undefined;
 
     const interval = setInterval(() => {
       setSectionTimerNowMs(Date.now());
@@ -628,6 +650,15 @@ export default function RunActivityPage({
     );
 
   const isObserver = !isActive;
+  const activityPaused = Number(activity?.section_timer_paused) === 1;
+
+  useEffect(() => {
+    if (!activityPaused) return;
+    const activeEl = document.activeElement;
+    if (activeEl && typeof activeEl.blur === 'function') {
+      activeEl.blur();
+    }
+  }, [activityPaused]);
   // NEW: compute test window from activity fields (if present)
   const testWindow = useMemo(() => {
     if (!isTestMode) return null;
@@ -3291,7 +3322,27 @@ export default function RunActivityPage({
             title="Full Submission History"
           />
         ) : (
-          <>
+          <div style={{ position: 'relative' }}>
+            {activityPaused && (
+              <div
+                className="d-flex align-items-center justify-content-center"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  zIndex: 20,
+                  background: 'rgba(255,255,255,0.45)',
+                  backdropFilter: 'grayscale(0.15)',
+                }}
+              >
+                <div className="px-3 py-2 rounded border bg-light text-muted fw-semibold shadow-sm">
+                  Paused
+                </div>
+              </div>
+            )}
+            <div
+              aria-disabled={activityPaused ? 'true' : undefined}
+              style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
+            >
             {renderBlocks(preamble, {
               editable: false,
               isActive: false,
@@ -3553,7 +3604,8 @@ export default function RunActivityPage({
                 %)
               </Alert>
             )}
-          </>
+            </div>
+          </div>
         )}
       </Container>
 

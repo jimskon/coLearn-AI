@@ -8,12 +8,14 @@ import {
   Alert,
   Button,
   ButtonGroup,
+  Badge,
   Row,
   Col,
   Form,
 } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
 import { FaUserCheck, FaLaptop } from 'react-icons/fa';
+import { parseUtcDbDatetime } from '../utils/time';
 
 function progressLabelFromInstanceRow(g) {
   const tg = Number(g.total_groups || 0);
@@ -131,6 +133,46 @@ function GroupProgressBars({ group }) {
   );
 }
 
+function formatTimerMinutesLabel(remainingMs) {
+  if (remainingMs <= 0) return 'Time out';
+  const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+  return `${remainingMinutes} min left`;
+}
+
+function getGroupTimerState(group, nowMs) {
+  const paused = Number(group.section_timer_paused) === 1;
+  const durationMinutes = Number(group.section_timer_duration_minutes || 0);
+  const startedAt = group.section_timer_started_at
+    ? parseUtcDbDatetime(group.section_timer_started_at)
+    : null;
+  const pausedAt = group.section_timer_paused_at
+    ? parseUtcDbDatetime(group.section_timer_paused_at)
+    : null;
+
+  if (paused) {
+    return { label: 'Paused', bg: 'secondary', text: 'light' };
+  }
+
+  if (!startedAt || durationMinutes <= 0) {
+    return { label: 'Waiting', bg: 'warning', text: 'dark' };
+  }
+
+  const durationMs = durationMinutes * 60 * 1000;
+  const effectiveNowMs = paused && pausedAt ? pausedAt.getTime() : nowMs;
+  const remainingMs = durationMs - (effectiveNowMs - startedAt.getTime());
+  const ratio = durationMs > 0 ? remainingMs / durationMs : 0;
+
+  if (remainingMs <= 0) {
+    return { label: 'Time out', bg: 'danger', text: 'light' };
+  }
+
+  if (ratio <= 0.2) {
+    return { label: formatTimerMinutesLabel(remainingMs), bg: 'warning', text: 'dark' };
+  }
+
+  return { label: formatTimerMinutesLabel(remainingMs), bg: 'success', text: 'light' };
+}
+
 export default function ViewGroupsPage() {
   const { courseId, activityId } = useParams();
   const location = useLocation();
@@ -152,6 +194,7 @@ export default function ViewGroupsPage() {
   const [togglingPause, setTogglingPause] = useState(false);
   const [rotationMode, setRotationMode] = useState('submit');
   const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
+  const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
 
   const fetchGroups = async () => {
     setLoading(true);
@@ -211,6 +254,11 @@ export default function ViewGroupsPage() {
     if (courseId && activityId) refreshStudents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, activityId]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setTimerNowMs(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const clearGroupAnswers = async (instanceId) => {
     if (!window.confirm('Clear all saved answers for this group? This cannot be undone.')) return;
@@ -393,11 +441,13 @@ export default function ViewGroupsPage() {
       <h2>{activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}</h2>
       {courseName && <h4 className="text-muted">{courseName}</h4>}
 
-      {/* Add / Remove UI */}
-      <div className="my-4 d-flex gap-3 align-items-center flex-wrap">
-        <div className="d-flex align-items-center gap-2">
-          <span className="text-muted small">Change active on</span>
-          <ButtonGroup size="sm">
+      <Card className="my-4">
+        <Card.Body className="d-flex gap-3 align-items-center justify-content-between flex-wrap">
+          <div>
+            <div className="fw-semibold">Active-student rotation</div>
+            <div className="small text-muted">Choose whether the active student changes on every submit or only when the group advances to the next question group.</div>
+          </div>
+          <ButtonGroup>
             <Button
               variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
               disabled={updatingRotationMode}
@@ -413,8 +463,11 @@ export default function ViewGroupsPage() {
               Q Group
             </Button>
           </ButtonGroup>
-        </div>
+        </Card.Body>
+      </Card>
 
+      {/* Add / Remove UI */}
+      <div className="my-4 d-flex gap-3 align-items-center flex-wrap">
         <Form.Select
           value={selectedAdd}
           onChange={(e) => setSelectedAdd(e.target.value)}
@@ -479,6 +532,7 @@ export default function ViewGroupsPage() {
         <Row>
           {groups.map((group) => {
             const isComplete = isCompleteFromInstanceRow(group);
+            const timerState = getGroupTimerState(group, timerNowMs);
 
             return (
               <Col lg={4} md={6} sm={12} key={group.instance_id}>
@@ -489,7 +543,10 @@ export default function ViewGroupsPage() {
                       <strong className="ms-2">{progressLabelFromInstanceRow(group)}</strong>
                     </div>
 
-                    <div className="d-flex gap-2 mt-2 mt-sm-0 flex-wrap">
+                    <div className="d-flex gap-2 mt-2 mt-sm-0 flex-wrap align-items-center">
+                      <Badge bg={timerState.bg} text={timerState.text}>
+                        {timerState.label}
+                      </Badge>
                       <Button
                         variant="outline-danger"
                         size="sm"

@@ -230,7 +230,10 @@ export default function ViewGroupsPage() {
   useEffect(() => {
     if (!courseId || !activityId) return;
     fetchGroups();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const interval = setInterval(() => {
+      fetchGroups();
+    }, 5000);
+    return () => clearInterval(interval);
   }, [courseId, activityId]);
 
   const refreshStudents = async () => {

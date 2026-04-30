@@ -448,10 +448,11 @@ export default function ViewGroupsPage() {
       <div
         className="sticky-top mb-4"
         style={{
-          top: 0,
-          zIndex: 1030,
+          top: '70px',
+          zIndex: 1020,
           background: '#fff',
           borderBottom: '1px solid #dee2e6',
+          boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
         }}
       >
         <div className="d-flex align-items-center justify-content-between gap-3 py-3 flex-wrap">

@@ -52,7 +52,9 @@ export default function ActivityLoadingOverlay({
                 height: 92,
                 borderRadius: '50%',
                 border: '4px solid rgba(25, 135, 84, 0.65)',
+                transform: 'translate(-50%, -50%) scale(0.45)',
                 animation: `aiPulseRing 1.8s ease-out ${delay}s infinite`,
+                animationFillMode: 'both',
               }}
             />
           ))}

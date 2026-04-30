@@ -2,7 +2,6 @@ import React from 'react';
 
 export default function ActivityLoadingOverlay({
   show = false,
-  label = 'Generating AI feedback...',
 }) {
   if (!show) return null;
 
@@ -71,10 +70,6 @@ export default function ActivityLoadingOverlay({
               boxShadow: '0 0 0 8px rgba(25, 135, 84, 0.12)',
             }}
           />
-        </div>
-
-        <div className="mt-3 text-center">
-          <div className="fw-semibold text-dark">{label}</div>
         </div>
       </div>
     </>

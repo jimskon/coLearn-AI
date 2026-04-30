@@ -3266,7 +3266,6 @@ export default function RunActivityPage({
     <>
       <ActivityLoadingOverlay
         show={isSubmitting}
-        label={isTestMode ? 'Submitting activity...' : 'Generating AI feedback...'}
       />
       <Container className="pt-3 mt-2">
         <h2>

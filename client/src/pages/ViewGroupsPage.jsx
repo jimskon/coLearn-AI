@@ -195,10 +195,13 @@ export default function ViewGroupsPage() {
   const [rotationMode, setRotationMode] = useState('submit');
   const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
-  const fetchGroups = async () => {
-    setLoading(true);
-    setError('');
+  const fetchGroups = async ({ quiet = false } = {}) => {
+    if (!quiet) {
+      setLoading(true);
+      setError('');
+    }
 
     try {
       const res = await fetch(
@@ -219,19 +222,20 @@ export default function ViewGroupsPage() {
       if (Array.isArray(data.groups) && data.groups.length > 0) {
         setRotationMode(String(data.groups[0].active_rotation_mode || 'submit'));
       }
+      setHasLoadedOnce(true);
     } catch (err) {
       console.error('❌ Error loading groups:', err);
       setError(err?.message || 'Could not load groups.');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
     if (!courseId || !activityId) return;
-    fetchGroups();
+    fetchGroups({ quiet: false });
     const interval = setInterval(() => {
-      fetchGroups();
+      fetchGroups({ quiet: true });
     }, 5000);
     return () => clearInterval(interval);
   }, [courseId, activityId]);
@@ -441,91 +445,35 @@ export default function ViewGroupsPage() {
 
   return (
     <Container className="mt-4">
-      <h2>{activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}</h2>
-      {courseName && <h4 className="text-muted">{courseName}</h4>}
-
-      <Card className="my-4">
-        <Card.Body className="d-flex gap-3 align-items-center justify-content-between flex-wrap">
+      <div
+        className="sticky-top mb-4"
+        style={{
+          top: '70px',
+          zIndex: 1020,
+          background: '#fff',
+          borderBottom: '1px solid #dee2e6',
+          boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
+        }}
+      >
+        <div className="d-flex align-items-center justify-content-between gap-3 py-3 flex-wrap">
           <div>
-            <div className="fw-semibold">Active-student rotation</div>
-            <div className="small text-muted">Choose whether the active student changes on every submit or only when the group advances to the next question group.</div>
+            <h2 className="mb-1">
+              {activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}
+            </h2>
+            {courseName && <div className="text-muted">{courseName}</div>}
           </div>
-          <ButtonGroup>
-            <Button
-              variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
-              disabled={updatingRotationMode}
-              onClick={() => handleSetRotationMode('submit')}
-            >
-              Submit
-            </Button>
-            <Button
-              variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
-              disabled={updatingRotationMode}
-              onClick={() => handleSetRotationMode('group')}
-            >
-              Q Group
-            </Button>
-          </ButtonGroup>
-        </Card.Body>
-      </Card>
-
-      {/* Add / Remove UI */}
-      <div className="my-4 d-flex gap-3 align-items-center flex-wrap">
-        <Form.Select
-          value={selectedAdd}
-          onChange={(e) => setSelectedAdd(e.target.value)}
-          style={{ maxWidth: 320 }}
-          disabled={timerPaused}
-        >
-          <option value="">Add student...</option>
-          {available.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} ({s.email})
-            </option>
-          ))}
-        </Form.Select>
-
-        <div className="d-flex gap-2">
-          <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd || timerPaused}>
-            Add to group
-          </Button>
-          <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd || timerPaused}>
-            Group of one
+          <Button
+            variant={timerButtonVariant}
+            onClick={handleTogglePause}
+            disabled={togglingPause}
+          >
+            {togglingPause ? 'Updating…' : timerButtonLabel}
           </Button>
         </div>
 
-        <Form.Select
-          value={selectedRemove}
-          onChange={(e) => setSelectedRemove(e.target.value)}
-          style={{ maxWidth: 380 }}
-          disabled={timerPaused}
-        >
-          <option value="">Remove student...</option>
-          {active.map((s) => (
-            <option
-              key={`${s.activity_instance_id}:${s.id}`}
-              value={`${s.activity_instance_id}:${s.id}`}
-            >
-              G{s.group_number} — {s.name}
-              {s.role ? ` (${s.role})` : ''}
-            </option>
-          ))}
-        </Form.Select>
-
-        <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove || timerPaused}>
-          Remove
-        </Button>
-
-        <Button
-          variant={timerButtonVariant}
-          onClick={handleTogglePause}
-          disabled={togglingPause}
-        >
-          {togglingPause ? 'Updating…' : timerButtonLabel}
-        </Button>
       </div>
 
-      {loading ? (
+      {loading && !hasLoadedOnce ? (
         <Spinner animation="border" />
       ) : error ? (
         <Alert variant="danger">{error}</Alert>
@@ -591,6 +539,82 @@ export default function ViewGroupsPage() {
           })}
         </Row>
       )}
+
+      <Card className="my-4">
+        <Card.Body className="d-flex flex-column gap-3">
+          <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+            <div>
+              <div className="fw-semibold">Active-student rotation</div>
+              <div className="small text-muted">
+                Choose whether the active student changes on every submit or only when the group advances to the next question group.
+              </div>
+            </div>
+            <ButtonGroup>
+              <Button
+                variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
+                disabled={updatingRotationMode}
+                onClick={() => handleSetRotationMode('submit')}
+              >
+                Submit
+              </Button>
+              <Button
+                variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
+                disabled={updatingRotationMode}
+                onClick={() => handleSetRotationMode('group')}
+              >
+                Q Group
+              </Button>
+            </ButtonGroup>
+          </div>
+
+          <div className="d-flex gap-3 align-items-center flex-wrap">
+            <Form.Select
+              value={selectedAdd}
+              onChange={(e) => setSelectedAdd(e.target.value)}
+              style={{ maxWidth: 320 }}
+              disabled={timerPaused}
+            >
+              <option value="">Add student...</option>
+              {available.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.email})
+                </option>
+              ))}
+            </Form.Select>
+
+            <div className="d-flex gap-2">
+              <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd || timerPaused}>
+                Add to group
+              </Button>
+              <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd || timerPaused}>
+                Group of one
+              </Button>
+            </div>
+
+            <Form.Select
+              value={selectedRemove}
+              onChange={(e) => setSelectedRemove(e.target.value)}
+              style={{ maxWidth: 380 }}
+              disabled={timerPaused}
+            >
+              <option value="">Remove student...</option>
+              {active.map((s) => (
+                <option
+                  key={`${s.activity_instance_id}:${s.id}`}
+                  value={`${s.activity_instance_id}:${s.id}`}
+                >
+                  G{s.group_number} — {s.name}
+                  {s.role ? ` (${s.role})` : ''}
+                </option>
+              ))}
+            </Form.Select>
+
+            <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove || timerPaused}>
+              Remove
+            </Button>
+          </div>
+        </Card.Body>
+      </Card>
     </Container>
   );
 }

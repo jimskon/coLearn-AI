@@ -28,10 +28,47 @@ async function ensureSchema() {
   `);
 
   await db.query(`
+    CREATE TABLE IF NOT EXISTS pogil_classes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(191) NOT NULL UNIQUE,
+      description TEXT DEFAULT NULL,
+      created_by INT DEFAULT NULL
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS courses (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name TEXT NOT NULL,
+      code VARCHAR(191) NOT NULL,
+      section TEXT NOT NULL,
+      semester ENUM('fall','spring','summer') NOT NULL,
+      year INT NOT NULL,
+      instructor_id INT DEFAULT NULL,
+      class_id INT DEFAULT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS pogil_activities (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(191) NOT NULL,
+      title TEXT NOT NULL,
+      sheet_url TEXT DEFAULT NULL,
+      class_id INT NOT NULL,
+      order_index INT NOT NULL DEFAULT 0,
+      created_by INT DEFAULT NULL,
+      last_loaded TIMESTAMP NULL DEFAULT NULL,
+      is_test TINYINT(1) DEFAULT NULL
+    )
+  `);
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS activity_instances (
       id INT AUTO_INCREMENT PRIMARY KEY,
-      activity_id INT NOT NULL DEFAULT 1,
-      course_id INT NOT NULL DEFAULT 1,
+      activity_id INT NOT NULL,
+      course_id INT NOT NULL,
       status ENUM('in_progress','completed') DEFAULT 'in_progress',
       active_student_id INT DEFAULT NULL,
       group_number INT DEFAULT NULL,
@@ -81,13 +118,65 @@ async function createUser(role = 'student', name = null) {
   };
 }
 
-async function createInstance({ activityId = 1, courseId = 1, status = 'in_progress' } = {}) {
+async function createClassRecord() {
+  const [result] = await db.query(
+    'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
+    [uniqueValue('ResponsesClass'), 'Class for responses route tests', null]
+  );
+  return Number(result.insertId);
+}
+
+async function createCourse({ instructorId, classId, code = uniqueValue('RSP').toUpperCase() }) {
+  const [result] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ['Responses Course', code, 'A', 'fall', 2026, instructorId, classId]
+  );
+  return Number(result.insertId);
+}
+
+async function createActivity({ classId, createdBy }) {
+  const [result] = await db.query(
+    `INSERT INTO pogil_activities (name, title, sheet_url, class_id, order_index, created_by, is_test)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      uniqueValue('responses-activity').toLowerCase(),
+      uniqueValue('Responses Activity Title'),
+      'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit',
+      classId,
+      1,
+      createdBy ?? null,
+      0,
+    ]
+  );
+  return Number(result.insertId);
+}
+
+async function createInstance({ activityId, courseId, status = 'in_progress' }) {
   const [result] = await db.query(
     `INSERT INTO activity_instances (activity_id, course_id, status)
      VALUES (?, ?, ?)`,
     [activityId, courseId, status]
   );
   return Number(result.insertId);
+}
+
+async function createFixture() {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  return {
+    instructor,
+    student,
+    classId,
+    courseId,
+    activityId,
+    instanceId,
+  };
 }
 
 function createTestServer(user = null) {
@@ -140,8 +229,7 @@ test.after(async () => {
 });
 
 test('single draft save upserts text responses by question id', async () => {
-  const student = await createUser('student');
-  const instanceId = await createInstance();
+  const { student, instanceId } = await createFixture();
 
   const first = await requestJson(student, '/api/responses', {
     method: 'POST',
@@ -181,8 +269,7 @@ test('single draft save upserts text responses by question id', async () => {
 });
 
 test('single draft save rejects invalid question ids', async () => {
-  const student = await createUser('student');
-  const instanceId = await createInstance();
+  const { student, instanceId } = await createFixture();
 
   const response = await requestJson(student, '/api/responses', {
     method: 'POST',
@@ -199,8 +286,7 @@ test('single draft save rejects invalid question ids', async () => {
 });
 
 test('code draft save stores python draft and returns mocked AI feedback', async () => {
-  const student = await createUser('student');
-  const instanceId = await createInstance();
+  const { student, instanceId } = await createFixture();
 
   const response = await requestJson(student, '/api/responses/code', {
     method: 'POST',
@@ -228,8 +314,7 @@ test('code draft save stores python draft and returns mocked AI feedback', async
 });
 
 test('bulk-save upserts multiple valid text drafts and reports saved count', async () => {
-  const student = await createUser('student');
-  const instanceId = await createInstance();
+  const { student, instanceId } = await createFixture();
 
   const response = await requestJson(student, '/api/responses/bulk-save', {
     method: 'POST',
@@ -265,8 +350,7 @@ test('bulk-save upserts multiple valid text drafts and reports saved count', asy
 });
 
 test('bulk-save rejects invalid question ids before writing drafts', async () => {
-  const student = await createUser('student');
-  const instanceId = await createInstance();
+  const { student, instanceId } = await createFixture();
 
   const response = await requestJson(student, '/api/responses/bulk-save', {
     method: 'POST',
@@ -291,8 +375,7 @@ test('bulk-save rejects invalid question ids before writing drafts', async () =>
 });
 
 test('instance readback merges submitted responses with drafts taking precedence', async () => {
-  const student = await createUser('student');
-  const instanceId = await createInstance();
+  const { student, instanceId } = await createFixture();
 
   await db.query(
     `INSERT INTO responses
@@ -340,8 +423,7 @@ test('instance readback merges submitted responses with drafts taking precedence
 });
 
 test('group readback returns the same merged answers without python_feedback decoration', async () => {
-  const student = await createUser('student');
-  const instanceId = await createInstance();
+  const { student, instanceId } = await createFixture();
 
   await db.query(
     `INSERT INTO responses
@@ -370,8 +452,8 @@ test('group readback returns the same merged answers without python_feedback dec
 });
 
 test('mark-complete flips the activity instance status to completed', async () => {
-  const student = await createUser('student');
-  const instanceId = await createInstance({ status: 'in_progress' });
+  const { student, activityId, courseId } = await createFixture();
+  const instanceId = await createInstance({ activityId, courseId, status: 'in_progress' });
 
   const response = await requestJson(student, '/api/responses/mark-complete', {
     method: 'POST',

@@ -470,6 +470,7 @@ export default function ViewGroupsPage() {
             {togglingPause ? 'Updating…' : timerButtonLabel}
           </Button>
         </div>
+
       </div>
 
       {loading && !hasLoadedOnce ? (

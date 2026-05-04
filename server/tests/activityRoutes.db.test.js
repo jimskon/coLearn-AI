@@ -142,6 +142,7 @@ function createTestServer(user = null) {
   app.use('/api/activities', activityRoutes);
 
   const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -149,7 +150,11 @@ function createTestServer(user = null) {
       const { port } = server.address();
       resolve({
         baseUrl: `http://127.0.0.1:${port}`,
-        close: () => new Promise((closeResolve) => server.close(closeResolve)),
+        close: () =>
+          new Promise((closeResolve) => {
+            server.close(closeResolve);
+            server.closeIdleConnections?.();
+          }),
       });
     });
   });
@@ -160,7 +165,10 @@ async function requestJson(user, path, { method = 'GET', body } = {}) {
   try {
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers:
+        body === undefined
+          ? { Connection: 'close' }
+          : { 'Content-Type': 'application/json', Connection: 'close' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const responseBody = response.status === 204 ? null : await response.json();

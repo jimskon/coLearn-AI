@@ -55,6 +55,8 @@ router.get('/:instanceId/groups', controller.getInstanceGroups);
 
 // ✅ List all activity_instances for a given course + activity
 router.get('/by-activity/:courseId/:activityId', controller.getInstancesForActivityInCourse);
+router.post('/by-activity/:courseId/:activityId/timer-pause', controller.setTimerPauseForActivity);
+router.post('/by-activity/:courseId/:activityId/active-rotation-mode', controller.setActiveRotationModeForActivity);
 
 // ✅ Refresh total_groups by parsing the linked Google Doc
 router.get('/:instanceId/refresh-groups', controller.refreshTotalGroups);

@@ -26,6 +26,7 @@ function createTestServer() {
   app.use('/api/auth', authRoutes);
 
   const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -33,7 +34,11 @@ function createTestServer() {
       const { port } = server.address();
       resolve({
         baseUrl: `http://127.0.0.1:${port}`,
-        close: () => new Promise(closeResolve => server.close(closeResolve)),
+        close: () =>
+          new Promise((closeResolve) => {
+            server.close(closeResolve);
+            server.closeIdleConnections?.();
+          }),
       });
     });
   });
@@ -46,6 +51,7 @@ async function requestJson(path, { method = 'POST', body, headers = {} } = {}) {
       method,
       headers: {
         'Content-Type': 'application/json',
+        Connection: 'close',
         ...headers,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -82,6 +88,7 @@ async function requestJsonWithServer(baseUrl, path, { method = 'GET', body, head
     method,
     headers: {
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      Connection: 'close',
       ...headers,
     },
     body: body === undefined ? undefined : JSON.stringify(body),

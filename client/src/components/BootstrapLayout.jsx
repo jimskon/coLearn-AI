@@ -10,10 +10,16 @@ export default function BootstrapLayout({ children }) {
   const canManageCourses = ['root', 'creator', 'instructor'].includes(user?.role);
 
   return (
-    <><h1>hello world</h1>
+    <>
       <Navbar bg="primary" variant="dark" expand="lg" className="mb-4">
         <Container>
-          <Navbar.Brand as={Link} to="/dashboard">POGIL ITS</Navbar.Brand>
+          <Navbar.Brand
+            href="https://colearn-ai.com/docs/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            coLearn-AI
+          </Navbar.Brand>
 
           <Navbar.Toggle aria-controls="basic-navbar-nav" />
           <Navbar.Collapse id="basic-navbar-nav">

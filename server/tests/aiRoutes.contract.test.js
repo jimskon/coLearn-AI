@@ -53,6 +53,8 @@ function createTestServer(overrides) {
   app.use('/api/ai', router);
 
   const server = http.createServer(app);
+  // Avoid waiting on Node's default 5s keep-alive timeout between tiny test requests.
+  server.keepAliveTimeout = 1;
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -66,6 +68,7 @@ function createTestServer(overrides) {
               restore();
               closeResolve();
             });
+            server.closeIdleConnections?.();
           }),
       });
     });
@@ -77,7 +80,10 @@ async function requestJson(path, { method = 'POST', body, overrides } = {}) {
   try {
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers:
+        body === undefined
+          ? { Connection: 'close' }
+          : { 'Content-Type': 'application/json', Connection: 'close' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const text = await response.text();

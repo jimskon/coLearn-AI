@@ -12,6 +12,7 @@ function createTestServer() {
   app.use('/api/activities', activityRoutes);
 
   const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -19,7 +20,11 @@ function createTestServer() {
       const { port } = server.address();
       resolve({
         baseUrl: `http://127.0.0.1:${port}`,
-        close: () => new Promise(closeResolve => server.close(closeResolve)),
+        close: () =>
+          new Promise((closeResolve) => {
+            server.close(closeResolve);
+            server.closeIdleConnections?.();
+          }),
       });
     });
   });
@@ -28,7 +33,9 @@ function createTestServer() {
 async function request(path) {
   const server = await createTestServer();
   try {
-    const response = await fetch(`${server.baseUrl}${path}`);
+    const response = await fetch(`${server.baseUrl}${path}`, {
+      headers: { Connection: 'close' },
+    });
     const body = await response.json();
     return {
       status: response.status,

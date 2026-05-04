@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const test = require('node:test');
 
+process.env.OPENAI_API_KEY ||= 'test-key';
+
 const express = require('express');
 
 const activityInstanceRoutes = require('../activity_instances/routes');

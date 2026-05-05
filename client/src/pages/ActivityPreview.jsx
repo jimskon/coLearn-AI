@@ -152,12 +152,16 @@ export default function ActivityPreview() {
         const body = await docRes.json();
         const lines = body?.lines || [];
 
-        const computedIsTest = Array.isArray(lines) && lines.some(
-          (line) => String(line).trim() === '\\test'
-        ) ? 1 : 0;
+        console.log("[ActivityPreview] preview-doc lines", { count: lines.length });
+
+        const parsedRes = parseSheetToBlocks(lines, { returnIssues: true });
+        const parsed = parsedRes.blocks;
+        setParseMeta(parsedRes.meta);
+
+        const computedIsTest = parsedRes?.meta?.isTest ? 1 : 0;
 
         // Persist only if different (avoids spamming)
-        const dbIsTest = (activityData?.is_test === 1) ? 1 : 0;
+        const dbIsTest = activityData?.is_test === 1 ? 1 : 0;
 
         if (computedIsTest !== dbIsTest) {
           try {
@@ -168,20 +172,12 @@ export default function ActivityPreview() {
               body: JSON.stringify({ is_test: computedIsTest }),
             });
 
-            // keep local state consistent (optional but nice)
             activityData.is_test = computedIsTest;
             setActivity({ ...activityData });
           } catch (e) {
             console.error('[ActivityPreview] Failed to persist is_test', e);
           }
         }
-
-
-        console.log("[ActivityPreview] preview-doc lines", { count: lines.length });
-
-        const parsedRes = parseSheetToBlocks(lines, { returnIssues: true });
-        const parsed = parsedRes.blocks;
-        setParseMeta(parsedRes.meta);
 
         const files = {};
         for (const block of parsed) {

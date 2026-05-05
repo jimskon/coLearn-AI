@@ -2958,13 +2958,7 @@ export default function RunActivityPage({
     const timeoutId = setTimeout(() => controller.abort(), 20000);
 
     try {
-      const studentId = activity?.submitted_by_user_id;
-
-      if (!studentId) {
-        console.warn('[REGRD] missing studentId; abort');
-        alert('Regrade failed: missing submitted_by_user_id for this test instance.');
-        return;
-      }
+      const studentId = activity?.submitted_by_user_id || null;
 
       const blocks = groups.flatMap((g) => [g.intro, ...(g.content || [])]);
 

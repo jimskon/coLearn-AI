@@ -35,6 +35,75 @@ function normalizeActiveRotationMode(raw) {
   return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
 }
 
+async function resolveTestOwnerStudentId(conn, instanceId, fallbackUserId = null) {
+  const [[inst]] = await conn.query(
+    `SELECT submitted_by_user_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  if (!inst) {
+    return { studentId: null, source: null, reason: 'instance_not_found' };
+  }
+
+  if (inst.submitted_by_user_id) {
+    return {
+      studentId: Number(inst.submitted_by_user_id),
+      source: 'submitted_by_user_id',
+      reason: null,
+    };
+  }
+
+  const [members] = await conn.query(
+    `SELECT DISTINCT student_id
+       FROM group_members
+      WHERE activity_instance_id = ?
+      ORDER BY id ASC`,
+    [instanceId]
+  );
+
+  if (members.length === 1 && members[0].student_id) {
+    return {
+      studentId: Number(members[0].student_id),
+      source: 'single_group_member',
+      reason: null,
+    };
+  }
+
+  const [answerers] = await conn.query(
+    `SELECT answered_by_user_id AS student_id, COUNT(*) AS response_count
+       FROM responses
+      WHERE activity_instance_id = ?
+        AND answered_by_user_id IS NOT NULL
+      GROUP BY answered_by_user_id
+      ORDER BY response_count DESC, answered_by_user_id ASC`,
+    [instanceId]
+  );
+
+  if (answerers.length === 1 && answerers[0].student_id) {
+    return {
+      studentId: Number(answerers[0].student_id),
+      source: 'single_response_owner',
+      reason: null,
+    };
+  }
+
+  if (!members.length && !answerers.length && fallbackUserId) {
+    return {
+      studentId: Number(fallbackUserId),
+      source: 'fallback_user',
+      reason: null,
+    };
+  }
+
+  return {
+    studentId: null,
+    source: null,
+    reason: members.length > 1 || answerers.length > 1 ? 'ambiguous' : 'missing',
+  };
+}
+
 async function appendResponse(conn, instanceId, submitId, qid, value, {
   type = 'text',
   answeredBy,
@@ -1607,7 +1676,7 @@ async function submitTest(req, res) {
   const isRegrade = regrade === true;
   const submitId = randomUUID();
 
-  if (!instanceId || !studentId || !answers) {
+  if (!instanceId || !answers || (!studentId && !isRegrade)) {
     return res.status(400).json({ error: 'Missing instanceId, studentId, or answers' });
   }
 
@@ -1640,6 +1709,25 @@ async function submitTest(req, res) {
     }
 
     await conn.beginTransaction();
+
+    let resolvedStudentId = Number(studentId) || null;
+    let ownerSource = resolvedStudentId ? 'request' : null;
+
+    if (!resolvedStudentId) {
+      const resolved = await resolveTestOwnerStudentId(conn, instanceId, req.user?.id || null);
+      resolvedStudentId = resolved.studentId;
+      ownerSource = resolved.source;
+
+      if (!resolvedStudentId) {
+        await conn.rollback();
+        return res.status(400).json({
+          error:
+            resolved.reason === 'ambiguous'
+              ? 'Cannot determine which student owns this test attempt.'
+              : 'Cannot determine which student owns this test attempt.',
+        });
+      }
+    }
 
     let totalEarnedPoints = 0;
     let totalMaxPoints = 0;
@@ -1780,36 +1868,36 @@ async function submitTest(req, res) {
       // Store per-band grading outputs (all as text)
       await appendResponse(conn, instanceId, submitId, `${baseId}CodeScore`, codeScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
       await appendResponse(conn, instanceId, submitId, `${baseId}CodeFeedback`, codeFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}RunScore`, runScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}RunFeedback`, runFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}ResponseScore`, responseScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}ResponseFeedback`, responseFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
@@ -1858,17 +1946,17 @@ async function submitTest(req, res) {
     // Test summary
     await appendResponse(conn, instanceId, submitId, 'testTotalScore', totalEarnedPoints, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
     await appendResponse(conn, instanceId, submitId, 'testMaxScore', totalMaxPoints, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
     await appendResponse(conn, instanceId, submitId, 'testSummary', summaryText, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
 
@@ -1882,10 +1970,11 @@ async function submitTest(req, res) {
         SET
           points_earned    = ?,
           points_possible  = ?,
-          graded_at        = UTC_TIMESTAMP()
+          graded_at        = UTC_TIMESTAMP(),
+          submitted_by_user_id = COALESCE(submitted_by_user_id, ?)
         WHERE id = ?
         `,
-        [totalEarnedPoints, totalMaxPoints, instanceId]
+        [totalEarnedPoints, totalMaxPoints, resolvedStudentId, instanceId]
       );
     } else {
       await conn.query(
@@ -1900,7 +1989,7 @@ async function submitTest(req, res) {
           submitted_by_user_id = COALESCE(submitted_by_user_id, ?)
         WHERE id = ?
         `,
-        [totalEarnedPoints, totalMaxPoints, studentId, instanceId]
+        [totalEarnedPoints, totalMaxPoints, resolvedStudentId, instanceId]
       );
     }
 
@@ -1928,6 +2017,8 @@ async function submitTest(req, res) {
     console.log('[SUBMIT_TEST] EXIT OK', {
       instanceId,
       isRegrade,
+      studentId: resolvedStudentId,
+      ownerSource,
       totalEarnedPoints,
       totalMaxPoints,
     });

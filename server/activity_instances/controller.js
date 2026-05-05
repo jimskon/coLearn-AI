@@ -330,6 +330,104 @@ async function createActivityInstance(req, res) {
   }
 }
 
+async function ensureDemoInstance(req, res) {
+  const activityId = Number(req.params.activityId);
+  const courseId = Number(req.params.courseId);
+  const userId = Number(req.user?.id);
+  const userRole = String(req.user?.role || '');
+
+  if (!activityId || !courseId || !userId) {
+    return res.status(400).json({ error: 'Missing activity, course, or user.' });
+  }
+
+  const conn = await db.getConnection();
+  const lockName = `ensureDemoInstance:${courseId}:${activityId}:${userId}`;
+
+  try {
+    const [[lockRow]] = await conn.query(`SELECT GET_LOCK(?, 5) AS got`, [lockName]);
+    if (!lockRow?.got) {
+      return res.status(409).json({ error: 'Someone else is opening this demo right now.' });
+    }
+
+    const [[activityRow]] = await conn.query(
+      `SELECT id, is_test, sheet_url
+         FROM pogil_activities
+        WHERE id = ?`,
+      [activityId]
+    );
+
+    if (!activityRow) {
+      return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    const activityType = await inferActivityTypeFromActivity(activityRow);
+    if (activityType !== 'demo') {
+      return res.status(400).json({ error: 'This activity is not a demo.' });
+    }
+
+    if (userRole === 'student') {
+      const [[enrollment]] = await conn.query(
+        `SELECT 1
+           FROM course_enrollments
+          WHERE course_id = ? AND student_id = ?
+          LIMIT 1`,
+        [courseId, userId]
+      );
+      if (!enrollment) {
+        return res.status(403).json({ error: 'Student is not enrolled in this course.' });
+      }
+    }
+
+    const [[existing]] = await conn.query(
+      `SELECT ai.id AS instance_id
+         FROM activity_instances ai
+         JOIN group_members gm ON gm.activity_instance_id = ai.id
+        WHERE ai.course_id = ?
+          AND ai.activity_id = ?
+          AND gm.student_id = ?
+        ORDER BY ai.id ASC
+        LIMIT 1`,
+      [courseId, activityId, userId]
+    );
+
+    if (existing?.instance_id) {
+      return res.json({ instanceId: Number(existing.instance_id), created: false });
+    }
+
+    const [[nextRow]] = await conn.query(
+      `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_group_number
+         FROM activity_instances
+        WHERE course_id = ? AND activity_id = ?`,
+      [courseId, activityId]
+    );
+
+    const [instanceResult] = await conn.query(
+      `INSERT INTO activity_instances
+         (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status, active_student_id, active_rotation_mode)
+       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, 'submit')`,
+      [courseId, activityId, Number(nextRow?.next_group_number) || 1, userId]
+    );
+
+    await conn.query(
+      `INSERT INTO group_members (activity_instance_id, student_id, role, connected)
+       VALUES (?, ?, NULL, 0)`,
+      [instanceResult.insertId, userId]
+    );
+
+    return res.status(201).json({ instanceId: Number(instanceResult.insertId), created: true });
+  } catch (err) {
+    console.error('❌ ensureDemoInstance:', err);
+    return res.status(500).json({ error: 'Failed to open demo.' });
+  } finally {
+    try {
+      await conn.query(`SELECT RELEASE_LOCK(?)`, [lockName]);
+    } catch (_) {
+      // ignore release errors
+    }
+    conn.release();
+  }
+}
+
 async function getActivityInstanceById(req, res) {
   const { id } = req.params;
 
@@ -2207,6 +2305,7 @@ module.exports = {
   clearResponsesForInstance,
   getParsedActivityDoc,
   createActivityInstance,
+  ensureDemoInstance,
   getActivityInstanceById,
   getEnrolledStudents,
   recordHeartbeat,

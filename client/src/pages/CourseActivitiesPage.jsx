@@ -49,16 +49,53 @@ export default function CourseActivitiesPage() {
     fetchActivities();
   }, [courseId]);
 
-  const handleDoActivity = (activity, isInstructor = false) => {
+  const ensureDemoInstance = async (activity) => {
+    const res = await fetch(
+      `${API_BASE_URL}/api/activity-instances/by-activity/${courseId}/${activity.activity_id}/demo-instance`,
+      {
+        method: 'POST',
+        credentials: 'include',
+      }
+    );
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.instanceId) {
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
+
+    return Number(data.instanceId);
+  };
+
+  const handleDoActivity = async (activity, isInstructor = false) => {
     const activityId = activity.activity_id;
-    const instanceId = activity.instance_id;
     const activityType = activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
     const isTest = activityType === 'test';
+    const isDemo = activityType === 'demo';
+    let instanceId = activity.instance_id;
+
+    if (isDemo) {
+      try {
+        instanceId = await ensureDemoInstance(activity);
+        setActivities((prev) =>
+          prev.map((a) =>
+            a.activity_id === activity.activity_id
+              ? { ...a, instance_id: instanceId, has_groups: true }
+              : a
+          )
+        );
+      } catch (err) {
+        console.error('❌ Failed to open demo:', err);
+        alert(err?.message || 'Unable to open demo.');
+        return;
+      }
+    }
 
     const path = isInstructor
       ? (isTest
         ? `/test-setup/${courseId}/${activityId}`   // ✅ tests go here
-        : `/setup-groups/${courseId}/${activityId}` // ✅ non-tests go here
+        : isDemo
+          ? `/run/${instanceId}`
+          : `/setup-groups/${courseId}/${activityId}` // ✅ non-tests go here
       )
       : `/run/${instanceId}`;
 
@@ -130,7 +167,7 @@ export default function CourseActivitiesPage() {
                 activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
               const isTest = activityType === 'test';
               const isDemo = activityType === 'demo';
-              const setupLabel = isDemo ? 'Setup Demo' : 'Setup Groups';
+              const setupLabel = isDemo ? 'Open Demo' : 'Setup Groups';
               const viewLabel = isDemo ? 'View Demo' : 'View Groups';
               const typeLabel = TYPE_LABELS[activityType] || 'Group';
               const typeVariant = TYPE_BADGE_VARIANTS[activityType] || 'secondary';
@@ -144,15 +181,17 @@ export default function CourseActivitiesPage() {
                     </div>
                   </td>
                   <td>
-                    {user?.role === 'student' && activity.instance_id && !activity.hidden ? (
+                    {user?.role === 'student' && (activity.instance_id || isDemo) && !activity.hidden ? (
 
                       (() => {
                         const status = activity.student_status;
 
-                        let label = 'Start';
+                        let label = isDemo ? 'Open Demo' : 'Start';
                         let variant = 'success';
 
-                        if (status === 'in_progress') {
+                        if (isDemo) {
+                          variant = 'secondary';
+                        } else if (status === 'in_progress') {
                           label = 'Resume';
                           variant = 'warning';
                         } else if (status === 'complete') {
@@ -207,9 +246,11 @@ export default function CourseActivitiesPage() {
                               <Button
                                 variant="secondary"
                                 onClick={() =>
-                                  navigate(`/view-groups/${courseId}/${activity.activity_id}`, {
-                                    state: { courseName },
-                                  })
+                                  isDemo
+                                    ? handleDoActivity(activity, true)
+                                    : navigate(`/view-groups/${courseId}/${activity.activity_id}`, {
+                                        state: { courseName },
+                                      })
                                 }
                               >
                                 {viewLabel}

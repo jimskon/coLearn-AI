@@ -646,6 +646,7 @@ export default function RunActivityPage({
   const isActive =
     !!user &&
     (
+      isPlaygroundMode ||
       (isTestMode && isStudent) ||
       (activeStudentId != null && String(user.id) === String(activeStudentId))
     );

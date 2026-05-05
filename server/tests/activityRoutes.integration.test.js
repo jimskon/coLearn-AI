@@ -1,49 +1,58 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const Module = require('node:module');
 const test = require('node:test');
 
 const express = require('express');
 
 function loadActivityRouter({ sheetsGet, docsGet, authorizeImpl } = {}) {
-  const googleApisPath = require.resolve('googleapis', {
-    paths: ['/Users/skonjp/Documents/Codex/2026-04-23-colearn-ai/coLearn-AI/server'],
-  });
   const googleAuthPath = require.resolve('../utils/googleAuth');
   const routesPath = require.resolve('../activities/routes');
 
+  const fakeGoogleApis = {
+    google: {
+      sheets: () => ({
+        spreadsheets: {
+          values: {
+            get: sheetsGet || (async () => ({ data: { values: [] } })),
+          },
+        },
+      }),
+      docs: () => ({
+        documents: {
+          get: docsGet || (async () => ({ data: { body: { content: [] } } })),
+        },
+      }),
+    },
+  };
+  const originalLoad = Module._load;
+
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'googleapis') {
+      return fakeGoogleApis;
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  delete require.cache[googleAuthPath];
   delete require.cache[routesPath];
 
-  const googleApis = require(googleApisPath);
   const googleAuth = require(googleAuthPath);
-
-  const originalSheets = googleApis.google.sheets;
-  const originalDocs = googleApis.google.docs;
   const originalAuthorize = googleAuth.authorize;
-
-  googleApis.google.sheets = () => ({
-    spreadsheets: {
-      values: {
-        get: sheetsGet || (async () => ({ data: { values: [] } })),
-      },
-    },
-  });
-
-  googleApis.google.docs = () => ({
-    documents: {
-      get: docsGet || (async () => ({ data: { body: { content: [] } } })),
-    },
-  });
-
   googleAuth.authorize = authorizeImpl || (() => ({ fake: true }));
 
-  const router = require(routesPath);
+  let router;
+  try {
+    router = require(routesPath);
+  } finally {
+    Module._load = originalLoad;
+  }
 
   return {
     router,
     restore() {
-      googleApis.google.sheets = originalSheets;
-      googleApis.google.docs = originalDocs;
       googleAuth.authorize = originalAuthorize;
+      delete require.cache[googleAuthPath];
       delete require.cache[routesPath];
     },
   };

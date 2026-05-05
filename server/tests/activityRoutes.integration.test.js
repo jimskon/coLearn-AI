@@ -94,9 +94,17 @@ async function request(path, { overrides } = {}) {
       headers: { Connection: 'close' },
     });
     const text = await response.text();
+    let body = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
+    }
     return {
       status: response.status,
-      body: text ? JSON.parse(text) : null,
+      body,
     };
   } finally {
     await server.close();
@@ -134,7 +142,7 @@ test('sheet preview returns 500 when the Google Sheets client throws', async () 
   );
 
   assert.equal(response.status, 500);
-  assert.equal(response.body, null);
+  assert.equal(response.body, 'Error fetching sheet data');
 });
 
 test('doc preview returns flattened paragraph lines from the stubbed Google Docs client', async () => {

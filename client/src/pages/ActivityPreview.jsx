@@ -209,7 +209,7 @@ export default function ActivityPreview() {
 
   const modeValue = parseMeta?.isTest
     ? 'test'
-    : (parseMeta?.mode || '').trim() || 'normal';
+    : (parseMeta?.mode || '').trim() || 'group';
 
   const formattedGuidance = stripHtml(headerValue('aicodeguidance')).trim();
   const formattedContext = stripHtml(headerValue('activitycontext')).trim();

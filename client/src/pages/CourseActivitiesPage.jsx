@@ -1,9 +1,21 @@
 // src/pages/CourseActivitiesPage.jsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Container, Table, Button, ButtonGroup, Spinner, Alert } from 'react-bootstrap';
+import { Container, Table, Button, ButtonGroup, Spinner, Alert, Badge } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
+
+const TYPE_LABELS = {
+  group: 'Group',
+  test: 'Test',
+  demo: 'Demo',
+};
+
+const TYPE_BADGE_VARIANTS = {
+  group: 'secondary',
+  test: 'warning',
+  demo: 'info',
+};
 
 
 export default function CourseActivitiesPage() {
@@ -40,7 +52,8 @@ export default function CourseActivitiesPage() {
   const handleDoActivity = (activity, isInstructor = false) => {
     const activityId = activity.activity_id;
     const instanceId = activity.instance_id;
-    const isTest = activity.is_test === 1;
+    const activityType = activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
+    const isTest = activityType === 'test';
 
     const path = isInstructor
       ? (isTest
@@ -113,13 +126,23 @@ export default function CourseActivitiesPage() {
           <tbody>
             {activities.map((activity) => {
               const title = activity.title || activity.activity_name || 'Untitled Activity';
-
-              // ✅ single source of truth from backend
-              const isTest = activity.is_test === 1;
+              const activityType =
+                activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
+              const isTest = activityType === 'test';
+              const isDemo = activityType === 'demo';
+              const setupLabel = isDemo ? 'Setup Demo' : 'Setup Groups';
+              const viewLabel = isDemo ? 'View Demo' : 'View Groups';
+              const typeLabel = TYPE_LABELS[activityType] || 'Group';
+              const typeVariant = TYPE_BADGE_VARIANTS[activityType] || 'secondary';
 
               return (
                 <tr key={activity.activity_id}>
-                  <td>{title}</td>
+                  <td>
+                    <div className="d-flex align-items-center gap-2 flex-wrap">
+                      <span>{title}</span>
+                      <Badge bg={typeVariant}>{typeLabel}</Badge>
+                    </div>
+                  </td>
                   <td>
                     {user?.role === 'student' && activity.instance_id && !activity.hidden ? (
 
@@ -177,7 +200,7 @@ export default function CourseActivitiesPage() {
                               variant="primary"
                               onClick={() => handleDoActivity(activity, true)}
                             >
-                              Setup Groups
+                              {setupLabel}
                             </Button>
                           ) : (
                             <>
@@ -189,7 +212,7 @@ export default function CourseActivitiesPage() {
                                   })
                                 }
                               >
-                                View Groups
+                                {viewLabel}
                               </Button>
 
                               {/* 🔒 Hide only if groups exist */}

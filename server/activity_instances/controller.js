@@ -2,6 +2,7 @@
 const db = require('../db');
 const { google } = require('googleapis');
 const { authorize } = require('../utils/googleAuth');
+const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
 const { gradeTestQuestion } = require('../ai/controller');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
@@ -672,7 +673,8 @@ async function setupMultipleGroupInstances(req, res) {
     );
 
     // Decide test vs non-test
-    const dbIsTest = !!activityRow?.is_test;
+    const activityType = await inferActivityTypeFromActivity(activityRow || {});
+    const dbIsTest = activityType === 'test';
     const hasTiming = !!testStartAt && Number(testDurationMinutes) > 0;
     const isTest = dbIsTest || hasTiming;
 
@@ -1352,7 +1354,7 @@ async function refreshTotalGroups(req, res) {
   try {
     // 1) Look up the activity + sheet_url for this instance
     const [[row]] = await db.query(
-      `SELECT ai.activity_id, a.sheet_url
+      `SELECT ai.activity_id, a.sheet_url, a.is_test
        FROM activity_instances ai
        JOIN pogil_activities a ON ai.activity_id = a.id
        WHERE ai.id = ?`,
@@ -1393,7 +1395,10 @@ async function refreshTotalGroups(req, res) {
     let groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
     if (groupCount <= 0) groupCount = 1;
 
-    const isTest = lines.some(line => line.trim() === '\\test');
+    const activityType = inferActivityTypeFromLines(lines, {
+      fallbackIsTest: Number(row.is_test) === 1,
+    });
+    const isTest = activityType === 'test';
 
     await db.query(
       `UPDATE activity_instances
@@ -1402,7 +1407,7 @@ async function refreshTotalGroups(req, res) {
       [groupCount, instanceId]
     );
 
-    // NEW: update pogil_activities.is_test based on \test tag
+    // Keep the legacy flag aligned with the current document type.
     await db.query(
       `UPDATE pogil_activities
        SET is_test = ?
@@ -1410,7 +1415,7 @@ async function refreshTotalGroups(req, res) {
       [isTest ? 1 : 0, row.activity_id]
     );
 
-    return res.json({ success: true, groupCount, isTest });
+    return res.json({ success: true, groupCount, isTest, activityType });
   } catch (err) {
     console.error('❌ refreshTotalGroups:', err);
     return res.status(500).json({ error: 'Failed to refresh total_groups' });

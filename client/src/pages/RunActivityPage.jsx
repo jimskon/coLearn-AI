@@ -352,8 +352,8 @@ export default function RunActivityPage({
   const [localCode, setLocalCode] = useState({});
 
   const [activity, setActivity] = useState(null);
-  const activityMode = activity?.meta?.mode || activity?.mode || 'normal';
-  const isPlaygroundMode = activityMode === 'playground';
+  const activityMode = activity?.meta?.mode || activity?.mode || 'group';
+  const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
 
 
   const [unansweredShown, setUnansweredShown] = useState({}); // { "1e": "Unanswered: ..." }

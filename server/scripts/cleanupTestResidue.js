@@ -282,7 +282,7 @@ async function deleteOrphanExampleUsers(conn, summary) {
     summary,
     'Delete orphan users with @example.com emails',
     `
-    DELETE FROM users u
+    DELETE u FROM users u
     WHERE u.email LIKE '%@example.com'
       AND NOT EXISTS (SELECT 1 FROM users parent WHERE parent.created_by = u.id)
       AND NOT EXISTS (SELECT 1 FROM pogil_classes pc WHERE pc.created_by = u.id)

@@ -11,13 +11,49 @@ function uniqueName(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const created = {
+  users: new Set(),
+  classes: new Set(),
+  courses: new Set(),
+  activities: new Set(),
+};
+
+function remember(kind, id) {
+  const numericId = Number(id);
+  if (Number.isFinite(numericId)) created[kind].add(numericId);
+  return numericId;
+}
+
+async function cleanupCreatedRows() {
+  const activityIds = [...created.activities];
+  const courseIds = [...created.courses];
+  const classIds = [...created.classes];
+  const userIds = [...created.users];
+
+  if (activityIds.length) {
+    await db.query(`DELETE FROM activity_instances WHERE activity_id IN (?)`, [activityIds]);
+    await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]);
+  }
+  if (courseIds.length) {
+    await db.query(`DELETE FROM course_enrollments WHERE course_id IN (?)`, [courseIds]);
+    await db.query(`DELETE FROM activity_instances WHERE course_id IN (?)`, [courseIds]);
+    await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]);
+  }
+  if (classIds.length) {
+    await db.query(`DELETE FROM pogil_classes WHERE id IN (?)`, [classIds]);
+  }
+  if (userIds.length) {
+    await db.query(`DELETE FROM users WHERE id IN (?)`, [userIds]);
+  }
+}
+
 async function createUser(role = 'student') {
   const email = `${uniqueName(role)}@example.com`;
   const [result] = await db.query(
     'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
     [`${role} user`, email, 'not-used', role]
   );
-  return Number(result.insertId);
+  return remember('users', result.insertId);
 }
 
 async function createClassRecord() {
@@ -25,7 +61,7 @@ async function createClassRecord() {
     'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
     [uniqueName('Class'), 'Class for route tests', null]
   );
-  return Number(result.insertId);
+  return remember('classes', result.insertId);
 }
 
 function createTestServer() {
@@ -74,6 +110,7 @@ async function requestJson(path, { method = 'GET', body } = {}) {
 }
 
 test.after(async () => {
+  await cleanupCreatedRows();
   await db.end();
 });
 
@@ -95,6 +132,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
   assert.equal(create.body.description, description);
   assert.equal(create.body.created_by, null);
   assert.equal(typeof create.body.id, 'number');
+  remember('classes', create.body.id);
 
   const list = await requestJson('/api/classes');
   assert.equal(list.status, 200);
@@ -156,6 +194,7 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.equal(create.body.class_id, classId);
   assert.equal(create.body.created_by, creatorId);
   assert.equal(typeof create.body.id, 'number');
+  remember('activities', create.body.id);
 
   const list = await requestJson(`/api/classes/${classId}/activities`);
   assert.equal(list.status, 200);
@@ -218,7 +257,7 @@ test('enrollment routes enroll a student by course code and list enrollments', a
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ['Intro CS', code, 'A', 'fall', 2026, instructorId, classId]
   );
-  const courseId = Number(courseResult.insertId);
+  const courseId = remember('courses', courseResult.insertId);
 
   const enroll = await requestJson('/api/classes/enroll-by-code', {
     method: 'POST',

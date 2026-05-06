@@ -80,6 +80,7 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS total_groups INT NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS completed_groups INT NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS progress_status VARCHAR(32) NOT NULL DEFAULT 'not_started',
+      ADD COLUMN IF NOT EXISTS submitted_by_user_id INT NULL,
       ADD COLUMN IF NOT EXISTS section_timer_key VARCHAR(64) NULL,
       ADD COLUMN IF NOT EXISTS section_timer_duration_minutes INT NULL,
       ADD COLUMN IF NOT EXISTS section_timer_started_at DATETIME NULL,
@@ -95,6 +96,7 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS reviewed_at DATETIME NULL,
       ADD COLUMN IF NOT EXISTS points_earned DECIMAL(10,2) NULL,
       ADD COLUMN IF NOT EXISTS points_possible DECIMAL(10,2) NULL,
+      ADD COLUMN IF NOT EXISTS hidden TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_before_start TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0
   `);
@@ -663,4 +665,95 @@ test('clear responses resets progress and timer fields on the instance', async (
   assert.equal(instance.section_timer_started_at, null);
   assert.equal(Number(instance.section_timer_paused), 0);
   assert.equal(instance.section_timer_paused_at, null);
+});
+
+test('students cannot fetch a hidden instance, but instructors still can', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  await db.query(
+    `UPDATE activity_instances
+        SET hidden = 1
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  const studentResponse = await requestJson(student, `/api/activity-instances/${instanceId}`);
+  assert.equal(studentResponse.status, 403);
+  assert.equal(studentResponse.body.error, 'This activity is currently hidden.');
+
+  const instructorResponse = await requestJson(instructor, `/api/activity-instances/${instanceId}`);
+  assert.equal(instructorResponse.status, 200);
+  assert.equal(instructorResponse.body.id, instanceId);
+  assert.equal(Number(instructorResponse.body.hidden), 1);
+});
+
+test('setup-groups returns 409 when group 1 already exists for the activity', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  await createInstance({ activityId, courseId, groupNumber: 1 });
+
+  const response = await requestJson(instructor, '/api/activity-instances/setup-groups', {
+    method: 'POST',
+    body: {
+      activityId,
+      courseId,
+      groups: [
+        {
+          members: [{ student_id: student.id, role: 'facilitator' }],
+        },
+      ],
+    },
+  });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'Groups already exist for this activity.');
+
+  const [[countRow]] = await db.query(
+    `SELECT COUNT(*) AS instance_count
+       FROM activity_instances
+      WHERE activity_id = ? AND course_id = ?`,
+    [activityId, courseId]
+  );
+  assert.equal(Number(countRow.instance_count), 1);
+});
+
+test('submit-test regrade fails cleanly when legacy ownership is ambiguous', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  await addGroupMember({ instanceId, studentId: studentA.id, role: 'facilitator', connected: true });
+  await addGroupMember({ instanceId, studentId: studentB.id, role: 'analyst', connected: true });
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/submit-test`, {
+    method: 'POST',
+    body: {
+      regrade: true,
+      answers: {},
+      questions: [],
+    },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'Cannot determine which student owns this test attempt.');
+
+  const [[instance]] = await db.query(
+    `SELECT submitted_by_user_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(instance.submitted_by_user_id, null);
 });

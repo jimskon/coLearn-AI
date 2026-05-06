@@ -221,17 +221,14 @@ function loadRouters({ docsById = {} } = {}) {
 
   let courseRoutes;
   let activityInstanceRoutes;
-  try {
-    courseRoutes = require(courseRoutesPath);
-    activityInstanceRoutes = require(activityInstanceRoutesPath);
-  } finally {
-    Module._load = originalLoad;
-  }
+  courseRoutes = require(courseRoutesPath);
+  activityInstanceRoutes = require(activityInstanceRoutesPath);
 
   return {
     courseRoutes,
     activityInstanceRoutes,
     restore() {
+      Module._load = originalLoad;
       googleAuth.authorize = originalAuthorize;
       delete require.cache[googleAuthPath];
       delete require.cache[courseRoutesPath];

@@ -35,6 +35,16 @@ async function cleanupCreatedRows() {
   if (courseIds.length) {
     await db.query(`DELETE FROM course_enrollments WHERE course_id IN (?)`, [courseIds]);
   }
+  if (activityIds.length) {
+    await db.query(
+      `DELETE FROM group_members
+       WHERE activity_instance_id IN (
+         SELECT id FROM activity_instances WHERE activity_id IN (?)
+       )`,
+      [activityIds]
+    );
+    await db.query(`DELETE FROM activity_instances WHERE activity_id IN (?)`, [activityIds]);
+  }
   if (instanceIds.length) {
     await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
     await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);

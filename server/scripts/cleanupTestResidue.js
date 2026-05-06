@@ -277,12 +277,11 @@ async function deleteOrphanExampleUsers(conn, summary) {
     ? `AND NOT EXISTS (SELECT 1 FROM response_drafts rd WHERE rd.answered_by_user_id = u.id)`
     : '';
 
-  await execDelete(
+  const orphanRows = await query(
     conn,
-    summary,
-    'Delete orphan users with @example.com emails',
     `
-    DELETE u FROM users u
+    SELECT u.id
+    FROM users u
     WHERE u.email LIKE '%@example.com'
       AND NOT EXISTS (SELECT 1 FROM users parent WHERE parent.created_by = u.id)
       AND NOT EXISTS (SELECT 1 FROM pogil_classes pc WHERE pc.created_by = u.id)
@@ -295,6 +294,20 @@ async function deleteOrphanExampleUsers(conn, summary) {
       ${responsesClause}
       ${responseDraftsClause}
     `
+  );
+
+  const orphanIds = idsFrom(orphanRows);
+  if (!orphanIds.length) {
+    summary.push({ step: 'Delete orphan users with @example.com emails', deleted: 0 });
+    return 0;
+  }
+
+  return execDelete(
+    conn,
+    summary,
+    'Delete orphan users with @example.com emails',
+    `DELETE FROM users WHERE id IN (?)`,
+    [orphanIds]
   );
 }
 

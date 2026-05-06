@@ -771,8 +771,8 @@ test('rotate-active-student returns 404 when no group members are connected', as
     activeStudentId: studentA.id,
   });
 
-  await addGroupMember({ instanceId, studentId: studentA.id, connected: false });
-  await addGroupMember({ instanceId, studentId: studentB.id, connected: false });
+  await addGroupMember({ instanceId, studentId: studentA.id, role: 'facilitator', connected: false });
+  await addGroupMember({ instanceId, studentId: studentB.id, role: 'analyst', connected: false });
 
   const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/rotate-active-student`, {
     method: 'POST',

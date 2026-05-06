@@ -1,5 +1,6 @@
 // server/groups/controller.js
 const db = require('../db');
+const { inferActivityTypeFromActivity } = require('../utils/activityType');
 
 // Priority order for roles
 const ROLES = ['facilitator', 'analyst', 'qc', 'spokesperson'];
@@ -10,12 +11,13 @@ const ROLES = ['facilitator', 'analyst', 'qc', 'spokesperson'];
 
 async function isTestActivity(conn, activityId) {
   const [[row]] = await conn.query(
-    `SELECT COALESCE(is_test, 0) AS is_test
+    `SELECT COALESCE(is_test, 0) AS is_test, sheet_url
        FROM pogil_activities
       WHERE id = ?`,
     [activityId]
   );
-  return !!row?.is_test;
+  const activityType = await inferActivityTypeFromActivity(row || {});
+  return activityType === 'test';
 }
 
 // Create a new instance for a test (group of 1, no roles)

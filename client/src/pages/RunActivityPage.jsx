@@ -352,8 +352,8 @@ export default function RunActivityPage({
   const [localCode, setLocalCode] = useState({});
 
   const [activity, setActivity] = useState(null);
-  const activityMode = activity?.meta?.mode || activity?.mode || 'normal';
-  const isPlaygroundMode = activityMode === 'playground';
+  const activityMode = activity?.meta?.mode || activity?.mode || 'group';
+  const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
 
 
   const [unansweredShown, setUnansweredShown] = useState({}); // { "1e": "Unanswered: ..." }
@@ -646,6 +646,7 @@ export default function RunActivityPage({
   const isActive =
     !!user &&
     (
+      isPlaygroundMode ||
       (isTestMode && isStudent) ||
       (activeStudentId != null && String(user.id) === String(activeStudentId))
     );
@@ -2958,13 +2959,7 @@ export default function RunActivityPage({
     const timeoutId = setTimeout(() => controller.abort(), 20000);
 
     try {
-      const studentId = activity?.submitted_by_user_id;
-
-      if (!studentId) {
-        console.warn('[REGRD] missing studentId; abort');
-        alert('Regrade failed: missing submitted_by_user_id for this test instance.');
-        return;
-      }
+      const studentId = activity?.submitted_by_user_id || null;
 
       const blocks = groups.flatMap((g) => [g.intro, ...(g.content || [])]);
 

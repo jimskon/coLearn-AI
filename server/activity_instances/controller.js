@@ -2,6 +2,7 @@
 const db = require('../db');
 const { google } = require('googleapis');
 const { authorize } = require('../utils/googleAuth');
+const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
 const { gradeTestQuestion } = require('../ai/controller');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
@@ -33,6 +34,75 @@ function toDbNowString(date = new Date()) {
 
 function normalizeActiveRotationMode(raw) {
   return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
+}
+
+async function resolveTestOwnerStudentId(conn, instanceId, fallbackUserId = null) {
+  const [[inst]] = await conn.query(
+    `SELECT submitted_by_user_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  if (!inst) {
+    return { studentId: null, source: null, reason: 'instance_not_found' };
+  }
+
+  if (inst.submitted_by_user_id) {
+    return {
+      studentId: Number(inst.submitted_by_user_id),
+      source: 'submitted_by_user_id',
+      reason: null,
+    };
+  }
+
+  const [members] = await conn.query(
+    `SELECT DISTINCT student_id
+       FROM group_members
+      WHERE activity_instance_id = ?
+      ORDER BY id ASC`,
+    [instanceId]
+  );
+
+  if (members.length === 1 && members[0].student_id) {
+    return {
+      studentId: Number(members[0].student_id),
+      source: 'single_group_member',
+      reason: null,
+    };
+  }
+
+  const [answerers] = await conn.query(
+    `SELECT answered_by_user_id AS student_id, COUNT(*) AS response_count
+       FROM responses
+      WHERE activity_instance_id = ?
+        AND answered_by_user_id IS NOT NULL
+      GROUP BY answered_by_user_id
+      ORDER BY response_count DESC, answered_by_user_id ASC`,
+    [instanceId]
+  );
+
+  if (answerers.length === 1 && answerers[0].student_id) {
+    return {
+      studentId: Number(answerers[0].student_id),
+      source: 'single_response_owner',
+      reason: null,
+    };
+  }
+
+  if (!members.length && !answerers.length && fallbackUserId) {
+    return {
+      studentId: Number(fallbackUserId),
+      source: 'fallback_user',
+      reason: null,
+    };
+  }
+
+  return {
+    studentId: null,
+    source: null,
+    reason: members.length > 1 || answerers.length > 1 ? 'ambiguous' : 'missing',
+  };
 }
 
 async function appendResponse(conn, instanceId, submitId, qid, value, {
@@ -257,6 +327,104 @@ async function createActivityInstance(req, res) {
   } catch (err) {
     console.error("❌ Failed to create activity instance:", err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+async function ensureDemoInstance(req, res) {
+  const activityId = Number(req.params.activityId);
+  const courseId = Number(req.params.courseId);
+  const userId = Number(req.user?.id);
+  const userRole = String(req.user?.role || '');
+
+  if (!activityId || !courseId || !userId) {
+    return res.status(400).json({ error: 'Missing activity, course, or user.' });
+  }
+
+  const conn = await db.getConnection();
+  const lockName = `ensureDemoInstance:${courseId}:${activityId}:${userId}`;
+
+  try {
+    const [[lockRow]] = await conn.query(`SELECT GET_LOCK(?, 5) AS got`, [lockName]);
+    if (!lockRow?.got) {
+      return res.status(409).json({ error: 'Someone else is opening this demo right now.' });
+    }
+
+    const [[activityRow]] = await conn.query(
+      `SELECT id, is_test, sheet_url
+         FROM pogil_activities
+        WHERE id = ?`,
+      [activityId]
+    );
+
+    if (!activityRow) {
+      return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    const activityType = await inferActivityTypeFromActivity(activityRow);
+    if (activityType !== 'demo') {
+      return res.status(400).json({ error: 'This activity is not a demo.' });
+    }
+
+    if (userRole === 'student') {
+      const [[enrollment]] = await conn.query(
+        `SELECT 1
+           FROM course_enrollments
+          WHERE course_id = ? AND student_id = ?
+          LIMIT 1`,
+        [courseId, userId]
+      );
+      if (!enrollment) {
+        return res.status(403).json({ error: 'Student is not enrolled in this course.' });
+      }
+    }
+
+    const [[existing]] = await conn.query(
+      `SELECT ai.id AS instance_id
+         FROM activity_instances ai
+         JOIN group_members gm ON gm.activity_instance_id = ai.id
+        WHERE ai.course_id = ?
+          AND ai.activity_id = ?
+          AND gm.student_id = ?
+        ORDER BY ai.id ASC
+        LIMIT 1`,
+      [courseId, activityId, userId]
+    );
+
+    if (existing?.instance_id) {
+      return res.json({ instanceId: Number(existing.instance_id), created: false });
+    }
+
+    const [[nextRow]] = await conn.query(
+      `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_group_number
+         FROM activity_instances
+        WHERE course_id = ? AND activity_id = ?`,
+      [courseId, activityId]
+    );
+
+    const [instanceResult] = await conn.query(
+      `INSERT INTO activity_instances
+         (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status, active_student_id, active_rotation_mode)
+       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, 'submit')`,
+      [courseId, activityId, Number(nextRow?.next_group_number) || 1, userId]
+    );
+
+    await conn.query(
+      `INSERT INTO group_members (activity_instance_id, student_id, role, connected)
+       VALUES (?, ?, NULL, 0)`,
+      [instanceResult.insertId, userId]
+    );
+
+    return res.status(201).json({ instanceId: Number(instanceResult.insertId), created: true });
+  } catch (err) {
+    console.error('❌ ensureDemoInstance:', err);
+    return res.status(500).json({ error: 'Failed to open demo.' });
+  } finally {
+    try {
+      await conn.query(`SELECT RELEASE_LOCK(?)`, [lockName]);
+    } catch (_) {
+      // ignore release errors
+    }
+    conn.release();
   }
 }
 
@@ -603,7 +771,8 @@ async function setupMultipleGroupInstances(req, res) {
     );
 
     // Decide test vs non-test
-    const dbIsTest = !!activityRow?.is_test;
+    const activityType = await inferActivityTypeFromActivity(activityRow || {});
+    const dbIsTest = activityType === 'test';
     const hasTiming = !!testStartAt && Number(testDurationMinutes) > 0;
     const isTest = dbIsTest || hasTiming;
 
@@ -1283,7 +1452,7 @@ async function refreshTotalGroups(req, res) {
   try {
     // 1) Look up the activity + sheet_url for this instance
     const [[row]] = await db.query(
-      `SELECT ai.activity_id, a.sheet_url
+      `SELECT ai.activity_id, a.sheet_url, a.is_test
        FROM activity_instances ai
        JOIN pogil_activities a ON ai.activity_id = a.id
        WHERE ai.id = ?`,
@@ -1324,7 +1493,10 @@ async function refreshTotalGroups(req, res) {
     let groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
     if (groupCount <= 0) groupCount = 1;
 
-    const isTest = lines.some(line => line.trim() === '\\test');
+    const activityType = inferActivityTypeFromLines(lines, {
+      fallbackIsTest: Number(row.is_test) === 1,
+    });
+    const isTest = activityType === 'test';
 
     await db.query(
       `UPDATE activity_instances
@@ -1333,7 +1505,7 @@ async function refreshTotalGroups(req, res) {
       [groupCount, instanceId]
     );
 
-    // NEW: update pogil_activities.is_test based on \test tag
+    // Keep the legacy flag aligned with the current document type.
     await db.query(
       `UPDATE pogil_activities
        SET is_test = ?
@@ -1341,7 +1513,7 @@ async function refreshTotalGroups(req, res) {
       [isTest ? 1 : 0, row.activity_id]
     );
 
-    return res.json({ success: true, groupCount, isTest });
+    return res.json({ success: true, groupCount, isTest, activityType });
   } catch (err) {
     console.error('❌ refreshTotalGroups:', err);
     return res.status(500).json({ error: 'Failed to refresh total_groups' });
@@ -1607,7 +1779,7 @@ async function submitTest(req, res) {
   const isRegrade = regrade === true;
   const submitId = randomUUID();
 
-  if (!instanceId || !studentId || !answers) {
+  if (!instanceId || !answers || (!studentId && !isRegrade)) {
     return res.status(400).json({ error: 'Missing instanceId, studentId, or answers' });
   }
 
@@ -1640,6 +1812,25 @@ async function submitTest(req, res) {
     }
 
     await conn.beginTransaction();
+
+    let resolvedStudentId = Number(studentId) || null;
+    let ownerSource = resolvedStudentId ? 'request' : null;
+
+    if (!resolvedStudentId) {
+      const resolved = await resolveTestOwnerStudentId(conn, instanceId, req.user?.id || null);
+      resolvedStudentId = resolved.studentId;
+      ownerSource = resolved.source;
+
+      if (!resolvedStudentId) {
+        await conn.rollback();
+        return res.status(400).json({
+          error:
+            resolved.reason === 'ambiguous'
+              ? 'Cannot determine which student owns this test attempt.'
+              : 'Cannot determine which student owns this test attempt.',
+        });
+      }
+    }
 
     let totalEarnedPoints = 0;
     let totalMaxPoints = 0;
@@ -1780,36 +1971,36 @@ async function submitTest(req, res) {
       // Store per-band grading outputs (all as text)
       await appendResponse(conn, instanceId, submitId, `${baseId}CodeScore`, codeScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
       await appendResponse(conn, instanceId, submitId, `${baseId}CodeFeedback`, codeFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}RunScore`, runScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}RunFeedback`, runFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}ResponseScore`, responseScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}ResponseFeedback`, responseFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
@@ -1858,17 +2049,17 @@ async function submitTest(req, res) {
     // Test summary
     await appendResponse(conn, instanceId, submitId, 'testTotalScore', totalEarnedPoints, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
     await appendResponse(conn, instanceId, submitId, 'testMaxScore', totalMaxPoints, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
     await appendResponse(conn, instanceId, submitId, 'testSummary', summaryText, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
 
@@ -1882,10 +2073,11 @@ async function submitTest(req, res) {
         SET
           points_earned    = ?,
           points_possible  = ?,
-          graded_at        = UTC_TIMESTAMP()
+          graded_at        = UTC_TIMESTAMP(),
+          submitted_by_user_id = COALESCE(submitted_by_user_id, ?)
         WHERE id = ?
         `,
-        [totalEarnedPoints, totalMaxPoints, instanceId]
+        [totalEarnedPoints, totalMaxPoints, resolvedStudentId, instanceId]
       );
     } else {
       await conn.query(
@@ -1900,7 +2092,7 @@ async function submitTest(req, res) {
           submitted_by_user_id = COALESCE(submitted_by_user_id, ?)
         WHERE id = ?
         `,
-        [totalEarnedPoints, totalMaxPoints, studentId, instanceId]
+        [totalEarnedPoints, totalMaxPoints, resolvedStudentId, instanceId]
       );
     }
 
@@ -1928,6 +2120,8 @@ async function submitTest(req, res) {
     console.log('[SUBMIT_TEST] EXIT OK', {
       instanceId,
       isRegrade,
+      studentId: resolvedStudentId,
+      ownerSource,
       totalEarnedPoints,
       totalMaxPoints,
     });
@@ -2111,6 +2305,7 @@ module.exports = {
   clearResponsesForInstance,
   getParsedActivityDoc,
   createActivityInstance,
+  ensureDemoInstance,
   getActivityInstanceById,
   getEnrolledStudents,
   recordHeartbeat,

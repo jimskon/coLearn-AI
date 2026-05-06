@@ -237,6 +237,12 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
               const earned = t.points_earned != null ? Number(t.points_earned) : null;
               const possible = t.points_possible != null ? Number(t.points_possible) : null;
               const hasScore = Number.isFinite(earned) && Number.isFinite(possible);
+              const percent = hasScore && possible > 0
+                ? ((earned / possible) * 100)
+                : null;
+              const percentLabel = percent == null
+                ? null
+                : `${Number.isInteger(percent) ? percent : percent.toFixed(1)}%`;
 
               let statusText = 'Not started';
               if (hasTiming) statusText = 'In progress';
@@ -265,7 +271,14 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
                   <td>{hasTiming ? `${t.test_duration_minutes} min` : '—'}</td>
                   <td>{t.test_reopen_until ? formatUtcToLocal(t.test_reopen_until) : '—'}</td>
                   <td>{t.submitted_at ? formatUtcToLocal(t.submitted_at) : 'Not submitted'}</td>
-                  <td>{hasScore ? `${earned}/${possible}` : '—'}</td>
+                  <td>
+                    {hasScore ? (
+                      <div>
+                        <div>{earned}/{possible}</div>
+                        <div className="small text-muted">{percentLabel}</div>
+                      </div>
+                    ) : '—'}
+                  </td>
 
                   <td>
                     <div className="d-flex flex-wrap gap-2">

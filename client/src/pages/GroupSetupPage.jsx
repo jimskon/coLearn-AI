@@ -90,7 +90,8 @@ export default function GroupSetupPage() {
 
         const data = await res.json();
 
-        setIsTest(data.is_test === 1);
+        const nextType = data.activity_type || (data.is_test === 1 ? 'test' : 'group');
+        setIsTest(nextType === 'test');
       } catch (err) {
         console.error('❌ Failed to load activity meta:', err);
       }

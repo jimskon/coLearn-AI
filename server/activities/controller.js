@@ -1,5 +1,6 @@
 // server/activities/controller.js
 const db = require('../db');
+const { inferActivityTypeFromActivity } = require('../utils/activityType');
 
 // Create a new activity
 exports.createActivity = async (req, res) => {
@@ -40,7 +41,13 @@ exports.getActivity = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Activity not found' });
     }
-    res.json({ ...rows[0] }); // ✅ flatten the single result into an object
+    const activity = rows[0];
+    const activityType = await inferActivityTypeFromActivity(activity);
+    res.json({
+      ...activity,
+      activity_type: activityType,
+      isTest: activityType === 'test',
+    });
   } catch (err) {
     res.status(500).json({ error: 'Could not retrieve activity.' });
   }

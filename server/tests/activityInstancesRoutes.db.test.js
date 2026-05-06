@@ -13,6 +13,49 @@ function uniqueValue(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const created = {
+  users: new Set(),
+  classes: new Set(),
+  courses: new Set(),
+  activities: new Set(),
+  instances: new Set(),
+};
+
+function remember(kind, id) {
+  const numericId = Number(id);
+  if (Number.isFinite(numericId)) {
+    created[kind].add(numericId);
+  }
+  return numericId;
+}
+
+async function cleanupCreatedRows() {
+  const instanceIds = [...created.instances];
+  const activityIds = [...created.activities];
+  const courseIds = [...created.courses];
+  const classIds = [...created.classes];
+  const userIds = [...created.users];
+
+  if (instanceIds.length) {
+    await db.query(`DELETE FROM response_drafts WHERE activity_instance_id IN (?)`, [instanceIds]);
+    await db.query(`DELETE FROM responses WHERE activity_instance_id IN (?)`, [instanceIds]);
+    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
+    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
+  }
+  if (activityIds.length) {
+    await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]);
+  }
+  if (courseIds.length) {
+    await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]);
+  }
+  if (classIds.length) {
+    await db.query(`DELETE FROM pogil_classes WHERE id IN (?)`, [classIds]);
+  }
+  if (userIds.length) {
+    await db.query(`DELETE FROM users WHERE id IN (?)`, [userIds]);
+  }
+}
+
 async function ensureSchema() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -80,6 +123,7 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS total_groups INT NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS completed_groups INT NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS progress_status VARCHAR(32) NOT NULL DEFAULT 'not_started',
+      ADD COLUMN IF NOT EXISTS submitted_by_user_id INT NULL,
       ADD COLUMN IF NOT EXISTS section_timer_key VARCHAR(64) NULL,
       ADD COLUMN IF NOT EXISTS section_timer_duration_minutes INT NULL,
       ADD COLUMN IF NOT EXISTS section_timer_started_at DATETIME NULL,
@@ -95,6 +139,7 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS reviewed_at DATETIME NULL,
       ADD COLUMN IF NOT EXISTS points_earned DECIMAL(10,2) NULL,
       ADD COLUMN IF NOT EXISTS points_possible DECIMAL(10,2) NULL,
+      ADD COLUMN IF NOT EXISTS hidden TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_before_start TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0
   `);
@@ -146,7 +191,7 @@ async function createUser(role = 'student') {
     [`${role} user`, email, 'not-used', role]
   );
   return {
-    id: Number(result.insertId),
+    id: remember('users', result.insertId),
     name: `${role} user`,
     email,
     role,
@@ -158,7 +203,7 @@ async function createClassRecord() {
     'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
     [uniqueValue('ActivityInstanceClass'), 'Class for activity instance tests', null]
   );
-  return Number(result.insertId);
+  return remember('classes', result.insertId);
 }
 
 async function createCourse({ instructorId, classId, code = uniqueValue('AI').toUpperCase() }) {
@@ -167,7 +212,7 @@ async function createCourse({ instructorId, classId, code = uniqueValue('AI').to
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ['Activity Instances Course', code, 'A', 'fall', 2026, instructorId, classId]
   );
-  return Number(result.insertId);
+  return remember('courses', result.insertId);
 }
 
 async function createActivity({ classId, createdBy }) {
@@ -184,7 +229,7 @@ async function createActivity({ classId, createdBy }) {
       0,
     ]
   );
-  return Number(result.insertId);
+  return remember('activities', result.insertId);
 }
 
 async function createInstance({
@@ -224,7 +269,7 @@ async function createInstance({
       sectionTimerPausedAt,
     ]
   );
-  return Number(result.insertId);
+  return remember('instances', result.insertId);
 }
 
 async function addGroupMember({
@@ -297,6 +342,7 @@ test.before(async () => {
 
 test.after(async () => {
   delete global.emitInstanceState;
+  await cleanupCreatedRows();
   await db.end();
 });
 
@@ -663,4 +709,200 @@ test('clear responses resets progress and timer fields on the instance', async (
   assert.equal(instance.section_timer_started_at, null);
   assert.equal(Number(instance.section_timer_paused), 0);
   assert.equal(instance.section_timer_paused_at, null);
+});
+
+test('students cannot fetch a hidden instance, but instructors still can', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  await db.query(
+    `UPDATE activity_instances
+        SET hidden = 1
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  const studentResponse = await requestJson(student, `/api/activity-instances/${instanceId}`);
+  assert.equal(studentResponse.status, 403);
+  assert.equal(studentResponse.body.error, 'This activity is currently hidden.');
+
+  const instructorResponse = await requestJson(instructor, `/api/activity-instances/${instanceId}`);
+  assert.equal(instructorResponse.status, 200);
+  assert.equal(instructorResponse.body.id, instanceId);
+  assert.equal(Number(instructorResponse.body.hidden), 1);
+});
+
+test('setup-groups returns 409 when group 1 already exists for the activity', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  await createInstance({ activityId, courseId, groupNumber: 1 });
+
+  const response = await requestJson(instructor, '/api/activity-instances/setup-groups', {
+    method: 'POST',
+    body: {
+      activityId,
+      courseId,
+      groups: [
+        {
+          members: [{ student_id: student.id, role: 'facilitator' }],
+        },
+      ],
+    },
+  });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error, 'Groups already exist for this activity.');
+
+  const [[countRow]] = await db.query(
+    `SELECT COUNT(*) AS instance_count
+       FROM activity_instances
+      WHERE activity_id = ? AND course_id = ?`,
+    [activityId, courseId]
+  );
+  assert.equal(Number(countRow.instance_count), 1);
+});
+
+test('submit-test regrade fails cleanly when legacy ownership is ambiguous', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  await addGroupMember({ instanceId, studentId: studentA.id, role: 'facilitator', connected: true });
+  await addGroupMember({ instanceId, studentId: studentB.id, role: 'analyst', connected: true });
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/submit-test`, {
+    method: 'POST',
+    body: {
+      regrade: true,
+      answers: {},
+      questions: [],
+    },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'Cannot determine which student owns this test attempt.');
+
+  const [[instance]] = await db.query(
+    `SELECT submitted_by_user_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(instance.submitted_by_user_id, null);
+});
+
+test('rotate-active-student returns 404 when no group members are connected', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    activeStudentId: studentA.id,
+  });
+
+  await addGroupMember({ instanceId, studentId: studentA.id, role: 'facilitator', connected: false });
+  await addGroupMember({ instanceId, studentId: studentB.id, role: 'analyst', connected: false });
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/rotate-active-student`, {
+    method: 'POST',
+    body: { currentStudentId: studentA.id },
+  });
+
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, 'No connected group members');
+
+  const [[instance]] = await db.query(
+    `SELECT active_student_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(Number(instance.active_student_id), studentA.id);
+});
+
+test('test-settings rejects invalid scheduling payloads without changing stored values', async () => {
+  const instructor = await createUser('instructor');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  await db.query(
+    `UPDATE activity_instances
+        SET test_start_at = '2026-05-01 13:00:00',
+            test_duration_minutes = 30,
+            test_reopen_until = '2026-05-01 13:20:00'
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/test-settings`, {
+    method: 'POST',
+    body: {
+      testStartAt: 'not-a-date',
+      testDurationMinutes: 25,
+    },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'Invalid testStartAt');
+
+  const [[instance]] = await db.query(
+    `SELECT test_start_at, test_duration_minutes, test_reopen_until
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(String(instance.test_start_at).slice(0, 19), '2026-05-01 13:00:00');
+  assert.equal(Number(instance.test_duration_minutes), 30);
+  assert.equal(String(instance.test_reopen_until).slice(0, 19), '2026-05-01 13:20:00');
+});
+
+test('reopen rejects already-submitted timed tests so instructors must clear answers first', async () => {
+  const instructor = await createUser('instructor');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  await db.query(
+    `UPDATE activity_instances
+        SET test_start_at = '2026-05-01 13:00:00',
+            test_duration_minutes = 30,
+            submitted_at = '2026-05-01 13:25:00',
+            test_reopen_until = NULL
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/reopen`, {
+    method: 'POST',
+    body: { minutes: 15 },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'Test already submitted; clear answers to reopen.');
+
+  const [[instance]] = await db.query(
+    `SELECT test_reopen_until
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(instance.test_reopen_until, null);
 });

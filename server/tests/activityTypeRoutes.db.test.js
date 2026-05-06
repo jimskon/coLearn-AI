@@ -13,6 +13,44 @@ function uniqueValue(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const created = {
+  users: new Set(),
+  classes: new Set(),
+  courses: new Set(),
+  activities: new Set(),
+  instances: new Set(),
+};
+
+function remember(kind, id) {
+  const numericId = Number(id);
+  if (Number.isFinite(numericId)) created[kind].add(numericId);
+  return numericId;
+}
+
+async function cleanupCreatedRows() {
+  const instanceIds = [...created.instances];
+  const activityIds = [...created.activities];
+  const courseIds = [...created.courses];
+  const classIds = [...created.classes];
+  const userIds = [...created.users];
+
+  if (courseIds.length) {
+    await db.query(`DELETE FROM course_enrollments WHERE course_id IN (?)`, [courseIds]);
+  }
+  if (activityIds.length) {
+    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (SELECT id FROM activity_instances WHERE activity_id IN (?))`, [activityIds]);
+    await db.query(`DELETE FROM activity_instances WHERE activity_id IN (?)`, [activityIds]);
+  }
+  if (instanceIds.length) {
+    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
+    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
+  }
+  if (activityIds.length) await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]);
+  if (courseIds.length) await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]);
+  if (classIds.length) await db.query(`DELETE FROM pogil_classes WHERE id IN (?)`, [classIds]);
+  if (userIds.length) await db.query(`DELETE FROM users WHERE id IN (?)`, [userIds]);
+}
+
 async function ensureSchema() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -126,7 +164,7 @@ async function createUser(role = 'student') {
     'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
     [`${role} user`, email, 'not-used', role]
   );
-  return { id: Number(result.insertId), role, email, name: `${role} user` };
+  return { id: remember('users', result.insertId), role, email, name: `${role} user` };
 }
 
 async function createClassRecord() {
@@ -134,7 +172,7 @@ async function createClassRecord() {
     'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
     [uniqueValue('ActivityTypeClass'), 'Class for activity type route tests', null]
   );
-  return Number(result.insertId);
+  return remember('classes', result.insertId);
 }
 
 async function createCourse({ instructorId, classId }) {
@@ -151,7 +189,7 @@ async function createCourse({ instructorId, classId }) {
       classId,
     ]
   );
-  return Number(result.insertId);
+  return remember('courses', result.insertId);
 }
 
 async function enroll(courseId, studentId) {
@@ -167,7 +205,7 @@ async function createActivity({ classId, title, sheetUrl, isTest = null, orderIn
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     [uniqueValue('activity').toLowerCase(), title, sheetUrl, classId, orderIndex, null, isTest]
   );
-  return Number(result.insertId);
+  return remember('activities', result.insertId);
 }
 
 function createDocBodyLines(lines) {
@@ -292,6 +330,7 @@ async function requestJson(user, path, { method = 'GET', body, overrides } = {})
 }
 
 test.after(async () => {
+  await cleanupCreatedRows();
   await db.end();
 });
 

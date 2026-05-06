@@ -11,6 +11,34 @@ function uniqueValue(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const created = {
+  users: new Set(),
+  classes: new Set(),
+  courses: new Set(),
+  activities: new Set(),
+};
+
+function remember(kind, id) {
+  const numericId = Number(id);
+  if (Number.isFinite(numericId)) created[kind].add(numericId);
+  return numericId;
+}
+
+async function cleanupCreatedRows() {
+  const activityIds = [...created.activities];
+  const courseIds = [...created.courses];
+  const classIds = [...created.classes];
+  const userIds = [...created.users];
+
+  if (activityIds.length) {
+    await db.query(`DELETE FROM activity_instances WHERE activity_id IN (?)`, [activityIds]);
+    await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]);
+  }
+  if (courseIds.length) await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]);
+  if (classIds.length) await db.query(`DELETE FROM pogil_classes WHERE id IN (?)`, [classIds]);
+  if (userIds.length) await db.query(`DELETE FROM users WHERE id IN (?)`, [userIds]);
+}
+
 async function ensureSchema() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -81,7 +109,7 @@ async function createUser(role = 'instructor', name = null) {
     [name || `${role} user`, email, 'not-used', role]
   );
   return {
-    id: Number(result.insertId),
+    id: remember('users', result.insertId),
     name: name || `${role} user`,
     email,
     role,
@@ -93,7 +121,7 @@ async function createClassRecord() {
     'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
     [uniqueValue('ActivitiesClass'), 'Class for activities route tests', null]
   );
-  return Number(result.insertId);
+  return remember('classes', result.insertId);
 }
 
 async function createCourse({ instructorId, classId, code = uniqueValue('ACT').toUpperCase() }) {
@@ -102,7 +130,7 @@ async function createCourse({ instructorId, classId, code = uniqueValue('ACT').t
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ['Activities Course', code, 'A', 'fall', 2026, instructorId, classId]
   );
-  return Number(result.insertId);
+  return remember('courses', result.insertId);
 }
 
 async function insertActivity({
@@ -121,7 +149,7 @@ async function insertActivity({
     [name, title, sheetUrl, classId, orderIndex, createdBy, isTest]
   );
   return {
-    id: Number(result.insertId),
+    id: remember('activities', result.insertId),
     name,
     title,
     sheet_url: sheetUrl,
@@ -186,6 +214,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
+  await cleanupCreatedRows();
   await db.end();
 });
 

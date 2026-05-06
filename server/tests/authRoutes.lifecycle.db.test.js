@@ -16,6 +16,31 @@ function uniqueEmail(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
 }
 
+const created = {
+  users: new Set(),
+  pendingUsers: new Set(),
+  userEmails: new Set(),
+  pendingEmails: new Set(),
+};
+
+function remember(kind, id) {
+  const numericId = Number(id);
+  if (Number.isFinite(numericId)) created[kind].add(numericId);
+  return numericId;
+}
+
+async function cleanupCreatedRows() {
+  const pendingIds = [...created.pendingUsers];
+  const userIds = [...created.users];
+  const pendingEmails = [...created.pendingEmails];
+  const userEmails = [...created.userEmails];
+
+  if (pendingIds.length) await db.query(`DELETE FROM pending_users WHERE id IN (?)`, [pendingIds]);
+  if (pendingEmails.length) await db.query(`DELETE FROM pending_users WHERE email IN (?)`, [pendingEmails]);
+  if (userIds.length) await db.query(`DELETE FROM users WHERE id IN (?)`, [userIds]);
+  if (userEmails.length) await db.query(`DELETE FROM users WHERE email IN (?)`, [userEmails]);
+}
+
 async function ensureSchema() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -145,17 +170,27 @@ async function requestJson(path, { method = 'POST', body, headers = {}, sentMail
 }
 
 async function createVerifiedUser({ name = 'Lifecycle User', email = uniqueEmail('lifecycle'), password = 'StartPassword123' } = {}) {
+  created.userEmails.add(email);
   const passwordHash = await bcrypt.hash(password, 10);
   const [result] = await db.query(
     'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
     [name, email, passwordHash]
   );
   return {
-    id: Number(result.insertId),
+    id: remember('users', result.insertId),
     name,
     email,
     password,
   };
+}
+
+async function createPendingUser({ name, email, passwordHash, code }) {
+  created.pendingEmails.add(email);
+  const [result] = await db.query(
+    'INSERT INTO pending_users (name, email, password_hash, code) VALUES (?, ?, ?, ?)',
+    [name, email, passwordHash, code]
+  );
+  return remember('pendingUsers', result.insertId);
 }
 
 function extractLastSixDigitCode(text) {
@@ -164,6 +199,7 @@ function extractLastSixDigitCode(text) {
 }
 
 test.after(async () => {
+  await cleanupCreatedRows();
   await db.end();
 });
 
@@ -171,12 +207,15 @@ test('verify promotes a pending user into users and removes the pending row', as
   await ensureSchema();
 
   const email = uniqueEmail('pending');
+  created.userEmails.add(email);
   const passwordHash = await bcrypt.hash('PendingPassword123', 10);
 
-  await db.query(
-    'INSERT INTO pending_users (name, email, password_hash, code) VALUES (?, ?, ?, ?)',
-    ['Pending User', email, passwordHash, '123456']
-  );
+  await createPendingUser({
+    name: 'Pending User',
+    email,
+    passwordHash,
+    code: '123456',
+  });
 
   const response = await requestJson('/api/auth/verify', {
     body: { email, code: '123456' },
@@ -198,12 +237,15 @@ test('verify rejects an incorrect code without creating a user', async () => {
   await ensureSchema();
 
   const email = uniqueEmail('wrong-code');
+  created.userEmails.add(email);
   const passwordHash = await bcrypt.hash('PendingPassword123', 10);
 
-  await db.query(
-    'INSERT INTO pending_users (name, email, password_hash, code) VALUES (?, ?, ?, ?)',
-    ['Wrong Code User', email, passwordHash, '654321']
-  );
+  await createPendingUser({
+    name: 'Wrong Code User',
+    email,
+    passwordHash,
+    code: '654321',
+  });
 
   const response = await requestJson('/api/auth/verify', {
     body: { email, code: '000000' },

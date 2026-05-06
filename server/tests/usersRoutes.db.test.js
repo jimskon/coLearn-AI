@@ -11,6 +11,37 @@ function uniqueValue(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const created = {
+  users: new Set(),
+  classes: new Set(),
+  courses: new Set(),
+  activities: new Set(),
+  instances: new Set(),
+};
+
+function remember(kind, id) {
+  const numericId = Number(id);
+  if (Number.isFinite(numericId)) created[kind].add(numericId);
+  return numericId;
+}
+
+async function cleanupCreatedRows() {
+  const instanceIds = [...created.instances];
+  const activityIds = [...created.activities];
+  const courseIds = [...created.courses];
+  const classIds = [...created.classes];
+  const userIds = [...created.users];
+
+  if (instanceIds.length) {
+    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
+    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
+  }
+  if (activityIds.length) await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]);
+  if (courseIds.length) await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]);
+  if (classIds.length) await db.query(`DELETE FROM pogil_classes WHERE id IN (?)`, [classIds]);
+  if (userIds.length) await db.query(`DELETE FROM users WHERE id IN (?)`, [userIds]);
+}
+
 async function ensureSchema() {
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -98,7 +129,7 @@ async function createUser(role = 'student', name = null) {
     [name || `${role} user`, email, 'not-used', role]
   );
   return {
-    id: Number(result.insertId),
+    id: remember('users', result.insertId),
     name: name || `${role} user`,
     email,
     role,
@@ -110,7 +141,7 @@ async function createClassRecord() {
     'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
     [uniqueValue('UsersClass'), 'Class for users route tests', null]
   );
-  return Number(result.insertId);
+  return remember('classes', result.insertId);
 }
 
 async function createCourse({ instructorId, classId, code = uniqueValue('USR').toUpperCase() }) {
@@ -119,7 +150,7 @@ async function createCourse({ instructorId, classId, code = uniqueValue('USR').t
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
     ['Users Course', code, 'A', 'fall', 2026, instructorId, classId]
   );
-  return Number(result.insertId);
+  return remember('courses', result.insertId);
 }
 
 async function createActivity({ classId, createdBy }) {
@@ -136,7 +167,7 @@ async function createActivity({ classId, createdBy }) {
       0,
     ]
   );
-  return Number(result.insertId);
+  return remember('activities', result.insertId);
 }
 
 async function createInstance({
@@ -151,7 +182,7 @@ async function createInstance({
      VALUES (?, ?, 'in_progress', ?, ?)`,
     [activityId, courseId, groupNumber, progressStatus]
   );
-  return Number(result.insertId);
+  return remember('instances', result.insertId);
 }
 
 async function addGroupMember({
@@ -231,6 +262,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
+  await cleanupCreatedRows();
   await db.end();
 });
 

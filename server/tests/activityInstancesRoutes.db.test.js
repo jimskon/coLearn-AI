@@ -757,3 +757,108 @@ test('submit-test regrade fails cleanly when legacy ownership is ambiguous', asy
   );
   assert.equal(instance.submitted_by_user_id, null);
 });
+
+test('rotate-active-student returns 404 when no group members are connected', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    activeStudentId: studentA.id,
+  });
+
+  await addGroupMember({ instanceId, studentId: studentA.id, connected: false });
+  await addGroupMember({ instanceId, studentId: studentB.id, connected: false });
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/rotate-active-student`, {
+    method: 'POST',
+    body: { currentStudentId: studentA.id },
+  });
+
+  assert.equal(response.status, 404);
+  assert.equal(response.body.error, 'No connected group members');
+
+  const [[instance]] = await db.query(
+    `SELECT active_student_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(Number(instance.active_student_id), studentA.id);
+});
+
+test('test-settings rejects invalid scheduling payloads without changing stored values', async () => {
+  const instructor = await createUser('instructor');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  await db.query(
+    `UPDATE activity_instances
+        SET test_start_at = '2026-05-01 13:00:00',
+            test_duration_minutes = 30,
+            test_reopen_until = '2026-05-01 13:20:00'
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/test-settings`, {
+    method: 'POST',
+    body: {
+      testStartAt: 'not-a-date',
+      testDurationMinutes: 25,
+    },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'Invalid testStartAt');
+
+  const [[instance]] = await db.query(
+    `SELECT test_start_at, test_duration_minutes, test_reopen_until
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(String(instance.test_start_at).slice(0, 19), '2026-05-01 13:00:00');
+  assert.equal(Number(instance.test_duration_minutes), 30);
+  assert.equal(String(instance.test_reopen_until).slice(0, 19), '2026-05-01 13:20:00');
+});
+
+test('reopen rejects already-submitted timed tests so instructors must clear answers first', async () => {
+  const instructor = await createUser('instructor');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  await db.query(
+    `UPDATE activity_instances
+        SET test_start_at = '2026-05-01 13:00:00',
+            test_duration_minutes = 30,
+            submitted_at = '2026-05-01 13:25:00',
+            test_reopen_until = NULL
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/reopen`, {
+    method: 'POST',
+    body: { minutes: 15 },
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, 'Test already submitted; clear answers to reopen.');
+
+  const [[instance]] = await db.query(
+    `SELECT test_reopen_until
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(instance.test_reopen_until, null);
+});

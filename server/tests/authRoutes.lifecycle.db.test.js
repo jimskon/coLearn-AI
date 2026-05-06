@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const Module = require('node:module');
 const test = require('node:test');
 
 delete process.env.AUTH_DEV_PASSWORDLESS_LOGIN;
@@ -9,7 +10,6 @@ const bcrypt = require('bcrypt');
 const express = require('express');
 const session = require('express-session');
 
-const authRoutes = require('../auth/routes');
 const db = require('../db');
 
 function uniqueEmail(prefix) {
@@ -41,7 +41,51 @@ async function ensureSchema() {
   `);
 }
 
-function createTestServer() {
+function loadAuthRoutes({ sentMail } = {}) {
+  const authRoutesPath = require.resolve('../auth/routes');
+  const originalEmailUser = process.env.EMAIL_USER;
+  const originalEmailPass = process.env.EMAIL_PASS;
+
+  process.env.EMAIL_USER = 'test@example.com';
+  process.env.EMAIL_PASS = 'test-pass';
+
+  const originalLoad = Module._load;
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'nodemailer') {
+      return {
+        createTransport: () => ({
+          sendMail: async (payload) => {
+            if (typeof sentMail === 'function') {
+              await sentMail(payload);
+            }
+            return { accepted: [payload.to] };
+          },
+        }),
+      };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  delete require.cache[authRoutesPath];
+  const authRoutes = require(authRoutesPath);
+
+  return {
+    authRoutes,
+    restore() {
+      Module._load = originalLoad;
+      delete require.cache[authRoutesPath];
+
+      if (originalEmailUser === undefined) delete process.env.EMAIL_USER;
+      else process.env.EMAIL_USER = originalEmailUser;
+
+      if (originalEmailPass === undefined) delete process.env.EMAIL_PASS;
+      else process.env.EMAIL_PASS = originalEmailPass;
+    },
+  };
+}
+
+function createTestServer({ sentMail } = {}) {
+  const { authRoutes, restore } = loadAuthRoutes({ sentMail });
   const app = express();
   app.use(express.json());
   app.use(session({
@@ -62,7 +106,10 @@ function createTestServer() {
         baseUrl: `http://127.0.0.1:${port}`,
         close: () =>
           new Promise((closeResolve) => {
-            server.close(closeResolve);
+            server.close(() => {
+              restore();
+              closeResolve();
+            });
             server.closeIdleConnections?.();
           }),
       });
@@ -88,8 +135,8 @@ async function requestJsonWithServer(baseUrl, path, { method = 'POST', body, hea
   };
 }
 
-async function requestJson(path, { method = 'POST', body, headers = {} } = {}) {
-  const server = await createTestServer();
+async function requestJson(path, { method = 'POST', body, headers = {}, sentMail } = {}) {
+  const server = await createTestServer({ sentMail });
   try {
     return await requestJsonWithServer(server.baseUrl, path, { method, body, headers });
   } finally {
@@ -111,26 +158,9 @@ async function createVerifiedUser({ name = 'Lifecycle User', email = uniqueEmail
   };
 }
 
-function withCapturedWarns(fn) {
-  const originalWarn = console.warn;
-  const messages = [];
-  console.warn = (...args) => {
-    messages.push(args.map((arg) => String(arg)).join(' '));
-  };
-
-  return Promise.resolve()
-    .then(() => fn(messages))
-    .finally(() => {
-      console.warn = originalWarn;
-    });
-}
-
-function extractLastSixDigitCode(messages) {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const match = messages[i].match(/\b(\d{6})\b/);
-    if (match) return match[1];
-  }
-  return null;
+function extractLastSixDigitCode(text) {
+  const match = String(text || '').match(/\b(\d{6})\b/);
+  return match ? match[1] : null;
 }
 
 test.after(async () => {
@@ -190,18 +220,22 @@ test('request-reset emits a reset code for an existing user', async () => {
   await ensureSchema();
 
   const user = await createVerifiedUser({ email: uniqueEmail('request-reset') });
+  const sent = [];
 
-  await withCapturedWarns(async (messages) => {
-    const response = await requestJson('/api/auth/request-reset', {
-      body: { email: user.email },
-    });
-
-    assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { message: 'Reset code sent to email.' });
-
-    const code = extractLastSixDigitCode(messages);
-    assert.match(code || '', /^\d{6}$/);
+  const response = await requestJson('/api/auth/request-reset', {
+    body: { email: user.email },
+    sentMail: async (payload) => {
+      sent.push(payload);
+    },
   });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { message: 'Reset code sent to email.' });
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].to, user.email);
+  const code = extractLastSixDigitCode(sent[0].text);
+  assert.match(code || '', /^\d{6}$/);
 });
 
 test('reset-password accepts the emitted code, updates the password, and clears the code', async () => {
@@ -212,20 +246,20 @@ test('reset-password accepts the emitted code, updates the password, and clears 
     password: 'OldPassword123',
   });
 
-  const server = await createTestServer();
+  const sent = [];
+  const server = await createTestServer({
+    sentMail: async (payload) => {
+      sent.push(payload);
+    },
+  });
   try {
-    let resetCode = null;
-
-    await withCapturedWarns(async (messages) => {
-      const requestReset = await requestJsonWithServer(server.baseUrl, '/api/auth/request-reset', {
-        method: 'POST',
-        body: { email: user.email },
-      });
-
-      assert.equal(requestReset.status, 200);
-      resetCode = extractLastSixDigitCode(messages);
+    const requestReset = await requestJsonWithServer(server.baseUrl, '/api/auth/request-reset', {
+      method: 'POST',
+      body: { email: user.email },
     });
 
+    assert.equal(requestReset.status, 200);
+    const resetCode = extractLastSixDigitCode(sent[0]?.text);
     assert.match(resetCode || '', /^\d{6}$/);
 
     const reset = await requestJsonWithServer(server.baseUrl, '/api/auth/reset-password', {
@@ -249,7 +283,7 @@ test('reset-password accepts the emitted code, updates the password, and clears 
     });
 
     assert.equal(login.status, 200);
-    assert.equal(login.body.email, user.email);
+    assert.equal(login.body.name, user.name);
 
     const staleCode = await requestJsonWithServer(server.baseUrl, '/api/auth/reset-password', {
       method: 'POST',
@@ -275,15 +309,15 @@ test('reset-password rejects an invalid code and leaves the old password working
     password: 'OriginalPassword123',
   });
 
-  const server = await createTestServer();
+  const server = await createTestServer({
+    sentMail: async () => ({ accepted: true }),
+  });
   try {
-    await withCapturedWarns(async () => {
-      const requestReset = await requestJsonWithServer(server.baseUrl, '/api/auth/request-reset', {
-        method: 'POST',
-        body: { email: user.email },
-      });
-      assert.equal(requestReset.status, 200);
+    const requestReset = await requestJsonWithServer(server.baseUrl, '/api/auth/request-reset', {
+      method: 'POST',
+      body: { email: user.email },
     });
+    assert.equal(requestReset.status, 200);
 
     const badReset = await requestJsonWithServer(server.baseUrl, '/api/auth/reset-password', {
       method: 'POST',
@@ -306,7 +340,7 @@ test('reset-password rejects an invalid code and leaves the old password working
     });
 
     assert.equal(login.status, 200);
-    assert.equal(login.body.email, user.email);
+    assert.equal(login.body.name, user.name);
   } finally {
     await server.close();
   }

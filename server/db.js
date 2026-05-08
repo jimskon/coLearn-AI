@@ -1,7 +1,12 @@
 const mysql = require('mysql2/promise');
-require('dotenv').config();
+const path = require('path');
 
-console.log("Connecting to DB as:", process.env.DB_USER, "with pass?", !!process.env.DB_PASS);
+require('dotenv').config({
+  path: path.join(__dirname, '.env'),
+  override: false,
+});
+
+console.log("Connecting to DB as:", process.env.DB_USER, "with pass?", !!process.env.DB_PASSWORD);
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,

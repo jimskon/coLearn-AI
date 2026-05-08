@@ -25,8 +25,10 @@ export default function ManageClassesPage() {
     setNewClass({ ...newClass, [e.target.name]: e.target.value });
   };
 
-  const handleAdd = async () => {
+  const handleAdd = async (e) => {
+    e?.preventDefault?.();
     const res = await fetch(`${API_BASE_URL}/api/classes`, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...newClass, createdBy: user.id })
     });
@@ -60,7 +62,7 @@ export default function ManageClassesPage() {
     <Container>
       <h2 className="mb-4">Manage Classes</h2>
 
-      <Form className="mb-4">
+      <Form className="mb-4" onSubmit={handleAdd}>
         <h4>Add New Class</h4>
         <Form.Group className="mb-2" controlId="formClassName">
           <Form.Label>Class Name</Form.Label>
@@ -82,7 +84,7 @@ export default function ManageClassesPage() {
             onChange={handleChange}
           />
         </Form.Group>
-        <Button variant="primary" onClick={handleAdd}>Add Class</Button>
+        <Button type="submit" variant="primary">Add Class</Button>
       </Form>
 
       <h4>Existing Classes</h4>
@@ -112,9 +114,9 @@ export default function ManageClassesPage() {
                 />
               </td>
               <td>
-                <Button variant="success" size="sm" onClick={() => handleUpdate(c)} className="me-2">Update</Button>
-                <Button variant="info" size="sm" onClick={() => navigate(`/class/${c.id}`)} className="me-2">Manage</Button>
-                <Button variant="danger" size="sm" onClick={() => handleDelete(c.id)}>Delete</Button>
+                <Button type="button" variant="success" size="sm" onClick={() => handleUpdate(c)} className="me-2">Update</Button>
+                <Button type="button" variant="info" size="sm" onClick={() => navigate(`/class/${c.id}`)} className="me-2">Manage</Button>
+                <Button type="button" variant="danger" size="sm" onClick={() => handleDelete(c.id)}>Delete</Button>
               </td>
             </tr>
           ))}

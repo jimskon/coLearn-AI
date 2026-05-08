@@ -313,7 +313,15 @@ export function parseSheetToBlocks(lines, options = {}) {
       context: context || null
     });
   };
-  const VALID_MODES = new Set(['normal', 'playground', 'test']);
+  const normalizeMode = (rawMode) => {
+    const mode = String(rawMode || '').trim().toLowerCase();
+
+    if (mode === 'test') return 'test';
+    if (mode === 'demo' || mode === 'playground') return 'demo';
+    if (mode === 'group' || mode === 'normal') return 'group';
+
+    return 'group';
+  };
   let isTest = false;
   const legacyTestNumbering = options.legacyTestNumbering === true;
   // default true unless explicitly set to false
@@ -329,7 +337,7 @@ export function parseSheetToBlocks(lines, options = {}) {
     isTest: false,
     retriesDefault: 0,
     groupRetries: {},
-    mode: 'normal',
+    mode: 'group',
   };
   let currentQuestion = null;
   let currentField = 'prompt';
@@ -818,8 +826,7 @@ export function parseSheetToBlocks(lines, options = {}) {
       const content = headerStart[2];
 
       if (tag === 'mode') {
-        const parsedMode = content.trim().toLowerCase();
-        meta.mode = VALID_MODES.has(parsedMode) ? parsedMode : 'normal';
+        meta.mode = normalizeMode(content);
 
         if (meta.mode === 'test') {
           meta.isTest = true;

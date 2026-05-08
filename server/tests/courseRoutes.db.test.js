@@ -11,6 +11,36 @@ function uniqueValue(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+const created = {
+  users: new Set(),
+  classes: new Set(),
+  courses: new Set(),
+};
+
+function remember(kind, id) {
+  const numericId = Number(id);
+  if (Number.isFinite(numericId)) created[kind].add(numericId);
+  return numericId;
+}
+
+async function cleanupCreatedRows() {
+  const courseIds = [...created.courses];
+  const classIds = [...created.classes];
+  const userIds = [...created.users];
+
+  if (courseIds.length) {
+    await db.query(`DELETE FROM course_enrollments WHERE course_id IN (?)`, [courseIds]);
+    await db.query(`DELETE FROM activity_instances WHERE course_id IN (?)`, [courseIds]);
+    await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]);
+  }
+  if (classIds.length) {
+    await db.query(`DELETE FROM pogil_classes WHERE id IN (?)`, [classIds]);
+  }
+  if (userIds.length) {
+    await db.query(`DELETE FROM users WHERE id IN (?)`, [userIds]);
+  }
+}
+
 async function createUser(role = 'student') {
   const email = `${uniqueValue(role)}@example.com`;
   const [result] = await db.query(
@@ -18,7 +48,7 @@ async function createUser(role = 'student') {
     [`${role} user`, email, 'not-used', role]
   );
   return {
-    id: Number(result.insertId),
+    id: remember('users', result.insertId),
     name: `${role} user`,
     email,
     role,
@@ -30,7 +60,7 @@ async function createClassRecord() {
     'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
     [uniqueValue('Course Class'), 'Class for course route tests', null]
   );
-  return Number(result.insertId);
+  return remember('classes', result.insertId);
 }
 
 function createTestServer(user) {
@@ -43,6 +73,7 @@ function createTestServer(user) {
   app.use('/api/courses', courseRoutes);
 
   const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -50,7 +81,11 @@ function createTestServer(user) {
       const { port } = server.address();
       resolve({
         baseUrl: `http://127.0.0.1:${port}`,
-        close: () => new Promise(closeResolve => server.close(closeResolve)),
+        close: () =>
+          new Promise((closeResolve) => {
+            server.close(closeResolve);
+            server.closeIdleConnections?.();
+          }),
       });
     });
   });
@@ -61,7 +96,10 @@ async function requestJson(user, path, { method = 'GET', body } = {}) {
   try {
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers:
+        body === undefined
+          ? { Connection: 'close' }
+          : { 'Content-Type': 'application/json', Connection: 'close' },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     const responseBody = response.status === 204 ? null : await response.json();
@@ -90,10 +128,11 @@ async function createCourse({ instructor, classId, code = uniqueValue('CS').toUp
   assert.equal(response.status, 201);
   assert.equal(response.body.success, true);
   assert.equal(typeof response.body.courseId, 'number');
-  return response.body.courseId;
+  return remember('courses', response.body.courseId);
 }
 
 test.after(async () => {
+  await cleanupCreatedRows();
   await db.end();
 });
 

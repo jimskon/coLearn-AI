@@ -48,6 +48,33 @@ export default function ActivityEditor() {
 
   const busy = autofixBusy;
 
+  const syncActivityIsTest = async (activityData, lines) => {
+    const parsed = parseSheetToBlocks(lines, { returnIssues: true });
+    const computedIsTest = parsed?.meta?.isTest ? 1 : 0;
+    const dbIsTest = activityData?.is_test === 1 ? 1 : 0;
+
+    if (computedIsTest !== dbIsTest) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/is-test`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ is_test: computedIsTest }),
+        });
+        if (!res.ok) {
+          throw new Error(`is-test patch failed ${res.status}`);
+        }
+
+        activityData.is_test = computedIsTest;
+        setActivity({ ...activityData });
+      } catch (e) {
+        console.error('[ActivityEditor] Failed to persist is_test', e);
+      }
+    }
+
+    return parsed;
+  };
+
   const handleUpdateFileContents = (updaterFn) => {
     setFileContents((prev) => {
       const updated = updaterFn(prev);
@@ -294,15 +321,21 @@ export default function ActivityEditor() {
         const activityData = await res.json();
         setActivity(activityData);
 
-        const cached = localStorage.getItem(`activity-${activityId}`);
-        if (cached) {
-          setRawText(cached); // auto compile will handle it
-        } else {
+        let sourceLines = null;
+        if (activityData?.sheet_url) {
           const docRes = await fetch(
             `${API_BASE_URL}/api/activities/preview-doc?docUrl=${encodeURIComponent(activityData.sheet_url)}`
           );
           const { lines } = await docRes.json();
-          const text = lines.join('\n');
+          sourceLines = Array.isArray(lines) ? lines : [];
+          await syncActivityIsTest(activityData, sourceLines);
+        }
+
+        const cached = localStorage.getItem(`activity-${activityId}`);
+        if (cached) {
+          setRawText(cached); // auto compile will handle it
+        } else {
+          const text = (sourceLines || []).join('\n');
           setRawText(text);
           localStorage.setItem(`activity-${activityId}`, text);
           setTimeout(() => handleCompile(text), 0);
@@ -373,6 +406,7 @@ export default function ActivityEditor() {
         `${API_BASE_URL}/api/activities/preview-doc?docUrl=${encodeURIComponent(activity.sheet_url)}`
       );
       const { lines } = await res.json();
+      await syncActivityIsTest(activity, Array.isArray(lines) ? lines : []);
       const recoveredText = lines.join('\n');
       setRawText(recoveredText);
       localStorage.setItem(`activity-${activityId}`, recoveredText);

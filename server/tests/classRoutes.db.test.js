@@ -39,6 +39,31 @@ function remember(kind, id) {
   return numericId;
 }
 
+async function ensureSchema() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS pogil_classes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(191) NOT NULL UNIQUE,
+      description TEXT DEFAULT NULL,
+      created_by INT DEFAULT NULL,
+      google_folder_url TEXT DEFAULT NULL,
+      google_folder_id VARCHAR(255) DEFAULT NULL,
+      google_folder_name VARCHAR(255) DEFAULT NULL,
+      google_folder_verified_at DATETIME DEFAULT NULL,
+      google_folder_status VARCHAR(32) DEFAULT NULL
+    )
+  `);
+
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS google_folder_url TEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS google_folder_id VARCHAR(255) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS google_folder_name VARCHAR(255) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS google_folder_verified_at DATETIME DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS google_folder_status VARCHAR(32) DEFAULT NULL
+  `);
+}
+
 async function cleanupCreatedRows() {
   const activityIds = [...created.activities];
   const courseIds = [...created.courses];
@@ -248,6 +273,7 @@ test.after(async () => {
 });
 
 test('class routes create, list, update, fetch, and delete a class', async () => {
+  await ensureSchema();
   const name = uniqueName('Intro CS');
   const description = 'Collaborative intro course';
 
@@ -305,6 +331,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
 });
 
 test('class folder endpoints return empty state, verify, save, fetch, and delete a folder', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
   const folderUrl = 'https://drive.google.com/drive/folders/1FolderGhIjKlMnOpQrStUvWxYz1234567890?usp=sharing';
 
@@ -382,6 +409,7 @@ test('class folder endpoints return empty state, verify, save, fetch, and delete
 });
 
 test('class folder save rejects invalid verification results', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
 
   const invalid = await requestJson(`/api/classes/${classId}/folder`, {

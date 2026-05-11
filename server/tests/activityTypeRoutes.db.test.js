@@ -427,7 +427,7 @@ test('student course activities infer activity_type from source docs instead of 
   });
 
   assert.equal(response.status, 200);
-  const byTitle = new Map(response.body.map((row) => [row.title, row]));
+  const byTitle = new Map(response.body.map((row) => [row.activity_name, row]));
   assert.equal(byTitle.get('Student Test Activity')?.activity_type, 'test');
   assert.equal(byTitle.get('Student Group Activity')?.activity_type, 'group');
 });
@@ -509,7 +509,7 @@ test('course test results include doc-classified tests even when is_test is stal
   await db.query(
     `INSERT INTO group_members (activity_instance_id, student_id, role)
      VALUES (?, ?, ?)`,
-    [instanceId, student.id, 'Recorder']
+    [instanceId, student.id, 'facilitator']
   );
 
   const response = await requestJson(instructor, `/api/courses/${courseId}/test-results`, {

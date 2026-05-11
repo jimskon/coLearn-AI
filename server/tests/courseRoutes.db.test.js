@@ -91,8 +91,68 @@ function createTestServer(user) {
   });
 }
 
-async function requestJson(user, path, { method = 'GET', body } = {}) {
-  const server = await createTestServer(user);
+function loadCourseRoutes({ verifyCourseFolderAccessImpl } = {}) {
+  const courseFolderPath = require.resolve('../utils/courseFolder');
+  const courseControllerPath = require.resolve('../courses/controller');
+  const courseRoutesPath = require.resolve('../courses/routes');
+
+  delete require.cache[courseFolderPath];
+  delete require.cache[courseControllerPath];
+  delete require.cache[courseRoutesPath];
+
+  const courseFolder = require(courseFolderPath);
+  const originalVerify = courseFolder.verifyCourseFolderAccess;
+  if (verifyCourseFolderAccessImpl) {
+    courseFolder.verifyCourseFolderAccess = verifyCourseFolderAccessImpl;
+  }
+
+  const loadedCourseRoutes = require(courseRoutesPath);
+
+  return {
+    courseRoutes: loadedCourseRoutes,
+    restore() {
+      courseFolder.verifyCourseFolderAccess = originalVerify;
+      delete require.cache[courseFolderPath];
+      delete require.cache[courseControllerPath];
+      delete require.cache[courseRoutesPath];
+    },
+  };
+}
+
+function createStubbedTestServer(user, overrides = {}) {
+  const { courseRoutes: stubbedCourseRoutes, restore } = loadCourseRoutes(overrides);
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = user;
+    next();
+  });
+  app.use('/api/courses', stubbedCourseRoutes);
+
+  const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      resolve({
+        baseUrl: `http://127.0.0.1:${port}`,
+        close: () =>
+          new Promise((closeResolve) => {
+            server.close(() => {
+              restore();
+              closeResolve();
+            });
+            server.closeIdleConnections?.();
+          }),
+      });
+    });
+  });
+}
+
+async function requestJson(user, path, { method = 'GET', body, overrides } = {}) {
+  const server = overrides ? await createStubbedTestServer(user, overrides) : await createTestServer(user);
   try {
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
@@ -306,4 +366,129 @@ test('non-owner cannot delete a course, but owner can delete it', async () => {
   const info = await requestJson(instructor, `/api/courses/${courseId}/info`);
   assert.equal(info.status, 404);
   assert.deepEqual(info.body, { error: 'Instance not found' });
+});
+
+test('course folder endpoints return empty state, verify, save, fetch, and delete a folder', async () => {
+  const instructor = await createUser('instructor');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructor, classId });
+  const folderUrl = 'https://drive.google.com/drive/folders/1FolderGhIjKlMnOpQrStUvWxYz1234567890?usp=sharing';
+
+  const initial = await requestJson(instructor, `/api/courses/${courseId}/folder`);
+  assert.equal(initial.status, 200);
+  assert.deepEqual(initial.body, {
+    course_id: courseId,
+    has_folder: false,
+  });
+
+  const verify = await requestJson(instructor, `/api/courses/${courseId}/folder/verify`, {
+    method: 'POST',
+    body: { folderUrl },
+    overrides: {
+      verifyCourseFolderAccessImpl: async () => ({
+        ok: true,
+        folderId: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+        folderName: 'CS101 Activities',
+        writable: true,
+        error: null,
+      }),
+    },
+  });
+  assert.equal(verify.status, 200);
+  assert.deepEqual(verify.body, {
+    ok: true,
+    folder_id: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+    folder_name: 'CS101 Activities',
+    writable: true,
+  });
+
+  const saved = await requestJson(instructor, `/api/courses/${courseId}/folder`, {
+    method: 'PUT',
+    body: { folderUrl },
+    overrides: {
+      verifyCourseFolderAccessImpl: async () => ({
+        ok: true,
+        folderId: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+        folderName: 'CS101 Activities',
+        writable: true,
+        error: null,
+      }),
+    },
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body, {
+    ok: true,
+    folder_url: folderUrl,
+    folder_id: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+    folder_name: 'CS101 Activities',
+    status: 'verified',
+  });
+
+  const fetched = await requestJson(instructor, `/api/courses/${courseId}/folder`);
+  assert.equal(fetched.status, 200);
+  assert.equal(fetched.body.has_folder, true);
+  assert.equal(fetched.body.folder_url, folderUrl);
+  assert.equal(fetched.body.folder_id, '1FolderGhIjKlMnOpQrStUvWxYz1234567890');
+  assert.equal(fetched.body.folder_name, 'CS101 Activities');
+  assert.equal(fetched.body.status, 'verified');
+  assert.ok(fetched.body.verified_at);
+
+  const removed = await requestJson(instructor, `/api/courses/${courseId}/folder`, {
+    method: 'DELETE',
+  });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.body, { ok: true });
+
+  const afterDelete = await requestJson(instructor, `/api/courses/${courseId}/folder`);
+  assert.equal(afterDelete.status, 200);
+  assert.deepEqual(afterDelete.body, {
+    course_id: courseId,
+    has_folder: false,
+  });
+});
+
+test('course folder save rejects unauthorized users and verification failures', async () => {
+  const instructor = await createUser('instructor');
+  const otherInstructor = await createUser('instructor');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructor, classId });
+  const folderUrl = 'https://drive.google.com/drive/folders/1FolderGhIjKlMnOpQrStUvWxYz1234567890?usp=sharing';
+
+  const forbidden = await requestJson(otherInstructor, `/api/courses/${courseId}/folder`, {
+    method: 'PUT',
+    body: { folderUrl },
+    overrides: {
+      verifyCourseFolderAccessImpl: async () => ({
+        ok: true,
+        folderId: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+        folderName: 'CS101 Activities',
+        writable: true,
+        error: null,
+      }),
+    },
+  });
+  assert.equal(forbidden.status, 403);
+  assert.deepEqual(forbidden.body, { error: 'Unauthorized' });
+
+  const invalid = await requestJson(instructor, `/api/courses/${courseId}/folder`, {
+    method: 'PUT',
+    body: { folderUrl: 'not a folder' },
+    overrides: {
+      verifyCourseFolderAccessImpl: async () => ({
+        ok: false,
+        folderId: null,
+        folderName: null,
+        writable: false,
+        error: 'Invalid Google Drive folder URL.',
+      }),
+    },
+  });
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(invalid.body, {
+    ok: false,
+    folder_id: null,
+    folder_name: null,
+    writable: false,
+    error: 'Invalid Google Drive folder URL.',
+  });
 });

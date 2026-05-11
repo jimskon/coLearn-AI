@@ -1,6 +1,7 @@
 // /courses/controller.js
 const db = require("../db");
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
+const { verifyCourseFolderAccess } = require('../utils/courseFolder');
 
 async function loadClassActivitiesWithTypes(classId) {
   const [rows] = await db.query(
@@ -21,6 +22,28 @@ async function loadClassActivitiesWithTypes(classId) {
       isTest: activityType === 'test',
     };
   }));
+}
+
+async function getManageableCourse(courseId, user) {
+  const [rows] = await db.query(
+    `SELECT id, instructor_id, google_folder_url, google_folder_id, google_folder_name, google_folder_verified_at, google_folder_status
+     FROM courses
+     WHERE id = ?`,
+    [courseId]
+  );
+
+  if (!rows.length) {
+    return { error: 'not_found' };
+  }
+
+  const course = rows[0];
+  const isOwner = user?.id === course.instructor_id;
+  const isAdmin = user?.role === 'root' || user?.role === 'creator';
+  if (!isOwner && !isAdmin) {
+    return { error: 'forbidden' };
+  }
+
+  return { course };
 }
 
 // GET all courses
@@ -492,6 +515,149 @@ async function getCourseInfo(req, res) {
   }
 }
 
+async function getCourseFolder(req, res) {
+  const { courseId } = req.params;
+
+  try {
+    const [rows] = await db.query(
+      `SELECT id, google_folder_url, google_folder_id, google_folder_name, google_folder_verified_at, google_folder_status
+       FROM courses
+       WHERE id = ?`,
+      [courseId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: "Instance not found" });
+    }
+
+    const row = rows[0];
+    if (!row.google_folder_id) {
+      return res.json({
+        course_id: row.id,
+        has_folder: false,
+      });
+    }
+
+    return res.json({
+      course_id: row.id,
+      has_folder: true,
+      folder_url: row.google_folder_url,
+      folder_id: row.google_folder_id,
+      folder_name: row.google_folder_name,
+      status: row.google_folder_status,
+      verified_at: row.google_folder_verified_at,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching course folder:", err);
+    return res.status(500).json({ error: "Failed to get course folder" });
+  }
+}
+
+async function verifyCourseFolder(req, res) {
+  const { folderUrl } = req.body || {};
+
+  try {
+    const result = await verifyCourseFolderAccess(folderUrl);
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        folder_id: result.folderId,
+        folder_name: result.folderName,
+        writable: false,
+        error: result.error,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      folder_id: result.folderId,
+      folder_name: result.folderName,
+      writable: true,
+    });
+  } catch (err) {
+    console.error("❌ Error verifying course folder:", err);
+    return res.status(500).json({ error: "Failed to verify course folder" });
+  }
+}
+
+async function saveCourseFolder(req, res) {
+  const { courseId } = req.params;
+  const { folderUrl } = req.body || {};
+
+  try {
+    const managed = await getManageableCourse(courseId, req.user);
+    if (managed.error === 'not_found') {
+      return res.status(404).json({ error: "Instance not found" });
+    }
+    if (managed.error === 'forbidden') {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    const result = await verifyCourseFolderAccess(folderUrl);
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        folder_id: result.folderId,
+        folder_name: result.folderName,
+        writable: false,
+        error: result.error,
+      });
+    }
+
+    await db.query(
+      `UPDATE courses
+       SET google_folder_url = ?,
+           google_folder_id = ?,
+           google_folder_name = ?,
+           google_folder_verified_at = NOW(),
+           google_folder_status = 'verified'
+       WHERE id = ?`,
+      [folderUrl, result.folderId, result.folderName, courseId]
+    );
+
+    return res.json({
+      ok: true,
+      folder_url: folderUrl,
+      folder_id: result.folderId,
+      folder_name: result.folderName,
+      status: 'verified',
+    });
+  } catch (err) {
+    console.error("❌ Error saving course folder:", err);
+    return res.status(500).json({ error: "Failed to save course folder" });
+  }
+}
+
+async function deleteCourseFolder(req, res) {
+  const { courseId } = req.params;
+
+  try {
+    const managed = await getManageableCourse(courseId, req.user);
+    if (managed.error === 'not_found') {
+      return res.status(404).json({ error: "Instance not found" });
+    }
+    if (managed.error === 'forbidden') {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    await db.query(
+      `UPDATE courses
+       SET google_folder_url = NULL,
+           google_folder_id = NULL,
+           google_folder_name = NULL,
+           google_folder_verified_at = NULL,
+           google_folder_status = NULL
+       WHERE id = ?`,
+      [courseId]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("❌ Error deleting course folder:", err);
+    return res.status(500).json({ error: "Failed to remove course folder" });
+  }
+}
+
 async function getCourseProgress(req, res) {
   const { courseId } = req.params;
 
@@ -930,6 +1096,10 @@ module.exports = {
   getStudentsForCourse,
   unenrollStudentFromCourse,
   getCourseInfo,
+  getCourseFolder,
+  verifyCourseFolder,
+  saveCourseFolder,
+  deleteCourseFolder,
   getCourseProgress,
   getCourseTestResults,
   setCourseActivityHidden,

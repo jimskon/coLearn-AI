@@ -35,6 +35,12 @@ router.get("/:courseId/students", controller.getStudentsForCourse);
 // Get course info (used in ManageCourseStudentsPage)
 router.get("/:courseId/info", controller.getCourseInfo);
 
+// Get/save/remove course folder configuration
+router.get("/:courseId/folder", controller.getCourseFolder);
+router.post("/:courseId/folder/verify", controller.verifyCourseFolder);
+router.put("/:courseId/folder", controller.saveCourseFolder);
+router.delete("/:courseId/folder", controller.deleteCourseFolder);
+
 // Get course progress (used in ManageCoursesPage) — regular activities only
 router.get("/:courseId/progress", controller.getCourseProgress);
 

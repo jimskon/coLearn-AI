@@ -402,20 +402,44 @@ test('student course activities infer activity_type from source docs instead of 
   const staleTestDocId = 'staleStudentTestDoc1234567890';
   const staleGroupDocId = 'staleStudentGroupDoc123456789';
 
-  await createActivity({
+  const staleTestActivityId = await createActivity({
     classId,
     title: 'Student Test Activity',
     sheetUrl: `https://docs.google.com/document/d/${staleTestDocId}/edit`,
     isTest: 0,
     orderIndex: 1,
   });
-  await createActivity({
+  const staleGroupActivityId = await createActivity({
     classId,
     title: 'Student Group Activity',
     sheetUrl: `https://docs.google.com/document/d/${staleGroupDocId}/edit`,
     isTest: 1,
     orderIndex: 2,
   });
+
+  const [testInstanceResult] = await db.query(
+    `INSERT INTO activity_instances (activity_id, course_id, status, progress_status)
+     VALUES (?, ?, ?, ?)`,
+    [staleTestActivityId, courseId, 'in_progress', 'in_progress']
+  );
+  const testInstanceId = remember('instances', testInstanceResult.insertId);
+  await db.query(
+    `INSERT INTO group_members (activity_instance_id, student_id, role)
+     VALUES (?, ?, ?)`,
+    [testInstanceId, student.id, 'facilitator']
+  );
+
+  const [groupInstanceResult] = await db.query(
+    `INSERT INTO activity_instances (activity_id, course_id, status, progress_status)
+     VALUES (?, ?, ?, ?)`,
+    [staleGroupActivityId, courseId, 'in_progress', 'in_progress']
+  );
+  const groupInstanceId = remember('instances', groupInstanceResult.insertId);
+  await db.query(
+    `INSERT INTO group_members (activity_instance_id, student_id, role)
+     VALUES (?, ?, ?)`,
+    [groupInstanceId, student.id, 'analyst']
+  );
 
   const response = await requestJson(student, `/api/courses/${courseId}/activities`, {
     overrides: {

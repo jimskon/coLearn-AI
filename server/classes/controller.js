@@ -1,6 +1,7 @@
 const db = require('../db');
 const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
+const { inferActivityTypeFromActivity } = require('../utils/activityType');
 
 // Get all classes
 exports.getAllClasses = async (req, res) => {
@@ -77,9 +78,15 @@ exports.createActivityForClass = async (req, res) => {
   }
 
   try {
+    const activityType = await inferActivityTypeFromActivity({
+      sheet_url,
+      is_test: 0,
+    });
+    const isTest = activityType === 'test' ? 1 : 0;
+
     const [result] = await db.query(
-      'INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, title, sheet_url, order_index, classId, createdBy]
+      'INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by, is_test) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [name, title, sheet_url, order_index, classId, createdBy, isTest]
     );
 
     // ✅ RETURN THE INSERTED ID
@@ -90,7 +97,9 @@ exports.createActivityForClass = async (req, res) => {
       sheet_url,
       order_index,
       class_id: Number(classId),
-      created_by: createdBy
+      created_by: createdBy,
+      is_test: isTest,
+      activity_type: activityType,
     });
   } catch (err) {
     console.error('Error creating activity:', err);
@@ -262,10 +271,16 @@ exports.importFolderActivities = async (req, res) => {
         continue; // skip to next file
       }
 
+      const activityType = await inferActivityTypeFromActivity({
+        sheet_url: url,
+        is_test: 0,
+      });
+      const isTest = activityType === 'test' ? 1 : 0;
+
       const [result] = await db.query(
-        `INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by)
-   VALUES (?, ?, ?, ?, ?, ?)`,
-        [name, title, url, index + 1, classId, createdBy]
+        `INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by, is_test)
+   VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [name, title, url, index + 1, classId, createdBy, isTest]
       );
 
       inserted.push({
@@ -275,7 +290,9 @@ exports.importFolderActivities = async (req, res) => {
         sheet_url: url,
         order_index: index + 1,
         class_id: Number(classId),
-        created_by: createdBy
+        created_by: createdBy,
+        is_test: isTest,
+        activity_type: activityType,
       });
     }
 

@@ -247,7 +247,9 @@ export default function CourseActivitiesPage() {
                                 variant="secondary"
                                 onClick={() =>
                                   isDemo
-                                    ? handleDoActivity(activity, true)
+                                    ? navigate(`/view-groups/${courseId}/${activity.activity_id}`, {
+                                        state: { courseName, activityType: 'demo' },
+                                      })
                                     : navigate(`/view-groups/${courseId}/${activity.activity_id}`, {
                                         state: { courseName },
                                       })

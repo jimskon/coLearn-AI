@@ -2,6 +2,27 @@
 const db = require("../db");
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 
+async function loadClassActivitiesWithTypes(classId) {
+  const [rows] = await db.query(
+    `
+    SELECT id, name, title, sheet_url, order_index, is_test
+    FROM pogil_activities
+    WHERE class_id = ?
+    ORDER BY order_index ASC, id ASC
+    `,
+    [classId]
+  );
+
+  return Promise.all(rows.map(async (row) => {
+    const activityType = await inferActivityTypeFromActivity(row);
+    return {
+      ...row,
+      activity_type: activityType,
+      isTest: activityType === 'test',
+    };
+  }));
+}
+
 // GET all courses
 async function getAllCourses(req, res) {
   const user = req.user;
@@ -267,11 +288,8 @@ async function getCourseActivities(req, res) {
       ]
     );
 
-    const shouldInferActivityType = role !== 'student';
     const activities = await Promise.all(rows.map(async (row) => {
-      const activityType = shouldInferActivityType
-        ? await inferActivityTypeFromActivity(row)
-        : (Number(row.is_test) === 1 ? 'test' : 'group');
+      const activityType = await inferActivityTypeFromActivity(row);
       const isTest = activityType === 'test';
       const is_test = row.is_test; // 1 / 0 / null
       const status = (row.progress_status || '').toLowerCase();
@@ -478,6 +496,14 @@ async function getCourseProgress(req, res) {
   const { courseId } = req.params;
 
   try {
+    const [[courseRow]] = await db.query(
+      `SELECT class_id FROM courses WHERE id = ?`,
+      [courseId]
+    );
+    if (!courseRow) {
+      return res.status(404).json({ error: "Instance not found" });
+    }
+
     // 1) Get enrolled students
     const [studentsRows] = await db.query(
       `SELECT u.id, u.name, u.email
@@ -487,20 +513,17 @@ async function getCourseProgress(req, res) {
       [courseId]
     );
 
-    // 2) Get NON-TEST activities for this course's class_id
-    const [activitiesRows] = await db.query(
-      `SELECT id, name, is_test
-       FROM pogil_activities
-       WHERE class_id = (
-         SELECT class_id FROM courses WHERE id = ?
-       )
-         AND is_test = 0
-       ORDER BY order_index`,
-      [courseId]
-    );
+    // 2) Load activities and classify them from source docs instead of trusting legacy is_test
+    const classActivities = await loadClassActivitiesWithTypes(courseRow.class_id);
+    const activitiesRows = classActivities.filter((activity) => activity.activity_type !== 'test');
+    const testActivityIds = classActivities
+      .filter((activity) => activity.activity_type === 'test')
+      .map((activity) => Number(activity.id));
 
-    // 3) Pull cached instance progress for these activities in this course
-    const [instanceRows] = await db.query(
+    let instanceRows = [];
+    if (testActivityIds.length) {
+      // 3) Pull cached instance progress for TEST activities in this course
+      [instanceRows] = await db.query(
       `
   SELECT
     ai.activity_id,
@@ -511,7 +534,6 @@ async function getCourseProgress(req, res) {
     ai.id AS instance_id,
     COALESCE(ai.graded_at, ai.submitted_at) AS last_ts
   FROM activity_instances ai
-  JOIN pogil_activities a ON a.id = ai.activity_id
   JOIN group_members gm   ON gm.activity_instance_id = ai.id
   JOIN (
     SELECT
@@ -520,10 +542,9 @@ async function getCourseProgress(req, res) {
       MAX(COALESCE(ai2.graded_at, ai2.submitted_at)) AS last_ts,
       MAX(ai2.id) AS last_id
     FROM activity_instances ai2
-    JOIN pogil_activities a2 ON a2.id = ai2.activity_id
     JOIN group_members gm2   ON gm2.activity_instance_id = ai2.id
     WHERE ai2.course_id = ?
-      AND a2.is_test = 1
+      AND ai2.activity_id IN (?)
     GROUP BY gm2.student_id, ai2.activity_id
   ) latest
     ON latest.student_id = gm.student_id
@@ -531,10 +552,11 @@ async function getCourseProgress(req, res) {
    AND COALESCE(ai.graded_at, ai.submitted_at) = latest.last_ts
    AND ai.id = latest.last_id
   WHERE ai.course_id = ?
-    AND a.is_test = 1
+    AND ai.activity_id IN (?)
   `,
-      [courseId, courseId]
-    );
+      [courseId, testActivityIds, courseId, testActivityIds]
+      );
+    }
 
 
     // 4) Build per-student structure
@@ -656,6 +678,14 @@ async function getCourseTestResults(req, res) {
   const { courseId } = req.params;
 
   try {
+    const [[courseRow]] = await db.query(
+      `SELECT class_id FROM courses WHERE id = ?`,
+      [courseId]
+    );
+    if (!courseRow) {
+      return res.status(404).json({ error: "Instance not found" });
+    }
+
     // 1) Enrolled students
     const [studentsRows] = await db.query(
       `SELECT u.id, u.name, u.email
@@ -665,17 +695,10 @@ async function getCourseTestResults(req, res) {
       [courseId]
     );
 
-    // 2) Test activities for this course's class_id
-    const [testsRows] = await db.query(
-      `SELECT id, name, is_test
-       FROM pogil_activities
-       WHERE class_id = (
-         SELECT class_id FROM courses WHERE id = ?
-       )
-       AND is_test = 1
-       ORDER BY order_index`,
-      [courseId]
-    );
+    // 2) Load activities and classify them from source docs instead of trusting legacy is_test
+    const classActivities = await loadClassActivitiesWithTypes(courseRow.class_id);
+    const testsRows = classActivities.filter((activity) => activity.activity_type === 'test');
+    const testActivityIds = testsRows.map((activity) => Number(activity.id));
 
     if (testsRows.length === 0) {
       return res.json({ tests: [], students: [] });
@@ -692,7 +715,6 @@ async function getCourseTestResults(req, res) {
     gm.student_id,
     ai.id AS instance_id
   FROM activity_instances ai
-  JOIN pogil_activities a ON a.id = ai.activity_id
   JOIN group_members gm   ON gm.activity_instance_id = ai.id
   JOIN (
     SELECT
@@ -701,10 +723,9 @@ async function getCourseTestResults(req, res) {
       MAX(COALESCE(ai2.graded_at, ai2.submitted_at, ai2.start_time)) AS last_ts,
       MAX(ai2.id) AS last_id
     FROM activity_instances ai2
-    JOIN pogil_activities a2 ON a2.id = ai2.activity_id
     JOIN group_members gm2   ON gm2.activity_instance_id = ai2.id
     WHERE ai2.course_id = ?
-      AND a2.is_test = 1
+      AND ai2.activity_id IN (?)
     GROUP BY gm2.student_id, ai2.activity_id
   ) latest
     ON latest.student_id = gm.student_id
@@ -712,9 +733,9 @@ async function getCourseTestResults(req, res) {
    AND COALESCE(ai.graded_at, ai.submitted_at, ai.start_time) = latest.last_ts
    AND ai.id = latest.last_id
   WHERE ai.course_id = ?
-    AND a.is_test = 1
+    AND ai.activity_id IN (?)
   `,
-      [courseId, courseId]
+      [courseId, testActivityIds, courseId, testActivityIds]
     );
 
 

@@ -1,6 +1,6 @@
 // src/pages/ManageActivitiesPage.jsx
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { Table, Button, Form, Container, Modal } from 'react-bootstrap';
@@ -25,8 +25,6 @@ export default function ManageActivitiesPage() {
   const canManage = user?.role === 'root' || user?.role === 'creator';
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [folderUrl, setFolderUrl] = useState('');
-
-  const location = useLocation();
 
   useEffect(() => {
     if (!canManage) {
@@ -99,20 +97,11 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    // We only trust the INSERT id so we can open Preview.
-    const newId = data?.id;
-
-    // Reset the form immediately (so if they come back, it's clean)
+    // Reset the form immediately so the add flow stays snappy.
     setNewActivity({ name: '', title: '', sheet_url: '', order_index: '' });
 
-    // If there's a doc URL, auto-open Preview so it parses and sets is_test in DB.
-    // (Preview will do the PATCH side-effect.)
-    if (newId && activity?.sheet_url && activity.sheet_url.trim() !== '') {
-      navigate(`/preview/${newId}?returnTo=${encodeURIComponent(location.pathname)}`);
-      return;
-    }
-
-    // Otherwise, re-fetch list from DB (single source of truth)
+    // Re-fetch list from DB (single source of truth). Activity metadata is now
+    // initialized server-side, so we no longer need the old preview side-effect.
     const refreshed = await fetch(
       `${API_BASE_URL}/api/classes/${classId}/activities`,
       { credentials: 'include' }

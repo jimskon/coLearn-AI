@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const Module = require('node:module');
 const test = require('node:test');
 
 const express = require('express');
@@ -9,6 +10,20 @@ const db = require('../db');
 
 function uniqueName(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function createDocBodyLines(lines) {
+  return {
+    data: {
+      body: {
+        content: lines.map((line) => ({
+          paragraph: {
+            elements: [{ textRun: { content: `${line}\n` } }],
+          },
+        })),
+      },
+    },
+  };
 }
 
 const created = {
@@ -67,6 +82,10 @@ async function createClassRecord() {
 function createTestServer() {
   const app = express();
   app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = app.locals.user;
+    next();
+  });
   app.use('/api/classes', classRoutes);
 
   const server = http.createServer(app);
@@ -88,8 +107,113 @@ function createTestServer() {
   });
 }
 
-async function requestJson(path, { method = 'GET', body } = {}) {
-  const server = await createTestServer();
+function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {} } = {}) {
+  const googleAuthPath = require.resolve('../utils/googleAuth');
+  const googleDrivePath = require.resolve('../utils/googleDrive');
+  const activityTypePath = require.resolve('../utils/activityType');
+  const classControllerPath = require.resolve('../classes/controller');
+  const classRoutesPath = require.resolve('../classes/routes');
+
+  const fakeGoogleApis = {
+    google: {
+      docs: () => ({
+        documents: {
+          get: async ({ documentId }) => {
+            const lines = docsById[documentId];
+            if (!lines) throw new Error(`No stubbed doc for ${documentId}`);
+            return createDocBodyLines(lines);
+          },
+        },
+      }),
+      drive: () => ({
+        files: {
+          list: async () => ({ data: { files: folderFiles } }),
+          get: async ({ fileId }) => ({
+            data:
+              metadataById[fileId]
+              || folderFiles.find((file) => file.id === fileId)
+              || { id: fileId, name: `Untitled ${fileId}` },
+          }),
+        },
+      }),
+    },
+  };
+
+  const originalLoad = Module._load;
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'googleapis') {
+      return fakeGoogleApis;
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  delete require.cache[googleAuthPath];
+  delete require.cache[googleDrivePath];
+  delete require.cache[activityTypePath];
+  delete require.cache[classControllerPath];
+  delete require.cache[classRoutesPath];
+
+  const googleAuth = require(googleAuthPath);
+  const originalAuthorize = googleAuth.authorize;
+  googleAuth.authorize = () => ({ fake: true });
+
+  const loadedClassRoutes = require(classRoutesPath);
+
+  return {
+    classRoutes: loadedClassRoutes,
+    restore() {
+      Module._load = originalLoad;
+      googleAuth.authorize = originalAuthorize;
+      delete require.cache[googleAuthPath];
+      delete require.cache[googleDrivePath];
+      delete require.cache[activityTypePath];
+      delete require.cache[classControllerPath];
+      delete require.cache[classRoutesPath];
+    },
+  };
+}
+
+function createStubbedTestServer(user, overrides = {}) {
+  const { classRoutes: stubbedClassRoutes, restore } = loadClassRoutes(overrides);
+  const app = express();
+  app.locals.user = user;
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.user = user;
+    next();
+  });
+  app.use('/api/classes', stubbedClassRoutes);
+
+  const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
+
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      resolve({
+        baseUrl: `http://127.0.0.1:${port}`,
+        close: () =>
+          new Promise((closeResolve) => {
+            server.close(() => {
+              restore();
+              closeResolve();
+            });
+            server.closeIdleConnections?.();
+          }),
+      });
+    });
+  });
+}
+
+async function requestJson(userOrPath, maybePathOrOptions, maybeOptions) {
+  const hasUser = typeof userOrPath !== 'string';
+  const user = hasUser ? userOrPath : undefined;
+  const path = hasUser ? maybePathOrOptions : userOrPath;
+  const options = hasUser ? (maybeOptions || {}) : (maybePathOrOptions || {});
+  const { method = 'GET', body, overrides } = options;
+  const server = overrides ? await createStubbedTestServer(user, overrides) : await createTestServer();
+
   try {
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
@@ -175,15 +299,21 @@ test('class activity routes create, list, update, and delete an activity', async
   const classId = await createClassRecord();
   const creatorId = await createUser('creator');
   const activityName = uniqueName('activity').toLowerCase();
+  const docId = 'testCreateActivityDoc123456789';
 
-  const create = await requestJson(`/api/classes/${classId}/activities`, {
+  const create = await requestJson(null, `/api/classes/${classId}/activities`, {
     method: 'POST',
     body: {
       name: activityName,
       title: 'Loops and Lists',
-      sheet_url: 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit',
+      sheet_url: `https://docs.google.com/document/d/${docId}/edit`,
       order_index: 2,
       createdBy: creatorId,
+    },
+    overrides: {
+      docsById: {
+        [docId]: ['\\title{Loops and Lists}', '\\mode{test}', '\\questiongroup{One}'],
+      },
     },
   });
 
@@ -193,6 +323,8 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.equal(create.body.order_index, 2);
   assert.equal(create.body.class_id, classId);
   assert.equal(create.body.created_by, creatorId);
+  assert.equal(create.body.is_test, 1);
+  assert.equal(create.body.activity_type, 'test');
   assert.equal(typeof create.body.id, 'number');
   remember('activities', create.body.id);
 
@@ -201,6 +333,13 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.equal(list.body.length, 1);
   assert.equal(list.body[0].id, create.body.id);
   assert.equal(list.body[0].name, activityName);
+  assert.equal(Number(list.body[0].is_test), 1);
+
+  const [[storedActivity]] = await db.query(
+    `SELECT is_test FROM pogil_activities WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(Number(storedActivity.is_test), 1);
 
   const update = await requestJson(`/api/classes/${classId}/activities/${activityName}`, {
     method: 'PUT',
@@ -229,6 +368,62 @@ test('class activity routes create, list, update, and delete an activity', async
   const listAfterDelete = await requestJson(`/api/classes/${classId}/activities`);
   assert.equal(listAfterDelete.status, 200);
   assert.deepEqual(listAfterDelete.body, []);
+});
+
+test('import-folder initializes activity types without opening each imported activity', async () => {
+  const classId = await createClassRecord();
+  const instructorId = await createUser('instructor');
+  const folderId = 'folderImportActivity1234567890';
+  const testDocId = 'folderImportTestDoc1234567890';
+  const groupDocId = 'folderImportGroupDoc123456789';
+
+  const response = await requestJson(
+    { id: instructorId, role: 'instructor' },
+    `/api/classes/${classId}/import-folder`,
+    {
+      method: 'POST',
+      body: {
+        folderUrl: `https://drive.google.com/drive/folders/${folderId}`,
+      },
+      overrides: {
+        folderFiles: [
+          { id: testDocId, name: '2 Test Activity' },
+          { id: groupDocId, name: '1 Group Activity' },
+        ],
+        metadataById: {
+          [testDocId]: { id: testDocId, name: '2 Test Activity' },
+          [groupDocId]: { id: groupDocId, name: '1 Group Activity' },
+        },
+        docsById: {
+          [testDocId]: ['\\title{Imported Test}', '\\mode{test}', '\\questiongroup{One}'],
+          [groupDocId]: ['\\title{Imported Group}', '\\mode{group}', '\\questiongroup{One}'],
+        },
+      },
+    }
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.imported.length, 2);
+
+  for (const activity of response.body.imported) {
+    remember('activities', activity.id);
+  }
+
+  const byTitle = new Map(response.body.imported.map((activity) => [activity.title, activity]));
+  assert.equal(byTitle.get('1 Group Activity')?.activity_type, 'group');
+  assert.equal(byTitle.get('1 Group Activity')?.is_test, 0);
+  assert.equal(byTitle.get('2 Test Activity')?.activity_type, 'test');
+  assert.equal(byTitle.get('2 Test Activity')?.is_test, 1);
+
+  const [storedRows] = await db.query(
+    `SELECT title, is_test
+       FROM pogil_activities
+      WHERE id IN (?)`,
+    [response.body.imported.map((activity) => activity.id)]
+  );
+  const storedByTitle = new Map(storedRows.map((row) => [row.title, Number(row.is_test)]));
+  assert.equal(storedByTitle.get('1 Group Activity'), 0);
+  assert.equal(storedByTitle.get('2 Test Activity'), 1);
 });
 
 test('activity creation rejects missing required fields before database insert', async () => {

@@ -49,6 +49,11 @@ async function main() {
         name VARCHAR(191) NOT NULL UNIQUE,
         description TEXT DEFAULT NULL,
         created_by INT DEFAULT NULL,
+        google_folder_url TEXT DEFAULT NULL,
+        google_folder_id VARCHAR(255) DEFAULT NULL,
+        google_folder_name VARCHAR(255) DEFAULT NULL,
+        google_folder_verified_at DATETIME DEFAULT NULL,
+        google_folder_status VARCHAR(32) DEFAULT NULL,
         CONSTRAINT pogil_classes_created_by_fk
           FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
       );
@@ -62,11 +67,6 @@ async function main() {
         year INT NOT NULL,
         instructor_id INT DEFAULT NULL,
         class_id INT DEFAULT NULL,
-        google_folder_url TEXT DEFAULT NULL,
-        google_folder_id VARCHAR(255) DEFAULT NULL,
-        google_folder_name VARCHAR(255) DEFAULT NULL,
-        google_folder_verified_at DATETIME DEFAULT NULL,
-        google_folder_status VARCHAR(32) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY unique_course (code, section(191), semester, year),
         CONSTRAINT courses_instructor_fk

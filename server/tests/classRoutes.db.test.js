@@ -107,9 +107,10 @@ function createTestServer() {
   });
 }
 
-function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {} } = {}) {
+function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {}, verifyCourseFolderAccessImpl } = {}) {
   const googleAuthPath = require.resolve('../utils/googleAuth');
   const googleDrivePath = require.resolve('../utils/googleDrive');
+  const courseFolderPath = require.resolve('../utils/courseFolder');
   const activityTypePath = require.resolve('../utils/activityType');
   const classControllerPath = require.resolve('../classes/controller');
   const classRoutesPath = require.resolve('../classes/routes');
@@ -149,6 +150,7 @@ function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {} } 
 
   delete require.cache[googleAuthPath];
   delete require.cache[googleDrivePath];
+  delete require.cache[courseFolderPath];
   delete require.cache[activityTypePath];
   delete require.cache[classControllerPath];
   delete require.cache[classRoutesPath];
@@ -156,6 +158,11 @@ function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {} } 
   const googleAuth = require(googleAuthPath);
   const originalAuthorize = googleAuth.authorize;
   googleAuth.authorize = () => ({ fake: true });
+  const courseFolder = require(courseFolderPath);
+  const originalVerifyCourseFolderAccess = courseFolder.verifyCourseFolderAccess;
+  if (verifyCourseFolderAccessImpl) {
+    courseFolder.verifyCourseFolderAccess = verifyCourseFolderAccessImpl;
+  }
 
   const loadedClassRoutes = require(classRoutesPath);
 
@@ -164,8 +171,10 @@ function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {} } 
     restore() {
       Module._load = originalLoad;
       googleAuth.authorize = originalAuthorize;
+      courseFolder.verifyCourseFolderAccess = originalVerifyCourseFolderAccess;
       delete require.cache[googleAuthPath];
       delete require.cache[googleDrivePath];
+      delete require.cache[courseFolderPath];
       delete require.cache[activityTypePath];
       delete require.cache[classControllerPath];
       delete require.cache[classRoutesPath];
@@ -293,6 +302,110 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
   const fetchDeleted = await requestJson(`/api/classes/${create.body.id}`);
   assert.equal(fetchDeleted.status, 404);
   assert.deepEqual(fetchDeleted.body, { error: 'Class not found' });
+});
+
+test('class folder endpoints return empty state, verify, save, fetch, and delete a folder', async () => {
+  const classId = await createClassRecord();
+  const folderUrl = 'https://drive.google.com/drive/folders/1FolderGhIjKlMnOpQrStUvWxYz1234567890?usp=sharing';
+
+  const initial = await requestJson(`/api/classes/${classId}/folder`);
+  assert.equal(initial.status, 200);
+  assert.deepEqual(initial.body, {
+    class_id: classId,
+    has_folder: false,
+  });
+
+  const verify = await requestJson(`/api/classes/${classId}/folder/verify`, {
+    method: 'POST',
+    body: { folderUrl },
+    overrides: {
+      verifyCourseFolderAccessImpl: async () => ({
+        ok: true,
+        folderId: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+        folderName: 'CS101 Activities',
+        writable: true,
+        error: null,
+      }),
+    },
+  });
+  assert.equal(verify.status, 200);
+  assert.deepEqual(verify.body, {
+    ok: true,
+    folder_id: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+    folder_name: 'CS101 Activities',
+    writable: true,
+  });
+
+  const saved = await requestJson(`/api/classes/${classId}/folder`, {
+    method: 'PUT',
+    body: { folderUrl },
+    overrides: {
+      verifyCourseFolderAccessImpl: async () => ({
+        ok: true,
+        folderId: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+        folderName: 'CS101 Activities',
+        writable: true,
+        error: null,
+      }),
+    },
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.body, {
+    ok: true,
+    folder_url: folderUrl,
+    folder_id: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
+    folder_name: 'CS101 Activities',
+    status: 'verified',
+  });
+
+  const fetched = await requestJson(`/api/classes/${classId}/folder`);
+  assert.equal(fetched.status, 200);
+  assert.equal(fetched.body.has_folder, true);
+  assert.equal(fetched.body.folder_url, folderUrl);
+  assert.equal(fetched.body.folder_id, '1FolderGhIjKlMnOpQrStUvWxYz1234567890');
+  assert.equal(fetched.body.folder_name, 'CS101 Activities');
+  assert.equal(fetched.body.status, 'verified');
+  assert.ok(fetched.body.verified_at);
+
+  const removed = await requestJson(`/api/classes/${classId}/folder`, {
+    method: 'DELETE',
+  });
+  assert.equal(removed.status, 200);
+  assert.deepEqual(removed.body, { ok: true });
+
+  const afterDelete = await requestJson(`/api/classes/${classId}/folder`);
+  assert.equal(afterDelete.status, 200);
+  assert.deepEqual(afterDelete.body, {
+    class_id: classId,
+    has_folder: false,
+  });
+});
+
+test('class folder save rejects invalid verification results', async () => {
+  const classId = await createClassRecord();
+
+  const invalid = await requestJson(`/api/classes/${classId}/folder`, {
+    method: 'PUT',
+    body: { folderUrl: 'not a folder' },
+    overrides: {
+      verifyCourseFolderAccessImpl: async () => ({
+        ok: false,
+        folderId: null,
+        folderName: null,
+        writable: false,
+        error: 'Invalid Google Drive folder URL.',
+      }),
+    },
+  });
+
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(invalid.body, {
+    ok: false,
+    folder_id: null,
+    folder_name: null,
+    writable: false,
+    error: 'Invalid Google Drive folder URL.',
+  });
 });
 
 test('class activity routes create, list, update, and delete an activity', async () => {

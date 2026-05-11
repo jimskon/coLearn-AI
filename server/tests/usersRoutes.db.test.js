@@ -60,7 +60,12 @@ async function ensureSchema() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(191) NOT NULL UNIQUE,
       description TEXT DEFAULT NULL,
-      created_by INT DEFAULT NULL
+      created_by INT DEFAULT NULL,
+      google_folder_url TEXT DEFAULT NULL,
+      google_folder_id VARCHAR(255) DEFAULT NULL,
+      google_folder_name VARCHAR(255) DEFAULT NULL,
+      google_folder_verified_at DATETIME DEFAULT NULL,
+      google_folder_status VARCHAR(32) DEFAULT NULL
     )
   `);
 
@@ -74,11 +79,6 @@ async function ensureSchema() {
       year INT NOT NULL,
       instructor_id INT DEFAULT NULL,
       class_id INT DEFAULT NULL,
-      google_folder_url TEXT DEFAULT NULL,
-      google_folder_id VARCHAR(255) DEFAULT NULL,
-      google_folder_name VARCHAR(255) DEFAULT NULL,
-      google_folder_verified_at DATETIME DEFAULT NULL,
-      google_folder_status VARCHAR(32) DEFAULT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);

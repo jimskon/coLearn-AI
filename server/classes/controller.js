@@ -2,6 +2,7 @@ const db = require('../db');
 const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
+const { verifyCourseFolderAccess } = require('../utils/courseFolder');
 
 // Get all classes
 exports.getAllClasses = async (req, res) => {
@@ -222,6 +223,141 @@ exports.getClassById = async (req, res) => {
   } catch (err) {
     console.error("Error fetching class:", err);
     res.status(500).json({ error: 'Database error' });
+  }
+};
+
+exports.getClassFolder = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const [rows] = await db.query(
+      `SELECT id, google_folder_url, google_folder_id, google_folder_name, google_folder_verified_at, google_folder_status
+       FROM pogil_classes WHERE id = ?`,
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    const row = rows[0];
+    if (!row.google_folder_id) {
+      return res.json({
+        class_id: Number(row.id),
+        has_folder: false,
+      });
+    }
+
+    return res.json({
+      class_id: Number(row.id),
+      has_folder: true,
+      folder_url: row.google_folder_url,
+      folder_id: row.google_folder_id,
+      folder_name: row.google_folder_name,
+      status: row.google_folder_status,
+      verified_at: row.google_folder_verified_at,
+    });
+  } catch (err) {
+    console.error('Error fetching class folder:', err);
+    return res.status(500).json({ error: 'Failed to get class folder' });
+  }
+};
+
+exports.verifyClassFolder = async (req, res) => {
+  const { folderUrl } = req.body || {};
+
+  try {
+    const result = await verifyCourseFolderAccess(folderUrl);
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        folder_id: result.folderId,
+        folder_name: result.folderName,
+        writable: false,
+        error: result.error,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      folder_id: result.folderId,
+      folder_name: result.folderName,
+      writable: true,
+    });
+  } catch (err) {
+    console.error('Error verifying class folder:', err);
+    return res.status(500).json({ error: 'Failed to verify class folder' });
+  }
+};
+
+exports.saveClassFolder = async (req, res) => {
+  const { id } = req.params;
+  const { folderUrl } = req.body || {};
+
+  try {
+    const [existingRows] = await db.query('SELECT id FROM pogil_classes WHERE id = ?', [id]);
+    if (existingRows.length === 0) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    const result = await verifyCourseFolderAccess(folderUrl);
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        folder_id: result.folderId,
+        folder_name: result.folderName,
+        writable: false,
+        error: result.error,
+      });
+    }
+
+    await db.query(
+      `UPDATE pogil_classes
+       SET google_folder_url = ?,
+           google_folder_id = ?,
+           google_folder_name = ?,
+           google_folder_verified_at = NOW(),
+           google_folder_status = 'verified'
+       WHERE id = ?`,
+      [folderUrl, result.folderId, result.folderName, id]
+    );
+
+    return res.json({
+      ok: true,
+      folder_url: folderUrl,
+      folder_id: result.folderId,
+      folder_name: result.folderName,
+      status: 'verified',
+    });
+  } catch (err) {
+    console.error('Error saving class folder:', err);
+    return res.status(500).json({ error: 'Failed to save class folder' });
+  }
+};
+
+exports.deleteClassFolder = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const [existingRows] = await db.query('SELECT id FROM pogil_classes WHERE id = ?', [id]);
+    if (existingRows.length === 0) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    await db.query(
+      `UPDATE pogil_classes
+       SET google_folder_url = NULL,
+           google_folder_id = NULL,
+           google_folder_name = NULL,
+           google_folder_verified_at = NULL,
+           google_folder_status = NULL
+       WHERE id = ?`,
+      [id]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('Error deleting class folder:', err);
+    return res.status(500).json({ error: 'Failed to remove class folder' });
   }
 };
 

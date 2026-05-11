@@ -88,6 +88,11 @@ async function ensureSchema() {
       year INT NOT NULL,
       instructor_id INT DEFAULT NULL,
       class_id INT DEFAULT NULL,
+      google_folder_url TEXT DEFAULT NULL,
+      google_folder_id VARCHAR(255) DEFAULT NULL,
+      google_folder_name VARCHAR(255) DEFAULT NULL,
+      google_folder_verified_at DATETIME DEFAULT NULL,
+      google_folder_status VARCHAR(32) DEFAULT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -102,7 +107,8 @@ async function ensureSchema() {
       order_index INT NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL,
       last_loaded TIMESTAMP NULL DEFAULT NULL,
-      is_test TINYINT(1) DEFAULT NULL
+      is_test TINYINT(1) DEFAULT NULL,
+      source_type VARCHAR(16) NOT NULL DEFAULT 'external'
     )
   `);
 

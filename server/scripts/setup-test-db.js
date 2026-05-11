@@ -62,6 +62,11 @@ async function main() {
         year INT NOT NULL,
         instructor_id INT DEFAULT NULL,
         class_id INT DEFAULT NULL,
+        google_folder_url TEXT DEFAULT NULL,
+        google_folder_id VARCHAR(255) DEFAULT NULL,
+        google_folder_name VARCHAR(255) DEFAULT NULL,
+        google_folder_verified_at DATETIME DEFAULT NULL,
+        google_folder_status VARCHAR(32) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         UNIQUE KEY unique_course (code, section(191), semester, year),
         CONSTRAINT courses_instructor_fk
@@ -91,6 +96,7 @@ async function main() {
         created_by INT DEFAULT NULL,
         last_loaded TIMESTAMP NULL DEFAULT NULL,
         is_test TINYINT(1) DEFAULT NULL,
+        source_type VARCHAR(16) NOT NULL DEFAULT 'external',
         CONSTRAINT pogil_activities_class_fk
           FOREIGN KEY (class_id) REFERENCES pogil_classes(id) ON DELETE CASCADE,
         CONSTRAINT pogil_activities_created_by_fk

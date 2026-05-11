@@ -451,7 +451,7 @@ test('student course activities infer activity_type from source docs instead of 
   });
 
   assert.equal(response.status, 200);
-  const byTitle = new Map(response.body.map((row) => [row.activity_name, row]));
+  const byTitle = new Map(response.body.map((row) => [row.title, row]));
   assert.equal(byTitle.get('Student Test Activity')?.activity_type, 'test');
   assert.equal(byTitle.get('Student Group Activity')?.activity_type, 'group');
 });

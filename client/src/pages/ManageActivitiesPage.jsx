@@ -35,6 +35,7 @@ export default function ManageActivitiesPage() {
   const [classFolderError, setClassFolderError] = useState('');
   const [classFolderSuccess, setClassFolderSuccess] = useState('');
   const [verifiedClassFolder, setVerifiedClassFolder] = useState(null);
+  const [serviceAccountCopied, setServiceAccountCopied] = useState(false);
 
   useEffect(() => {
     if (!canManage) {
@@ -227,6 +228,41 @@ export default function ManageActivitiesPage() {
   };
 
   const classFolderNeedsReverify = verifiedClassFolder && verifiedClassFolder.folderUrl !== classFolderUrlInput;
+
+  const copyServiceAccountEmail = async () => {
+    if (!SERVICE_ACCOUNT_EMAIL) return;
+
+    try {
+      await navigator.clipboard.writeText(SERVICE_ACCOUNT_EMAIL);
+      setServiceAccountCopied(true);
+      window.setTimeout(() => setServiceAccountCopied(false), 1800);
+    } catch (err) {
+      console.error('Failed to copy service account email:', err);
+    }
+  };
+
+  const renderServiceAccountHelper = () => (
+    <span className="d-inline-flex flex-wrap align-items-center gap-2">
+      <span>Make sure the folder is shared with</span>
+      <code
+        className="px-2 py-1 rounded"
+        style={{ backgroundColor: '#e7f1ff', color: '#0d6efd', fontWeight: 600 }}
+      >
+        {SERVICE_ACCOUNT_EMAIL || 'the service account'}
+      </code>
+      {SERVICE_ACCOUNT_EMAIL && (
+        <Button
+          variant={serviceAccountCopied ? 'success' : 'outline-primary'}
+          size="sm"
+          className="py-0 px-2"
+          onClick={copyServiceAccountEmail}
+        >
+          {serviceAccountCopied ? 'Copied' : 'Copy'}
+        </Button>
+      )}
+      <span>as an editor.</span>
+    </span>
+  );
 
   const saveActivity = async (activity) => {
     const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
@@ -465,7 +501,7 @@ export default function ManageActivitiesPage() {
             value={folderUrl}
             onChange={(e) => setFolderUrl(e.target.value)}
           />
-          <p className="mt-2">Make sure the folder is shared with: <code>{SERVICE_ACCOUNT_EMAIL}</code></p>
+          <div className="mt-2 small text-muted">{renderServiceAccountHelper()}</div>
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowImportFolderModal(false)}>Cancel</Button>
@@ -518,7 +554,7 @@ export default function ManageActivitiesPage() {
                   placeholder="https://drive.google.com/drive/folders/..."
                 />
                 <Form.Text className="text-muted">
-                  Make sure {SERVICE_ACCOUNT_EMAIL || 'the service account'} has editor access to this folder.
+                  {renderServiceAccountHelper()}
                 </Form.Text>
               </Form.Group>
 
@@ -599,7 +635,7 @@ export default function ManageActivitiesPage() {
           </Modal.Header>
           <Modal.Body>
             <p>If your activity uses a Google Sheet or Doc, please ensure it is shared with:</p>
-            <code>{SERVICE_ACCOUNT_EMAIL}</code>
+            <div>{renderServiceAccountHelper()}</div>
             <p className="mt-3">Click "Continue" once you've shared access or if no document is being used.</p>
           </Modal.Body>
           <Modal.Footer>

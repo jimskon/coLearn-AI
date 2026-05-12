@@ -4,6 +4,7 @@ const { extractGoogleFileId } = require('../utils/googleIds');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const { verifyCourseFolderAccess } = require('../utils/courseFolder');
 const { getFilesInFolder, getFileMetadata } = require('../utils/googleDrive');
+const { createLocalActivityDoc } = require('../utils/localActivityDocs');
 
 async function reconcileClassActivitySources(classId, folderId) {
   const [activities] = await db.query(
@@ -45,6 +46,13 @@ async function reconcileClassActivitySources(classId, folderId) {
   }
 
   return reconciled;
+}
+
+function slugifyActivityName(title) {
+  return String(title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'new_activity';
 }
 
 // Get all classes
@@ -152,6 +160,83 @@ exports.createActivityForClass = async (req, res) => {
   } catch (err) {
     console.error('Error creating activity:', err);
     res.status(500).json({ error: 'Failed to create activity.' });
+  }
+};
+
+exports.createLocalActivityForClass = async (req, res) => {
+  const classId = Number(req.params.id);
+  const { title, createdBy, mode = 'group' } = req.body || {};
+
+  if (!title || createdBy === undefined) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const [[classRow]] = await db.query(
+      `SELECT id, google_folder_id, google_folder_status
+         FROM pogil_classes
+        WHERE id = ?`,
+      [classId]
+    );
+
+    if (!classRow) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    if (!classRow.google_folder_id || classRow.google_folder_status !== 'verified') {
+      return res.status(400).json({ error: 'This class needs a verified folder before local activities can be created.' });
+    }
+
+    const [[orderRow]] = await db.query(
+      `SELECT COALESCE(MAX(order_index), -1) AS max_order
+         FROM pogil_activities
+        WHERE class_id = ?`,
+      [classId]
+    );
+    const orderIndex = Number(orderRow?.max_order ?? -1) + 1;
+
+    const baseName = slugifyActivityName(title);
+    let finalName = baseName;
+    let suffix = 2;
+    while (true) {
+      const [[existing]] = await db.query(
+        `SELECT id FROM pogil_activities WHERE name = ? AND class_id = ?`,
+        [finalName, classId]
+      );
+      if (!existing) break;
+      finalName = `${baseName}_${suffix}`;
+      suffix += 1;
+    }
+
+    const doc = await createLocalActivityDoc({
+      title,
+      folderId: classRow.google_folder_id,
+      mode,
+    });
+
+    const [result] = await db.query(
+      `INSERT INTO pogil_activities
+       (name, title, sheet_url, order_index, class_id, created_by, is_test, source_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [finalName, title, doc.url, orderIndex, classId, createdBy, mode === 'test' ? 1 : 0, 'local']
+    );
+
+    return res.status(201).json({
+      id: Number(result.insertId),
+      name: finalName,
+      title,
+      sheet_url: doc.url,
+      order_index: orderIndex,
+      class_id: classId,
+      created_by: createdBy,
+      is_test: mode === 'test' ? 1 : 0,
+      source_type: 'local',
+      activity_type: mode,
+      editor_url: `/editor/${Number(result.insertId)}`,
+    });
+  } catch (err) {
+    console.error('Error creating local activity:', err);
+    return res.status(500).json({ error: 'Failed to create local activity.' });
   }
 };
 

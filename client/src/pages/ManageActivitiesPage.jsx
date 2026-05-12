@@ -36,6 +36,10 @@ export default function ManageActivitiesPage() {
   const [classFolderSuccess, setClassFolderSuccess] = useState('');
   const [verifiedClassFolder, setVerifiedClassFolder] = useState(null);
   const [serviceAccountCopied, setServiceAccountCopied] = useState(false);
+  const [showLocalActivityModal, setShowLocalActivityModal] = useState(false);
+  const [localActivityTitle, setLocalActivityTitle] = useState('');
+  const [localActivityCreating, setLocalActivityCreating] = useState(false);
+  const [localActivityError, setLocalActivityError] = useState('');
 
   useEffect(() => {
     if (!canManage) {
@@ -101,6 +105,41 @@ export default function ManageActivitiesPage() {
       setFolderUrl('');
     } else {
       alert(data.error || "Folder import failed.");
+    }
+  };
+
+  const handleCreateLocalActivity = async () => {
+    if (!localActivityTitle.trim()) {
+      setLocalActivityError('Please enter a title.');
+      return;
+    }
+
+    setLocalActivityCreating(true);
+    setLocalActivityError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/classes/${classId}/local-activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: localActivityTitle.trim(),
+          createdBy: user?.id,
+          mode: 'group',
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to create local activity.');
+      }
+
+      setActivities((prev) => [...prev, data].sort((a, b) => Number(a.order_index) - Number(b.order_index)));
+      setShowLocalActivityModal(false);
+      setLocalActivityTitle('');
+      navigate(`/editor/${data.id}`);
+    } catch (err) {
+      setLocalActivityError(err.message || 'Failed to create local activity.');
+    } finally {
+      setLocalActivityCreating(false);
     }
   };
 
@@ -434,6 +473,22 @@ export default function ManageActivitiesPage() {
         >
           Import Activities from Google Folder
         </Button>
+        <Button
+          variant="success"
+          className="mb-4 ms-2"
+          onClick={() => {
+            setLocalActivityError('');
+            setShowLocalActivityModal(true);
+          }}
+          disabled={!classFolder?.has_folder || classFolder?.status !== 'verified'}
+        >
+          Create Local Activity
+        </Button>
+        {(!classFolder?.has_folder || classFolder?.status !== 'verified') && (
+          <div className="small text-muted mt-2">
+            Attach and verify a class folder to create local activities.
+          </div>
+        )}
 
 
       </Form>
@@ -514,6 +569,52 @@ export default function ManageActivitiesPage() {
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowImportFolderModal(false)}>Cancel</Button>
           <Button variant="primary" onClick={handleBulkImport}>Import</Button>
+        </Modal.Footer>
+      </Modal>
+      <Modal
+        show={showLocalActivityModal}
+        onHide={() => {
+          if (!localActivityCreating) {
+            setShowLocalActivityModal(false);
+          }
+        }}
+      >
+        <Modal.Header closeButton={!localActivityCreating}>
+          <Modal.Title>Create Local Activity</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="text-muted">
+            This will create a new Google Doc in the attached class folder and open it in the editor with a starter template.
+          </p>
+          {localActivityError && <Alert variant="danger">{localActivityError}</Alert>}
+          <Form.Group>
+            <Form.Label>Activity Title</Form.Label>
+            <Form.Control
+              type="text"
+              value={localActivityTitle}
+              onChange={(e) => {
+                setLocalActivityTitle(e.target.value);
+                setLocalActivityError('');
+              }}
+              placeholder="Pointers Warmup"
+            />
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="secondary"
+            onClick={() => setShowLocalActivityModal(false)}
+            disabled={localActivityCreating}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="success"
+            onClick={handleCreateLocalActivity}
+            disabled={localActivityCreating || !localActivityTitle.trim()}
+          >
+            {localActivityCreating ? 'Creating...' : 'Create Local Activity'}
+          </Button>
         </Modal.Footer>
       </Modal>
       <Modal

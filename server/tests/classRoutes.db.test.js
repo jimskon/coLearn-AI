@@ -137,10 +137,11 @@ function createTestServer() {
   });
 }
 
-function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {}, verifyCourseFolderAccessImpl } = {}) {
+function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {}, verifyCourseFolderAccessImpl, createLocalActivityDocImpl } = {}) {
   const googleAuthPath = require.resolve('../utils/googleAuth');
   const googleDrivePath = require.resolve('../utils/googleDrive');
   const courseFolderPath = require.resolve('../utils/courseFolder');
+  const localActivityDocsPath = require.resolve('../utils/localActivityDocs');
   const activityTypePath = require.resolve('../utils/activityType');
   const classControllerPath = require.resolve('../classes/controller');
   const classRoutesPath = require.resolve('../classes/routes');
@@ -181,6 +182,7 @@ function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {}, v
   delete require.cache[googleAuthPath];
   delete require.cache[googleDrivePath];
   delete require.cache[courseFolderPath];
+  delete require.cache[localActivityDocsPath];
   delete require.cache[activityTypePath];
   delete require.cache[classControllerPath];
   delete require.cache[classRoutesPath];
@@ -193,6 +195,11 @@ function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {}, v
   if (verifyCourseFolderAccessImpl) {
     courseFolder.verifyCourseFolderAccess = verifyCourseFolderAccessImpl;
   }
+  const localActivityDocs = require(localActivityDocsPath);
+  const originalCreateLocalActivityDoc = localActivityDocs.createLocalActivityDoc;
+  if (createLocalActivityDocImpl) {
+    localActivityDocs.createLocalActivityDoc = createLocalActivityDocImpl;
+  }
 
   const loadedClassRoutes = require(classRoutesPath);
 
@@ -202,9 +209,11 @@ function loadClassRoutes({ docsById = {}, folderFiles = [], metadataById = {}, v
       Module._load = originalLoad;
       googleAuth.authorize = originalAuthorize;
       courseFolder.verifyCourseFolderAccess = originalVerifyCourseFolderAccess;
+      localActivityDocs.createLocalActivityDoc = originalCreateLocalActivityDoc;
       delete require.cache[googleAuthPath];
       delete require.cache[googleDrivePath];
       delete require.cache[courseFolderPath];
+      delete require.cache[localActivityDocsPath];
       delete require.cache[activityTypePath];
       delete require.cache[classControllerPath];
       delete require.cache[classRoutesPath];
@@ -519,6 +528,79 @@ test('class activity routes create, list, update, and delete an activity', async
   const listAfterDelete = await requestJson(`/api/classes/${classId}/activities`);
   assert.equal(listAfterDelete.status, 200);
   assert.deepEqual(listAfterDelete.body, []);
+});
+
+test('local activity route creates a starter doc in the class folder and stores a local activity', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const folderId = '1FolderGhIjKlMnOpQrStUvWxYz1234567890';
+
+  await db.query(
+    `UPDATE pogil_classes
+        SET google_folder_id = ?,
+            google_folder_name = ?,
+            google_folder_status = 'verified'
+      WHERE id = ?`,
+    [folderId, 'Demo Activities', classId]
+  );
+
+  const response = await requestJson(`/api/classes/${classId}/local-activities`, {
+    method: 'POST',
+    body: {
+      title: 'Pointers Warmup',
+      createdBy: creatorId,
+      mode: 'group',
+    },
+    overrides: {
+      createLocalActivityDocImpl: async ({ title, folderId: receivedFolderId, mode }) => ({
+        documentId: '1NewDocGhIjKlMnOpQrStUvWxYz1234567890',
+        title,
+        mode,
+        folderId: receivedFolderId,
+        url: 'https://docs.google.com/document/d/1NewDocGhIjKlMnOpQrStUvWxYz1234567890/edit',
+      }),
+    },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.title, 'Pointers Warmup');
+  assert.equal(response.body.sheet_url, 'https://docs.google.com/document/d/1NewDocGhIjKlMnOpQrStUvWxYz1234567890/edit');
+  assert.equal(response.body.source_type, 'local');
+  assert.equal(response.body.activity_type, 'group');
+  assert.equal(response.body.is_test, 0);
+  assert.equal(response.body.editor_url, `/editor/${response.body.id}`);
+  remember('activities', response.body.id);
+
+  const [[stored]] = await db.query(
+    `SELECT name, source_type, sheet_url
+       FROM pogil_activities
+      WHERE id = ?`,
+    [response.body.id]
+  );
+  assert.equal(stored.source_type, 'local');
+  assert.equal(stored.sheet_url, 'https://docs.google.com/document/d/1NewDocGhIjKlMnOpQrStUvWxYz1234567890/edit');
+  assert.equal(stored.name, 'pointers_warmup');
+});
+
+test('local activity route rejects creation when the class has no verified folder', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+
+  const response = await requestJson(`/api/classes/${classId}/local-activities`, {
+    method: 'POST',
+    body: {
+      title: 'Pointers Warmup',
+      createdBy: creatorId,
+      mode: 'group',
+    },
+  });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    error: 'This class needs a verified folder before local activities can be created.',
+  });
 });
 
 test('saving a class folder reconciles matching existing external activities to local', async () => {

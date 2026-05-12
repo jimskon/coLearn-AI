@@ -21,7 +21,7 @@ exports.getFileMetadata = async (fileId) => {
 
   const res = await drive.files.get({
     fileId,
-    fields: 'id, name',
+    fields: 'id, name, parents',
   });
   return res.data;
 };

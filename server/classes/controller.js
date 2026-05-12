@@ -3,6 +3,49 @@ const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const { verifyCourseFolderAccess } = require('../utils/courseFolder');
+const { getFilesInFolder, getFileMetadata } = require('../utils/googleDrive');
+
+async function reconcileClassActivitySources(classId, folderId) {
+  const [activities] = await db.query(
+    `SELECT id, sheet_url, source_type
+       FROM pogil_activities
+      WHERE class_id = ?`,
+    [classId]
+  );
+
+  let reconciled = 0;
+
+  for (const activity of activities) {
+    if (activity.source_type === 'local') {
+      continue;
+    }
+
+    const fileId = extractGoogleFileId(activity.sheet_url);
+    if (!fileId) {
+      continue;
+    }
+
+    try {
+      const metadata = await getFileMetadata(fileId);
+      const parents = Array.isArray(metadata.parents) ? metadata.parents : [];
+      if (!parents.includes(folderId)) {
+        continue;
+      }
+
+      await db.query(
+        `UPDATE pogil_activities
+            SET source_type = 'local'
+          WHERE id = ?`,
+        [activity.id]
+      );
+      reconciled += 1;
+    } catch (err) {
+      console.warn(`Could not reconcile activity ${activity.id}:`, err.message);
+    }
+  }
+
+  return reconciled;
+}
 
 // Get all classes
 exports.getAllClasses = async (req, res) => {
@@ -325,12 +368,15 @@ exports.saveClassFolder = async (req, res) => {
       [folderUrl, result.folderId, result.folderName, id]
     );
 
+    const reconciled_count = await reconcileClassActivitySources(id, result.folderId);
+
     return res.json({
       ok: true,
       folder_url: folderUrl,
       folder_id: result.folderId,
       folder_name: result.folderName,
       status: 'verified',
+      reconciled_count,
     });
   } catch (err) {
     console.error('Error saving class folder:', err);
@@ -364,8 +410,6 @@ exports.deleteClassFolder = async (req, res) => {
     return res.status(500).json({ error: 'Failed to remove class folder' });
   }
 };
-
-const { getFilesInFolder, getFileMetadata } = require('../utils/googleDrive'); // helper you'll create below
 
 exports.importFolderActivities = async (req, res) => {
   const { id: classId } = req.params;

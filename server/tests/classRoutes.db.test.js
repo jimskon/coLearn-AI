@@ -388,6 +388,7 @@ test('class folder endpoints return empty state, verify, save, fetch, and delete
     folder_id: '1FolderGhIjKlMnOpQrStUvWxYz1234567890',
     folder_name: 'CS101 Activities',
     status: 'verified',
+    reconciled_count: 0,
   });
 
   const fetched = await requestJson(`/api/classes/${classId}/folder`);
@@ -518,6 +519,80 @@ test('class activity routes create, list, update, and delete an activity', async
   const listAfterDelete = await requestJson(`/api/classes/${classId}/activities`);
   assert.equal(listAfterDelete.status, 200);
   assert.deepEqual(listAfterDelete.body, []);
+});
+
+test('saving a class folder reconciles matching existing external activities to local', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const folderId = '1FolderGhIjKlMnOpQrStUvWxYz1234567890';
+  const matchingDocId = '1MatchingDocGhIjKlMnOpQrStUvWxYz12345';
+  const otherDocId = '1OtherDocGhIjKlMnOpQrStUvWxYz12345678';
+
+  const [matchingActivity] = await db.query(
+    `INSERT INTO pogil_activities
+     (name, title, sheet_url, order_index, class_id, created_by, is_test, source_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      uniqueName('matching').toLowerCase(),
+      'Matching Activity',
+      `https://docs.google.com/document/d/${matchingDocId}/edit`,
+      1,
+      classId,
+      creatorId,
+      0,
+      'external',
+    ]
+  );
+  remember('activities', matchingActivity.insertId);
+
+  const [otherActivity] = await db.query(
+    `INSERT INTO pogil_activities
+     (name, title, sheet_url, order_index, class_id, created_by, is_test, source_type)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      uniqueName('other').toLowerCase(),
+      'Other Activity',
+      `https://docs.google.com/document/d/${otherDocId}/edit`,
+      2,
+      classId,
+      creatorId,
+      0,
+      'external',
+    ]
+  );
+  remember('activities', otherActivity.insertId);
+
+  const response = await requestJson(`/api/classes/${classId}/folder`, {
+    method: 'PUT',
+    body: { folderUrl: `https://drive.google.com/drive/folders/${folderId}` },
+    overrides: {
+      verifyCourseFolderAccessImpl: async () => ({
+        ok: true,
+        folderId,
+        folderName: 'CS101 Activities',
+        writable: true,
+        error: null,
+      }),
+      metadataById: {
+        [matchingDocId]: { id: matchingDocId, name: 'Matching Activity', parents: [folderId] },
+        [otherDocId]: { id: otherDocId, name: 'Other Activity', parents: ['different-folder'] },
+      },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.reconciled_count, 1);
+
+  const [storedRows] = await db.query(
+    `SELECT title, source_type
+       FROM pogil_activities
+      WHERE id IN (?, ?)`,
+    [matchingActivity.insertId, otherActivity.insertId]
+  );
+  const storedByTitle = new Map(storedRows.map((row) => [row.title, row.source_type]));
+  assert.equal(storedByTitle.get('Matching Activity'), 'local');
+  assert.equal(storedByTitle.get('Other Activity'), 'external');
 });
 
 test('import-folder initializes activity types without opening each imported activity', async () => {

@@ -49,6 +49,11 @@ async function main() {
         name VARCHAR(191) NOT NULL UNIQUE,
         description TEXT DEFAULT NULL,
         created_by INT DEFAULT NULL,
+        google_folder_url TEXT DEFAULT NULL,
+        google_folder_id VARCHAR(255) DEFAULT NULL,
+        google_folder_name VARCHAR(255) DEFAULT NULL,
+        google_folder_verified_at DATETIME DEFAULT NULL,
+        google_folder_status VARCHAR(32) DEFAULT NULL,
         CONSTRAINT pogil_classes_created_by_fk
           FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
       );
@@ -91,6 +96,7 @@ async function main() {
         created_by INT DEFAULT NULL,
         last_loaded TIMESTAMP NULL DEFAULT NULL,
         is_test TINYINT(1) DEFAULT NULL,
+        source_type VARCHAR(16) NOT NULL DEFAULT 'external',
         CONSTRAINT pogil_activities_class_fk
           FOREIGN KEY (class_id) REFERENCES pogil_classes(id) ON DELETE CASCADE,
         CONSTRAINT pogil_activities_created_by_fk

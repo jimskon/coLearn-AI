@@ -1183,10 +1183,14 @@ async function getInstancesForActivityInCourse(req, res) {
   const { courseId, activityId } = req.params;
   try {
     const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
-    const [[activity]] = await db.query(`SELECT title FROM pogil_activities WHERE id = ?`, [activityId]);
+    const [[activity]] = await db.query(
+      `SELECT id, title, is_test, sheet_url FROM pogil_activities WHERE id = ?`,
+      [activityId]
+    );
 
     const courseName = course?.name || 'Unknown Course';
     const activityTitle = activity?.title || '';
+    const activityType = await inferActivityTypeFromActivity(activity || {});
 
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
@@ -1302,7 +1306,7 @@ async function getInstancesForActivityInCourse(req, res) {
       });
     }
 
-    res.json({ courseName, activityTitle, groups });
+    res.json({ courseName, activityTitle, activityType, groups });
   } catch (err) {
     console.error("❌ getInstancesForActivityInCourse:", err);
     res.status(500).json({ error: 'Failed to fetch instances' });

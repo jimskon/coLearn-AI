@@ -177,10 +177,12 @@ export default function ViewGroupsPage() {
   const { courseId, activityId } = useParams();
   const location = useLocation();
   const incomingCourseName = location.state && location.state.courseName;
+  const incomingActivityType = location.state && location.state.activityType;
   const navigate = useNavigate();
 
   const [activityTitle, setActivityTitle] = useState('');
   const [courseName, setCourseName] = useState(incomingCourseName || '');
+  const [activityType, setActivityType] = useState(incomingActivityType || 'group');
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -196,6 +198,7 @@ export default function ViewGroupsPage() {
   const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [openingOwnDemo, setOpeningOwnDemo] = useState(false);
 
   const fetchGroups = async ({ quiet = false } = {}) => {
     if (!quiet) {
@@ -218,6 +221,7 @@ export default function ViewGroupsPage() {
 
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
+      setActivityType(String(data.activityType || incomingActivityType || 'group'));
       setGroups(data.groups);
       if (Array.isArray(data.groups) && data.groups.length > 0) {
         setRotationMode(String(data.groups[0].active_rotation_mode || 'submit'));
@@ -384,6 +388,7 @@ export default function ViewGroupsPage() {
     (group.members || []).some((member) => member.connected)
   );
   const timerPaused = groups.some((group) => Number(group.section_timer_paused) === 1);
+  const isDemo = activityType === 'demo';
 
   let timerButtonVariant = 'warning';
   let timerButtonLabel = 'Waiting';
@@ -443,6 +448,29 @@ export default function ViewGroupsPage() {
     }
   };
 
+  const handleOpenOwnDemo = async () => {
+    setOpeningOwnDemo(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${courseId}/${activityId}/demo-instance`,
+        {
+          method: 'POST',
+          credentials: 'include',
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.instanceId) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+      navigate(`/run/${data.instanceId}`, { state: { courseName } });
+    } catch (err) {
+      console.error('❌ Failed to open own demo:', err);
+      alert(err?.message || 'Failed to open your demo.');
+    } finally {
+      setOpeningOwnDemo(false);
+    }
+  };
+
   return (
     <Container className="mt-4">
       <div
@@ -458,17 +486,32 @@ export default function ViewGroupsPage() {
         <div className="d-flex align-items-center justify-content-between gap-3 py-3 flex-wrap">
           <div>
             <h2 className="mb-1">
-              {activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}
+              {activityTitle
+                ? `${isDemo ? 'Demo' : 'Activity'}: ${activityTitle}`
+                : isDemo
+                  ? 'Demo Instances'
+                  : 'Groups for Activity'}
             </h2>
             {courseName && <div className="text-muted">{courseName}</div>}
           </div>
-          <Button
-            variant={timerButtonVariant}
-            onClick={handleTogglePause}
-            disabled={togglingPause}
-          >
-            {togglingPause ? 'Updating…' : timerButtonLabel}
-          </Button>
+          <div className="d-flex gap-2 align-items-center flex-wrap">
+            {isDemo && (
+              <Button
+                variant="primary"
+                onClick={handleOpenOwnDemo}
+                disabled={openingOwnDemo}
+              >
+                {openingOwnDemo ? 'Opening…' : 'Open My Demo'}
+              </Button>
+            )}
+            <Button
+              variant={timerButtonVariant}
+              onClick={handleTogglePause}
+              disabled={togglingPause}
+            >
+              {togglingPause ? 'Updating…' : timerButtonLabel}
+            </Button>
+          </div>
         </div>
 
       </div>
@@ -540,81 +583,83 @@ export default function ViewGroupsPage() {
         </Row>
       )}
 
-      <Card className="my-4">
-        <Card.Body className="d-flex flex-column gap-3">
-          <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
-            <div>
-              <div className="fw-semibold">Active-student rotation</div>
-              <div className="small text-muted">
-                Choose whether the active student changes on every submit or only when the group advances to the next question group.
+      {!isDemo && (
+        <Card className="my-4">
+          <Card.Body className="d-flex flex-column gap-3">
+            <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+              <div>
+                <div className="fw-semibold">Active-student rotation</div>
+                <div className="small text-muted">
+                  Choose whether the active student changes on every submit or only when the group advances to the next question group.
+                </div>
               </div>
-            </div>
-            <ButtonGroup>
-              <Button
-                variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
-                disabled={updatingRotationMode}
-                onClick={() => handleSetRotationMode('submit')}
-              >
-                Submit
-              </Button>
-              <Button
-                variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
-                disabled={updatingRotationMode}
-                onClick={() => handleSetRotationMode('group')}
-              >
-                Q Group
-              </Button>
-            </ButtonGroup>
-          </div>
-
-          <div className="d-flex gap-3 align-items-center flex-wrap">
-            <Form.Select
-              value={selectedAdd}
-              onChange={(e) => setSelectedAdd(e.target.value)}
-              style={{ maxWidth: 320 }}
-              disabled={timerPaused}
-            >
-              <option value="">Add student...</option>
-              {available.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.email})
-                </option>
-              ))}
-            </Form.Select>
-
-            <div className="d-flex gap-2">
-              <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd || timerPaused}>
-                Add to group
-              </Button>
-              <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd || timerPaused}>
-                Group of one
-              </Button>
-            </div>
-
-            <Form.Select
-              value={selectedRemove}
-              onChange={(e) => setSelectedRemove(e.target.value)}
-              style={{ maxWidth: 380 }}
-              disabled={timerPaused}
-            >
-              <option value="">Remove student...</option>
-              {active.map((s) => (
-                <option
-                  key={`${s.activity_instance_id}:${s.id}`}
-                  value={`${s.activity_instance_id}:${s.id}`}
+              <ButtonGroup>
+                <Button
+                  variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
+                  disabled={updatingRotationMode}
+                  onClick={() => handleSetRotationMode('submit')}
                 >
-                  G{s.group_number} — {s.name}
-                  {s.role ? ` (${s.role})` : ''}
-                </option>
-              ))}
-            </Form.Select>
+                  Submit
+                </Button>
+                <Button
+                  variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
+                  disabled={updatingRotationMode}
+                  onClick={() => handleSetRotationMode('group')}
+                >
+                  Q Group
+                </Button>
+              </ButtonGroup>
+            </div>
 
-            <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove || timerPaused}>
-              Remove
-            </Button>
-          </div>
-        </Card.Body>
-      </Card>
+            <div className="d-flex gap-3 align-items-center flex-wrap">
+              <Form.Select
+                value={selectedAdd}
+                onChange={(e) => setSelectedAdd(e.target.value)}
+                style={{ maxWidth: 320 }}
+                disabled={timerPaused}
+              >
+                <option value="">Add student...</option>
+                {available.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.email})
+                  </option>
+                ))}
+              </Form.Select>
+
+              <div className="d-flex gap-2">
+                <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd || timerPaused}>
+                  Add to group
+                </Button>
+                <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd || timerPaused}>
+                  Group of one
+                </Button>
+              </div>
+
+              <Form.Select
+                value={selectedRemove}
+                onChange={(e) => setSelectedRemove(e.target.value)}
+                style={{ maxWidth: 380 }}
+                disabled={timerPaused}
+              >
+                <option value="">Remove student...</option>
+                {active.map((s) => (
+                  <option
+                    key={`${s.activity_instance_id}:${s.id}`}
+                    value={`${s.activity_instance_id}:${s.id}`}
+                  >
+                    G{s.group_number} — {s.name}
+                    {s.role ? ` (${s.role})` : ''}
+                  </option>
+                ))}
+              </Form.Select>
+
+              <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove || timerPaused}>
+                Remove
+              </Button>
+            </div>
+          </Card.Body>
+        </Card>
+      )}
     </Container>
   );
 }

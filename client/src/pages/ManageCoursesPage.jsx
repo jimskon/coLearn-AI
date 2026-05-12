@@ -1,6 +1,6 @@
 // src/pages/ManageCoursesPage.jsx
 import React, { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Table, Button, Form, Container, Row, Col } from 'react-bootstrap';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';

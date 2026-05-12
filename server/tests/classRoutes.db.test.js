@@ -62,6 +62,11 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS google_folder_verified_at DATETIME DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS google_folder_status VARCHAR(32) DEFAULT NULL
   `);
+
+  await db.query(`
+    ALTER TABLE pogil_activities
+      ADD COLUMN IF NOT EXISTS source_type VARCHAR(16) NOT NULL DEFAULT 'external'
+  `);
 }
 
 async function cleanupCreatedRows() {
@@ -437,6 +442,7 @@ test('class folder save rejects invalid verification results', async () => {
 });
 
 test('class activity routes create, list, update, and delete an activity', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
   const creatorId = await createUser('creator');
   const activityName = uniqueName('activity').toLowerCase();
@@ -466,6 +472,7 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.equal(create.body.created_by, creatorId);
   assert.equal(create.body.is_test, 1);
   assert.equal(create.body.activity_type, 'test');
+  assert.equal(create.body.source_type, 'external');
   assert.equal(typeof create.body.id, 'number');
   remember('activities', create.body.id);
 
@@ -475,12 +482,14 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.equal(list.body[0].id, create.body.id);
   assert.equal(list.body[0].name, activityName);
   assert.equal(Number(list.body[0].is_test), 1);
+  assert.equal(list.body[0].source_type, 'external');
 
   const [[storedActivity]] = await db.query(
-    `SELECT is_test FROM pogil_activities WHERE id = ?`,
+    `SELECT is_test, source_type FROM pogil_activities WHERE id = ?`,
     [create.body.id]
   );
   assert.equal(Number(storedActivity.is_test), 1);
+  assert.equal(storedActivity.source_type, 'external');
 
   const update = await requestJson(`/api/classes/${classId}/activities/${activityName}`, {
     method: 'PUT',
@@ -512,11 +521,27 @@ test('class activity routes create, list, update, and delete an activity', async
 });
 
 test('import-folder initializes activity types without opening each imported activity', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
   const instructorId = await createUser('instructor');
   const folderId = 'folderImportActivity1234567890';
   const testDocId = 'folderImportTestDoc1234567890';
   const groupDocId = 'folderImportGroupDoc123456789';
+
+  await db.query(
+    `UPDATE pogil_classes
+        SET google_folder_url = ?,
+            google_folder_id = ?,
+            google_folder_name = ?,
+            google_folder_status = 'verified'
+      WHERE id = ?`,
+    [
+      `https://drive.google.com/drive/folders/${folderId}`,
+      folderId,
+      'Demo Activities',
+      classId,
+    ]
+  );
 
   const response = await requestJson(
     { id: instructorId, role: 'instructor' },
@@ -553,18 +578,22 @@ test('import-folder initializes activity types without opening each imported act
   const byTitle = new Map(response.body.imported.map((activity) => [activity.title, activity]));
   assert.equal(byTitle.get('1 Group Activity')?.activity_type, 'group');
   assert.equal(byTitle.get('1 Group Activity')?.is_test, 0);
+  assert.equal(byTitle.get('1 Group Activity')?.source_type, 'local');
   assert.equal(byTitle.get('2 Test Activity')?.activity_type, 'test');
   assert.equal(byTitle.get('2 Test Activity')?.is_test, 1);
+  assert.equal(byTitle.get('2 Test Activity')?.source_type, 'local');
 
   const [storedRows] = await db.query(
-    `SELECT title, is_test
+    `SELECT title, is_test, source_type
        FROM pogil_activities
       WHERE id IN (?)`,
     [response.body.imported.map((activity) => activity.id)]
   );
-  const storedByTitle = new Map(storedRows.map((row) => [row.title, Number(row.is_test)]));
-  assert.equal(storedByTitle.get('1 Group Activity'), 0);
-  assert.equal(storedByTitle.get('2 Test Activity'), 1);
+  const storedByTitle = new Map(storedRows.map((row) => [row.title, row]));
+  assert.equal(Number(storedByTitle.get('1 Group Activity')?.is_test), 0);
+  assert.equal(storedByTitle.get('1 Group Activity')?.source_type, 'local');
+  assert.equal(Number(storedByTitle.get('2 Test Activity')?.is_test), 1);
+  assert.equal(storedByTitle.get('2 Test Activity')?.source_type, 'local');
 });
 
 test('activity creation rejects missing required fields before database insert', async () => {

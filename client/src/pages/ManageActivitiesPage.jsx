@@ -444,6 +444,7 @@ export default function ManageActivitiesPage() {
           <tr>
             <th>Name</th>
             <th>Title</th>
+            <th>Source</th>
             <th>Sheet URL</th>
             <th>Order</th>
             <th style={{ width: '30%' }}>Actions</th>
@@ -460,6 +461,11 @@ export default function ManageActivitiesPage() {
                   value={activity.title}
                   onChange={e => handleFieldChange(activity.name, 'title', e.target.value)}
                 />
+              </td>
+              <td className="align-middle text-center">
+                <Badge bg={activity.source_type === 'local' ? 'success' : 'secondary'}>
+                  {activity.source_type === 'local' ? 'Local' : 'External'}
+                </Badge>
               </td>
               <td>
                 <Form.Control

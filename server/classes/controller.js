@@ -84,10 +84,13 @@ exports.createActivityForClass = async (req, res) => {
       is_test: 0,
     });
     const isTest = activityType === 'test' ? 1 : 0;
+    const sourceType = 'external';
 
     const [result] = await db.query(
-      'INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by, is_test) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [name, title, sheet_url, order_index, classId, createdBy, isTest]
+      `INSERT INTO pogil_activities
+       (name, title, sheet_url, order_index, class_id, created_by, is_test, source_type)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name, title, sheet_url, order_index, classId, createdBy, isTest, sourceType]
     );
 
     // ✅ RETURN THE INSERTED ID
@@ -101,6 +104,7 @@ exports.createActivityForClass = async (req, res) => {
       created_by: createdBy,
       is_test: isTest,
       activity_type: activityType,
+      source_type: sourceType,
     });
   } catch (err) {
     console.error('Error creating activity:', err);
@@ -377,6 +381,18 @@ exports.importFolderActivities = async (req, res) => {
       return res.status(400).json({ error: "Invalid folder URL" });
     }
 
+    const [[classRow]] = await db.query(
+      `SELECT google_folder_id FROM pogil_classes WHERE id = ?`,
+      [classId]
+    );
+    if (!classRow) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    const sourceType = classRow.google_folder_id && classRow.google_folder_id === folderId
+      ? 'local'
+      : 'external';
+
     const files = await getFilesInFolder(folderId);
     console.log(`Found ${files.length} files in folder ${folderId}`);
 
@@ -414,9 +430,10 @@ exports.importFolderActivities = async (req, res) => {
       const isTest = activityType === 'test' ? 1 : 0;
 
       const [result] = await db.query(
-        `INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by, is_test)
-   VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [name, title, url, index + 1, classId, createdBy, isTest]
+        `INSERT INTO pogil_activities
+         (name, title, sheet_url, order_index, class_id, created_by, is_test, source_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [name, title, url, index + 1, classId, createdBy, isTest, sourceType]
       );
 
       inserted.push({
@@ -429,6 +446,7 @@ exports.importFolderActivities = async (req, res) => {
         created_by: createdBy,
         is_test: isTest,
         activity_type: activityType,
+        source_type: sourceType,
       });
     }
 

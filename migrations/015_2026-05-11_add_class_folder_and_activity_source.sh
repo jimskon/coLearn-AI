@@ -5,8 +5,8 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$DIR/db.sh"
 
 db_exec <<'SQL'
-ALTER TABLE courses
-  ADD COLUMN IF NOT EXISTS google_folder_url TEXT NULL AFTER class_id,
+ALTER TABLE pogil_classes
+  ADD COLUMN IF NOT EXISTS google_folder_url TEXT NULL AFTER created_by,
   ADD COLUMN IF NOT EXISTS google_folder_id VARCHAR(255) NULL AFTER google_folder_url,
   ADD COLUMN IF NOT EXISTS google_folder_name VARCHAR(255) NULL AFTER google_folder_id,
   ADD COLUMN IF NOT EXISTS google_folder_verified_at DATETIME NULL AFTER google_folder_name,

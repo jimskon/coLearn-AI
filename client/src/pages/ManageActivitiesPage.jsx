@@ -24,6 +24,7 @@ export default function ManageActivitiesPage() {
   const [pendingActivity, setPendingActivity] = useState(null);
   const canManage = user?.role === 'root' || user?.role === 'creator';
   const [showImportFolderModal, setShowImportFolderModal] = useState(false);
+  const [showAddActivityModal, setShowAddActivityModal] = useState(false);
   const [folderUrl, setFolderUrl] = useState('');
   const [showClassFolderModal, setShowClassFolderModal] = useState(false);
   const [classFolder, setClassFolder] = useState(null);
@@ -85,11 +86,13 @@ export default function ManageActivitiesPage() {
 
     if (!activity.sheet_url || activity.sheet_url.trim() === '') {
       saveActivity(activity);
+      setShowAddActivityModal(false);
       return;
     }
 
     setPendingActivity(activity);
     setShowModal(true);
+    setShowAddActivityModal(false);
   };
 
   const handleBulkImport = async () => {
@@ -357,11 +360,13 @@ export default function ManageActivitiesPage() {
       } else {
         alert("Access denied or document not found. Please ensure the document is shared and the URL is correct.");
         setNewActivity(pendingActivity);
+        setShowAddActivityModal(true);
       }
     } catch (err) {
       console.error("Error checking access:", err);
       alert("Error checking document access. Please try again.");
       setNewActivity(pendingActivity);
+      setShowAddActivityModal(true);
     }
 
     setPendingActivity(null);
@@ -430,69 +435,6 @@ export default function ManageActivitiesPage() {
         </Button>
       </div>
 
-      <Form className="mb-4">
-        <h4>Add New Activity</h4>
-        <Form.Group className="mb-2">
-          <Form.Control
-            name="name"
-            placeholder="Activity ID"
-            value={newActivity.name}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Form.Group className="mb-2">
-          <Form.Control
-            name="title"
-            placeholder="Title"
-            value={newActivity.title}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Form.Group className="mb-2">
-          <Form.Control
-            name="sheet_url"
-            placeholder="Google Sheet or Doc URL"
-            value={newActivity.sheet_url}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Form.Group className="mb-3">
-          <Form.Control
-            name="order_index"
-            type="number"
-            placeholder="Order Index"
-            value={newActivity.order_index}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Button variant="primary" onClick={handleAdd}>Add Activity</Button>
-        <Button
-          variant="secondary"
-          className="mb-4"
-          onClick={() => setShowImportFolderModal(true)}
-        >
-          Import Activities from Google Folder
-        </Button>
-        <Button
-          variant="success"
-          className="mb-4 ms-2"
-          onClick={() => {
-            setLocalActivityError('');
-            setShowLocalActivityModal(true);
-          }}
-          disabled={!classFolder?.has_folder || classFolder?.status !== 'verified'}
-        >
-          Create Local Activity
-        </Button>
-        {(!classFolder?.has_folder || classFolder?.status !== 'verified') && (
-          <div className="small text-muted mt-2">
-            Attach and verify a class folder to create local activities.
-          </div>
-        )}
-
-
-      </Form>
-
       <h4>Current Activities</h4>
       <Table striped bordered hover responsive>
         <thead>
@@ -553,6 +495,88 @@ export default function ManageActivitiesPage() {
           ))}
         </tbody>
       </Table>
+      <div className="d-flex flex-wrap align-items-center gap-2 mb-4">
+        <Button
+          variant="success"
+          onClick={() => {
+            setLocalActivityError('');
+            setShowLocalActivityModal(true);
+          }}
+          disabled={!classFolder?.has_folder || classFolder?.status !== 'verified'}
+        >
+          Create Local Activity
+        </Button>
+        <Button
+          variant="primary"
+          onClick={() => setShowAddActivityModal(true)}
+        >
+          Add Activity
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={() => setShowImportFolderModal(true)}
+        >
+          Import Activities from Google Folder
+        </Button>
+      </div>
+      {(!classFolder?.has_folder || classFolder?.status !== 'verified') && (
+        <div className="small text-muted mb-4">
+          Attach and verify a class folder to create local activities.
+        </div>
+      )}
+      <Modal
+        show={showAddActivityModal}
+        onHide={() => setShowAddActivityModal(false)}
+      >
+        <Modal.Header closeButton>
+          <Modal.Title>Add External Activity</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form>
+            <Form.Group className="mb-2">
+              <Form.Control
+                name="name"
+                placeholder="Activity ID"
+                value={newActivity.name}
+                onChange={handleChange}
+              />
+            </Form.Group>
+            <Form.Group className="mb-2">
+              <Form.Control
+                name="title"
+                placeholder="Title"
+                value={newActivity.title}
+                onChange={handleChange}
+              />
+            </Form.Group>
+            <Form.Group className="mb-2">
+              <Form.Control
+                name="sheet_url"
+                placeholder="Google Sheet or Doc URL"
+                value={newActivity.sheet_url}
+                onChange={handleChange}
+              />
+            </Form.Group>
+            <Form.Group className="mb-0">
+              <Form.Control
+                name="order_index"
+                type="number"
+                placeholder="Order Index"
+                value={newActivity.order_index}
+                onChange={handleChange}
+              />
+            </Form.Group>
+          </Form>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowAddActivityModal(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleAdd}>
+            Add Activity
+          </Button>
+        </Modal.Footer>
+      </Modal>
       <Modal show={showImportFolderModal} onHide={() => setShowImportFolderModal(false)}>
         <Modal.Header closeButton>
           <Modal.Title>Import from Google Folder</Modal.Title>

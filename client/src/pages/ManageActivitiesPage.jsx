@@ -489,7 +489,9 @@ export default function ManageActivitiesPage() {
                     navigate(`/preview/${activity.id}?returnTo=${encodeURIComponent(location.pathname)}`);
                   }
                 }} className="me-2">Preview</Button>
-                <Button variant="warning" size="sm" onClick={() => navigate(`/editor/${activity.id}`)} className="me-2">Edit</Button>
+                {activity.source_type === 'local' ? (
+                  <Button variant="warning" size="sm" onClick={() => navigate(`/editor/${activity.id}`)} className="me-2">Edit</Button>
+                ) : null}
                 <Button variant="danger" size="sm" onClick={() => handleDelete(activity.id)}>Delete</Button>
               </td>
             </tr>

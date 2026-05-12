@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Container, Row, Col, Button, Form, Alert, Modal, Spinner, Tabs, Tab } from 'react-bootstrap';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
 
 export default function ActivityEditor() {
   const { activityId } = useParams();
+  const navigate = useNavigate();
 
   const [activity, setActivity] = useState(null);
   const [rawText, setRawText] = useState('');
@@ -36,6 +37,7 @@ export default function ActivityEditor() {
   const [autofixProposedText, setAutofixProposedText] = useState('');
   const [autofixSummary, setAutofixSummary] = useState([]);
   const [autofixWarnings, setAutofixWarnings] = useState([]);
+  const [externalBlocked, setExternalBlocked] = useState(false);
 
   const [autofixBlocks, setAutofixBlocks] = useState([]);
   const [autofixElements, setAutofixElements] = useState([]);
@@ -321,6 +323,11 @@ export default function ActivityEditor() {
         const activityData = await res.json();
         setActivity(activityData);
 
+        if (activityData?.source_type === 'external') {
+          setExternalBlocked(true);
+          return;
+        }
+
         let sourceLines = null;
         if (activityData?.sheet_url) {
           const docRes = await fetch(
@@ -348,6 +355,29 @@ export default function ActivityEditor() {
     if (skulptLoaded) fetchActivity();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activityId, skulptLoaded]);
+
+  if (externalBlocked) {
+    return (
+      <Container className="mt-4">
+        <Alert variant="warning">
+          This activity is marked as external and can’t be edited in the authoring tool.
+        </Alert>
+        <div className="d-flex gap-2">
+          <Button variant="secondary" onClick={() => navigate(-1)}>
+            Go Back
+          </Button>
+          {activity?.sheet_url && (
+            <Button
+              variant="outline-primary"
+              onClick={() => window.open(toGoogleDocEditUrl(activity.sheet_url), '_blank', 'noopener,noreferrer')}
+            >
+              Open Doc
+            </Button>
+          )}
+        </div>
+      </Container>
+    );
+  }
 
   // Auto-compile on change
   useEffect(() => {

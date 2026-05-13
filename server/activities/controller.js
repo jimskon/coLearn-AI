@@ -3,6 +3,11 @@ const db = require('../db');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const { loadActivitySourceById } = require('../utils/activityContent');
 
+function extractTitleFromText(text) {
+  const match = String(text || '').match(/^\\title\{([\s\S]*?)\}$/m);
+  return match ? match[1].trim() : null;
+}
+
 // Create a new activity
 exports.createActivity = async (req, res) => {
   const { name, title, sheet_url, createdBy, class_id, order_index = 0 } = req.body;
@@ -72,6 +77,44 @@ exports.getActivitySource = async (req, res) => {
   } catch (err) {
     console.error('getActivitySource error:', err);
     return res.status(500).json({ error: 'Could not retrieve activity source.' });
+  }
+};
+
+exports.saveActivitySource = async (req, res) => {
+  const { id } = req.params;
+  const { text } = req.body || {};
+
+  if (typeof text !== 'string') {
+    return res.status(400).json({ error: 'text is required' });
+  }
+
+  try {
+    const [rows] = await db.query('SELECT id, title FROM pogil_activities WHERE id = ?', [id]);
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
+
+    const extractedTitle = extractTitleFromText(text);
+    const nextTitle = extractedTitle || rows[0].title;
+
+    await db.query(
+      `UPDATE pogil_activities
+          SET content_text = ?,
+              source_type = 'local',
+              title = ?
+        WHERE id = ?`,
+      [text, nextTitle, id]
+    );
+
+    return res.json({
+      activity_id: Number(id),
+      source_type: 'local',
+      title: nextTitle,
+      text,
+    });
+  } catch (err) {
+    console.error('saveActivitySource error:', err);
+    return res.status(500).json({ error: 'Could not save activity source.' });
   }
 };
 

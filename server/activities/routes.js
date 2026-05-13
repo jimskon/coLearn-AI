@@ -118,6 +118,7 @@ router.get('/check-access', async (req, res) => {
 });
 
 router.get('/:id/source', controller.getActivitySource);
+router.put('/:id/source', controller.saveActivitySource);
 
 // GET /activities/:name
 router.get('/:id', controller.getActivity);

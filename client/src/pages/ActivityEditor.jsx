@@ -12,6 +12,8 @@ export default function ActivityEditor() {
   const [elements, setElements] = useState([]);
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [copySuccess, setCopySuccess] = useState('');
+  const [saveStatus, setSaveStatus] = useState('');
+  const [saveBusy, setSaveBusy] = useState(false);
   const [previewKey, setPreviewKey] = useState(Date.now());
   const [autoCompileEnabled, setAutoCompileEnabled] = useState(true);
 
@@ -409,6 +411,40 @@ export default function ActivityEditor() {
     }
   };
 
+  const handleSave = async () => {
+    setSaveStatus('');
+    setSaveBusy(true);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text: rawText }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body?.error || `save failed ${res.status}`);
+      }
+
+      setActivity((prev) => ({
+        ...(prev || {}),
+        source_type: 'local',
+        title: body?.title || prev?.title,
+        content_text: rawText,
+      }));
+      localStorage.setItem(`activity-${activityId}`, rawText);
+      setSaveStatus('Saved locally.');
+      setTimeout(() => setSaveStatus(''), 2000);
+    } catch (err) {
+      console.error('Failed to save activity source', err);
+      setSaveStatus(`Save failed: ${err?.message || String(err)}`);
+    } finally {
+      setSaveBusy(false);
+    }
+  };
+
   const runAutofix = async () => {
     setAutofixError('');
 
@@ -591,6 +627,15 @@ export default function ActivityEditor() {
           />
 
           <Button
+            variant="success"
+            className="me-2"
+            onClick={handleSave}
+            disabled={busy || saveBusy}
+          >
+            {saveBusy ? 'Saving…' : 'Save'}
+          </Button>
+
+          <Button
             variant="outline-secondary"
             className="me-2"
             onClick={handleCheck}
@@ -642,6 +687,14 @@ export default function ActivityEditor() {
       </div>
 
       {copySuccess && <Alert variant="info" className="py-1">{copySuccess}</Alert>}
+      {saveStatus && (
+        <Alert
+          variant={saveStatus.startsWith('Save failed') ? 'danger' : 'success'}
+          className="py-1"
+        >
+          {saveStatus}
+        </Alert>
+      )}
 
       <Row className="editor-body">
         {/* LEFT: editor + gutter */}

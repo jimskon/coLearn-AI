@@ -69,12 +69,7 @@ async function ensureSchema() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(191) NOT NULL UNIQUE,
       description TEXT DEFAULT NULL,
-      created_by INT DEFAULT NULL,
-      google_folder_url TEXT DEFAULT NULL,
-      google_folder_id VARCHAR(255) DEFAULT NULL,
-      google_folder_name VARCHAR(255) DEFAULT NULL,
-      google_folder_verified_at DATETIME DEFAULT NULL,
-      google_folder_status VARCHAR(32) DEFAULT NULL
+      created_by INT DEFAULT NULL
     )
   `);
 
@@ -110,8 +105,7 @@ async function ensureSchema() {
       order_index INT NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL,
       last_loaded TIMESTAMP NULL DEFAULT NULL,
-      is_test TINYINT(1) DEFAULT NULL,
-      source_type VARCHAR(16) NOT NULL DEFAULT 'external'
+      is_test TINYINT(1) DEFAULT NULL
     )
   `);
 
@@ -388,172 +382,6 @@ test('course activities returns canonical activity_type values inferred from sou
   assert.equal(byTitle.get('Demo Activity')?.activity_type, 'demo');
   assert.equal(byTitle.get('Test Activity')?.activity_type, 'test');
   assert.equal(byTitle.get('Group Activity')?.activity_type, 'group');
-});
-
-test('student course activities infer activity_type from source docs instead of stale DB flags', async () => {
-  await ensureSchema();
-
-  const instructor = await createUser('instructor');
-  const student = await createUser('student');
-  const classId = await createClassRecord();
-  const courseId = await createCourse({ instructorId: instructor.id, classId });
-  await enroll(courseId, student.id);
-
-  const staleTestDocId = 'staleStudentTestDoc1234567890';
-  const staleGroupDocId = 'staleStudentGroupDoc123456789';
-
-  const staleTestActivityId = await createActivity({
-    classId,
-    title: 'Student Test Activity',
-    sheetUrl: `https://docs.google.com/document/d/${staleTestDocId}/edit`,
-    isTest: 0,
-    orderIndex: 1,
-  });
-  const staleGroupActivityId = await createActivity({
-    classId,
-    title: 'Student Group Activity',
-    sheetUrl: `https://docs.google.com/document/d/${staleGroupDocId}/edit`,
-    isTest: 1,
-    orderIndex: 2,
-  });
-
-  const [testInstanceResult] = await db.query(
-    `INSERT INTO activity_instances (activity_id, course_id, status, progress_status)
-     VALUES (?, ?, ?, ?)`,
-    [staleTestActivityId, courseId, 'in_progress', 'in_progress']
-  );
-  const testInstanceId = remember('instances', testInstanceResult.insertId);
-  await db.query(
-    `INSERT INTO group_members (activity_instance_id, student_id, role)
-     VALUES (?, ?, ?)`,
-    [testInstanceId, student.id, 'facilitator']
-  );
-
-  const [groupInstanceResult] = await db.query(
-    `INSERT INTO activity_instances (activity_id, course_id, status, progress_status)
-     VALUES (?, ?, ?, ?)`,
-    [staleGroupActivityId, courseId, 'in_progress', 'in_progress']
-  );
-  const groupInstanceId = remember('instances', groupInstanceResult.insertId);
-  await db.query(
-    `INSERT INTO group_members (activity_instance_id, student_id, role)
-     VALUES (?, ?, ?)`,
-    [groupInstanceId, student.id, 'analyst']
-  );
-
-  const response = await requestJson(student, `/api/courses/${courseId}/activities`, {
-    overrides: {
-      docsById: {
-        [staleTestDocId]: ['\\title{Student Test}', '\\mode{test}', '\\questiongroup{One}'],
-        [staleGroupDocId]: ['\\title{Student Group}', '\\mode{group}', '\\questiongroup{One}'],
-      },
-    },
-  });
-
-  assert.equal(response.status, 200);
-  const byTitle = new Map(response.body.map((row) => [row.title, row]));
-  assert.equal(byTitle.get('Student Test Activity')?.activity_type, 'test');
-  assert.equal(byTitle.get('Student Group Activity')?.activity_type, 'group');
-});
-
-test('course progress filters non-test activities using inferred doc types instead of stale DB flags', async () => {
-  await ensureSchema();
-
-  const instructor = await createUser('instructor');
-  const student = await createUser('student');
-  const classId = await createClassRecord();
-  const courseId = await createCourse({ instructorId: instructor.id, classId });
-  await enroll(courseId, student.id);
-
-  const groupDocId = 'progressGroupDoc12345678901234';
-  const testDocId = 'progressTestDoc123456789012345';
-
-  const staleGroupActivityId = await createActivity({
-    classId,
-    title: 'Progress Group Activity',
-    sheetUrl: `https://docs.google.com/document/d/${groupDocId}/edit`,
-    isTest: 1,
-    orderIndex: 1,
-  });
-  await createActivity({
-    classId,
-    title: 'Progress Test Activity',
-    sheetUrl: `https://docs.google.com/document/d/${testDocId}/edit`,
-    isTest: 0,
-    orderIndex: 2,
-  });
-
-  const response = await requestJson(instructor, `/api/courses/${courseId}/progress`, {
-    overrides: {
-      docsById: {
-        [groupDocId]: ['\\title{Progress Group}', '\\mode{group}', '\\questiongroup{One}'],
-        [testDocId]: ['\\title{Progress Test}', '\\mode{test}', '\\questiongroup{One}'],
-      },
-    },
-  });
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(response.body.activities.map((activity) => activity.id), [staleGroupActivityId]);
-});
-
-test('course test results include doc-classified tests even when is_test is stale in the database', async () => {
-  await ensureSchema();
-
-  const instructor = await createUser('instructor');
-  const student = await createUser('student');
-  const classId = await createClassRecord();
-  const courseId = await createCourse({ instructorId: instructor.id, classId });
-  await enroll(courseId, student.id);
-
-  const realTestDocId = 'resultsTestDoc1234567890123456';
-  const staleGroupDocId = 'resultsGroupDoc123456789012345';
-
-  const testActivityId = await createActivity({
-    classId,
-    title: 'Results Test Activity',
-    sheetUrl: `https://docs.google.com/document/d/${realTestDocId}/edit`,
-    isTest: 0,
-    orderIndex: 1,
-  });
-  await createActivity({
-    classId,
-    title: 'Results Group Activity',
-    sheetUrl: `https://docs.google.com/document/d/${staleGroupDocId}/edit`,
-    isTest: 1,
-    orderIndex: 2,
-  });
-
-  const [instanceResult] = await db.query(
-    `INSERT INTO activity_instances
-       (activity_id, course_id, status, progress_status, points_earned, points_possible, submitted_at, graded_at)
-     VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-    [testActivityId, courseId, 'completed', 'completed', 8, 10]
-  );
-  const instanceId = remember('instances', instanceResult.insertId);
-  await db.query(
-    `INSERT INTO group_members (activity_instance_id, student_id, role)
-     VALUES (?, ?, ?)`,
-    [instanceId, student.id, 'facilitator']
-  );
-
-  const response = await requestJson(instructor, `/api/courses/${courseId}/test-results`, {
-    overrides: {
-      docsById: {
-        [realTestDocId]: ['\\title{Results Test}', '\\mode{test}', '\\questiongroup{One}'],
-        [staleGroupDocId]: ['\\title{Results Group}', '\\mode{group}', '\\questiongroup{One}'],
-      },
-    },
-  });
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(response.body.tests.map((testRow) => testRow.id), [testActivityId]);
-  const studentRow = response.body.students.find((row) => row.id === student.id);
-  assert.ok(studentRow);
-  assert.deepEqual(studentRow.scores[testActivityId], {
-    status: 'completed',
-    pointsEarned: 8,
-    pointsPossible: 10,
-  });
 });
 
 test('demo-instance creates a personal instance once and reuses it on repeat opens', async () => {

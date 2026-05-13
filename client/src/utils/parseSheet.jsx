@@ -882,25 +882,16 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // questiongroup: \questiongroup{...}
-    const groupArgs = parseCommandArgs(trimmed, 'questiongroup');
-    if (groupArgs) {
+    if (trimmed.startsWith('\\questiongroup{')) {
       flushCurrentBlock();
 
       if (inGroup) {
         pushIssue('warn', lineNo, 'Nested \\questiongroup encountered. Did you forget \\endquestiongroup?', line);
       }
 
-      const [contentRaw] = groupArgs;
-      const content = format(String(contentRaw || '').trimStart());
-
-      if (groupArgs.length > 1) {
-        pushIssue(
-          'error',
-          lineNo,
-          '\\questiongroup does not support timers. Put timing on \\section{Title}{10} before the group instead.',
-          line
-        );
-      }
+      const m = trimmed.match(/\\questiongroup\{([\s\S]+?)\}/);
+      const contentRaw = m ? m[1] : '';
+      const content = format(contentRaw.trimStart());
 
       groupNumber++;
       inGroup = true;
@@ -918,16 +909,6 @@ export function parseSheetToBlocks(lines, options = {}) {
         retriesRequired: currentGroupRetriesRequired, // ✅ include it
       });
       meta.groupRetries[groupNumber] = currentGroupRetriesRequired;
-      continue;
-    }
-
-    if (trimmed.startsWith('\\questiongroup{')) {
-      flushCurrentBlock();
-      pushIssue('error', lineNo, 'Malformed \\questiongroup command. Use \\questiongroup{Title}.', line);
-      blocks.push({
-        type: 'text',
-        content: format(trimmed),
-      });
       continue;
     }
 

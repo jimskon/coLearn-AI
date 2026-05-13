@@ -90,6 +90,7 @@ function createTestServer(user) {
     });
   });
 }
+
 async function requestJson(user, path, { method = 'GET', body } = {}) {
   const server = await createTestServer(user);
   try {

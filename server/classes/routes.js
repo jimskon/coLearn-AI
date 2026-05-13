@@ -26,12 +26,6 @@ router.post('/:id/activities', classController.createActivityForClass);
 router.put('/:id/activities/:activityName', classController.updateActivityForClass);
 router.delete('/:classId/activities/:activityId', classController.deleteActivityFromClass);
 
-// Class folder configuration
-router.get('/:id/folder', classController.getClassFolder);
-router.post('/:id/folder/verify', classController.verifyClassFolder);
-router.put('/:id/folder', classController.saveClassFolder);
-router.delete('/:id/folder', classController.deleteClassFolder);
-
 // ✅ NEW: Get single class info
 router.get('/:id', classController.getClassById);
 

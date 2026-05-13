@@ -98,6 +98,12 @@ async function ensureSchema() {
   `);
 
   await db.query(`
+    ALTER TABLE pogil_activities
+      MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      MODIFY COLUMN content_text LONGTEXT DEFAULT NULL
+  `);
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS activity_instances (
       id INT AUTO_INCREMENT PRIMARY KEY,
       activity_id INT NOT NULL,

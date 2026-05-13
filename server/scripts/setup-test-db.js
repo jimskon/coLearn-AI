@@ -99,6 +99,10 @@ async function main() {
           FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
       );
 
+      ALTER TABLE pogil_activities
+        MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+        MODIFY COLUMN content_text LONGTEXT NULL;
+
       CREATE TABLE IF NOT EXISTS activity_instances (
         id INT AUTO_INCREMENT PRIMARY KEY,
         activity_id INT NOT NULL,

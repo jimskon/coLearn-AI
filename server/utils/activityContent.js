@@ -33,8 +33,9 @@ async function fetchGoogleDocLinesByUrl(sheetUrl) {
 
 async function loadActivitySourceLines(activity) {
   const sourceType = String(activity?.source_type || 'remote').toLowerCase();
+  const hasStoredText = activity?.content_text != null && String(activity.content_text).length > 0;
 
-  if (sourceType === 'local') {
+  if (sourceType === 'local' && hasStoredText) {
     return linesFromStoredText(activity?.content_text);
   }
 

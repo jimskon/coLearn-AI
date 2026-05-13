@@ -1,9 +1,9 @@
 // src/pages/ManageActivitiesPage.jsx
 import React, { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
-import { Table, Button, Form, Container, Modal, Alert, Badge, Spinner } from 'react-bootstrap';
+import { Table, Button, Form, Container, Modal } from 'react-bootstrap';
 
 const SERVICE_ACCOUNT_EMAIL = import.meta.env.VITE_SERVICE_ACCOUNT_EMAIL;
 
@@ -23,18 +23,10 @@ export default function ManageActivitiesPage() {
   const [showModal, setShowModal] = useState(false);
   const [pendingActivity, setPendingActivity] = useState(null);
   const canManage = user?.role === 'root' || user?.role === 'creator';
-  const [showImportFolderModal, setShowImportFolderModal] = useState(false);
+  const [showFolderModal, setShowFolderModal] = useState(false);
   const [folderUrl, setFolderUrl] = useState('');
-  const [showClassFolderModal, setShowClassFolderModal] = useState(false);
-  const [classFolder, setClassFolder] = useState(null);
-  const [classFolderUrlInput, setClassFolderUrlInput] = useState('');
-  const [classFolderLoading, setClassFolderLoading] = useState(false);
-  const [classFolderVerifyLoading, setClassFolderVerifyLoading] = useState(false);
-  const [classFolderSaveLoading, setClassFolderSaveLoading] = useState(false);
-  const [classFolderRemoveLoading, setClassFolderRemoveLoading] = useState(false);
-  const [classFolderError, setClassFolderError] = useState('');
-  const [classFolderSuccess, setClassFolderSuccess] = useState('');
-  const [verifiedClassFolder, setVerifiedClassFolder] = useState(null);
+
+  const location = useLocation();
 
   useEffect(() => {
     if (!canManage) {
@@ -53,17 +45,6 @@ export default function ManageActivitiesPage() {
       })
       .catch(err => {
         console.error("Fetch error:", err);
-      });
-
-    fetch(`${API_BASE_URL}/api/classes/${classId}/folder`)
-      .then(res => res.json())
-      .then(data => {
-        if (data && typeof data === 'object') {
-          setClassFolder(data);
-        }
-      })
-      .catch(err => {
-        console.error("Class folder fetch error:", err);
       });
   }, [canManage, classId, navigate]);
 
@@ -88,7 +69,7 @@ export default function ManageActivitiesPage() {
   };
 
   const handleBulkImport = async () => {
-    setShowImportFolderModal(false);
+    setShowFolderModal(false);
     const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/import-folder`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -102,131 +83,6 @@ export default function ManageActivitiesPage() {
       alert(data.error || "Folder import failed.");
     }
   };
-
-  const loadClassFolder = async () => {
-    setClassFolderLoading(true);
-    setClassFolderError('');
-    setClassFolderSuccess('');
-    setVerifiedClassFolder(null);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/classes/${classId}/folder`);
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to load class folder.');
-      }
-      setClassFolder(data);
-      setClassFolderUrlInput(data.folder_url || '');
-    } catch (err) {
-      setClassFolderError(err.message || 'Failed to load class folder.');
-    } finally {
-      setClassFolderLoading(false);
-    }
-  };
-
-  const openClassFolderModal = async () => {
-    setShowClassFolderModal(true);
-    await loadClassFolder();
-  };
-
-  const handleVerifyClassFolder = async () => {
-    setClassFolderVerifyLoading(true);
-    setClassFolderError('');
-    setClassFolderSuccess('');
-    setVerifiedClassFolder(null);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/classes/${classId}/folder/verify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderUrl: classFolderUrlInput }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to verify class folder.');
-      }
-
-      setVerifiedClassFolder({
-        folderUrl: classFolderUrlInput,
-        folderId: data.folder_id,
-        folderName: data.folder_name,
-      });
-      setClassFolderSuccess(`Verified access to ${data.folder_name || 'folder'}.`);
-    } catch (err) {
-      setClassFolderError(err.message || 'Failed to verify class folder.');
-    } finally {
-      setClassFolderVerifyLoading(false);
-    }
-  };
-
-  const handleSaveClassFolder = async () => {
-    if (!verifiedClassFolder || verifiedClassFolder.folderUrl !== classFolderUrlInput) return;
-
-    setClassFolderSaveLoading(true);
-    setClassFolderError('');
-    setClassFolderSuccess('');
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/classes/${classId}/folder`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folderUrl: classFolderUrlInput }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to save class folder.');
-      }
-
-      setClassFolder({
-        class_id: Number(classId),
-        has_folder: true,
-        folder_url: data.folder_url,
-        folder_id: data.folder_id,
-        folder_name: data.folder_name,
-        status: data.status,
-        verified_at: new Date().toISOString(),
-      });
-      setClassFolderSuccess(`Saved ${data.folder_name || 'class folder'}.`);
-    } catch (err) {
-      setClassFolderError(err.message || 'Failed to save class folder.');
-    } finally {
-      setClassFolderSaveLoading(false);
-    }
-  };
-
-  const handleRemoveClassFolder = async () => {
-    if (!window.confirm('Remove the folder attachment from this class? Existing activities will not be changed.')) {
-      return;
-    }
-
-    setClassFolderRemoveLoading(true);
-    setClassFolderError('');
-    setClassFolderSuccess('');
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/classes/${classId}/folder`, {
-        method: 'DELETE',
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.error || 'Failed to remove class folder.');
-      }
-
-      setClassFolder({
-        class_id: Number(classId),
-        has_folder: false,
-      });
-      setClassFolderUrlInput('');
-      setVerifiedClassFolder(null);
-      setClassFolderSuccess('Class folder removed.');
-    } catch (err) {
-      setClassFolderError(err.message || 'Failed to remove class folder.');
-    } finally {
-      setClassFolderRemoveLoading(false);
-    }
-  };
-
-  const classFolderNeedsReverify = verifiedClassFolder && verifiedClassFolder.folderUrl !== classFolderUrlInput;
 
   const saveActivity = async (activity) => {
     const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
@@ -243,11 +99,20 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    // Reset the form immediately so the add flow stays snappy.
+    // We only trust the INSERT id so we can open Preview.
+    const newId = data?.id;
+
+    // Reset the form immediately (so if they come back, it's clean)
     setNewActivity({ name: '', title: '', sheet_url: '', order_index: '' });
 
-    // Re-fetch list from DB (single source of truth). Activity metadata is now
-    // initialized server-side, so we no longer need the old preview side-effect.
+    // If there's a doc URL, auto-open Preview so it parses and sets is_test in DB.
+    // (Preview will do the PATCH side-effect.)
+    if (newId && activity?.sheet_url && activity.sheet_url.trim() !== '') {
+      navigate(`/preview/${newId}?returnTo=${encodeURIComponent(location.pathname)}`);
+      return;
+    }
+
+    // Otherwise, re-fetch list from DB (single source of truth)
     const refreshed = await fetch(
       `${API_BASE_URL}/api/classes/${classId}/activities`,
       { credentials: 'include' }
@@ -338,22 +203,6 @@ export default function ManageActivitiesPage() {
   return (
     <Container>
       <h2 className="mb-4">Manage POGIL Activities for Class {classId}</h2>
-      <div className="d-flex align-items-center gap-2 mb-3">
-        <strong>Class Folder:</strong>
-        {classFolder?.has_folder ? (
-          <>
-            <Badge bg={classFolder.status === 'verified' ? 'success' : 'secondary'}>
-              {classFolder.status === 'verified' ? 'Verified' : 'Attached'}
-            </Badge>
-            {classFolder.folder_name && <span>{classFolder.folder_name}</span>}
-          </>
-        ) : (
-          <Badge bg="secondary">No Folder</Badge>
-        )}
-        <Button variant="outline-secondary" size="sm" onClick={openClassFolderModal}>
-          {classFolder?.has_folder ? 'Manage Folder' : 'Attach Folder'}
-        </Button>
-      </div>
 
       <Form className="mb-4">
         <h4>Add New Activity</h4>
@@ -394,7 +243,7 @@ export default function ManageActivitiesPage() {
         <Button
           variant="secondary"
           className="mb-4"
-          onClick={() => setShowImportFolderModal(true)}
+          onClick={() => setShowFolderModal(true)}
         >
           Import Activities from Google Folder
         </Button>
@@ -454,7 +303,7 @@ export default function ManageActivitiesPage() {
           ))}
         </tbody>
       </Table>
-      <Modal show={showImportFolderModal} onHide={() => setShowImportFolderModal(false)}>
+      <Modal show={showFolderModal} onHide={() => setShowFolderModal(false)}>
         <Modal.Header closeButton>
           <Modal.Title>Import from Google Folder</Modal.Title>
         </Modal.Header>
@@ -468,128 +317,8 @@ export default function ManageActivitiesPage() {
           <p className="mt-2">Make sure the folder is shared with: <code>{SERVICE_ACCOUNT_EMAIL}</code></p>
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowImportFolderModal(false)}>Cancel</Button>
+          <Button variant="secondary" onClick={() => setShowFolderModal(false)}>Cancel</Button>
           <Button variant="primary" onClick={handleBulkImport}>Import</Button>
-        </Modal.Footer>
-      </Modal>
-      <Modal
-        show={showClassFolderModal}
-        onHide={() => {
-          if (!classFolderLoading && !classFolderVerifyLoading && !classFolderSaveLoading && !classFolderRemoveLoading) {
-            setShowClassFolderModal(false);
-          }
-        }}
-        centered
-      >
-        <Modal.Header closeButton={!classFolderLoading && !classFolderVerifyLoading && !classFolderSaveLoading && !classFolderRemoveLoading}>
-          <Modal.Title>{classFolder?.has_folder ? 'Manage Class Folder' : 'Attach Class Folder'}</Modal.Title>
-        </Modal.Header>
-        <Modal.Body>
-          {classFolderLoading ? (
-            <div className="d-flex align-items-center gap-2">
-              <Spinner animation="border" size="sm" />
-              <span>Loading folder settings...</span>
-            </div>
-          ) : (
-            <>
-              <p className="text-muted mb-3">
-                Local activities for this class will use this Google Drive folder by default.
-                External activities can still be linked separately.
-              </p>
-
-              {classFolderError && <Alert variant="danger">{classFolderError}</Alert>}
-              {classFolderSuccess && <Alert variant="success">{classFolderSuccess}</Alert>}
-              {classFolderNeedsReverify && (
-                <Alert variant="warning" className="py-2">
-                  Folder URL changed. Verify again before saving.
-                </Alert>
-              )}
-
-              <Form.Group className="mb-3">
-                <Form.Label>Google Folder URL</Form.Label>
-                <Form.Control
-                  type="url"
-                  value={classFolderUrlInput}
-                  onChange={(e) => {
-                    setClassFolderUrlInput(e.target.value);
-                    setClassFolderError('');
-                    setClassFolderSuccess('');
-                  }}
-                  placeholder="https://drive.google.com/drive/folders/..."
-                />
-                <Form.Text className="text-muted">
-                  Make sure {SERVICE_ACCOUNT_EMAIL || 'the service account'} has editor access to this folder.
-                </Form.Text>
-              </Form.Group>
-
-              {classFolder?.has_folder && (
-                <div className="mb-3">
-                  <div className="d-flex align-items-center gap-2 mb-2">
-                    <strong>Current status:</strong>
-                    <Badge bg={classFolder.status === 'verified' ? 'success' : 'secondary'}>
-                      {classFolder.status === 'verified' ? 'Verified' : 'Attached'}
-                    </Badge>
-                  </div>
-                  {classFolder.folder_name && <div><strong>Folder:</strong> {classFolder.folder_name}</div>}
-                  {classFolder.folder_id && <div><strong>Folder ID:</strong> {classFolder.folder_id}</div>}
-                  {classFolder.folder_url && (
-                    <div className="mt-2">
-                      <a href={classFolder.folder_url} target="_blank" rel="noreferrer">Open Folder</a>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {verifiedClassFolder && verifiedClassFolder.folderUrl === classFolderUrlInput && (
-                <Alert variant="info" className="py-2 mb-0">
-                  Ready to save: {verifiedClassFolder.folderName || verifiedClassFolder.folderId}
-                </Alert>
-              )}
-            </>
-          )}
-        </Modal.Body>
-        <Modal.Footer className="d-flex justify-content-between">
-          <div>
-            {classFolder?.has_folder && (
-              <Button
-                variant="outline-danger"
-                onClick={handleRemoveClassFolder}
-                disabled={classFolderLoading || classFolderVerifyLoading || classFolderSaveLoading || classFolderRemoveLoading}
-              >
-                {classFolderRemoveLoading ? 'Removing...' : 'Remove Folder'}
-              </Button>
-            )}
-          </div>
-          <div className="d-flex gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => setShowClassFolderModal(false)}
-              disabled={classFolderLoading || classFolderVerifyLoading || classFolderSaveLoading || classFolderRemoveLoading}
-            >
-              Close
-            </Button>
-            <Button
-              variant="outline-primary"
-              onClick={handleVerifyClassFolder}
-              disabled={!classFolderUrlInput || classFolderLoading || classFolderVerifyLoading || classFolderSaveLoading || classFolderRemoveLoading}
-            >
-              {classFolderVerifyLoading ? 'Verifying...' : 'Verify Access'}
-            </Button>
-            <Button
-              variant="primary"
-              onClick={handleSaveClassFolder}
-              disabled={
-                !verifiedClassFolder ||
-                verifiedClassFolder.folderUrl !== classFolderUrlInput ||
-                classFolderLoading ||
-                classFolderVerifyLoading ||
-                classFolderSaveLoading ||
-                classFolderRemoveLoading
-              }
-            >
-              {classFolderSaveLoading ? 'Saving...' : 'Save Folder'}
-            </Button>
-          </div>
         </Modal.Footer>
       </Modal>
       {pendingActivity?.sheet_url && pendingActivity.sheet_url.trim() !== '' && (

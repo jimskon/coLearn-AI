@@ -41,7 +41,6 @@ All interactive content must appear inside a `\questiongroup`.
 | `\mode{demo}` | In-class demonstration mode. All question groups are visible, there is no submit button, and each student edits their own saved sandbox. | `\mode{demo}` |
 | `\test` | Marks activity as graded assessment | `\test` |
 | `\section{...}` | Structural heading (non-interactive) | `\section{Introduction}` |
-| `\section{...}{10}` | Structural heading with a shared 10-minute timer for following groups | `\section{Introduction}{10}` |
 
 Notes:
 
@@ -50,8 +49,7 @@ Notes:
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
 - `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
-- `\section` is structural. `\section{Title}{10}` also adds a shared timer for the groups under that section.
-- `\questiongroup` does not accept a timer argument. Put timing on the preceding `\section{Title}{10}` instead.
+- `\section` is structural only.
 
 ---
 

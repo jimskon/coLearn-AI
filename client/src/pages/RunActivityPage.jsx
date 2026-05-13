@@ -1336,19 +1336,12 @@ export default function RunActivityPage({
       }
 
 
-      // Parse Google Doc structure
-      const docUrl = instanceData.sheet_url;
-      if (!docUrl || docUrl === 'undefined') {
-        console.warn(
-          '❌ Skipping doc preview because sheet_url is missing or undefined:',
-          docUrl
-        );
-      } else {
+      // Parse activity source structure (remote Google Doc or local DB text)
+      {
         const docRes = await fetch(
-          `${API_BASE_URL}/api/activities/preview-doc?docUrl=${encodeURIComponent(
-            docUrl
-          )}`
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/preview-doc`
         );
+        if (!docRes.ok) throw new Error(`instance preview failed ${docRes.status}`);
         const { lines } = await docRes.json();
         // ---- compute test + legacy flags from the fresh instanceData ----
         const isTestNow =

@@ -1,6 +1,7 @@
 // server/activities/controller.js
 const db = require('../db');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
+const { loadActivitySourceById } = require('../utils/activityContent');
 
 // Create a new activity
 exports.createActivity = async (req, res) => {
@@ -50,6 +51,27 @@ exports.getActivity = async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: 'Could not retrieve activity.' });
+  }
+};
+
+exports.getActivitySource = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const source = await loadActivitySourceById(db, id);
+    if (!source) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
+
+    return res.json({
+      activity_id: Number(id),
+      source_type: source.activity.source_type || 'remote',
+      lines: source.lines,
+      text: source.text,
+    });
+  } catch (err) {
+    console.error('getActivitySource error:', err);
+    return res.status(500).json({ error: 'Could not retrieve activity source.' });
   }
 };
 

@@ -11,7 +11,7 @@ const ROLES = ['facilitator', 'analyst', 'qc', 'spokesperson'];
 
 async function isTestActivity(conn, activityId) {
   const [[row]] = await conn.query(
-    `SELECT COALESCE(is_test, 0) AS is_test, sheet_url
+    `SELECT COALESCE(is_test, 0) AS is_test, sheet_url, source_type, content_text
        FROM pogil_activities
       WHERE id = ?`,
     [activityId]

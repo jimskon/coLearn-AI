@@ -175,6 +175,8 @@ async function getCourseActivities(req, res) {
     a.order_index AS activity_index,
     a.is_test AS is_test,
     a.sheet_url AS sheet_url,
+    a.source_type AS source_type,
+    a.content_text AS content_text,
 
     -- instance id
     (

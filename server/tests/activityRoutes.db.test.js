@@ -248,6 +248,35 @@ test('activity storage columns default existing-style inserts to remote with no 
   assert.equal(row.content_text, null);
 });
 
+test('getActivitySource returns stored local content without reading Google Docs', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: creator.id });
+  const contentText = [
+    '\\title{Local Activity}',
+    '\\mode{group}',
+    '',
+    '\\questiongroup{One}',
+    '\\question{What do you notice?}',
+  ].join('\n');
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET source_type = 'local',
+            content_text = ?
+      WHERE id = ?`,
+    [contentText, activity.id]
+  );
+
+  const response = await requestJson(null, `/api/activities/${activity.id}/source`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.activity_id, activity.id);
+  assert.equal(response.body.source_type, 'local');
+  assert.deepEqual(response.body.lines, contentText.split('\n'));
+  assert.equal(response.body.text, contentText);
+});
+
 test('createActivity inserts a new activity and returns its payload', async () => {
   const creator = await createUser('creator');
   const classId = await createClassRecord();

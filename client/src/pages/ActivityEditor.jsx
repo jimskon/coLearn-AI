@@ -321,15 +321,11 @@ export default function ActivityEditor() {
         const activityData = await res.json();
         setActivity(activityData);
 
-        let sourceLines = null;
-        if (activityData?.sheet_url) {
-          const docRes = await fetch(
-            `${API_BASE_URL}/api/activities/preview-doc?docUrl=${encodeURIComponent(activityData.sheet_url)}`
-          );
-          const { lines } = await docRes.json();
-          sourceLines = Array.isArray(lines) ? lines : [];
-          await syncActivityIsTest(activityData, sourceLines);
-        }
+        const sourceRes = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`);
+        if (!sourceRes.ok) throw new Error(`activity source failed ${sourceRes.status}`);
+        const sourceBody = await sourceRes.json();
+        const sourceLines = Array.isArray(sourceBody?.lines) ? sourceBody.lines : [];
+        await syncActivityIsTest(activityData, sourceLines);
 
         const cached = localStorage.getItem(`activity-${activityId}`);
         if (cached) {
@@ -394,17 +390,14 @@ export default function ActivityEditor() {
   };
 
   const handleRecover = async () => {
-    if (!activity?.sheet_url) return;
-
     const confirmed = window.confirm(
       'This will discard all unsaved changes and recover the original text from the source document. Are you sure?'
     );
     if (!confirmed) return;
 
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/activities/preview-doc?docUrl=${encodeURIComponent(activity.sheet_url)}`
-      );
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`);
+      if (!res.ok) throw new Error(`activity source failed ${res.status}`);
       const { lines } = await res.json();
       await syncActivityIsTest(activity, Array.isArray(lines) ? lines : []);
       const recoveredText = lines.join('\n');

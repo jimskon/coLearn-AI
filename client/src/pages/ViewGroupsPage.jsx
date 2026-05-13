@@ -7,12 +7,15 @@ import {
   Spinner,
   Alert,
   Button,
+  ButtonGroup,
+  Badge,
   Row,
   Col,
   Form,
 } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
 import { FaUserCheck, FaLaptop } from 'react-icons/fa';
+import { parseUtcDbDatetime } from '../utils/time';
 
 function progressLabelFromInstanceRow(g) {
   const tg = Number(g.total_groups || 0);
@@ -130,6 +133,46 @@ function GroupProgressBars({ group }) {
   );
 }
 
+function formatTimerMinutesLabel(remainingMs) {
+  if (remainingMs <= 0) return 'Time out';
+  const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+  return `${remainingMinutes} min left`;
+}
+
+function getGroupTimerState(group, nowMs) {
+  const paused = Number(group.section_timer_paused) === 1;
+  const durationMinutes = Number(group.section_timer_duration_minutes || 0);
+  const startedAt = group.section_timer_started_at
+    ? parseUtcDbDatetime(group.section_timer_started_at)
+    : null;
+  const pausedAt = group.section_timer_paused_at
+    ? parseUtcDbDatetime(group.section_timer_paused_at)
+    : null;
+
+  if (paused) {
+    return { label: 'Paused', bg: 'secondary', text: 'light' };
+  }
+
+  if (!startedAt || durationMinutes <= 0) {
+    return { label: 'Waiting', bg: 'warning', text: 'dark' };
+  }
+
+  const durationMs = durationMinutes * 60 * 1000;
+  const effectiveNowMs = paused && pausedAt ? pausedAt.getTime() : nowMs;
+  const remainingMs = durationMs - (effectiveNowMs - startedAt.getTime());
+  const ratio = durationMs > 0 ? remainingMs / durationMs : 0;
+
+  if (remainingMs <= 0) {
+    return { label: 'Time out', bg: 'danger', text: 'light' };
+  }
+
+  if (ratio <= 0.2) {
+    return { label: formatTimerMinutesLabel(remainingMs), bg: 'warning', text: 'dark' };
+  }
+
+  return { label: formatTimerMinutesLabel(remainingMs), bg: 'success', text: 'light' };
+}
+
 export default function ViewGroupsPage() {
   const { courseId, activityId } = useParams();
   const location = useLocation();
@@ -148,10 +191,17 @@ export default function ViewGroupsPage() {
   const [active, setActive] = useState([]);
   const [selectedAdd, setSelectedAdd] = useState('');
   const [selectedRemove, setSelectedRemove] = useState('');
+  const [togglingPause, setTogglingPause] = useState(false);
+  const [rotationMode, setRotationMode] = useState('submit');
+  const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
+  const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
 
-  const fetchGroups = async () => {
-    setLoading(true);
-    setError('');
+  const fetchGroups = async ({ quiet = false } = {}) => {
+    if (!quiet) {
+      setLoading(true);
+      setError('');
+    }
 
     try {
       const res = await fetch(
@@ -169,18 +219,25 @@ export default function ViewGroupsPage() {
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
       setGroups(data.groups);
+      if (Array.isArray(data.groups) && data.groups.length > 0) {
+        setRotationMode(String(data.groups[0].active_rotation_mode || 'submit'));
+      }
+      setHasLoadedOnce(true);
     } catch (err) {
       console.error('❌ Error loading groups:', err);
       setError(err?.message || 'Could not load groups.');
     } finally {
-      setLoading(false);
+      if (!quiet) setLoading(false);
     }
   };
 
   useEffect(() => {
     if (!courseId || !activityId) return;
-    fetchGroups();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    fetchGroups({ quiet: false });
+    const interval = setInterval(() => {
+      fetchGroups({ quiet: true });
+    }, 5000);
+    return () => clearInterval(interval);
   }, [courseId, activityId]);
 
   const refreshStudents = async () => {
@@ -204,6 +261,11 @@ export default function ViewGroupsPage() {
     if (courseId && activityId) refreshStudents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, activityId]);
+
+  useEffect(() => {
+    const interval = setInterval(() => setTimerNowMs(Date.now()), 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   const clearGroupAnswers = async (instanceId) => {
     if (!window.confirm('Clear all saved answers for this group? This cannot be undone.')) return;
@@ -318,58 +380,100 @@ export default function ViewGroupsPage() {
     }
   };
 
+  const anyStudentsActive = groups.some((group) =>
+    (group.members || []).some((member) => member.connected)
+  );
+  const timerPaused = groups.some((group) => Number(group.section_timer_paused) === 1);
+
+  let timerButtonVariant = 'warning';
+  let timerButtonLabel = 'Waiting';
+  if (timerPaused) {
+    timerButtonVariant = 'danger';
+    timerButtonLabel = 'Paused';
+  } else if (anyStudentsActive) {
+    timerButtonVariant = 'success';
+    timerButtonLabel = 'Running';
+  }
+
+  const handleTogglePause = async () => {
+    setTogglingPause(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${courseId}/${activityId}/timer-pause`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ paused: !timerPaused }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to update timer pause state');
+      await fetchGroups();
+    } catch (err) {
+      console.error('❌ Error toggling timer pause:', err);
+      alert(err?.message || 'Failed to update timer pause state');
+    } finally {
+      setTogglingPause(false);
+    }
+  };
+
+  const handleSetRotationMode = async (mode) => {
+    if (!mode || mode === rotationMode) return;
+    setUpdatingRotationMode(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${courseId}/${activityId}/active-rotation-mode`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ mode }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || 'Failed to update active rotation mode');
+      setRotationMode(data?.mode || mode);
+      await fetchGroups();
+    } catch (err) {
+      console.error('❌ Error updating active rotation mode:', err);
+      alert(err?.message || 'Failed to update active rotation mode');
+    } finally {
+      setUpdatingRotationMode(false);
+    }
+  };
+
   return (
     <Container className="mt-4">
-      <h2>{activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}</h2>
-      {courseName && <h4 className="text-muted">{courseName}</h4>}
-
-      {/* Add / Remove UI */}
-      <div className="my-4 d-flex gap-3 align-items-center flex-wrap">
-        <Form.Select
-          value={selectedAdd}
-          onChange={(e) => setSelectedAdd(e.target.value)}
-          style={{ maxWidth: 320 }}
-        >
-          <option value="">Add student...</option>
-          {available.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name} ({s.email})
-            </option>
-          ))}
-        </Form.Select>
-
-        <div className="d-flex gap-2">
-          <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd}>
-            Add to group
-          </Button>
-          <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd}>
-            Group of one
+      <div
+        className="sticky-top mb-4"
+        style={{
+          top: '70px',
+          zIndex: 1020,
+          background: '#fff',
+          borderBottom: '1px solid #dee2e6',
+          boxShadow: '0 1px 0 rgba(0,0,0,0.04)',
+        }}
+      >
+        <div className="d-flex align-items-center justify-content-between gap-3 py-3 flex-wrap">
+          <div>
+            <h2 className="mb-1">
+              {activityTitle ? `Activity: ${activityTitle}` : 'Groups for Activity'}
+            </h2>
+            {courseName && <div className="text-muted">{courseName}</div>}
+          </div>
+          <Button
+            variant={timerButtonVariant}
+            onClick={handleTogglePause}
+            disabled={togglingPause}
+          >
+            {togglingPause ? 'Updating…' : timerButtonLabel}
           </Button>
         </div>
 
-        <Form.Select
-          value={selectedRemove}
-          onChange={(e) => setSelectedRemove(e.target.value)}
-          style={{ maxWidth: 380 }}
-        >
-          <option value="">Remove student...</option>
-          {active.map((s) => (
-            <option
-              key={`${s.activity_instance_id}:${s.id}`}
-              value={`${s.activity_instance_id}:${s.id}`}
-            >
-              G{s.group_number} — {s.name}
-              {s.role ? ` (${s.role})` : ''}
-            </option>
-          ))}
-        </Form.Select>
-
-        <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove}>
-          Remove
-        </Button>
       </div>
 
-      {loading ? (
+      {loading && !hasLoadedOnce ? (
         <Spinner animation="border" />
       ) : error ? (
         <Alert variant="danger">{error}</Alert>
@@ -379,6 +483,7 @@ export default function ViewGroupsPage() {
         <Row>
           {groups.map((group) => {
             const isComplete = isCompleteFromInstanceRow(group);
+            const timerState = getGroupTimerState(group, timerNowMs);
 
             return (
               <Col lg={4} md={6} sm={12} key={group.instance_id}>
@@ -389,11 +494,14 @@ export default function ViewGroupsPage() {
                       <strong className="ms-2">{progressLabelFromInstanceRow(group)}</strong>
                     </div>
 
-                    <div className="d-flex gap-2 mt-2 mt-sm-0 flex-wrap">
+                    <div className="d-flex gap-2 mt-2 mt-sm-0 flex-wrap align-items-center">
+                      <Badge bg={timerState.bg} text={timerState.text}>
+                        {timerState.label}
+                      </Badge>
                       <Button
                         variant="outline-danger"
                         size="sm"
-                        disabled={clearing.has(group.instance_id)}
+                        disabled={clearing.has(group.instance_id) || timerPaused}
                         onClick={() => clearGroupAnswers(group.instance_id)}
                       >
                         {clearing.has(group.instance_id) ? 'Clearing…' : 'Clear Answers'}
@@ -431,6 +539,82 @@ export default function ViewGroupsPage() {
           })}
         </Row>
       )}
+
+      <Card className="my-4">
+        <Card.Body className="d-flex flex-column gap-3">
+          <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+            <div>
+              <div className="fw-semibold">Active-student rotation</div>
+              <div className="small text-muted">
+                Choose whether the active student changes on every submit or only when the group advances to the next question group.
+              </div>
+            </div>
+            <ButtonGroup>
+              <Button
+                variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
+                disabled={updatingRotationMode}
+                onClick={() => handleSetRotationMode('submit')}
+              >
+                Submit
+              </Button>
+              <Button
+                variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
+                disabled={updatingRotationMode}
+                onClick={() => handleSetRotationMode('group')}
+              >
+                Q Group
+              </Button>
+            </ButtonGroup>
+          </div>
+
+          <div className="d-flex gap-3 align-items-center flex-wrap">
+            <Form.Select
+              value={selectedAdd}
+              onChange={(e) => setSelectedAdd(e.target.value)}
+              style={{ maxWidth: 320 }}
+              disabled={timerPaused}
+            >
+              <option value="">Add student...</option>
+              {available.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name} ({s.email})
+                </option>
+              ))}
+            </Form.Select>
+
+            <div className="d-flex gap-2">
+              <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd || timerPaused}>
+                Add to group
+              </Button>
+              <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd || timerPaused}>
+                Group of one
+              </Button>
+            </div>
+
+            <Form.Select
+              value={selectedRemove}
+              onChange={(e) => setSelectedRemove(e.target.value)}
+              style={{ maxWidth: 380 }}
+              disabled={timerPaused}
+            >
+              <option value="">Remove student...</option>
+              {active.map((s) => (
+                <option
+                  key={`${s.activity_instance_id}:${s.id}`}
+                  value={`${s.activity_instance_id}:${s.id}`}
+                >
+                  G{s.group_number} — {s.name}
+                  {s.role ? ` (${s.role})` : ''}
+                </option>
+              ))}
+            </Form.Select>
+
+            <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove || timerPaused}>
+              Remove
+            </Button>
+          </div>
+        </Card.Body>
+      </Card>
     </Container>
   );
 }

@@ -1,7 +1,7 @@
 // client/src/pages/ActivityPreview.jsx
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Container, Button } from 'react-bootstrap';
+import { Container, Button, Card, Row, Col, Badge } from 'react-bootstrap';
 import Prism from 'prismjs';
 import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-python';
@@ -21,12 +21,16 @@ export default function ActivityPreview() {
   const [activity, setActivity] = useState(null);
   const [blocks, setBlocks] = useState([]);
   const [fileContents, setFileContents] = useState({});
-  const [renderedElements, setRenderedElements] = useState([]);
   const [skulptLoaded, setSkulptLoaded] = useState(false);
 
   // NEW: local state used by renderBlocks / code blocks
   const [codeViewMode, setCodeViewMode] = useState({}); // { responseKey: 'active'|'local' }
   const [localCode, setLocalCode] = useState({});       // { responseKey: string }
+
+  const stripHtml = (s = '') =>
+    String(s)
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/?[^>]+>/g, '');
 
   const handleUpdateFileContents = (updaterFn) => {
     setFileContents((prev) => updaterFn(prev));
@@ -148,12 +152,16 @@ export default function ActivityPreview() {
         const body = await docRes.json();
         const lines = body?.lines || [];
 
-        const computedIsTest = Array.isArray(lines) && lines.some(
-          (line) => String(line).trim() === '\\test'
-        ) ? 1 : 0;
+        console.log("[ActivityPreview] preview-doc lines", { count: lines.length });
+
+        const parsedRes = parseSheetToBlocks(lines, { returnIssues: true });
+        const parsed = parsedRes.blocks;
+        setParseMeta(parsedRes.meta);
+
+        const computedIsTest = parsedRes?.meta?.isTest ? 1 : 0;
 
         // Persist only if different (avoids spamming)
-        const dbIsTest = (activityData?.is_test === 1) ? 1 : 0;
+        const dbIsTest = activityData?.is_test === 1 ? 1 : 0;
 
         if (computedIsTest !== dbIsTest) {
           try {
@@ -164,20 +172,12 @@ export default function ActivityPreview() {
               body: JSON.stringify({ is_test: computedIsTest }),
             });
 
-            // keep local state consistent (optional but nice)
             activityData.is_test = computedIsTest;
             setActivity({ ...activityData });
           } catch (e) {
             console.error('[ActivityPreview] Failed to persist is_test', e);
           }
         }
-
-
-        console.log("[ActivityPreview] preview-doc lines", { count: lines.length });
-
-        const parsedRes = parseSheetToBlocks(lines, { returnIssues: true });
-        const parsed = parsedRes.blocks;
-        setParseMeta(parsedRes.meta);
 
         const files = {};
         for (const block of parsed) {
@@ -197,50 +197,30 @@ export default function ActivityPreview() {
     return () => { cancelled = true; };
   }, [activityId, skulptLoaded]);
   useEffect(() => {
-    const rendered = renderBlocks(blocks, {
-      mode: 'preview',
-      editable: true,
-      isActive: true,              // allow editing in preview
-      isObserver: false,
-      allowLocalToggle: true,      // needed for Edit / View buttons
-      fileContents,
-      setFileContents: handleUpdateFileContents,
-
-      // hook up code editing just like RunActivityPage (but local-only)
-      codeViewMode,
-      onToggleViewMode: toggleCodeViewMode,
-      localCode,
-      onLocalCodeChange: updateLocalCode,
-      onCodeChange: handleCodeChange,
-    });
-    setRenderedElements(rendered);
+    Prism.highlightAll();
   }, [blocks, fileContents, codeViewMode, localCode]);
 
-  useEffect(() => {
-    Prism.highlightAll();
-  }, [renderedElements]);
+  const previewHeaders = blocks.filter((block) => block?.type === 'header');
+  const previewSections = blocks.filter((block) => block?.type === 'section');
+  const contentBlocks = blocks.filter((block) => block?.type !== 'header');
+
+  const headerValue = (tag) =>
+    previewHeaders.find((block) => block.tag === tag)?.content || '';
+
+  const modeValue = parseMeta?.isTest
+    ? 'test'
+    : (parseMeta?.mode || '').trim() || 'group';
+
+  const formattedGuidance = stripHtml(headerValue('aicodeguidance')).trim();
+  const formattedContext = stripHtml(headerValue('activitycontext')).trim();
+  const formattedStudentLevel = stripHtml(headerValue('studentlevel')).trim();
+  const formattedName = stripHtml(headerValue('name')).trim();
+  const timedSections = previewSections.filter((block) => Number(block.minutes) > 0);
 
   return (
     <Container>
       <div className="d-flex justify-content-between align-items-center mt-2 mb-2">
         <h2 className="mb-0">Preview: {activity?.title}</h2>
-        {parseMeta && (
-          <div className="alert alert-secondary py-2 my-2">
-            <div>
-              <strong>Retries:</strong> sheet default = {parseMeta.retriesDefault}
-            </div>
-
-            <div className="small mt-1">
-              Per-group effective:{' '}
-              {Object.keys(parseMeta.groupRetries).length
-                ? Object.entries(parseMeta.groupRetries)
-                  .sort((a, b) => Number(a[0]) - Number(b[0]))
-                  .map(([gid, v]) => `G${gid}=${v}`)
-                  .join(' · ')
-                : 'none'}
-            </div>
-          </div>
-        )}
         <Button
           variant="secondary"
           onClick={() => {
@@ -252,10 +232,101 @@ export default function ActivityPreview() {
         </Button>
       </div>
 
+      <Card className="mb-3">
+        <Card.Body>
+          <Row className="g-3">
+            <Col md={6}>
+              <div className="small text-muted mb-1">Mode</div>
+              <div>
+                <Badge bg={modeValue === 'test' ? 'danger' : 'secondary'} className="text-uppercase">
+                  {modeValue}
+                </Badge>
+                {parseMeta?.isTest && (
+                  <Badge bg="warning" text="dark" className="ms-2">
+                    \test enabled
+                  </Badge>
+                )}
+              </div>
+            </Col>
+
+            {formattedName && (
+              <Col md={6}>
+                <div className="small text-muted mb-1">Name</div>
+                <div>{formattedName}</div>
+              </Col>
+            )}
+
+            {formattedStudentLevel && (
+              <Col md={6}>
+                <div className="small text-muted mb-1">Student Level</div>
+                <div>{formattedStudentLevel}</div>
+              </Col>
+            )}
+
+            <Col md={6}>
+              <div className="small text-muted mb-1">Retries</div>
+              <div>Sheet default = {parseMeta?.retriesDefault ?? 0}</div>
+              <div className="small text-muted mt-1">
+                {parseMeta && Object.keys(parseMeta.groupRetries || {}).length
+                  ? Object.entries(parseMeta.groupRetries)
+                    .sort((a, b) => Number(a[0]) - Number(b[0]))
+                    .map(([gid, v]) => `G${gid}=${v}`)
+                    .join(' · ')
+                  : 'No group overrides'}
+              </div>
+            </Col>
+
+            {formattedContext && (
+              <Col xs={12}>
+                <div className="small text-muted mb-1">Context</div>
+                <div style={{ whiteSpace: 'pre-wrap' }}>{formattedContext}</div>
+              </Col>
+            )}
+
+            <Col xs={12}>
+              <div className="small text-muted mb-1">Section Timing</div>
+              {timedSections.length ? (
+                <div className="d-flex flex-wrap gap-2">
+                  {timedSections.map((section) => (
+                    <Badge key={section.key || section.title} bg="light" text="dark" className="border">
+                      {stripHtml(section.title)}: {section.minutes} min
+                    </Badge>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-muted">No section timers</div>
+              )}
+            </Col>
+
+            {formattedGuidance && (
+              <Col xs={12}>
+                <div className="small text-muted mb-1">AI Code Guidance</div>
+                <pre className="mb-0 p-3 bg-light border rounded" style={{ whiteSpace: 'pre-wrap' }}>
+                  {formattedGuidance}
+                </pre>
+              </Col>
+            )}
+          </Row>
+        </Card.Body>
+      </Card>
+
       {!skulptLoaded ? (
         <p>Loading Python engine (Skulpt)...</p>
       ) : (
-        renderedElements
+        renderBlocks(contentBlocks, {
+          mode: 'preview',
+          editable: true,
+          isActive: true,
+          isObserver: false,
+          allowLocalToggle: true,
+          fileContents,
+          setFileContents: handleUpdateFileContents,
+          codeViewMode,
+          onToggleViewMode: toggleCodeViewMode,
+          localCode,
+          onLocalCodeChange: updateLocalCode,
+          onCodeChange: handleCodeChange,
+        })
       )}
     </Container>
   );

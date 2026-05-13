@@ -15,6 +15,23 @@ function uniqueEmail(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.com`;
 }
 
+const created = {
+  emails: new Set(),
+};
+
+function rememberEmail(email) {
+  if (email) created.emails.add(String(email));
+  return email;
+}
+
+async function cleanupCreatedRows() {
+  const emails = [...created.emails];
+  if (!emails.length) return;
+
+  await db.query(`DELETE FROM pending_users WHERE email IN (?)`, [emails]).catch(() => {});
+  await db.query(`DELETE FROM users WHERE email IN (?)`, [emails]);
+}
+
 function createTestServer() {
   const app = express();
   app.use(express.json());
@@ -26,6 +43,7 @@ function createTestServer() {
   app.use('/api/auth', authRoutes);
 
   const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -33,7 +51,11 @@ function createTestServer() {
       const { port } = server.address();
       resolve({
         baseUrl: `http://127.0.0.1:${port}`,
-        close: () => new Promise(closeResolve => server.close(closeResolve)),
+        close: () =>
+          new Promise((closeResolve) => {
+            server.close(closeResolve);
+            server.closeIdleConnections?.();
+          }),
       });
     });
   });
@@ -46,6 +68,7 @@ async function requestJson(path, { method = 'POST', body, headers = {} } = {}) {
       method,
       headers: {
         'Content-Type': 'application/json',
+        Connection: 'close',
         ...headers,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -82,6 +105,7 @@ async function requestJsonWithServer(baseUrl, path, { method = 'GET', body, head
     method,
     headers: {
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      Connection: 'close',
       ...headers,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -95,11 +119,12 @@ async function requestJsonWithServer(baseUrl, path, { method = 'GET', body, head
 }
 
 test.after(async () => {
+  await cleanupCreatedRows();
   await db.end();
 });
 
 test('register creates a verified user in dev auto-verify mode', async () => {
-  const email = uniqueEmail('register');
+  const email = rememberEmail(uniqueEmail('register'));
 
   const response = await requestJson('/api/auth/register', {
     body: {
@@ -120,7 +145,7 @@ test('register creates a verified user in dev auto-verify mode', async () => {
 });
 
 test('register rejects duplicate email addresses', async () => {
-  const email = uniqueEmail('duplicate');
+  const email = rememberEmail(uniqueEmail('duplicate'));
   const body = {
     name: 'Katherine Johnson',
     email,
@@ -136,7 +161,7 @@ test('register rejects duplicate email addresses', async () => {
 });
 
 test('login accepts a registered user password and creates a session cookie', async () => {
-  const email = uniqueEmail('login');
+  const email = rememberEmail(uniqueEmail('login'));
   const password = 'CorrectHorseBatteryStaple123';
 
   const register = await requestJson('/api/auth/register', {
@@ -162,7 +187,7 @@ test('login accepts a registered user password and creates a session cookie', as
 });
 
 test('login rejects an incorrect password for an existing user', async () => {
-  const email = uniqueEmail('bad-password');
+  const email = rememberEmail(uniqueEmail('bad-password'));
 
   const register = await requestJson('/api/auth/register', {
     body: {
@@ -196,7 +221,7 @@ test('whoami rejects requests without a session', async () => {
 test('login session can be read by whoami and cleared by logout', async () => {
   const server = await createTestServer();
   const jar = createCookieJar();
-  const email = uniqueEmail('session');
+  const email = rememberEmail(uniqueEmail('session'));
   const password = 'SessionPassword123';
 
   try {

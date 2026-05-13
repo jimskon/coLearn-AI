@@ -4,6 +4,39 @@ const test = require('node:test');
 
 process.env.OPENAI_API_KEY ||= 'test-key';
 
+const nativeFetch = global.fetch;
+global.fetch = async (input, init) => {
+  const url = typeof input === 'string' ? input : input?.url || '';
+
+  if (url.includes('api.openai.com')) {
+    return new Response(
+      JSON.stringify({
+        id: 'chatcmpl-test',
+        object: 'chat.completion',
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: JSON.stringify({
+                accepted: false,
+                feedback: 'Please answer the question with one concrete detail.',
+              }),
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
+  }
+
+  return nativeFetch(input, init);
+};
+
 const express = require('express');
 const aiRoutes = require('../ai/routes');
 
@@ -13,6 +46,7 @@ function createTestServer() {
   app.use('/api/ai', aiRoutes);
 
   const server = http.createServer(app);
+  server.keepAliveTimeout = 1;
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -20,7 +54,11 @@ function createTestServer() {
       const { port } = server.address();
       resolve({
         baseUrl: `http://127.0.0.1:${port}`,
-        close: () => new Promise(closeResolve => server.close(closeResolve)),
+        close: () =>
+          new Promise((closeResolve) => {
+            server.close(closeResolve);
+            server.closeIdleConnections?.();
+          }),
       });
     });
   });
@@ -31,7 +69,7 @@ async function postJson(path, body) {
   try {
     const response = await fetch(`${server.baseUrl}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Connection: 'close' },
       body: JSON.stringify(body),
     });
     const responseBody = await response.json();
@@ -43,6 +81,10 @@ async function postJson(path, body) {
     await server.close();
   }
 }
+
+test.after(() => {
+  global.fetch = nativeFetch;
+});
 
 test('requirements-only response evaluation rejects keyboard-mash gibberish', async () => {
   const response = await postJson('/api/ai/evaluate-response', {

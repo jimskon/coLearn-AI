@@ -2,6 +2,7 @@
 const db = require('../db');
 const { google } = require('googleapis');
 const { authorize } = require('../utils/googleAuth');
+const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
 const { gradeTestQuestion } = require('../ai/controller');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
@@ -24,6 +25,83 @@ function normalizeSectionTimerPayload(raw = {}) {
   return {
     key,
     durationMinutes: Math.round(minutes),
+  };
+}
+
+function toDbNowString(date = new Date()) {
+  return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function normalizeActiveRotationMode(raw) {
+  return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
+}
+
+async function resolveTestOwnerStudentId(conn, instanceId, fallbackUserId = null) {
+  const [[inst]] = await conn.query(
+    `SELECT submitted_by_user_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+
+  if (!inst) {
+    return { studentId: null, source: null, reason: 'instance_not_found' };
+  }
+
+  if (inst.submitted_by_user_id) {
+    return {
+      studentId: Number(inst.submitted_by_user_id),
+      source: 'submitted_by_user_id',
+      reason: null,
+    };
+  }
+
+  const [members] = await conn.query(
+    `SELECT DISTINCT student_id
+       FROM group_members
+      WHERE activity_instance_id = ?
+      ORDER BY id ASC`,
+    [instanceId]
+  );
+
+  if (members.length === 1 && members[0].student_id) {
+    return {
+      studentId: Number(members[0].student_id),
+      source: 'single_group_member',
+      reason: null,
+    };
+  }
+
+  const [answerers] = await conn.query(
+    `SELECT answered_by_user_id AS student_id, COUNT(*) AS response_count
+       FROM responses
+      WHERE activity_instance_id = ?
+        AND answered_by_user_id IS NOT NULL
+      GROUP BY answered_by_user_id
+      ORDER BY response_count DESC, answered_by_user_id ASC`,
+    [instanceId]
+  );
+
+  if (answerers.length === 1 && answerers[0].student_id) {
+    return {
+      studentId: Number(answerers[0].student_id),
+      source: 'single_response_owner',
+      reason: null,
+    };
+  }
+
+  if (!members.length && !answerers.length && fallbackUserId) {
+    return {
+      studentId: Number(fallbackUserId),
+      source: 'fallback_user',
+      reason: null,
+    };
+  }
+
+  return {
+    studentId: null,
+    source: null,
+    reason: members.length > 1 || answerers.length > 1 ? 'ambiguous' : 'missing',
   };
 }
 
@@ -169,6 +247,8 @@ async function clearResponsesForInstance(req, res) {
 	       section_timer_key = NULL,
 	       section_timer_duration_minutes = NULL,
 	       section_timer_started_at = NULL,
+	       section_timer_paused = 0,
+	       section_timer_paused_at = NULL,
 	       test_reopen_until = NULL,
 	       completed_groups  = 0
 	   WHERE id = ?`,
@@ -185,6 +265,8 @@ async function clearResponsesForInstance(req, res) {
 	      section_timer_key: null,
 	      section_timer_duration_minutes: null,
 	      section_timer_started_at: null,
+	      section_timer_paused: 0,
+	      section_timer_paused_at: null,
 	      test_reopen_until: null,
       completed_groups: 0, // only if you also want to reset it; if not, omit
     });
@@ -238,13 +320,111 @@ async function createActivityInstance(req, res) {
   const { activityId, courseId } = req.body;
   try {
     const [result] = await db.query(
-      `INSERT INTO activity_instances (activity_id, course_id) VALUES (?, ?)`,
+      `INSERT INTO activity_instances (activity_id, course_id, active_rotation_mode) VALUES (?, ?, 'submit')`,
       [activityId, courseId]
     );
     res.status(201).json({ instanceId: result.insertId });
   } catch (err) {
     console.error("❌ Failed to create activity instance:", err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+}
+
+async function ensureDemoInstance(req, res) {
+  const activityId = Number(req.params.activityId);
+  const courseId = Number(req.params.courseId);
+  const userId = Number(req.user?.id);
+  const userRole = String(req.user?.role || '');
+
+  if (!activityId || !courseId || !userId) {
+    return res.status(400).json({ error: 'Missing activity, course, or user.' });
+  }
+
+  const conn = await db.getConnection();
+  const lockName = `ensureDemoInstance:${courseId}:${activityId}:${userId}`;
+
+  try {
+    const [[lockRow]] = await conn.query(`SELECT GET_LOCK(?, 5) AS got`, [lockName]);
+    if (!lockRow?.got) {
+      return res.status(409).json({ error: 'Someone else is opening this demo right now.' });
+    }
+
+    const [[activityRow]] = await conn.query(
+      `SELECT id, is_test, sheet_url
+         FROM pogil_activities
+        WHERE id = ?`,
+      [activityId]
+    );
+
+    if (!activityRow) {
+      return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    const activityType = await inferActivityTypeFromActivity(activityRow);
+    if (activityType !== 'demo') {
+      return res.status(400).json({ error: 'This activity is not a demo.' });
+    }
+
+    if (userRole === 'student') {
+      const [[enrollment]] = await conn.query(
+        `SELECT 1
+           FROM course_enrollments
+          WHERE course_id = ? AND student_id = ?
+          LIMIT 1`,
+        [courseId, userId]
+      );
+      if (!enrollment) {
+        return res.status(403).json({ error: 'Student is not enrolled in this course.' });
+      }
+    }
+
+    const [[existing]] = await conn.query(
+      `SELECT ai.id AS instance_id
+         FROM activity_instances ai
+         JOIN group_members gm ON gm.activity_instance_id = ai.id
+        WHERE ai.course_id = ?
+          AND ai.activity_id = ?
+          AND gm.student_id = ?
+        ORDER BY ai.id ASC
+        LIMIT 1`,
+      [courseId, activityId, userId]
+    );
+
+    if (existing?.instance_id) {
+      return res.json({ instanceId: Number(existing.instance_id), created: false });
+    }
+
+    const [[nextRow]] = await conn.query(
+      `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_group_number
+         FROM activity_instances
+        WHERE course_id = ? AND activity_id = ?`,
+      [courseId, activityId]
+    );
+
+    const [instanceResult] = await conn.query(
+      `INSERT INTO activity_instances
+         (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status, active_student_id, active_rotation_mode)
+       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, 'submit')`,
+      [courseId, activityId, Number(nextRow?.next_group_number) || 1, userId]
+    );
+
+    await conn.query(
+      `INSERT INTO group_members (activity_instance_id, student_id, role, connected)
+       VALUES (?, ?, NULL, 0)`,
+      [instanceResult.insertId, userId]
+    );
+
+    return res.status(201).json({ instanceId: Number(instanceResult.insertId), created: true });
+  } catch (err) {
+    console.error('❌ ensureDemoInstance:', err);
+    return res.status(500).json({ error: 'Failed to open demo.' });
+  } finally {
+    try {
+      await conn.query(`SELECT RELEASE_LOCK(?)`, [lockName]);
+    } catch (_) {
+      // ignore release errors
+    }
+    conn.release();
   }
 }
 
@@ -265,6 +445,8 @@ async function getActivityInstanceById(req, res) {
          ai.section_timer_key,
          ai.section_timer_duration_minutes,
          ai.section_timer_started_at,
+         ai.section_timer_paused,
+         ai.section_timer_paused_at,
          ai.test_start_at,
          ai.test_duration_minutes,
          ai.test_reopen_until,
@@ -333,7 +515,9 @@ async function recordHeartbeat(req, res) {
       `SELECT active_student_id,
               section_timer_key,
               section_timer_duration_minutes,
-              section_timer_started_at
+              section_timer_started_at,
+              section_timer_paused,
+              section_timer_paused_at
        FROM activity_instances
        WHERE id = ?`,
       [instanceId]
@@ -344,6 +528,7 @@ async function recordHeartbeat(req, res) {
     const currentKey = String(inst.section_timer_key || '').trim() || null;
     const currentDuration = Number(inst.section_timer_duration_minutes) || null;
     const currentStartedAt = inst.section_timer_started_at || null;
+    const currentPaused = Number(inst.section_timer_paused) === 1;
 
     // The timer is DB-backed instance state: store only the section key,
     // duration, and the shared UTC start anchor. Clients derive display text.
@@ -352,7 +537,7 @@ async function recordHeartbeat(req, res) {
         currentKey !== timerInfo.key ||
         currentDuration !== timerInfo.durationMinutes;
 
-      if (timerChanged || !currentStartedAt) {
+      if (!currentPaused && (timerChanged || !currentStartedAt)) {
         await db.query(
           `UPDATE activity_instances
            SET section_timer_key = ?,
@@ -365,7 +550,7 @@ async function recordHeartbeat(req, res) {
         timerPatch = {
           section_timer_key: timerInfo.key,
           section_timer_duration_minutes: timerInfo.durationMinutes,
-          section_timer_started_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+          section_timer_started_at: toDbNowString(),
         };
       }
     } else if (currentKey || currentDuration || currentStartedAt) {
@@ -586,7 +771,8 @@ async function setupMultipleGroupInstances(req, res) {
     );
 
     // Decide test vs non-test
-    const dbIsTest = !!activityRow?.is_test;
+    const activityType = await inferActivityTypeFromActivity(activityRow || {});
+    const dbIsTest = activityType === 'test';
     const hasTiming = !!testStartAt && Number(testDurationMinutes) > 0;
     const isTest = dbIsTest || hasTiming;
 
@@ -669,8 +855,8 @@ async function setupMultipleGroupInstances(req, res) {
       const [instanceResult] = await conn.query(
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
-            test_start_at, test_duration_minutes, locked_before_start, locked_after_end)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?)`,
+            test_start_at, test_duration_minutes, locked_before_start, locked_after_end, active_rotation_mode)
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, 'submit')`,
         [
           courseId,
           activityId,
@@ -862,10 +1048,11 @@ async function submitGroupResponses(req, res) {
 
     // ---- 4) Recompute cached progress from i=1..total_groups using istate ----
     const [[meta]] = await conn.query(
-      `SELECT total_groups FROM activity_instances WHERE id = ?`,
+      `SELECT total_groups, active_rotation_mode FROM activity_instances WHERE id = ?`,
       [instanceId]
     );
     const totalGroups = Number(meta?.total_groups) || 0;
+    const activeRotationMode = normalizeActiveRotationMode(meta?.active_rotation_mode);
 
     let completedGroups = 0;
     if (totalGroups > 0) {
@@ -907,6 +1094,10 @@ async function submitGroupResponses(req, res) {
     emitPatch = { completed_groups: completedGroups, progress_status: progressStatus };
 
 
+    const shouldRotateActive =
+      activeRotationMode === 'submit' ||
+      (activeRotationMode === 'group' && shouldAdvance);
+
     // ---- 5) Rotate active student among connected members ----
     const [connected] = await conn.query(
       `SELECT student_id
@@ -915,7 +1106,7 @@ async function submitGroupResponses(req, res) {
       [instanceId]
     );
 
-    if (connected.length > 0) {
+    if (shouldRotateActive && connected.length > 0) {
       const eligible = connected.filter(m => Number(m.student_id) !== studentId);
       const pickFrom = eligible.length ? eligible : connected;
       const next = pickFrom[Math.floor(Math.random() * pickFrom.length)].student_id;
@@ -1000,6 +1191,7 @@ async function getInstancesForActivityInCourse(req, res) {
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
 	              group_number,
+                active_rotation_mode,
 	              active_student_id,
 	              total_groups,
 	              completed_groups,
@@ -1007,6 +1199,8 @@ async function getInstancesForActivityInCourse(req, res) {
 	              section_timer_key,
 	              section_timer_duration_minutes,
 	              section_timer_started_at,
+                section_timer_paused,
+                section_timer_paused_at,
 	              test_start_at,
               test_duration_minutes,
               test_reopen_until,
@@ -1072,6 +1266,7 @@ async function getInstancesForActivityInCourse(req, res) {
       groups.push({
         instance_id: inst.instance_id,
         group_number: inst.group_number,
+        active_rotation_mode: normalizeActiveRotationMode(inst.active_rotation_mode),
         active_student_id: activeId,
 
         // ✅ THE DB TRUTH FIELDS YOUR UI WANTS
@@ -1081,6 +1276,8 @@ async function getInstancesForActivityInCourse(req, res) {
 	        section_timer_key: inst.section_timer_key,
 	        section_timer_duration_minutes: inst.section_timer_duration_minutes,
 	        section_timer_started_at: inst.section_timer_started_at,
+          section_timer_paused: Number(inst.section_timer_paused) === 1,
+          section_timer_paused_at: inst.section_timer_paused_at,
 
         // Optional convenience label for UI (derived *from* DB truth)
         // progress: progress,  // you can keep or delete this
@@ -1109,6 +1306,94 @@ async function getInstancesForActivityInCourse(req, res) {
   } catch (err) {
     console.error("❌ getInstancesForActivityInCourse:", err);
     res.status(500).json({ error: 'Failed to fetch instances' });
+  }
+}
+
+async function setTimerPauseForActivity(req, res) {
+  const { courseId, activityId } = req.params;
+  const paused = !!req.body?.paused;
+
+  try {
+    const [instances] = await db.query(
+      `SELECT id
+       FROM activity_instances
+       WHERE course_id = ? AND activity_id = ?`,
+      [courseId, activityId]
+    );
+
+    if (!instances.length) {
+      return res.json({ ok: true, paused, updated: 0 });
+    }
+
+    if (paused) {
+      await db.query(
+        `UPDATE activity_instances
+         SET section_timer_paused = 1,
+             section_timer_paused_at = COALESCE(section_timer_paused_at, UTC_TIMESTAMP())
+         WHERE course_id = ? AND activity_id = ?`,
+        [courseId, activityId]
+      );
+    } else {
+      await db.query(
+        `UPDATE activity_instances
+         SET section_timer_started_at = CASE
+               WHEN section_timer_paused = 1
+                AND section_timer_paused_at IS NOT NULL
+                AND section_timer_started_at IS NOT NULL
+               THEN DATE_ADD(
+                 section_timer_started_at,
+                 INTERVAL TIMESTAMPDIFF(SECOND, section_timer_paused_at, UTC_TIMESTAMP()) SECOND
+               )
+               ELSE section_timer_started_at
+             END,
+             section_timer_paused = 0,
+             section_timer_paused_at = NULL
+         WHERE course_id = ? AND activity_id = ?`,
+        [courseId, activityId]
+      );
+    }
+
+    const [updatedRows] = await db.query(
+      `SELECT id,
+              section_timer_started_at,
+              section_timer_paused,
+              section_timer_paused_at
+       FROM activity_instances
+       WHERE course_id = ? AND activity_id = ?`,
+      [courseId, activityId]
+    );
+
+    updatedRows.forEach((inst) => {
+      global.emitInstanceState?.(Number(inst.id), {
+        section_timer_started_at: inst.section_timer_started_at,
+        section_timer_paused: Number(inst.section_timer_paused) === 1 ? 1 : 0,
+        section_timer_paused_at: inst.section_timer_paused_at,
+      });
+    });
+
+    res.json({ ok: true, paused, updated: instances.length });
+  } catch (err) {
+    console.error('❌ setTimerPauseForActivity:', err);
+    res.status(500).json({ error: 'Failed to update timer pause state' });
+  }
+}
+
+async function setActiveRotationModeForActivity(req, res) {
+  const { courseId, activityId } = req.params;
+  const mode = normalizeActiveRotationMode(req.body?.mode);
+
+  try {
+    const [result] = await db.query(
+      `UPDATE activity_instances
+       SET active_rotation_mode = ?
+       WHERE course_id = ? AND activity_id = ?`,
+      [mode, courseId, activityId]
+    );
+
+    res.json({ ok: true, mode, updated: result.affectedRows || 0 });
+  } catch (err) {
+    console.error('❌ setActiveRotationModeForActivity:', err);
+    res.status(500).json({ error: 'Failed to update active rotation mode' });
   }
 }
 
@@ -1167,7 +1452,7 @@ async function refreshTotalGroups(req, res) {
   try {
     // 1) Look up the activity + sheet_url for this instance
     const [[row]] = await db.query(
-      `SELECT ai.activity_id, a.sheet_url
+      `SELECT ai.activity_id, a.sheet_url, a.is_test
        FROM activity_instances ai
        JOIN pogil_activities a ON ai.activity_id = a.id
        WHERE ai.id = ?`,
@@ -1208,7 +1493,10 @@ async function refreshTotalGroups(req, res) {
     let groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
     if (groupCount <= 0) groupCount = 1;
 
-    const isTest = lines.some(line => line.trim() === '\\test');
+    const activityType = inferActivityTypeFromLines(lines, {
+      fallbackIsTest: Number(row.is_test) === 1,
+    });
+    const isTest = activityType === 'test';
 
     await db.query(
       `UPDATE activity_instances
@@ -1217,7 +1505,7 @@ async function refreshTotalGroups(req, res) {
       [groupCount, instanceId]
     );
 
-    // NEW: update pogil_activities.is_test based on \test tag
+    // Keep the legacy flag aligned with the current document type.
     await db.query(
       `UPDATE pogil_activities
        SET is_test = ?
@@ -1225,7 +1513,7 @@ async function refreshTotalGroups(req, res) {
       [isTest ? 1 : 0, row.activity_id]
     );
 
-    return res.json({ success: true, groupCount, isTest });
+    return res.json({ success: true, groupCount, isTest, activityType });
   } catch (err) {
     console.error('❌ refreshTotalGroups:', err);
     return res.status(500).json({ error: 'Failed to refresh total_groups' });
@@ -1491,7 +1779,7 @@ async function submitTest(req, res) {
   const isRegrade = regrade === true;
   const submitId = randomUUID();
 
-  if (!instanceId || !studentId || !answers) {
+  if (!instanceId || !answers || (!studentId && !isRegrade)) {
     return res.status(400).json({ error: 'Missing instanceId, studentId, or answers' });
   }
 
@@ -1524,6 +1812,25 @@ async function submitTest(req, res) {
     }
 
     await conn.beginTransaction();
+
+    let resolvedStudentId = Number(studentId) || null;
+    let ownerSource = resolvedStudentId ? 'request' : null;
+
+    if (!resolvedStudentId) {
+      const resolved = await resolveTestOwnerStudentId(conn, instanceId, req.user?.id || null);
+      resolvedStudentId = resolved.studentId;
+      ownerSource = resolved.source;
+
+      if (!resolvedStudentId) {
+        await conn.rollback();
+        return res.status(400).json({
+          error:
+            resolved.reason === 'ambiguous'
+              ? 'Cannot determine which student owns this test attempt.'
+              : 'Cannot determine which student owns this test attempt.',
+        });
+      }
+    }
 
     let totalEarnedPoints = 0;
     let totalMaxPoints = 0;
@@ -1664,36 +1971,36 @@ async function submitTest(req, res) {
       // Store per-band grading outputs (all as text)
       await appendResponse(conn, instanceId, submitId, `${baseId}CodeScore`, codeScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
       await appendResponse(conn, instanceId, submitId, `${baseId}CodeFeedback`, codeFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}RunScore`, runScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}RunFeedback`, runFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}ResponseScore`, responseScore, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
       await appendResponse(conn, instanceId, submitId, `${baseId}ResponseFeedback`, responseFeedback, {
         type: 'text',
-        answeredBy: studentId,
+        answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
 
@@ -1742,17 +2049,17 @@ async function submitTest(req, res) {
     // Test summary
     await appendResponse(conn, instanceId, submitId, 'testTotalScore', totalEarnedPoints, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
     await appendResponse(conn, instanceId, submitId, 'testMaxScore', totalMaxPoints, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
     await appendResponse(conn, instanceId, submitId, 'testSummary', summaryText, {
       type: 'text',
-      answeredBy: studentId,
+      answeredBy: resolvedStudentId,
       allowEmpty: true,
     });
 
@@ -1766,10 +2073,11 @@ async function submitTest(req, res) {
         SET
           points_earned    = ?,
           points_possible  = ?,
-          graded_at        = UTC_TIMESTAMP()
+          graded_at        = UTC_TIMESTAMP(),
+          submitted_by_user_id = COALESCE(submitted_by_user_id, ?)
         WHERE id = ?
         `,
-        [totalEarnedPoints, totalMaxPoints, instanceId]
+        [totalEarnedPoints, totalMaxPoints, resolvedStudentId, instanceId]
       );
     } else {
       await conn.query(
@@ -1784,7 +2092,7 @@ async function submitTest(req, res) {
           submitted_by_user_id = COALESCE(submitted_by_user_id, ?)
         WHERE id = ?
         `,
-        [totalEarnedPoints, totalMaxPoints, studentId, instanceId]
+        [totalEarnedPoints, totalMaxPoints, resolvedStudentId, instanceId]
       );
     }
 
@@ -1812,6 +2120,8 @@ async function submitTest(req, res) {
     console.log('[SUBMIT_TEST] EXIT OK', {
       instanceId,
       isRegrade,
+      studentId: resolvedStudentId,
+      ownerSource,
       totalEarnedPoints,
       totalMaxPoints,
     });
@@ -1995,6 +2305,7 @@ module.exports = {
   clearResponsesForInstance,
   getParsedActivityDoc,
   createActivityInstance,
+  ensureDemoInstance,
   getActivityInstanceById,
   getEnrolledStudents,
   recordHeartbeat,
@@ -2004,6 +2315,8 @@ module.exports = {
   submitGroupResponses,
   getInstanceGroups,
   getInstancesForActivityInCourse,
+  setTimerPauseForActivity,
+  setActiveRotationModeForActivity,
   getInstanceResponses,
   refreshTotalGroups,
   reopenInstance,

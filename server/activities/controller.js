@@ -1,5 +1,6 @@
 // server/activities/controller.js
 const db = require('../db');
+const { inferActivityTypeFromActivity } = require('../utils/activityType');
 
 // Create a new activity
 exports.createActivity = async (req, res) => {
@@ -40,7 +41,13 @@ exports.getActivity = async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Activity not found' });
     }
-    res.json({ ...rows[0] }); // ✅ flatten the single result into an object
+    const activity = rows[0];
+    const activityType = await inferActivityTypeFromActivity(activity);
+    res.json({
+      ...activity,
+      activity_type: activityType,
+      isTest: activityType === 'test',
+    });
   } catch (err) {
     res.status(500).json({ error: 'Could not retrieve activity.' });
   }
@@ -49,9 +56,18 @@ exports.getActivity = async (req, res) => {
 // Launch a new activity instance by activity ID
 exports.launchActivityInstance = async (req, res) => {
   const { courseId, groupNumber } = req.body;
-  const activityId = req.params.id;
+  const activityRef = req.params.id ?? req.params.name;
 
   try {
+    const [rows] = await db.query(
+      `SELECT id FROM pogil_activities WHERE id = ? OR name = ? LIMIT 1`,
+      [activityRef, activityRef]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
+    const activityId = Number(rows[0].id);
+
     await db.query(
       `INSERT INTO activity_instances 
         (activity_id, course_id, start_time, group_number) 
@@ -79,11 +95,17 @@ exports.getAllActivities = async (req, res) => {
 
 // Delete an activity by ID
 exports.deleteActivity = async (req, res) => {
-  const { id } = req.params;
-  console.log("Deleting activity ID:", id);
+  const activityRef = req.params.id ?? req.params.name;
+  console.log("Deleting activity:", activityRef);
 
   try {
-    await db.query('DELETE FROM pogil_activities WHERE id = ?', [id]);
+    const [result] = await db.query(
+      'DELETE FROM pogil_activities WHERE id = ? OR name = ?',
+      [activityRef, activityRef]
+    );
+    if (!result.affectedRows) {
+      return res.status(404).json({ error: 'Activity not found' });
+    }
     res.json({ message: 'Activity deleted.' });
   } catch (err) {
     console.error('Delete error:', err);

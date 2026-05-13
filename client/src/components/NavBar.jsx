@@ -50,7 +50,7 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
 
         <Container>
           <Navbar.Brand
-            href="https://colearn-ai.com"
+            href="https://colearn-ai.com/docs/"
             target="_blank"
             rel="noopener noreferrer"
             className="d-flex align-items-center gap-2"

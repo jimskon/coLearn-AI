@@ -1,5 +1,6 @@
 // /courses/controller.js
 const db = require("../db");
+const { inferActivityTypeFromActivity } = require('../utils/activityType');
 
 // GET all courses
 async function getAllCourses(req, res) {
@@ -173,6 +174,7 @@ async function getCourseActivities(req, res) {
     a.title AS activity_title,
     a.order_index AS activity_index,
     a.is_test AS is_test,
+    a.sheet_url AS sheet_url,
 
     -- instance id
     (
@@ -265,7 +267,12 @@ async function getCourseActivities(req, res) {
       ]
     );
 
-    const activities = rows.map((row) => {
+    const shouldInferActivityType = role !== 'student';
+    const activities = await Promise.all(rows.map(async (row) => {
+      const activityType = shouldInferActivityType
+        ? await inferActivityTypeFromActivity(row)
+        : (Number(row.is_test) === 1 ? 'test' : 'group');
+      const isTest = activityType === 'test';
       const is_test = row.is_test; // 1 / 0 / null
       const status = (row.progress_status || '').toLowerCase();
       const tg = Number(row.total_groups || 0);
@@ -289,8 +296,9 @@ async function getCourseActivities(req, res) {
         order_index: row.activity_index,
 
         is_test,
-        isTest: is_test === 1,
-        isTestKnown: is_test !== null && is_test !== undefined,
+        activity_type: activityType,
+        isTest,
+        isTestKnown: true,
 
         instance_id: row.instance_id || null,
         submitted_at: row.submitted_at || null,
@@ -303,7 +311,7 @@ async function getCourseActivities(req, res) {
         has_groups: row.group_count > 0,
         hidden: !!row.hidden,
       };
-    });
+    }));
 
 
     res.json(activities);

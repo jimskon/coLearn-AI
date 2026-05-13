@@ -11,6 +11,7 @@ router.post('/', controller.createActivityInstance);
 
 // ✅ Create multiple group-based instances
 router.post('/setup-groups', controller.setupMultipleGroupInstances);
+router.post('/by-activity/:courseId/:activityId/demo-instance', controller.ensureDemoInstance);
 
 // ✅ Reopen a timed test window for this instance
 router.post('/:instanceId/reopen', controller.reopenInstance);
@@ -55,6 +56,8 @@ router.get('/:instanceId/groups', controller.getInstanceGroups);
 
 // ✅ List all activity_instances for a given course + activity
 router.get('/by-activity/:courseId/:activityId', controller.getInstancesForActivityInCourse);
+router.post('/by-activity/:courseId/:activityId/timer-pause', controller.setTimerPauseForActivity);
+router.post('/by-activity/:courseId/:activityId/active-rotation-mode', controller.setActiveRotationModeForActivity);
 
 // ✅ Refresh total_groups by parsing the linked Google Doc
 router.get('/:instanceId/refresh-groups', controller.refreshTotalGroups);

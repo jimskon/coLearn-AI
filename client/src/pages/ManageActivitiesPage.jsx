@@ -1,32 +1,70 @@
-// src/pages/ManageActivitiesPage.jsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
-import { Table, Button, Form, Container, Modal } from 'react-bootstrap';
+import {
+  Alert,
+  Badge,
+  Button,
+  Container,
+  Form,
+  Modal,
+  Table,
+} from 'react-bootstrap';
 
 const SERVICE_ACCOUNT_EMAIL = import.meta.env.VITE_SERVICE_ACCOUNT_EMAIL;
+
+const emptyUploadActivity = {
+  name: '',
+  title: '',
+  sheet_url: '',
+  order_index: '',
+};
+
+function SourceBadge({ sourceType }) {
+  const normalized = String(sourceType || 'remote').toLowerCase();
+  const isLocal = normalized === 'local';
+
+  return (
+    <Badge bg={isLocal ? 'success' : 'secondary'}>
+      {isLocal ? 'Local' : 'Remote'}
+    </Badge>
+  );
+}
 
 export default function ManageActivitiesPage() {
   const { id: classId } = useParams();
   const { user } = useUser();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [activities, setActivities] = useState([]);
-  const [newActivity, setNewActivity] = useState({
-    name: '',
-    title: '',
-    sheet_url: '',
-    order_index: ''
-  });
-
-  const [showModal, setShowModal] = useState(false);
+  const [newActivity, setNewActivity] = useState(emptyUploadActivity);
   const [pendingActivity, setPendingActivity] = useState(null);
-  const canManage = user?.role === 'root' || user?.role === 'creator';
-  const [showFolderModal, setShowFolderModal] = useState(false);
-  const [folderUrl, setFolderUrl] = useState('');
 
-  const location = useLocation();
+  const [showShareModal, setShowShareModal] = useState(false);
+  const [showFolderModal, setShowFolderModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+
+  const [folderUrl, setFolderUrl] = useState('');
+  const [uploadMode, setUploadMode] = useState('google');
+  const [downloadSelection, setDownloadSelection] = useState({});
+  const [downloadFolderUrl, setDownloadFolderUrl] = useState('');
+
+  const canManage = user?.role === 'root' || user?.role === 'creator';
+
+  const refreshActivities = async () => {
+    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+      credentials: 'include',
+    });
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      setActivities(data);
+    } else {
+      console.error('Unexpected response format:', data);
+    }
+  };
 
   useEffect(() => {
     if (!canManage) {
@@ -34,54 +72,42 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    fetch(`${API_BASE_URL}/api/classes/${classId}/activities`)
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setActivities(data);
-        } else {
-          console.error("Unexpected response format:", data);
-        }
-      })
-      .catch(err => {
-        console.error("Fetch error:", err);
-      });
+    refreshActivities().catch((err) => {
+      console.error('Fetch error:', err);
+    });
   }, [canManage, classId, navigate]);
 
-  const handleChange = (e) => {
-    setNewActivity({ ...newActivity, [e.target.name]: e.target.value });
+  useEffect(() => {
+    const nextSelection = {};
+    for (const activity of activities) {
+      nextSelection[activity.id] = downloadSelection[activity.id] ?? false;
+    }
+    setDownloadSelection(nextSelection);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activities]);
+
+  const selectedDownloadCount = useMemo(
+    () => Object.values(downloadSelection).filter(Boolean).length,
+    [downloadSelection]
+  );
+
+  const handleFieldChange = (name, field, value) => {
+    setActivities((prev) =>
+      prev.map((activity) =>
+        activity.name === name ? { ...activity, [field]: value } : activity
+      )
+    );
   };
 
-  const handleAdd = async () => {
-    const activity = {
-      ...newActivity,
-      order_index: parseInt(newActivity.order_index, 10),
-      createdBy: user?.id
-    };
-
-    if (!activity.sheet_url || activity.sheet_url.trim() === '') {
-      saveActivity(activity);
-      return;
-    }
-
-    setPendingActivity(activity);
-    setShowModal(true);
+  const handleUploadFieldChange = (e) => {
+    setNewActivity((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const handleBulkImport = async () => {
-    setShowFolderModal(false);
-    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/import-folder`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folderUrl, createdBy: user.id })
-    });
-    const data = await res.json();
-    if (res.ok) {
-      setActivities([...activities, ...data.imported]);
-      setFolderUrl('');
-    } else {
-      alert(data.error || "Folder import failed.");
-    }
+  const resetUploadState = () => {
+    setNewActivity(emptyUploadActivity);
+    setPendingActivity(null);
+    setShowUploadModal(false);
+    setShowShareModal(false);
   };
 
   const saveActivity = async (activity) => {
@@ -99,171 +125,164 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    // We only trust the INSERT id so we can open Preview.
     const newId = data?.id;
+    resetUploadState();
 
-    // Reset the form immediately (so if they come back, it's clean)
-    setNewActivity({ name: '', title: '', sheet_url: '', order_index: '' });
-
-    // If there's a doc URL, auto-open Preview so it parses and sets is_test in DB.
-    // (Preview will do the PATCH side-effect.)
     if (newId && activity?.sheet_url && activity.sheet_url.trim() !== '') {
       navigate(`/preview/${newId}?returnTo=${encodeURIComponent(location.pathname)}`);
       return;
     }
 
-    // Otherwise, re-fetch list from DB (single source of truth)
-    const refreshed = await fetch(
-      `${API_BASE_URL}/api/classes/${classId}/activities`,
-      { credentials: 'include' }
-    );
-
-    const refreshedData = await refreshed.json();
-    if (Array.isArray(refreshedData)) setActivities(refreshedData);
+    await refreshActivities();
   };
 
+  const handleUpload = async () => {
+    if (uploadMode !== 'google') {
+      alert('File upload is coming next. For now, use a Google Doc URL in this modal.');
+      return;
+    }
+
+    const activity = {
+      ...newActivity,
+      order_index:
+        newActivity.order_index === '' ? 0 : parseInt(newActivity.order_index, 10),
+      createdBy: user?.id,
+    };
+
+    if (!activity.name || !activity.title) {
+      alert('Please enter an activity ID and title.');
+      return;
+    }
+
+    if (!activity.sheet_url || activity.sheet_url.trim() === '') {
+      alert('Please enter a Google Sheet or Doc URL, or switch to file upload once it is available.');
+      return;
+    }
+
+    setPendingActivity(activity);
+    setShowUploadModal(false);
+    setShowShareModal(true);
+  };
 
   const confirmShareAndCheckAccess = async () => {
-    setShowModal(false);
+    setShowShareModal(false);
+
     if (!pendingActivity?.sheet_url) {
-      saveActivity(pendingActivity);
+      await saveActivity(pendingActivity);
       setPendingActivity(null);
       return;
     }
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/activities/check-access?url=${encodeURIComponent(pendingActivity.sheet_url)}`);
+      const res = await fetch(
+        `${API_BASE_URL}/api/activities/check-access?url=${encodeURIComponent(pendingActivity.sheet_url)}`
+      );
 
       let result = { access: false };
       if (res.ok) {
         const text = await res.text();
-        if (text) {
-          result = JSON.parse(text);
-        }
+        if (text) result = JSON.parse(text);
       }
 
       if (res.ok && result.access) {
-        saveActivity(pendingActivity);
+        await saveActivity(pendingActivity);
       } else {
-        alert("Access denied or document not found. Please ensure the document is shared and the URL is correct.");
+        alert('Access denied or document not found. Please ensure the document is shared and the URL is correct.');
         setNewActivity(pendingActivity);
+        setShowUploadModal(true);
       }
     } catch (err) {
-      console.error("Error checking access:", err);
-      alert("Error checking document access. Please try again.");
+      console.error('Error checking access:', err);
+      alert('Error checking document access. Please try again.');
       setNewActivity(pendingActivity);
+      setShowUploadModal(true);
     }
 
     setPendingActivity(null);
   };
 
-  const handleDelete = async (activityId) => {
-    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/${activityId}`, {
-      method: 'DELETE'
+  const handleBulkImport = async () => {
+    setShowFolderModal(false);
+    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/import-folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folderUrl, createdBy: user.id }),
     });
-
+    const data = await res.json();
     if (res.ok) {
-      setActivities(activities.filter(a => a.id !== activityId));
+      setActivities((prev) => [...prev, ...data.imported]);
+      setFolderUrl('');
     } else {
-      const data = await res.json();
-      alert(data.error || "Delete failed.");
+      alert(data.error || 'Folder import failed.');
     }
   };
 
+  const handleDelete = async (activityId) => {
+    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/${activityId}`, {
+      method: 'DELETE',
+    });
+
+    if (res.ok) {
+      setActivities((prev) => prev.filter((activity) => activity.id !== activityId));
+    } else {
+      const data = await res.json();
+      alert(data.error || 'Delete failed.');
+    }
+  };
 
   const handleUpdate = async (activity) => {
     const payload = {
       title: activity.title,
       sheet_url: activity.sheet_url,
-      order_index: parseInt(activity.order_index, 10)
+      order_index: parseInt(activity.order_index, 10),
     };
 
     const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/${activity.name}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
 
     if (res.ok) {
       const updated = await res.json();
-      setActivities(activities.map(a => a.name === updated.name ? updated : a));
+      setActivities((prev) =>
+        prev.map((activityRow) =>
+          activityRow.name === updated.name ? { ...activityRow, ...updated } : activityRow
+        )
+      );
     } else {
       const err = await res.text();
-      console.error("Update failed:", err);
-      alert("Update failed.");
+      console.error('Update failed:', err);
+      alert('Update failed.');
     }
   };
 
-  const handleFieldChange = (name, field, value) => {
-    setActivities(activities.map(a =>
-      a.name === name ? { ...a, [field]: value } : a
-    ));
+  const openCreatePlaceholder = () => {
+    alert('Create Activity is the next step. We will wire this button into the new authoring flow.');
+  };
+
+  const openDownloadPlaceholder = () => {
+    setShowDownloadModal(true);
   };
 
   return (
     <Container>
       <h2 className="mb-4">Manage POGIL Activities for Class {classId}</h2>
 
-      <Form className="mb-4">
-        <h4>Add New Activity</h4>
-        <Form.Group className="mb-2">
-          <Form.Control
-            name="name"
-            placeholder="Activity ID"
-            value={newActivity.name}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Form.Group className="mb-2">
-          <Form.Control
-            name="title"
-            placeholder="Title"
-            value={newActivity.title}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Form.Group className="mb-2">
-          <Form.Control
-            name="sheet_url"
-            placeholder="Google Sheet or Doc URL"
-            value={newActivity.sheet_url}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Form.Group className="mb-3">
-          <Form.Control
-            name="order_index"
-            type="number"
-            placeholder="Order Index"
-            value={newActivity.order_index}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Button variant="primary" onClick={handleAdd}>Add Activity</Button>
-        <Button
-          variant="secondary"
-          className="mb-4"
-          onClick={() => setShowFolderModal(true)}
-        >
-          Import Activities from Google Folder
-        </Button>
-
-
-      </Form>
-
       <h4>Current Activities</h4>
-      <Table striped bordered hover responsive>
+      <Table striped bordered hover responsive className="mb-4">
         <thead>
           <tr>
             <th>Name</th>
             <th>Title</th>
+            <th>Source</th>
             <th>Sheet URL</th>
             <th>Order</th>
             <th style={{ width: '30%' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
-          {activities.map(activity => (
+          {activities.map((activity) => (
             <tr key={activity.name}>
               <td>
                 <Form.Control value={activity.name} readOnly />
@@ -271,38 +290,142 @@ export default function ManageActivitiesPage() {
               <td>
                 <Form.Control
                   value={activity.title}
-                  onChange={e => handleFieldChange(activity.name, 'title', e.target.value)}
+                  onChange={(e) => handleFieldChange(activity.name, 'title', e.target.value)}
                 />
+              </td>
+              <td className="align-middle text-center">
+                <SourceBadge sourceType={activity.source_type} />
               </td>
               <td>
                 <Form.Control
-                  value={activity.sheet_url}
-                  onChange={e => handleFieldChange(activity.name, 'sheet_url', e.target.value)}
+                  value={activity.sheet_url || ''}
+                  onChange={(e) => handleFieldChange(activity.name, 'sheet_url', e.target.value)}
                 />
               </td>
               <td>
                 <Form.Control
                   type="number"
                   value={activity.order_index}
-                  onChange={e => handleFieldChange(activity.name, 'order_index', parseInt(e.target.value, 10))}
+                  onChange={(e) =>
+                    handleFieldChange(activity.name, 'order_index', parseInt(e.target.value, 10))
+                  }
                 />
               </td>
-              <td>
-                <Button variant="success" size="sm" onClick={() => handleUpdate(activity)} className="me-2">Update</Button>
-                <Button variant="info" size="sm" onClick={() => {
-                  if (!activity.sheet_url) {
-                    alert("No document URL specified for this activity.");
-                  } else {
-                    navigate(`/preview/${activity.id}?returnTo=${encodeURIComponent(location.pathname)}`);
-                  }
-                }} className="me-2">Preview</Button>
-                <Button variant="warning" size="sm" onClick={() => navigate(`/editor/${activity.id}`)} className="me-2">Edit</Button>
-                <Button variant="danger" size="sm" onClick={() => handleDelete(activity.id)}>Delete</Button>
+              <td className="align-middle">
+                <div className="d-flex flex-wrap gap-2">
+                  <Button
+                    variant="success"
+                    size="sm"
+                    onClick={() => handleUpdate(activity)}
+                  >
+                    Update
+                  </Button>
+                  <Button
+                    variant="info"
+                    size="sm"
+                    onClick={() => navigate(`/preview/${activity.id}?returnTo=${encodeURIComponent(location.pathname)}`)}
+                  >
+                    Preview
+                  </Button>
+                  <Button
+                    variant="warning"
+                    size="sm"
+                    onClick={() => navigate(`/editor/${activity.id}`)}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => handleDelete(activity.id)}
+                  >
+                    Delete
+                  </Button>
+                </div>
               </td>
             </tr>
           ))}
         </tbody>
       </Table>
+
+      <div className="d-flex flex-wrap gap-2 align-items-center mb-4">
+        <Button variant="success" onClick={openCreatePlaceholder}>
+          Create
+        </Button>
+        <Button variant="primary" onClick={() => setShowUploadModal(true)}>
+          Upload
+        </Button>
+        <Button variant="secondary" onClick={openDownloadPlaceholder}>
+          Download
+        </Button>
+      </div>
+
+      <Modal show={showUploadModal} onHide={() => setShowUploadModal(false)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Upload Activity</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>Upload Type</Form.Label>
+            <Form.Select value={uploadMode} onChange={(e) => setUploadMode(e.target.value)}>
+              <option value="google">Google Doc or Sheet URL</option>
+              <option value="file">Single text file or zip file</option>
+            </Form.Select>
+          </Form.Group>
+
+          {uploadMode === 'google' ? (
+            <>
+              <Form.Group className="mb-2">
+                <Form.Control
+                  name="name"
+                  placeholder="Activity ID"
+                  value={newActivity.name}
+                  onChange={handleUploadFieldChange}
+                />
+              </Form.Group>
+              <Form.Group className="mb-2">
+                <Form.Control
+                  name="title"
+                  placeholder="Title"
+                  value={newActivity.title}
+                  onChange={handleUploadFieldChange}
+                />
+              </Form.Group>
+              <Form.Group className="mb-2">
+                <Form.Control
+                  name="sheet_url"
+                  placeholder="Google Sheet or Doc URL"
+                  value={newActivity.sheet_url}
+                  onChange={handleUploadFieldChange}
+                />
+              </Form.Group>
+              <Form.Group>
+                <Form.Control
+                  name="order_index"
+                  type="number"
+                  placeholder="Order Index"
+                  value={newActivity.order_index}
+                  onChange={handleUploadFieldChange}
+                />
+              </Form.Group>
+            </>
+          ) : (
+            <Alert variant="info" className="mb-0">
+              File upload is the next step. This modal will soon accept a single activity text file
+              or a zip of activities.
+            </Alert>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowUploadModal(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleUpload}>
+            Continue
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
       <Modal show={showFolderModal} onHide={() => setShowFolderModal(false)}>
         <Modal.Header closeButton>
           <Modal.Title>Import from Google Folder</Modal.Title>
@@ -314,26 +437,106 @@ export default function ManageActivitiesPage() {
             value={folderUrl}
             onChange={(e) => setFolderUrl(e.target.value)}
           />
-          <p className="mt-2">Make sure the folder is shared with: <code>{SERVICE_ACCOUNT_EMAIL}</code></p>
+          <p className="mt-2">
+            Make sure the folder is shared with: <code>{SERVICE_ACCOUNT_EMAIL}</code>
+          </p>
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowFolderModal(false)}>Cancel</Button>
-          <Button variant="primary" onClick={handleBulkImport}>Import</Button>
+          <Button variant="secondary" onClick={() => setShowFolderModal(false)}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleBulkImport}>
+            Import
+          </Button>
         </Modal.Footer>
       </Modal>
+
+      <Modal show={showDownloadModal} onHide={() => setShowDownloadModal(false)} size="lg">
+        <Modal.Header closeButton>
+          <Modal.Title>Download Activities</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>Activity Selection</Form.Label>
+            <div className="border rounded p-3" style={{ maxHeight: '260px', overflowY: 'auto' }}>
+              {activities.map((activity) => (
+                <Form.Check
+                  key={activity.id}
+                  type="checkbox"
+                  className="mb-2"
+                  label={
+                    <span>
+                      {activity.title} <span className="ms-2"><SourceBadge sourceType={activity.source_type} /></span>
+                    </span>
+                  }
+                  checked={!!downloadSelection[activity.id]}
+                  onChange={(e) =>
+                    setDownloadSelection((prev) => ({
+                      ...prev,
+                      [activity.id]: e.target.checked,
+                    }))
+                  }
+                />
+              ))}
+            </div>
+            <div className="text-muted small mt-2">
+              {selectedDownloadCount} selected
+            </div>
+          </Form.Group>
+
+          <Form.Group className="mb-2">
+            <Form.Label>Google Folder Import/Export Option</Form.Label>
+            <Form.Control
+              type="text"
+              placeholder="Google folder URL (existing path)"
+              value={downloadFolderUrl}
+              onChange={(e) => setDownloadFolderUrl(e.target.value)}
+            />
+          </Form.Group>
+
+          <Alert variant="info" className="mb-0">
+            Zip download/upload is the next step. This dialog is the landing spot for choosing a
+            set of activities and optionally using the existing Google-folder flow.
+          </Alert>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowDownloadModal(false)}>
+            Close
+          </Button>
+          <Button variant="outline-secondary" onClick={() => {
+            setShowDownloadModal(false);
+            setShowFolderModal(true);
+          }}>
+            Open Google Folder Import
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
       {pendingActivity?.sheet_url && pendingActivity.sheet_url.trim() !== '' && (
-        <Modal show={showModal} onHide={() => setShowModal(false)}>
+        <Modal show={showShareModal} onHide={() => setShowShareModal(false)}>
           <Modal.Header closeButton>
             <Modal.Title>Share Document Access</Modal.Title>
           </Modal.Header>
           <Modal.Body>
             <p>If your activity uses a Google Sheet or Doc, please ensure it is shared with:</p>
             <code>{SERVICE_ACCOUNT_EMAIL}</code>
-            <p className="mt-3">Click "Continue" once you've shared access or if no document is being used.</p>
+            <p className="mt-3">
+              Click "Continue" once you've shared access or if no document is being used.
+            </p>
           </Modal.Body>
           <Modal.Footer>
-            <Button variant="secondary" onClick={() => setShowModal(false)}>Cancel</Button>
-            <Button variant="primary" onClick={confirmShareAndCheckAccess}>Continue</Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setShowShareModal(false);
+                setShowUploadModal(true);
+              }}
+            >
+              Back
+            </Button>
+            <Button variant="primary" onClick={confirmShareAndCheckAccess}>
+              Continue
+            </Button>
           </Modal.Footer>
         </Modal>
       )}

@@ -4,7 +4,7 @@ const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const { loadActivitySourceById } = require('../utils/activityContent');
 
 function extractTitleFromText(text) {
-  const match = String(text || '').match(/^\\title\{([\s\S]*?)\}$/m);
+  const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
   return match ? match[1].trim() : null;
 }
 

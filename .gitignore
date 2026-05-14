@@ -55,3 +55,8 @@ pogil_db_*.sql
 client/hash
 
 bootstrap-summary.txt
+
+/package-lock.json
+/server/package-lock.json
+/package-lock.json
+/server/package-lock.json

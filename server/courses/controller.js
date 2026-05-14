@@ -162,10 +162,9 @@ async function getCourseActivities(req, res) {
   try {
     const role = req.user?.role;
 
-    // Students: only show activities that have groups (instances) AND are not hidden
-    const studentHaving = (role === 'student')
-      ? `HAVING COUNT(ai.id) > 0 AND MAX(COALESCE(ai.hidden, 0)) = 0`
-      : '';
+    // Students are filtered after activity type inference so demos remain visible
+    // even before they have any instances/groups.
+    const studentHaving = '';
     const [rows] = await db.query(
       `
   SELECT 
@@ -269,11 +268,8 @@ async function getCourseActivities(req, res) {
       ]
     );
 
-    const shouldInferActivityType = role !== 'student';
     const activities = await Promise.all(rows.map(async (row) => {
-      const activityType = shouldInferActivityType
-        ? await inferActivityTypeFromActivity(row)
-        : (Number(row.is_test) === 1 ? 'test' : 'group');
+      const activityType = await inferActivityTypeFromActivity(row);
       const isTest = activityType === 'test';
       const is_test = row.is_test; // 1 / 0 / null
       const status = (row.progress_status || '').toLowerCase();
@@ -315,8 +311,11 @@ async function getCourseActivities(req, res) {
       };
     }));
 
+    const visibleActivities = role === 'student'
+      ? activities.filter((activity) => !activity.hidden && (activity.activity_type === 'demo' || activity.has_groups))
+      : activities;
 
-    res.json(activities);
+    res.json(visibleActivities);
   } catch (err) {
     console.error("❌ Error fetching activities for course:", err);
     res.status(500).json({ error: "Failed to fetch activities" });

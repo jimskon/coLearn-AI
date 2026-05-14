@@ -304,9 +304,12 @@ async function getParsedActivityDoc(req, res) {
     const lines = doc.data.body.content
       .map(block => {
         if (!block.paragraph?.elements) return null;
-        return block.paragraph.elements.map(e => e.textRun?.content || '').join('').trim();
+        return block.paragraph.elements
+          .map(e => e.textRun?.content || '')
+          .join('')
+          .replace(/\r?\n$/, '');
       })
-      .filter(Boolean);
+      .filter((line) => line !== null && line !== '');
 
     res.json({ lines });
   } catch (err) {

@@ -295,7 +295,26 @@ async function getParsedActivityDoc(req, res) {
       return res.status(404).json({ error: 'Activity source not found' });
     }
 
+<<<<<<< HEAD
     const lines = await loadActivitySourceLines(rows[0]);
+=======
+    const docId = rows[0].sheet_url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
+    if (!docId) throw new Error('Invalid sheet_url');
+
+    const auth = authorize();
+    const docs = google.docs({ version: 'v1', auth });
+    const doc = await docs.documents.get({ documentId: docId });
+
+    const lines = doc.data.body.content
+      .map(block => {
+        if (!block.paragraph?.elements) return null;
+        return block.paragraph.elements
+          .map(e => e.textRun?.content || '')
+          .join('')
+          .replace(/\r?\n$/, '');
+      })
+      .filter((line) => line !== null && line !== '');
+>>>>>>> 49703e8 (Fix code indentation)
 
     res.json({ lines });
   } catch (err) {

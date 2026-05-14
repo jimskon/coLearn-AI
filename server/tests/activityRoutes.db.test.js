@@ -81,12 +81,20 @@ async function ensureSchema() {
       name VARCHAR(191) NOT NULL,
       title TEXT NOT NULL,
       sheet_url TEXT DEFAULT NULL,
+      source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      content_text LONGTEXT DEFAULT NULL,
       class_id INT NOT NULL,
       order_index INT NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL,
       last_loaded TIMESTAMP NULL DEFAULT NULL,
       is_test TINYINT(1) DEFAULT NULL
     )
+  `);
+
+  await db.query(`
+    ALTER TABLE pogil_activities
+      ADD COLUMN IF NOT EXISTS source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      ADD COLUMN IF NOT EXISTS content_text LONGTEXT DEFAULT NULL
   `);
 
   await db.query(`
@@ -216,6 +224,22 @@ test.before(async () => {
 test.after(async () => {
   await cleanupCreatedRows();
   await db.end();
+});
+
+test('activity storage columns default existing-style inserts to remote with no local content', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: creator.id });
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text
+       FROM pogil_activities
+      WHERE id = ?`,
+    [activity.id]
+  );
+
+  assert.equal(row.source_type, 'remote');
+  assert.equal(row.content_text, null);
 });
 
 test('createActivity inserts a new activity and returns its payload', async () => {

@@ -101,12 +101,20 @@ async function ensureSchema() {
       name VARCHAR(191) NOT NULL,
       title TEXT NOT NULL,
       sheet_url TEXT DEFAULT NULL,
+      source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      content_text LONGTEXT DEFAULT NULL,
       class_id INT NOT NULL,
       order_index INT NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL,
       last_loaded TIMESTAMP NULL DEFAULT NULL,
       is_test TINYINT(1) DEFAULT NULL
     )
+  `);
+
+  await db.query(`
+    ALTER TABLE pogil_activities
+      ADD COLUMN IF NOT EXISTS source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      ADD COLUMN IF NOT EXISTS content_text LONGTEXT DEFAULT NULL
   `);
 
   await db.query(`
@@ -382,6 +390,75 @@ test('course activities returns canonical activity_type values inferred from sou
   assert.equal(byTitle.get('Demo Activity')?.activity_type, 'demo');
   assert.equal(byTitle.get('Test Activity')?.activity_type, 'test');
   assert.equal(byTitle.get('Group Activity')?.activity_type, 'group');
+});
+
+test('student course activities include demos without groups and classify them as demo', async () => {
+  await ensureSchema();
+
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  await enroll(courseId, student.id);
+
+  const demoDocId = 'studentVisibleDemo12345678901234';
+  const groupDocId = 'studentVisibleGroup1234567890123';
+
+  await createActivity({
+    classId,
+    title: 'Student Demo Visible',
+    sheetUrl: `https://docs.google.com/document/d/${demoDocId}/edit`,
+    isTest: 0,
+    orderIndex: 1,
+  });
+  const groupActivityId = await createActivity({
+    classId,
+    title: 'Student Group Hidden Without Groups',
+    sheetUrl: `https://docs.google.com/document/d/${groupDocId}/edit`,
+    isTest: 0,
+    orderIndex: 2,
+  });
+
+  const response = await requestJson(student, `/api/courses/${courseId}/activities`, {
+    overrides: {
+      docsById: {
+        [demoDocId]: ['\\title{Student Demo Visible}', '\\mode{demo}', '\\questiongroup{One}'],
+        [groupDocId]: ['\\title{Student Group Hidden Without Groups}', '\\mode{group}', '\\questiongroup{One}'],
+      },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const byTitle = new Map(response.body.map((row) => [row.title, row]));
+  assert.equal(byTitle.get('Student Demo Visible')?.activity_type, 'demo');
+  assert.equal(byTitle.get('Student Demo Visible')?.has_groups, false);
+  assert.equal(byTitle.has('Student Group Hidden Without Groups'), false);
+
+  const openDemo = await requestJson(
+    student,
+    `/api/activity-instances/by-activity/${courseId}/${byTitle.get('Student Demo Visible').activity_id}/demo-instance`,
+    {
+      method: 'POST',
+      overrides: {
+        docsById: {
+          [demoDocId]: ['\\title{Student Demo Visible}', '\\mode{demo}', '\\questiongroup{One}'],
+        },
+      },
+    }
+  );
+
+  assert.equal(openDemo.status, 201);
+  assert.equal(typeof openDemo.body.instanceId, 'number');
+
+  const [[instanceRow]] = await db.query(
+    `SELECT course_id, activity_id, active_student_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [openDemo.body.instanceId]
+  );
+  assert.equal(Number(instanceRow.course_id), courseId);
+  assert.equal(Number(instanceRow.activity_id), byTitle.get('Student Demo Visible').activity_id);
+  assert.equal(Number(instanceRow.active_student_id), student.id);
 });
 
 test('demo-instance creates a personal instance once and reuses it on repeat opens', async () => {

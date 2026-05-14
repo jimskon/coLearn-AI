@@ -90,12 +90,20 @@ async function ensureSchema() {
       name VARCHAR(191) NOT NULL,
       title TEXT NOT NULL,
       sheet_url TEXT DEFAULT NULL,
+      source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      content_text LONGTEXT DEFAULT NULL,
       class_id INT NOT NULL,
       order_index INT NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL,
       last_loaded TIMESTAMP NULL DEFAULT NULL,
       is_test TINYINT(1) DEFAULT NULL
     )
+  `);
+
+  await db.query(`
+    ALTER TABLE pogil_activities
+      ADD COLUMN IF NOT EXISTS source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      ADD COLUMN IF NOT EXISTS content_text LONGTEXT DEFAULT NULL
   `);
 
   await db.query(`

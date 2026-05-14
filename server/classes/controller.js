@@ -67,27 +67,59 @@ exports.getActivitiesByClass = async (req, res) => {
 
 exports.createActivityForClass = async (req, res) => {
   const classId = req.params.id;
-  const { name, title, sheet_url, order_index, createdBy } = req.body;
+  const {
+    name,
+    title,
+    sheet_url,
+    order_index,
+    createdBy,
+    source_type = 'remote',
+    content_text = null,
+  } = req.body;
 
   if (!name || !title || order_index === undefined || createdBy === undefined) {
     return res.status(400).json({
       error: 'Missing required fields',
-      received: { name, title, sheet_url, order_index, createdBy }
+      received: { name, title, sheet_url, order_index, createdBy, source_type }
     });
+  }
+
+  const normalizedSourceType = String(source_type || 'remote').toLowerCase() === 'local'
+    ? 'local'
+    : 'remote';
+
+  if (normalizedSourceType === 'remote' && (!sheet_url || String(sheet_url).trim() === '')) {
+    return res.status(400).json({ error: 'Remote activities require a Google Sheet or Doc URL.' });
+  }
+
+  if (normalizedSourceType === 'local' && (content_text == null || String(content_text) === '')) {
+    return res.status(400).json({ error: 'Local activities require content_text.' });
   }
 
   try {
     const [result] = await db.query(
-      'INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, title, sheet_url, order_index, classId, createdBy]
+      `INSERT INTO pogil_activities
+         (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        name,
+        title,
+        normalizedSourceType === 'remote' ? sheet_url : null,
+        normalizedSourceType,
+        normalizedSourceType === 'local' ? content_text : null,
+        order_index,
+        classId,
+        createdBy,
+      ]
     );
 
-    // ✅ RETURN THE INSERTED ID
     res.status(201).json({
-      id: Number(result.insertId),          // <--- THIS IS THE FIX
+      id: Number(result.insertId),
       name,
       title,
-      sheet_url,
+      sheet_url: normalizedSourceType === 'remote' ? sheet_url : null,
+      source_type: normalizedSourceType,
+      content_text: normalizedSourceType === 'local' ? content_text : null,
       order_index,
       class_id: Number(classId),
       created_by: createdBy

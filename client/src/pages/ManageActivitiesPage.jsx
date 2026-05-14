@@ -21,6 +21,20 @@ const emptyUploadActivity = {
   order_index: '',
 };
 
+function slugifyActivityName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 180);
+}
+
+function extractTitleFromMarkup(text) {
+  const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
+  return match ? match[1].trim() : null;
+}
+
 function SourceBadge({ sourceType }) {
   const normalized = String(sourceType || 'remote').toLowerCase();
   const isLocal = normalized === 'local';
@@ -48,9 +62,11 @@ export default function ManageActivitiesPage() {
   const [showDownloadModal, setShowDownloadModal] = useState(false);
 
   const [folderUrl, setFolderUrl] = useState('');
-  const [uploadMode, setUploadMode] = useState('google');
+  const [uploadMode, setUploadMode] = useState('file');
   const [downloadSelection, setDownloadSelection] = useState({});
   const [downloadFolderUrl, setDownloadFolderUrl] = useState('');
+  const [selectedUploadFile, setSelectedUploadFile] = useState(null);
+  const [uploadNote, setUploadNote] = useState('');
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 
@@ -106,6 +122,8 @@ export default function ManageActivitiesPage() {
   const resetUploadState = () => {
     setNewActivity(emptyUploadActivity);
     setPendingActivity(null);
+    setSelectedUploadFile(null);
+    setUploadNote('');
     setShowUploadModal(false);
     setShowShareModal(false);
   };
@@ -137,8 +155,66 @@ export default function ManageActivitiesPage() {
   };
 
   const handleUpload = async () => {
-    if (uploadMode !== 'google') {
-      alert('File upload is coming next. For now, use a Google Doc URL in this modal.');
+    setUploadNote('');
+
+    if (uploadMode === 'file') {
+      if (!selectedUploadFile) {
+        setUploadNote('Choose a local text file or JSON bundle first.');
+        return;
+      }
+
+      try {
+        const raw = await selectedUploadFile.text();
+        const filename = selectedUploadFile.name || 'activity.txt';
+        const fileBase = filename.replace(/\.[^.]+$/, '');
+
+        if (/\.json$/i.test(filename)) {
+          const parsed = JSON.parse(raw);
+          const importedItems = Array.isArray(parsed?.activities)
+            ? parsed.activities
+            : Array.isArray(parsed)
+              ? parsed
+              : [parsed];
+
+          if (!importedItems.length) {
+            setUploadNote('That JSON file did not contain any activities.');
+            return;
+          }
+
+          for (let index = 0; index < importedItems.length; index += 1) {
+            const item = importedItems[index] || {};
+            const contentText = String(item.content_text || item.text || '');
+            const title = item.title || extractTitleFromMarkup(contentText) || `Imported Activity ${index + 1}`;
+            const name = slugifyActivityName(item.name || title || `${fileBase}_${index + 1}`) || `activity_${Date.now()}_${index + 1}`;
+
+            await saveActivity({
+              name,
+              title,
+              source_type: 'local',
+              content_text: contentText,
+              order_index: item.order_index ?? activities.length + index,
+              createdBy: user?.id,
+            });
+          }
+
+          return;
+        }
+
+        const title = extractTitleFromMarkup(raw) || newActivity.title || fileBase;
+        const name = slugifyActivityName(newActivity.name || title || fileBase) || `activity_${Date.now()}`;
+
+        await saveActivity({
+          name,
+          title,
+          source_type: 'local',
+          content_text: raw,
+          order_index: newActivity.order_index === '' ? activities.length : parseInt(newActivity.order_index, 10),
+          createdBy: user?.id,
+        });
+      } catch (err) {
+        console.error('Local upload failed:', err);
+        setUploadNote('Unable to read that file. Use a plain text activity file or a JSON bundle.');
+      }
       return;
     }
 
@@ -265,6 +341,70 @@ export default function ManageActivitiesPage() {
     setShowDownloadModal(true);
   };
 
+  const triggerBrowserDownload = (filename, text, mimeType = 'text/plain;charset=utf-8') => {
+    const blob = new Blob([text], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadSelected = async () => {
+    const selectedActivities = activities.filter((activity) => downloadSelection[activity.id]);
+    if (!selectedActivities.length) {
+      alert('Select at least one activity to download.');
+      return;
+    }
+
+    try {
+      const bundle = [];
+      for (const activity of selectedActivities) {
+        const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/source`, {
+          credentials: 'include',
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          throw new Error(body?.error || `Failed to load activity ${activity.title}`);
+        }
+
+        bundle.push({
+          id: activity.id,
+          name: activity.name,
+          title: activity.title,
+          source_type: body.source_type || activity.source_type || 'remote',
+          sheet_url: activity.sheet_url || null,
+          order_index: activity.order_index,
+          content_text: body.text || '',
+        });
+      }
+
+      if (bundle.length === 1) {
+        const item = bundle[0];
+        const filename = `${slugifyActivityName(item.name || item.title || 'activity') || 'activity'}.txt`;
+        triggerBrowserDownload(filename, item.content_text || '', 'text/plain;charset=utf-8');
+      } else {
+        const exportPayload = {
+          format: 'colearn-activity-bundle/v1',
+          class_id: Number(classId),
+          exported_at: new Date().toISOString(),
+          activities: bundle,
+        };
+        triggerBrowserDownload(
+          `class_${classId}_activities.json`,
+          JSON.stringify(exportPayload, null, 2),
+          'application/json;charset=utf-8'
+        );
+      }
+    } catch (err) {
+      console.error('Download failed:', err);
+      alert(err?.message || 'Failed to download selected activities.');
+    }
+  };
+
   return (
     <Container>
       <h2 className="mb-4">Manage POGIL Activities for Class {classId}</h2>
@@ -368,8 +508,8 @@ export default function ManageActivitiesPage() {
           <Form.Group className="mb-3">
             <Form.Label>Upload Type</Form.Label>
             <Form.Select value={uploadMode} onChange={(e) => setUploadMode(e.target.value)}>
+              <option value="file">Single text file or JSON bundle</option>
               <option value="google">Google Doc or Sheet URL</option>
-              <option value="file">Single text file or zip file</option>
             </Form.Select>
           </Form.Group>
 
@@ -410,18 +550,49 @@ export default function ManageActivitiesPage() {
               </Form.Group>
             </>
           ) : (
-            <Alert variant="info" className="mb-0">
-              File upload is the next step. This modal will soon accept a single activity text file
-              or a zip of activities.
-            </Alert>
+            <>
+              <Form.Group className="mb-3">
+                <Form.Label>Choose Local File</Form.Label>
+                <Form.Control
+                  type="file"
+                  accept=".txt,.md,.tex,.json,.zip"
+                  onChange={(e) => setSelectedUploadFile(e.target.files?.[0] || null)}
+                />
+                <div className="text-muted small mt-2">
+                  Upload a single activity text file now, or a JSON activity bundle. Zip support is next.
+                </div>
+              </Form.Group>
+              <Form.Group className="mb-2">
+                <Form.Control
+                  name="name"
+                  placeholder="Optional Activity ID override"
+                  value={newActivity.name}
+                  onChange={handleUploadFieldChange}
+                />
+              </Form.Group>
+              <Form.Group>
+                <Form.Control
+                  name="order_index"
+                  type="number"
+                  placeholder="Optional Order Index"
+                  value={newActivity.order_index}
+                  onChange={handleUploadFieldChange}
+                />
+              </Form.Group>
+            </>
           )}
+          {uploadNote ? (
+            <Alert variant="warning" className="mt-3 mb-0">
+              {uploadNote}
+            </Alert>
+          ) : null}
         </Modal.Body>
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowUploadModal(false)}>
             Cancel
           </Button>
           <Button variant="primary" onClick={handleUpload}>
-            Continue
+            {uploadMode === 'file' ? 'Upload from Drive' : 'Continue'}
           </Button>
         </Modal.Footer>
       </Modal>
@@ -484,8 +655,8 @@ export default function ManageActivitiesPage() {
             </div>
           </Form.Group>
 
-          <Form.Group className="mb-2">
-            <Form.Label>Google Folder Import/Export Option</Form.Label>
+          <Form.Group className="mb-2 mt-4">
+            <Form.Label>Secondary Google Folder Option</Form.Label>
             <Form.Control
               type="text"
               placeholder="Google folder URL (existing path)"
@@ -495,11 +666,15 @@ export default function ManageActivitiesPage() {
           </Form.Group>
 
           <Alert variant="info" className="mb-0">
-            Zip download/upload is the next step. This dialog is the landing spot for choosing a
-            set of activities and optionally using the existing Google-folder flow.
+            Local download works now. One selected activity downloads as a text file; multiple
+            selected activities download as a JSON bundle. Zip support is next. Google-folder flow
+            stays available as a secondary path.
           </Alert>
         </Modal.Body>
         <Modal.Footer>
+          <Button variant="primary" onClick={handleDownloadSelected}>
+            Download Selected
+          </Button>
           <Button variant="secondary" onClick={() => setShowDownloadModal(false)}>
             Close
           </Button>

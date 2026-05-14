@@ -231,6 +231,43 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.deepEqual(listAfterDelete.body, []);
 });
 
+test('class activity routes can create a local stored activity', async () => {
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const activityName = uniqueName('local-activity').toLowerCase();
+  const contentText = '\\title{Local Upload}\\mode{group}\n\\questiongroup{One}';
+
+  const create = await requestJson(`/api/classes/${classId}/activities`, {
+    method: 'POST',
+    body: {
+      name: activityName,
+      title: 'Local Upload',
+      source_type: 'local',
+      content_text: contentText,
+      order_index: 1,
+      createdBy: creatorId,
+    },
+  });
+
+  assert.equal(create.status, 201);
+  assert.equal(create.body.name, activityName);
+  assert.equal(create.body.title, 'Local Upload');
+  assert.equal(create.body.source_type, 'local');
+  assert.equal(create.body.content_text, contentText);
+  assert.equal(create.body.sheet_url, null);
+  remember('activities', create.body.id);
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text, sheet_url
+       FROM pogil_activities
+      WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(row.source_type, 'local');
+  assert.equal(row.content_text, contentText);
+  assert.equal(row.sheet_url, null);
+});
+
 test('activity creation rejects missing required fields before database insert', async () => {
   const classId = await createClassRecord();
 

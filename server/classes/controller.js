@@ -359,7 +359,7 @@ exports.createCreatorDraft = async (req, res) => {
     const classRow = classes[0];
     const orderIndex = await getNextOrderIndex(classId);
     const name = await getUniqueActivityName(normalizedTitle, classId);
-    const contentText = await activityCreator.generateActivityDraft({
+    const generation = await activityCreator.generateActivityDraft({
       title: normalizedTitle,
       mode: normalizedMode,
       durationMinutes: Math.round(durationMinutes),
@@ -369,6 +369,7 @@ exports.createCreatorDraft = async (req, res) => {
       classDescription: classRow.description,
       activityDescription: normalizedDescription,
     });
+    const contentText = generation.text;
 
     const [result] = await db.query(
       `INSERT INTO pogil_activities
@@ -397,6 +398,8 @@ exports.createCreatorDraft = async (req, res) => {
       mode: normalizedMode,
       duration_minutes: Math.round(durationMinutes),
       selected_model: normalizedSelectedModel,
+      generation_status: generation.generation_status,
+      generation_error: generation.generation_error,
     });
   } catch (err) {
     console.error('Error creating creator draft:', err);

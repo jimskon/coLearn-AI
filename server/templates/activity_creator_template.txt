@@ -1,17 +1,17 @@
-\title{{TITLE}}
-\mode{{MODE}}
-\studentlevel{{CLASS_LEVEL}}
-\activitycontext{{CLASS_TOPIC_DOMAIN}}
+\title{__TITLE__}
+\mode{__MODE__}
+\studentlevel{__CLASS_LEVEL__}
+\activitycontext{__CLASS_TOPIC_DOMAIN__}
 
 \section{Draft Brief}
-Target duration: {{DURATION_MINUTES}} minutes.
-Requested generation model: {{SELECTED_MODEL}}.
+Target duration: __DURATION_MINUTES__ minutes.
+Requested generation model: __SELECTED_MODEL__.
 
 Class description:
-{{CLASS_DESCRIPTION_BLOCK}}
+__CLASS_DESCRIPTION_BLOCK__
 
 Initial activity brief:
-{{ACTIVITY_DESCRIPTION_BLOCK}}
+__ACTIVITY_DESCRIPTION_BLOCK__
 
 \section{Introduction}
 \questiongroup{Question Group 1}

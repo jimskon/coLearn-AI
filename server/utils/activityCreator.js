@@ -35,14 +35,14 @@ function renderFallbackTemplate({
   const template = fs.readFileSync(CREATOR_TEMPLATE_PATH, 'utf8');
 
   return template
-    .replace('{{TITLE}}', sanitizeHeaderValue(title, 'New Activity'))
-    .replace('{{MODE}}', sanitizeHeaderValue(mode, 'group'))
-    .replace('{{CLASS_LEVEL}}', sanitizeHeaderValue(classLevel, 'Not specified'))
-    .replace('{{CLASS_TOPIC_DOMAIN}}', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
-    .replace('{{DURATION_MINUTES}}', String(durationMinutes))
-    .replace('{{SELECTED_MODEL}}', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
-    .replace('{{CLASS_DESCRIPTION_BLOCK}}', normalizeTextBlock(classDescription))
-    .replace('{{ACTIVITY_DESCRIPTION_BLOCK}}', normalizeTextBlock(activityDescription));
+    .replace('__TITLE__', sanitizeHeaderValue(title, 'New Activity'))
+    .replace('__MODE__', sanitizeHeaderValue(mode, 'group'))
+    .replace('__CLASS_LEVEL__', sanitizeHeaderValue(classLevel, 'Not specified'))
+    .replace('__CLASS_TOPIC_DOMAIN__', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
+    .replace('__DURATION_MINUTES__', String(durationMinutes))
+    .replace('__SELECTED_MODEL__', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
+    .replace('__CLASS_DESCRIPTION_BLOCK__', normalizeTextBlock(classDescription))
+    .replace('__ACTIVITY_DESCRIPTION_BLOCK__', normalizeTextBlock(activityDescription));
 }
 
 function stripCodeFences(text) {
@@ -122,15 +122,29 @@ async function generateActivityDraft(input) {
 
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || apiKey === 'test-key') {
-    return renderFallbackTemplate(fallbackInput);
+    return {
+      text: renderFallbackTemplate(fallbackInput),
+      generation_status: 'fallback',
+      generation_error: 'OPENAI_API_KEY is not configured for live generation.',
+    };
   }
 
   try {
     const generated = await generateWithOpenAI(fallbackInput);
-    return normalizeGeneratedDraft(generated, fallbackInput);
+    const normalized = normalizeGeneratedDraft(generated, fallbackInput);
+    const usedFallback = normalized === renderFallbackTemplate(fallbackInput);
+    return {
+      text: normalized,
+      generation_status: usedFallback ? 'fallback' : 'generated',
+      generation_error: usedFallback ? 'Model output did not pass activity markup validation.' : null,
+    };
   } catch (err) {
     console.error('Activity draft generation failed, falling back to template:', err);
-    return renderFallbackTemplate(fallbackInput);
+    return {
+      text: renderFallbackTemplate(fallbackInput),
+      generation_status: 'fallback',
+      generation_error: err?.message || 'Generation failed.',
+    };
   }
 }
 

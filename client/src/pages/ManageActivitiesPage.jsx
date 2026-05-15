@@ -424,6 +424,13 @@ export default function ManageActivitiesPage() {
 
       setShowCreateModal(false);
       await refreshActivities();
+      if (data.generation_status === 'fallback') {
+        window.alert(
+          data.generation_error
+            ? `The system saved a fallback draft instead of a model-generated draft: ${data.generation_error}`
+            : 'The system saved a fallback draft instead of a model-generated draft.'
+        );
+      }
       navigate(`/editor/${data.id}`);
     } catch (err) {
       console.error('Create draft failed:', err);

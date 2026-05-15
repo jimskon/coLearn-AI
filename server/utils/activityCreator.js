@@ -95,15 +95,20 @@ async function generateWithOpenAI({
     'Write a useful first-pass activity draft now.',
   ].join('\n\n');
 
-  const chat = await openai.chat.completions.create({
+  const request = {
     model: selectedModel,
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    temperature: 0.7,
     max_completion_tokens: 2200,
-  });
+  };
+
+  if (!String(selectedModel || '').startsWith('gpt-5')) {
+    request.temperature = 0.7;
+  }
+
+  const chat = await openai.chat.completions.create(request);
 
   return chat.choices?.[0]?.message?.content || '';
 }

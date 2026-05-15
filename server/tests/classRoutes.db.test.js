@@ -24,6 +24,25 @@ function remember(kind, id) {
   return numericId;
 }
 
+async function ensureSchema() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS pogil_classes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(191) NOT NULL UNIQUE,
+      description TEXT DEFAULT NULL,
+      level VARCHAR(255) DEFAULT NULL,
+      topic_domain VARCHAR(255) DEFAULT NULL,
+      created_by INT DEFAULT NULL
+    )
+  `);
+
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS level VARCHAR(255) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL
+  `);
+}
+
 async function cleanupCreatedRows() {
   const activityIds = [...created.activities];
   const courseIds = [...created.courses];
@@ -115,6 +134,7 @@ test.after(async () => {
 });
 
 test('class routes create, list, update, fetch, and delete a class', async () => {
+  await ensureSchema();
   const name = uniqueName('Intro CS');
   const description = 'Collaborative intro course';
   const level = 'First-year college';
@@ -186,6 +206,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
 });
 
 test('class activity routes create, list, update, and delete an activity', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
   const creatorId = await createUser('creator');
   const activityName = uniqueName('activity').toLowerCase();
@@ -246,6 +267,7 @@ test('class activity routes create, list, update, and delete an activity', async
 });
 
 test('class activity routes can create a local stored activity', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
   const creatorId = await createUser('creator');
   const activityName = uniqueName('local-activity').toLowerCase();
@@ -283,6 +305,7 @@ test('class activity routes can create a local stored activity', async () => {
 });
 
 test('activity creation rejects missing required fields before database insert', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
 
   const response = await requestJson(`/api/classes/${classId}/activities`, {
@@ -298,6 +321,7 @@ test('activity creation rejects missing required fields before database insert',
 });
 
 test('enrollment routes enroll a student by course code and list enrollments', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
   const instructorId = await createUser('instructor');
   const studentId = await createUser('student');
@@ -339,6 +363,7 @@ test('enrollment routes enroll a student by course code and list enrollments', a
 });
 
 test('enroll by code returns 404 for an unknown course code', async () => {
+  await ensureSchema();
   const studentId = await createUser('student');
 
   const response = await requestJson('/api/classes/enroll-by-code', {

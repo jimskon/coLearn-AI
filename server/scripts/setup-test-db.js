@@ -55,6 +55,10 @@ async function main() {
           FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
       );
 
+      ALTER TABLE pogil_classes
+        ADD COLUMN IF NOT EXISTS level VARCHAR(255) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL;
+
       CREATE TABLE IF NOT EXISTS courses (
         id INT AUTO_INCREMENT PRIMARY KEY,
         name TEXT NOT NULL,

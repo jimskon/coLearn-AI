@@ -48,6 +48,8 @@ async function main() {
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(191) NOT NULL UNIQUE,
         description TEXT DEFAULT NULL,
+        level VARCHAR(255) DEFAULT NULL,
+        topic_domain VARCHAR(255) DEFAULT NULL,
         created_by INT DEFAULT NULL,
         CONSTRAINT pogil_classes_created_by_fk
           FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL

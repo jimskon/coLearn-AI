@@ -15,13 +15,20 @@ exports.getAllClasses = async (req, res) => {
 };
 
 exports.createClass = async (req, res) => {
-  const { name, description, createdBy } = req.body;
+  const { name, description, level = null, topic_domain = null, createdBy } = req.body;
   try {
     const [result] = await db.query(
-      'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
-      [name, description, createdBy]
+      'INSERT INTO pogil_classes (name, description, level, topic_domain, created_by) VALUES (?, ?, ?, ?, ?)',
+      [name, description, level, topic_domain, createdBy]
     );
-    res.status(201).json({ id: Number(result.insertId), name, description, created_by: createdBy });
+    res.status(201).json({
+      id: Number(result.insertId),
+      name,
+      description,
+      level,
+      topic_domain,
+      created_by: createdBy,
+    });
   } catch (err) {
     console.error("Error creating class:", err);
     res.status(500).json({ error: 'Failed to create class' });
@@ -29,13 +36,13 @@ exports.createClass = async (req, res) => {
 };
 
 exports.updateClass = async (req, res) => {
-  const { name, description } = req.body;
+  const { name, description, level = null, topic_domain = null } = req.body;
   try {
     await db.query(
-      'UPDATE pogil_classes SET name = ?, description = ? WHERE id = ?',
-      [name, description, req.params.id]
+      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ? WHERE id = ?',
+      [name, description, level, topic_domain, req.params.id]
     );
-    res.json({ id: req.params.id, name, description });
+    res.json({ id: req.params.id, name, description, level, topic_domain });
   } catch (err) {
     console.error("Error updating class:", err);
     res.status(500).json({ error: 'Failed to update class' });

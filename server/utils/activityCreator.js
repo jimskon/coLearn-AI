@@ -54,8 +54,78 @@ function stripCodeFences(text) {
   return fenced ? fenced[1].trim() : raw;
 }
 
+function normalizeLearningObjectivesSection(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const startIndex = lines.findIndex((line) => line.trim() === '\\section{Learning Objectives}');
+
+  if (startIndex === -1) {
+    return text;
+  }
+
+  let firstContentIndex = startIndex + 1;
+  while (firstContentIndex < lines.length && !lines[firstContentIndex].trim()) {
+    firstContentIndex += 1;
+  }
+
+  if (firstContentIndex >= lines.length) {
+    return text;
+  }
+
+  const firstContentLine = lines[firstContentIndex].trim();
+  if (
+    firstContentLine.startsWith('\\text{') ||
+    firstContentLine.startsWith('\\begin{itemize}') ||
+    firstContentLine.startsWith('\\questiongroup{')
+  ) {
+    return text;
+  }
+
+  let endIndex = firstContentIndex;
+  while (endIndex < lines.length) {
+    const trimmed = lines[endIndex].trim();
+    if (!trimmed) {
+      endIndex += 1;
+      continue;
+    }
+    if (trimmed.startsWith('\\section{') || trimmed.startsWith('\\questiongroup{')) {
+      break;
+    }
+    endIndex += 1;
+  }
+
+  const contentLines = lines
+    .slice(firstContentIndex, endIndex)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!contentLines.length) {
+    return text;
+  }
+
+  const objectiveLines = contentLines.filter(
+    (line) => line.toLowerCase() !== 'students will be able to:'
+  );
+
+  if (!objectiveLines.length) {
+    return text;
+  }
+
+  const replacement = [
+    '\\text{Students will be able to:}',
+    '\\begin{itemize}',
+    ...objectiveLines.map((line) => `\\item ${line.replace(/^[-*]\s*/, '')}`),
+    '\\end{itemize}',
+  ];
+
+  return [
+    ...lines.slice(0, firstContentIndex),
+    ...replacement,
+    ...lines.slice(endIndex),
+  ].join('\n');
+}
+
 function normalizeGeneratedDraft(text, fallbackInput) {
-  const cleaned = stripCodeFences(text);
+  const cleaned = normalizeLearningObjectivesSection(stripCodeFences(text));
   if (!cleaned.includes('\\title{') || !cleaned.includes('\\questiongroup{')) {
     return {
       text: renderFallbackTemplate(fallbackInput),

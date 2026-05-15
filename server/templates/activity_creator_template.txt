@@ -6,6 +6,7 @@
 \section{Draft Brief}
 Target duration: __DURATION_MINUTES__ minutes.
 Requested generation model: __SELECTED_MODEL__.
+Requested major sections: __MAJOR_SECTIONS_BLOCK__.
 
 Class description:
 __CLASS_DESCRIPTION_BLOCK__

@@ -317,24 +317,28 @@ test('creator draft route creates a local draft from the template and class meta
   const classId = remember('classes', classResult.insertId);
 
   const originalGenerator = activityCreator.generateActivityDraft;
-  activityCreator.generateActivityDraft = async () => ({
-    text: [
-      '\\title{Sorting Warmup}',
-      '\\mode{demo}',
-      '\\studentlevel{First-year college}',
-      '\\activitycontext{Computer Science}',
-      '\\section{Introduction}',
-      '\\questiongroup{Predictions}',
-      '\\question{What do you predict insertion sort will do first?}',
-      '\\textresponse{3}',
-      '\\sampleresponses{Students predict the first comparison or swap.}',
-      '\\feedbackprompt{Accept any reasonable prediction grounded in the problem.}',
-      '\\endquestion',
-      '\\endquestiongroup',
-    ].join('\n'),
-    generation_status: 'generated',
-    generation_error: null,
-  });
+  let capturedInput = null;
+  activityCreator.generateActivityDraft = async (input) => {
+    capturedInput = input;
+    return {
+      text: [
+        '\\title{Sorting Warmup}',
+        '\\mode{demo}',
+        '\\studentlevel{First-year college}',
+        '\\activitycontext{Computer Science}',
+        '\\section{Learning Objectives}',
+        '\\questiongroup{Predictions}',
+        '\\question{What do you predict insertion sort will do first?}',
+        '\\textresponse{3}',
+        '\\sampleresponses{Students predict the first comparison or swap.}',
+        '\\feedbackprompt{Accept any reasonable prediction grounded in the problem.}',
+        '\\endquestion',
+        '\\endquestiongroup',
+      ].join('\n'),
+      generation_status: 'generated',
+      generation_error: null,
+    };
+  };
 
   try {
     const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
@@ -345,6 +349,7 @@ test('creator draft route creates a local draft from the template and class meta
         mode: 'demo',
         description: 'Introduce insertion sort with a small trace and one reflection prompt.',
         selected_model: 'gpt-5-mini',
+        major_sections: ['Learning Objectives', 'Application', 'Reflection'],
         createdBy: creatorId,
       },
     });
@@ -355,11 +360,14 @@ test('creator draft route creates a local draft from the template and class meta
     assert.equal(create.body.mode, 'demo');
     assert.equal(create.body.duration_minutes, 35);
     assert.equal(create.body.selected_model, 'gpt-5-mini');
+    assert.deepEqual(create.body.major_sections, ['Learning Objectives', 'Application', 'Reflection']);
     assert.equal(create.body.generation_status, 'generated');
     assert.equal(create.body.generation_error, null);
     assert.match(create.body.content_text, /\\title\{Sorting Warmup\}/);
     assert.match(create.body.content_text, /\\mode\{demo\}/);
+    assert.match(create.body.content_text, /\\section\{Learning Objectives\}/);
     assert.match(create.body.content_text, /\\questiongroup\{Predictions\}/);
+    assert.deepEqual(capturedInput?.majorSections, ['Learning Objectives', 'Application', 'Reflection']);
     remember('activities', create.body.id);
 
     const [[row]] = await db.query(

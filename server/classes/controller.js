@@ -12,6 +12,14 @@ const CREATOR_MODEL_OPTIONS = new Set([
   'gpt-5.2',
 ]);
 
+const CREATOR_MAJOR_SECTION_OPTIONS = [
+  'Learning Objectives',
+  'Exploration',
+  'Concept Invention',
+  'Application',
+  'Reflection',
+];
+
 // Get all classes
 exports.getAllClasses = async (req, res) => {
   try {
@@ -323,6 +331,7 @@ exports.createCreatorDraft = async (req, res) => {
     mode = 'group',
     description,
     selected_model = 'gpt-5-mini',
+    major_sections = CREATOR_MAJOR_SECTION_OPTIONS,
     createdBy,
   } = req.body || {};
 
@@ -331,6 +340,9 @@ exports.createCreatorDraft = async (req, res) => {
   const durationMinutes = Number(duration_minutes);
   const normalizedMode = String(mode || 'group').trim().toLowerCase();
   const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
+  const normalizedMajorSections = Array.isArray(major_sections)
+    ? CREATOR_MAJOR_SECTION_OPTIONS.filter((sectionName) => major_sections.includes(sectionName))
+    : [];
 
   if (!normalizedTitle || !normalizedDescription || !createdBy || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
     return res.status(400).json({
@@ -344,6 +356,10 @@ exports.createCreatorDraft = async (req, res) => {
 
   if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
     return res.status(400).json({ error: 'selected_model is not supported.' });
+  }
+
+  if (!normalizedMajorSections.length) {
+    return res.status(400).json({ error: 'major_sections must include at least one supported section.' });
   }
 
   try {
@@ -364,6 +380,7 @@ exports.createCreatorDraft = async (req, res) => {
       mode: normalizedMode,
       durationMinutes: Math.round(durationMinutes),
       selectedModel: normalizedSelectedModel,
+      majorSections: normalizedMajorSections,
       classLevel: classRow.level,
       classTopicDomain: classRow.topic_domain,
       classDescription: classRow.description,
@@ -411,6 +428,7 @@ exports.createCreatorDraft = async (req, res) => {
       mode: normalizedMode,
       duration_minutes: Math.round(durationMinutes),
       selected_model: normalizedSelectedModel,
+      major_sections: normalizedMajorSections,
       generation_status: generation.generation_status,
       generation_error: generation.generation_error,
       generation_debug_preview: generation.raw_model_output

@@ -26,6 +26,13 @@ const emptyCreateDraft = {
   duration_minutes: '45',
   mode: 'group',
   selected_model: 'gpt-5-mini',
+  major_sections: [
+    'Learning Objectives',
+    'Exploration',
+    'Concept Invention',
+    'Application',
+    'Reflection',
+  ],
   description: '',
 };
 
@@ -35,6 +42,14 @@ const creatorModelOptions = [
   { value: 'gpt-4o', label: 'gpt-4o', note: 'Strong general model, higher cost' },
   { value: 'gpt-5.1', label: 'gpt-5.1', note: 'High-quality reasoning, higher cost' },
   { value: 'gpt-5.2', label: 'gpt-5.2', note: 'Best quality, highest cost' },
+];
+
+const majorSectionOptions = [
+  'Learning Objectives',
+  'Exploration',
+  'Concept Invention',
+  'Application',
+  'Reflection',
 ];
 
 function slugifyActivityName(value) {
@@ -138,7 +153,34 @@ export default function ManageActivitiesPage() {
   };
 
   const handleCreateDraftFieldChange = (e) => {
-    setCreateDraft((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+    const { name, value } = e.target;
+    setCreateDraft((prev) => {
+      if (name === 'mode') {
+        return {
+          ...prev,
+          mode: value,
+          major_sections: [...majorSectionOptions],
+        };
+      }
+
+      return { ...prev, [name]: value };
+    });
+  };
+
+  const handleMajorSectionToggle = (sectionName) => {
+    setCreateDraft((prev) => {
+      const selected = new Set(prev.major_sections || []);
+      if (selected.has(sectionName)) {
+        selected.delete(sectionName);
+      } else {
+        selected.add(sectionName);
+      }
+
+      return {
+        ...prev,
+        major_sections: majorSectionOptions.filter((option) => selected.has(option)),
+      };
+    });
   };
 
   const resetUploadState = () => {
@@ -400,6 +442,11 @@ export default function ManageActivitiesPage() {
       return;
     }
 
+    if (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length) {
+      setCreateNote('Select at least one major section for the draft structure.');
+      return;
+    }
+
     setCreateBusy(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/creator-draft`, {
@@ -411,6 +458,7 @@ export default function ManageActivitiesPage() {
           duration_minutes: durationMinutes,
           mode: createDraft.mode,
           selected_model: createDraft.selected_model,
+          major_sections: createDraft.major_sections,
           description: createDraft.description,
           createdBy: user?.id,
         }),
@@ -614,6 +662,26 @@ export default function ManageActivitiesPage() {
               onChange={handleCreateDraftFieldChange}
               placeholder="Describe the learning goals, topic, structure, constraints, and any starting ideas for the activity. This can be long."
             />
+          </Form.Group>
+
+          <Form.Group className="mt-3">
+            <Form.Label>Major Sections</Form.Label>
+            <div className="row g-2">
+              {majorSectionOptions.map((sectionName) => (
+                <div className="col-md-6" key={sectionName}>
+                  <Form.Check
+                    type="checkbox"
+                    id={`major-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                    label={sectionName}
+                    checked={createDraft.major_sections.includes(sectionName)}
+                    onChange={() => handleMajorSectionToggle(sectionName)}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="text-muted small mt-2">
+              We will use these as the high-level structure for the first draft.
+            </div>
           </Form.Group>
 
           <div className="text-muted small mt-3">

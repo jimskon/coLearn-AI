@@ -27,6 +27,7 @@ function renderFallbackTemplate({
   mode,
   durationMinutes,
   selectedModel,
+  majorSections,
   classLevel,
   classTopicDomain,
   classDescription,
@@ -41,6 +42,7 @@ function renderFallbackTemplate({
     .replace('__CLASS_TOPIC_DOMAIN__', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
     .replace('__DURATION_MINUTES__', String(durationMinutes))
     .replace('__SELECTED_MODEL__', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
+    .replace('__MAJOR_SECTIONS_BLOCK__', normalizeTextBlock((majorSections || []).join(', '), 'Not specified.'))
     .replace('__CLASS_DESCRIPTION_BLOCK__', normalizeTextBlock(classDescription))
     .replace('__ACTIVITY_DESCRIPTION_BLOCK__', normalizeTextBlock(activityDescription));
 }
@@ -74,6 +76,7 @@ async function generateWithOpenAI({
   mode,
   durationMinutes,
   selectedModel,
+  majorSections,
   classLevel,
   classTopicDomain,
   classDescription,
@@ -99,6 +102,7 @@ async function generateWithOpenAI({
     `Activity title: ${title}`,
     `Mode: ${mode}`,
     `Target duration (minutes): ${durationMinutes}`,
+    `Use these major sections in this order: ${(majorSections || []).join(' | ') || 'Learning Objectives | Exploration | Concept Invention | Application | Reflection'}`,
     `Class level: ${classLevel || 'Not specified'}`,
     `Topic/domain: ${classTopicDomain || 'Not specified'}`,
     `Class description:\n${classDescription || 'Not specified.'}`,
@@ -130,6 +134,7 @@ async function generateActivityDraft(input) {
     mode: input.mode,
     durationMinutes: input.durationMinutes,
     selectedModel: input.selectedModel,
+    majorSections: input.majorSections,
     classLevel: input.classLevel,
     classTopicDomain: input.classTopicDomain,
     classDescription: input.classDescription,

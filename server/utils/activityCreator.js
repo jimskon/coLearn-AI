@@ -5,11 +5,6 @@ require('dotenv').config();
 
 const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
 
-function clip(text, max = 4000) {
-  const value = String(text ?? '');
-  return value.length <= max ? value : `${value.slice(0, max)}...(+${value.length - max} chars)`;
-}
-
 function sanitizeHeaderValue(value, fallback = '') {
   return String(value == null ? fallback : value)
     .replace(/\r\n/g, ' ')
@@ -112,16 +107,6 @@ async function generateWithOpenAI({
     'Write a useful first-pass activity draft now.',
   ].join('\n\n');
 
-  console.log('[activityCreator] MODEL REQUEST', {
-    model: selectedModel,
-    mode,
-    durationMinutes,
-    classLevel: classLevel || 'Not specified',
-    classTopicDomain: classTopicDomain || 'Not specified',
-  });
-  console.log('[activityCreator] SYSTEM PROMPT\n' + clip(system, 6000));
-  console.log('[activityCreator] USER PROMPT\n' + clip(user, 12000));
-
   const request = {
     model: selectedModel,
     instructions: system,
@@ -136,7 +121,6 @@ async function generateWithOpenAI({
 
   const response = await openai.responses.create(request);
   const raw = response.output_text || '';
-  console.log('[activityCreator] RAW MODEL OUTPUT\n' + clip(raw, 12000));
   return raw;
 }
 
@@ -166,10 +150,7 @@ async function generateActivityDraft(input) {
     const generated = await generateWithOpenAI(fallbackInput);
     const normalized = normalizeGeneratedDraft(generated, fallbackInput);
     if (normalized.usedFallback) {
-      console.warn(
-        '[activityCreator] Falling back after validation failure. Raw model output preview:\n',
-        String(normalized.rawOutput || '').slice(0, 2000)
-      );
+      console.warn('[activityCreator] Falling back after validation failure.');
     }
     return {
       text: normalized.text,

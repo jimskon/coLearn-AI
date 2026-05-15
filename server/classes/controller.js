@@ -1,6 +1,7 @@
 const db = require('../db');
 const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
+const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
 
 // Get all classes
 exports.getAllClasses = async (req, res) => {
@@ -248,27 +249,125 @@ exports.getClassById = async (req, res) => {
   }
 };
 
-const { getFilesInFolder, getFileMetadata } = require('../utils/googleDrive'); // helper you'll create below
+const { getFilesInFolder, getFileMetadata } = require('../utils/googleDrive');
+
+function slugifyActivityName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 180);
+}
+
+function isGoogleFolderUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'drive.google.com' && parsed.pathname.includes('/folders/');
+  } catch {
+    return false;
+  }
+}
+
+async function getNextOrderIndex(classId) {
+  const [[row]] = await db.query(
+    `SELECT COALESCE(MAX(order_index), -1) AS max_order
+       FROM pogil_activities
+      WHERE class_id = ?`,
+    [classId]
+  );
+  return Number(row?.max_order ?? -1) + 1;
+}
+
+async function getUniqueActivityName(baseName, classId) {
+  const normalizedBase = slugifyActivityName(baseName) || `activity_${Date.now()}`;
+
+  const [existing] = await db.query(
+    `SELECT name FROM pogil_activities WHERE class_id = ? AND name LIKE ?`,
+    [classId, `${normalizedBase}%`]
+  );
+
+  const taken = new Set(existing.map((row) => row.name));
+  if (!taken.has(normalizedBase)) {
+    return normalizedBase;
+  }
+
+  let suffix = 2;
+  while (taken.has(`${normalizedBase}_${suffix}`)) {
+    suffix += 1;
+  }
+  return `${normalizedBase}_${suffix}`;
+}
+
+async function insertImportedActivity({
+  classId,
+  createdBy,
+  title,
+  orderIndex,
+  googleUrl,
+  importMode,
+}) {
+  const name = await getUniqueActivityName(title, classId);
+
+  if (importMode === 'local') {
+    const lines = await fetchGoogleDocLinesByUrl(googleUrl);
+    const contentText = lines.join('\n');
+
+    const [result] = await db.query(
+      `INSERT INTO pogil_activities
+         (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
+       VALUES (?, ?, ?, 'local', ?, ?, ?, ?)`,
+      [name, title, null, contentText, orderIndex, classId, createdBy]
+    );
+
+    return {
+      id: Number(result.insertId),
+      name,
+      title,
+      sheet_url: null,
+      source_type: 'local',
+      content_text: contentText,
+      order_index: orderIndex,
+      class_id: Number(classId),
+      created_by: createdBy,
+    };
+  }
+
+  const [result] = await db.query(
+    `INSERT INTO pogil_activities
+       (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
+     VALUES (?, ?, ?, 'remote', NULL, ?, ?, ?)`,
+    [name, title, googleUrl, orderIndex, classId, createdBy]
+  );
+
+  return {
+    id: Number(result.insertId),
+    name,
+    title,
+    sheet_url: googleUrl,
+    source_type: 'remote',
+    content_text: null,
+    order_index: orderIndex,
+    class_id: Number(classId),
+    created_by: createdBy,
+  };
+}
 
 exports.importFolderActivities = async (req, res) => {
   const { id: classId } = req.params;
-  const { folderUrl } = req.body;
+  const { folderUrl, import_mode = 'remote' } = req.body;
   const createdBy = req.user.id;
-
-  console.log("Received import folder request:", req.body);
-
+  const importMode = String(import_mode || 'remote').toLowerCase() === 'local' ? 'local' : 'remote';
 
   try {
     const folderId = extractGoogleFileId(folderUrl);
     if (!folderId) {
-      return res.status(400).json({ error: "Invalid folder URL" });
+      return res.status(400).json({ error: 'Invalid folder URL' });
     }
 
     const files = await getFilesInFolder(folderId);
-    console.log(`Found ${files.length} files in folder ${folderId}`);
-
     const inserted = [];
-
+    const nextOrderIndex = await getNextOrderIndex(classId);
     const sortedFiles = files.sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
     );
@@ -276,44 +375,69 @@ exports.importFolderActivities = async (req, res) => {
     for (const [index, file] of sortedFiles.entries()) {
       const metadata = await getFileMetadata(file.id);
       const title = metadata.name;
-      const url = `https://docs.google.com/document/d/${file.id}`;
+      const googleUrl = `https://docs.google.com/document/d/${file.id}`;
 
-      const name = title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '_')
-        .replace(/^_+|_+$/g, '');
-
-      // Check for existing activity with same name in this class
-      const [existing] = await db.query(
-        `SELECT id FROM pogil_activities WHERE name = ? AND class_id = ?`,
-        [name, classId]
-      );
-
-      if (existing.length > 0) {
-        console.log(`⚠️ Skipping duplicate: ${name}`);
-        continue; // skip to next file
-      }
-
-      const [result] = await db.query(
-        `INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by)
-   VALUES (?, ?, ?, ?, ?, ?)`,
-        [name, title, url, index + 1, classId, createdBy]
-      );
-
-      inserted.push({
-        id: Number(result.insertId),
-        name,
+      const item = await insertImportedActivity({
+        classId,
+        createdBy,
         title,
-        sheet_url: url,
-        order_index: index + 1,
-        class_id: Number(classId),
-        created_by: createdBy
+        orderIndex: nextOrderIndex + index,
+        googleUrl,
+        importMode,
       });
+
+      inserted.push(item);
     }
 
-    res.json({ imported: inserted });
+    res.json({ imported: inserted, import_mode: importMode });
   } catch (err) {
-    console.error("Import folder error:", err);
-    res.status(500).json({ error: "Failed to import from folder." });
+    console.error('Import folder error:', err);
+    res.status(500).json({ error: 'Failed to import from folder.' });
+  }
+};
+
+exports.importGoogleActivities = async (req, res) => {
+  const { id: classId } = req.params;
+  const { url, import_mode = 'remote' } = req.body;
+  const createdBy = req.user.id;
+  const importMode = String(import_mode || 'remote').toLowerCase() === 'local' ? 'local' : 'remote';
+
+  if (!url || String(url).trim() === '') {
+    return res.status(400).json({ error: 'A Google Doc, Sheet, or folder link is required.' });
+  }
+
+  const trimmedUrl = String(url).trim();
+
+  if (isGoogleFolderUrl(trimmedUrl)) {
+    req.body.folderUrl = trimmedUrl;
+    req.body.import_mode = importMode;
+    return exports.importFolderActivities(req, res);
+  }
+
+  const googleId = extractGoogleFileId(trimmedUrl);
+  if (!googleId) {
+    return res.status(400).json({ error: 'Invalid Google URL.' });
+  }
+
+  if (importMode === 'local' && !trimmedUrl.includes('/document/')) {
+    return res.status(400).json({ error: 'Import into local currently supports Google Docs only.' });
+  }
+
+  try {
+    const metadata = await getFileMetadata(googleId);
+    const nextOrderIndex = await getNextOrderIndex(classId);
+    const item = await insertImportedActivity({
+      classId,
+      createdBy,
+      title: metadata.name,
+      orderIndex: nextOrderIndex,
+      googleUrl: trimmedUrl,
+      importMode,
+    });
+
+    res.status(201).json({ imported: [item], import_mode: importMode });
+  } catch (err) {
+    console.error('Google import error:', err);
+    res.status(500).json({ error: 'Failed to import from Google.' });
   }
 };

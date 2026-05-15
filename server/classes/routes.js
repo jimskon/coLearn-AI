@@ -31,6 +31,7 @@ router.get('/:id', classController.getClassById);
 
 // ✅ NEW: Import activities from a folder
 router.post('/:id/import-folder', requireAuth, classController.importFolderActivities);
+router.post('/:id/import-google', requireAuth, classController.importGoogleActivities);
 
 
 module.exports = router;

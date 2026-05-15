@@ -55,15 +55,16 @@ export default function ManageActivitiesPage() {
   const [activities, setActivities] = useState([]);
   const [newActivity, setNewActivity] = useState(emptyUploadActivity);
 
-  const [showFolderModal, setShowFolderModal] = useState(false);
+  const [showGoogleModal, setShowGoogleModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
 
-  const [folderUrl, setFolderUrl] = useState('');
   const [downloadSelection, setDownloadSelection] = useState({});
-  const [downloadFolderUrl, setDownloadFolderUrl] = useState('');
   const [selectedUploadFile, setSelectedUploadFile] = useState(null);
   const [uploadNote, setUploadNote] = useState('');
+  const [googleImportUrl, setGoogleImportUrl] = useState('');
+  const [googleImportMode, setGoogleImportMode] = useState('remote');
+  const [googleImportNote, setGoogleImportNote] = useState('');
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 
@@ -211,19 +212,39 @@ export default function ManageActivitiesPage() {
     }
   };
 
-  const handleBulkImport = async () => {
-    setShowFolderModal(false);
-    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/import-folder`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folderUrl, createdBy: user.id }),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      setActivities((prev) => [...prev, ...data.imported]);
-      setFolderUrl('');
-    } else {
-      alert(data.error || 'Folder import failed.');
+  const handleGoogleImport = async () => {
+    setGoogleImportNote('');
+
+    if (!googleImportUrl.trim()) {
+      setGoogleImportNote('Paste a Google Doc, Sheet, or folder link first.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/import-google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          url: googleImportUrl.trim(),
+          import_mode: googleImportMode,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setGoogleImportNote(data.error || 'Google import failed.');
+        return;
+      }
+
+      setShowGoogleModal(false);
+      setGoogleImportUrl('');
+      setGoogleImportMode('remote');
+      setGoogleImportNote('');
+      await refreshActivities();
+    } catch (err) {
+      console.error('Google import failed:', err);
+      setGoogleImportNote('Google import failed. Please try again.');
     }
   };
 
@@ -432,6 +453,9 @@ export default function ManageActivitiesPage() {
         <Button variant="secondary" onClick={openDownloadPlaceholder}>
           Download
         </Button>
+        <Button variant="outline-secondary" onClick={() => setShowGoogleModal(true)}>
+          Google
+        </Button>
       </div>
 
       <Modal show={showUploadModal} onHide={() => setShowUploadModal(false)}>
@@ -483,27 +507,55 @@ export default function ManageActivitiesPage() {
         </Modal.Footer>
       </Modal>
 
-      <Modal show={showFolderModal} onHide={() => setShowFolderModal(false)}>
+      <Modal show={showGoogleModal} onHide={() => setShowGoogleModal(false)}>
         <Modal.Header closeButton>
-          <Modal.Title>Import from Google Folder</Modal.Title>
+          <Modal.Title>Import from Google</Modal.Title>
         </Modal.Header>
         <Modal.Body>
-          <Form.Control
-            type="text"
-            placeholder="Enter Google Drive folder URL"
-            value={folderUrl}
-            onChange={(e) => setFolderUrl(e.target.value)}
-          />
-          <p className="mt-2">
-            Make sure the folder is shared with: <code>{SERVICE_ACCOUNT_EMAIL}</code>
-          </p>
+          <Form.Group className="mb-3">
+            <Form.Label>Google Link</Form.Label>
+            <Form.Control
+              type="text"
+              placeholder="Paste a Google Doc, Sheet, or folder link"
+              value={googleImportUrl}
+              onChange={(e) => setGoogleImportUrl(e.target.value)}
+            />
+            <div className="text-muted small mt-2">
+              Paste a single Google activity link or a Google folder link. We will detect which one it is.
+            </div>
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Import Mode</Form.Label>
+            <Form.Select
+              value={googleImportMode}
+              onChange={(e) => setGoogleImportMode(e.target.value)}
+            >
+              <option value="local">Import into local storage</option>
+              <option value="remote">Keep remote</option>
+            </Form.Select>
+          </Form.Group>
+
+          <Alert variant="info" className="mb-0">
+            Local import makes a copy into the database. Keep remote leaves the activity linked to Google.
+          </Alert>
+
+          <div className="text-muted small mt-3">
+            If the Google file or folder is private, share it with <code>{SERVICE_ACCOUNT_EMAIL}</code>.
+          </div>
+
+          {googleImportNote ? (
+            <Alert variant="warning" className="mt-3 mb-0">
+              {googleImportNote}
+            </Alert>
+          ) : null}
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowFolderModal(false)}>
+          <Button variant="secondary" onClick={() => setShowGoogleModal(false)}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleBulkImport}>
-            Import
+          <Button variant="primary" onClick={handleGoogleImport}>
+            Import from Google
           </Button>
         </Modal.Footer>
       </Modal>
@@ -541,20 +593,9 @@ export default function ManageActivitiesPage() {
             </div>
           </Form.Group>
 
-          <Form.Group className="mb-2 mt-4">
-            <Form.Label>Secondary Google Folder Option</Form.Label>
-            <Form.Control
-              type="text"
-              placeholder="Google folder URL (existing path)"
-              value={downloadFolderUrl}
-              onChange={(e) => setDownloadFolderUrl(e.target.value)}
-            />
-          </Form.Group>
-
           <Alert variant="info" className="mb-0">
             Local download works now. One selected activity downloads as a text file; multiple
-            selected activities download as a JSON bundle. Zip support is next. Google-folder flow
-            stays available as a secondary path.
+            selected activities download as a JSON bundle. Zip support is next.
           </Alert>
         </Modal.Body>
         <Modal.Footer>
@@ -563,12 +604,6 @@ export default function ManageActivitiesPage() {
           </Button>
           <Button variant="secondary" onClick={() => setShowDownloadModal(false)}>
             Close
-          </Button>
-          <Button variant="outline-secondary" onClick={() => {
-            setShowDownloadModal(false);
-            setShowFolderModal(true);
-          }}>
-            Open Google Folder Import
           </Button>
         </Modal.Footer>
       </Modal>

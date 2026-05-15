@@ -5,6 +5,7 @@
 
 \section{Draft Brief}
 Target duration: {{DURATION_MINUTES}} minutes.
+Requested generation model: {{SELECTED_MODEL}}.
 
 Class description:
 {{CLASS_DESCRIPTION_BLOCK}}

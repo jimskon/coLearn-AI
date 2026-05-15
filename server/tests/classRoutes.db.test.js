@@ -322,6 +322,7 @@ test('creator draft route creates a local draft from the template and class meta
       duration_minutes: 35,
       mode: 'demo',
       description: 'Introduce insertion sort with a small trace and one reflection prompt.',
+      selected_model: 'gpt-5-mini',
       createdBy: creatorId,
     },
   });
@@ -331,11 +332,13 @@ test('creator draft route creates a local draft from the template and class meta
   assert.equal(create.body.source_type, 'local');
   assert.equal(create.body.mode, 'demo');
   assert.equal(create.body.duration_minutes, 35);
+  assert.equal(create.body.selected_model, 'gpt-5-mini');
   assert.match(create.body.content_text, /\\title\{Sorting Warmup\}/);
   assert.match(create.body.content_text, /\\mode\{demo\}/);
   assert.match(create.body.content_text, /\\studentlevel\{First-year college\}/);
   assert.match(create.body.content_text, /\\activitycontext\{Computer Science\}/);
   assert.match(create.body.content_text, /Target duration: 35 minutes\./);
+  assert.match(create.body.content_text, /Requested generation model: gpt-5-mini\./);
   assert.match(create.body.content_text, /Introduce insertion sort with a small trace and one reflection prompt\./);
   remember('activities', create.body.id);
 

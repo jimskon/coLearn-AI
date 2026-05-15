@@ -25,8 +25,17 @@ const emptyCreateDraft = {
   title: '',
   duration_minutes: '45',
   mode: 'group',
+  selected_model: 'gpt-5-mini',
   description: '',
 };
+
+const creatorModelOptions = [
+  { value: 'gpt-4o-mini', label: 'gpt-4o-mini', note: 'Fastest, lowest cost' },
+  { value: 'gpt-5-mini', label: 'gpt-5-mini', note: 'Better reasoning, moderate cost' },
+  { value: 'gpt-4o', label: 'gpt-4o', note: 'Strong general model, higher cost' },
+  { value: 'gpt-5.1', label: 'gpt-5.1', note: 'High-quality reasoning, higher cost' },
+  { value: 'gpt-5.2', label: 'gpt-5.2', note: 'Best quality, highest cost' },
+];
 
 function slugifyActivityName(value) {
   return String(value || '')
@@ -401,6 +410,7 @@ export default function ManageActivitiesPage() {
           title: createDraft.title.trim(),
           duration_minutes: durationMinutes,
           mode: createDraft.mode,
+          selected_model: createDraft.selected_model,
           description: createDraft.description,
           createdBy: user?.id,
         }),
@@ -565,6 +575,24 @@ export default function ManageActivitiesPage() {
               </Form.Group>
             </div>
           </div>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Generation Model</Form.Label>
+            <Form.Select
+              name="selected_model"
+              value={createDraft.selected_model}
+              onChange={handleCreateDraftFieldChange}
+            >
+              {creatorModelOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label} — {option.note}
+                </option>
+              ))}
+            </Form.Select>
+            <div className="text-muted small mt-2">
+              Higher-quality models usually cost more per generation.
+            </div>
+          </Form.Group>
 
           <Form.Group>
             <Form.Label>Initial Description</Form.Label>

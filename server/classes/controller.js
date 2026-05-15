@@ -6,6 +6,13 @@ const { extractGoogleFileId } = require('../utils/googleIds');
 const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
 
 const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
+const CREATOR_MODEL_OPTIONS = new Set([
+  'gpt-4o-mini',
+  'gpt-5-mini',
+  'gpt-4o',
+  'gpt-5.1',
+  'gpt-5.2',
+]);
 
 // Get all classes
 exports.getAllClasses = async (req, res) => {
@@ -331,6 +338,7 @@ function renderCreatorTemplate({
   title,
   mode,
   durationMinutes,
+  selectedModel,
   classLevel,
   classTopicDomain,
   classDescription,
@@ -344,6 +352,7 @@ function renderCreatorTemplate({
     .replace('{{CLASS_LEVEL}}', sanitizeHeaderValue(classLevel, 'Not specified'))
     .replace('{{CLASS_TOPIC_DOMAIN}}', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
     .replace('{{DURATION_MINUTES}}', String(durationMinutes))
+    .replace('{{SELECTED_MODEL}}', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
     .replace('{{CLASS_DESCRIPTION_BLOCK}}', normalizeTextBlock(classDescription))
     .replace('{{ACTIVITY_DESCRIPTION_BLOCK}}', normalizeTextBlock(activityDescription));
 }
@@ -355,6 +364,7 @@ exports.createCreatorDraft = async (req, res) => {
     duration_minutes,
     mode = 'group',
     description,
+    selected_model = 'gpt-5-mini',
     createdBy,
   } = req.body || {};
 
@@ -362,6 +372,7 @@ exports.createCreatorDraft = async (req, res) => {
   const normalizedDescription = String(description || '').trim();
   const durationMinutes = Number(duration_minutes);
   const normalizedMode = String(mode || 'group').trim().toLowerCase();
+  const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
 
   if (!normalizedTitle || !normalizedDescription || !createdBy || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
     return res.status(400).json({
@@ -371,6 +382,10 @@ exports.createCreatorDraft = async (req, res) => {
 
   if (!['group', 'demo', 'test'].includes(normalizedMode)) {
     return res.status(400).json({ error: 'mode must be group, demo, or test.' });
+  }
+
+  if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
+    return res.status(400).json({ error: 'selected_model is not supported.' });
   }
 
   try {
@@ -390,6 +405,7 @@ exports.createCreatorDraft = async (req, res) => {
       title: normalizedTitle,
       mode: normalizedMode,
       durationMinutes: Math.round(durationMinutes),
+      selectedModel: normalizedSelectedModel,
       classLevel: classRow.level,
       classTopicDomain: classRow.topic_domain,
       classDescription: classRow.description,
@@ -422,6 +438,7 @@ exports.createCreatorDraft = async (req, res) => {
       created_by: createdBy,
       mode: normalizedMode,
       duration_minutes: Math.round(durationMinutes),
+      selected_model: normalizedSelectedModel,
     });
   } catch (err) {
     console.error('Error creating creator draft:', err);

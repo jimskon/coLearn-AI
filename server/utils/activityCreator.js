@@ -4,6 +4,7 @@ const OpenAI = require('openai');
 require('dotenv').config();
 
 const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
+const MARKUP_HOUSE_STYLE_PATH = path.join(__dirname, '..', 'templates', 'activity_markup_house_style.txt');
 
 function sanitizeHeaderValue(value, fallback = '') {
   return String(value == null ? fallback : value)
@@ -83,6 +84,7 @@ async function generateWithOpenAI({
   activityDescription,
 }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const houseStyle = fs.readFileSync(MARKUP_HOUSE_STYLE_PATH, 'utf8').trim();
 
   const system = [
     'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
@@ -92,10 +94,16 @@ async function generateWithOpenAI({
     'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
     'Keep each question concise. Keep sample responses and feedback prompts short.',
     'It is better to finish a complete compact activity than to begin a longer activity and stop halfway through.',
+    'Treat Learning Objectives as a structural section, not as an interactive activity, unless the creator explicitly asks otherwise.',
+    'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp or \\python ... \\endpython. Never paste raw code directly into question text.',
+    'Use the house-style example below as syntax guidance and imitate its structure when relevant.',
     'For mode=group, use collaborative prompts and progression.',
     'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
     'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
     'Make the activity reflect the creator brief, not generic filler.',
+    '',
+    'House-style example:',
+    houseStyle,
   ].join('\n');
 
   const user = [

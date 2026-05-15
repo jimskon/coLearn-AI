@@ -1,0 +1,33 @@
+\section{Learning Objectives}
+\text{Students will be able to:}
+\begin{itemize}
+\item Explain the key concept in plain language
+\item Predict the behavior of a short program
+\item Apply the concept in a small coding task
+\end{itemize}
+
+\section{Exploration}
+\questiongroup{Predict and observe}
+\question{Read the C++ example below. Predict what it prints before you run it.}
+\cpp
+#include <iostream>
+int main() {
+  int x = 10;
+  std::cout << x << "\\n";
+  return 0;
+}
+\endcpp
+\textresponse{2}
+\sampleresponses{It prints 10.}
+\feedbackprompt{Look for a prediction tied to the code.}
+\endquestion
+\endquestiongroup
+
+Rules illustrated above:
+- Learning Objectives is usually structural, not interactive.
+- Put learning-objective bullets in \text plus \begin{itemize} ... \end{itemize}.
+- If you include runnable C++ code, wrap it in \cpp ... \endcpp.
+- If you include runnable Python code, wrap it in \python ... \endpython.
+- If you include runnable turtle code, wrap it in \pythonturtle{WxH,timeout} ... \endpythonturtle.
+- Do not paste raw code directly into question text.
+- Keep all interactive questions inside \questiongroup blocks.

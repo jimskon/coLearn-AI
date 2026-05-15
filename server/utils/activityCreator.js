@@ -91,7 +91,9 @@ async function generateWithOpenAI({
     'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
     'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\section{...}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\sampleresponses{...}, \\feedbackprompt{...}, \\endquestion, \\endquestiongroup.',
     'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
-    'Prefer 2-4 question groups for medium-length activities. Keep the scope realistic for the requested duration.',
+    'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
+    'Keep each question concise. Keep sample responses and feedback prompts short.',
+    'It is better to finish a complete compact activity than to begin a longer activity and stop halfway through.',
     'For mode=group, use collaborative prompts and progression.',
     'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
     'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
@@ -125,7 +127,7 @@ async function generateWithOpenAI({
     instructions: system,
     input: user,
     text: { format: { type: 'text' } },
-    max_output_tokens: 2200,
+    max_output_tokens: 5000,
   };
 
   if (!String(selectedModel || '').startsWith('gpt-5')) {

@@ -102,7 +102,7 @@ async function generateWithOpenAI({
       { role: 'user', content: user },
     ],
     temperature: 0.7,
-    max_tokens: 2200,
+    max_completion_tokens: 2200,
   });
 
   return chat.choices?.[0]?.message?.content || '';

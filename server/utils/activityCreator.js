@@ -122,19 +122,18 @@ async function generateWithOpenAI({
 
   const request = {
     model: selectedModel,
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: user },
-    ],
-    max_completion_tokens: 2200,
+    instructions: system,
+    input: user,
+    text: { format: { type: 'text' } },
+    max_output_tokens: 2200,
   };
 
   if (!String(selectedModel || '').startsWith('gpt-5')) {
     request.temperature = 0.7;
   }
 
-  const chat = await openai.chat.completions.create(request);
-  const raw = chat.choices?.[0]?.message?.content || '';
+  const response = await openai.responses.create(request);
+  const raw = response.output_text || '';
   console.log('[activityCreator] RAW MODEL OUTPUT\n' + clip(raw, 12000));
   return raw;
 }

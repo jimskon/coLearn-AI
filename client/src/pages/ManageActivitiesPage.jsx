@@ -54,15 +54,12 @@ export default function ManageActivitiesPage() {
 
   const [activities, setActivities] = useState([]);
   const [newActivity, setNewActivity] = useState(emptyUploadActivity);
-  const [pendingActivity, setPendingActivity] = useState(null);
 
-  const [showShareModal, setShowShareModal] = useState(false);
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
 
   const [folderUrl, setFolderUrl] = useState('');
-  const [uploadMode, setUploadMode] = useState('file');
   const [downloadSelection, setDownloadSelection] = useState({});
   const [downloadFolderUrl, setDownloadFolderUrl] = useState('');
   const [selectedUploadFile, setSelectedUploadFile] = useState(null);
@@ -121,11 +118,9 @@ export default function ManageActivitiesPage() {
 
   const resetUploadState = () => {
     setNewActivity(emptyUploadActivity);
-    setPendingActivity(null);
     setSelectedUploadFile(null);
     setUploadNote('');
     setShowUploadModal(false);
-    setShowShareModal(false);
   };
 
   const saveActivity = async (activity) => {
@@ -157,124 +152,63 @@ export default function ManageActivitiesPage() {
   const handleUpload = async () => {
     setUploadNote('');
 
-    if (uploadMode === 'file') {
-      if (!selectedUploadFile) {
-        setUploadNote('Choose a local text file or JSON bundle first.');
-        return;
-      }
-
-      try {
-        const raw = await selectedUploadFile.text();
-        const filename = selectedUploadFile.name || 'activity.txt';
-        const fileBase = filename.replace(/\.[^.]+$/, '');
-
-        if (/\.json$/i.test(filename)) {
-          const parsed = JSON.parse(raw);
-          const importedItems = Array.isArray(parsed?.activities)
-            ? parsed.activities
-            : Array.isArray(parsed)
-              ? parsed
-              : [parsed];
-
-          if (!importedItems.length) {
-            setUploadNote('That JSON file did not contain any activities.');
-            return;
-          }
-
-          for (let index = 0; index < importedItems.length; index += 1) {
-            const item = importedItems[index] || {};
-            const contentText = String(item.content_text || item.text || '');
-            const title = item.title || extractTitleFromMarkup(contentText) || `Imported Activity ${index + 1}`;
-            const name = slugifyActivityName(item.name || title || `${fileBase}_${index + 1}`) || `activity_${Date.now()}_${index + 1}`;
-
-            await saveActivity({
-              name,
-              title,
-              source_type: 'local',
-              content_text: contentText,
-              order_index: item.order_index ?? activities.length + index,
-              createdBy: user?.id,
-            });
-          }
-
-          return;
-        }
-
-        const title = extractTitleFromMarkup(raw) || newActivity.title || fileBase;
-        const name = slugifyActivityName(newActivity.name || title || fileBase) || `activity_${Date.now()}`;
-
-        await saveActivity({
-          name,
-          title,
-          source_type: 'local',
-          content_text: raw,
-          order_index: newActivity.order_index === '' ? activities.length : parseInt(newActivity.order_index, 10),
-          createdBy: user?.id,
-        });
-      } catch (err) {
-        console.error('Local upload failed:', err);
-        setUploadNote('Unable to read that file. Use a plain text activity file or a JSON bundle.');
-      }
-      return;
-    }
-
-    const activity = {
-      ...newActivity,
-      order_index:
-        newActivity.order_index === '' ? 0 : parseInt(newActivity.order_index, 10),
-      createdBy: user?.id,
-    };
-
-    if (!activity.name || !activity.title) {
-      alert('Please enter an activity ID and title.');
-      return;
-    }
-
-    if (!activity.sheet_url || activity.sheet_url.trim() === '') {
-      alert('Please enter a Google Sheet or Doc URL, or switch to file upload once it is available.');
-      return;
-    }
-
-    setPendingActivity(activity);
-    setShowUploadModal(false);
-    setShowShareModal(true);
-  };
-
-  const confirmShareAndCheckAccess = async () => {
-    setShowShareModal(false);
-
-    if (!pendingActivity?.sheet_url) {
-      await saveActivity(pendingActivity);
-      setPendingActivity(null);
+    if (!selectedUploadFile) {
+      setUploadNote('Choose a local text file or JSON bundle first.');
       return;
     }
 
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/activities/check-access?url=${encodeURIComponent(pendingActivity.sheet_url)}`
-      );
+      const raw = await selectedUploadFile.text();
+      const filename = selectedUploadFile.name || 'activity.txt';
+      const fileBase = filename.replace(/\.[^.]+$/, '');
 
-      let result = { access: false };
-      if (res.ok) {
-        const text = await res.text();
-        if (text) result = JSON.parse(text);
+      if (/\.json$/i.test(filename)) {
+        const parsed = JSON.parse(raw);
+        const importedItems = Array.isArray(parsed?.activities)
+          ? parsed.activities
+          : Array.isArray(parsed)
+            ? parsed
+            : [parsed];
+
+        if (!importedItems.length) {
+          setUploadNote('That JSON file did not contain any activities.');
+          return;
+        }
+
+        for (let index = 0; index < importedItems.length; index += 1) {
+          const item = importedItems[index] || {};
+          const contentText = String(item.content_text || item.text || '');
+          const title = item.title || extractTitleFromMarkup(contentText) || `Imported Activity ${index + 1}`;
+          const name = slugifyActivityName(item.name || title || `${fileBase}_${index + 1}`) || `activity_${Date.now()}_${index + 1}`;
+
+          await saveActivity({
+            name,
+            title,
+            source_type: 'local',
+            content_text: contentText,
+            order_index: item.order_index ?? activities.length + index,
+            createdBy: user?.id,
+          });
+        }
+
+        return;
       }
 
-      if (res.ok && result.access) {
-        await saveActivity(pendingActivity);
-      } else {
-        alert('Access denied or document not found. Please ensure the document is shared and the URL is correct.');
-        setNewActivity(pendingActivity);
-        setShowUploadModal(true);
-      }
+      const title = extractTitleFromMarkup(raw) || newActivity.title || fileBase;
+      const name = slugifyActivityName(newActivity.name || title || fileBase) || `activity_${Date.now()}`;
+
+      await saveActivity({
+        name,
+        title,
+        source_type: 'local',
+        content_text: raw,
+        order_index: newActivity.order_index === '' ? activities.length : parseInt(newActivity.order_index, 10),
+        createdBy: user?.id,
+      });
     } catch (err) {
-      console.error('Error checking access:', err);
-      alert('Error checking document access. Please try again.');
-      setNewActivity(pendingActivity);
-      setShowUploadModal(true);
+      console.error('Local upload failed:', err);
+      setUploadNote('Unable to read that file. Use a plain text activity file or a JSON bundle.');
     }
-
-    setPendingActivity(null);
   };
 
   const handleBulkImport = async () => {
@@ -506,81 +440,33 @@ export default function ManageActivitiesPage() {
         </Modal.Header>
         <Modal.Body>
           <Form.Group className="mb-3">
-            <Form.Label>Upload Type</Form.Label>
-            <Form.Select value={uploadMode} onChange={(e) => setUploadMode(e.target.value)}>
-              <option value="file">Single text file or JSON bundle</option>
-              <option value="google">Google Doc or Sheet URL</option>
-            </Form.Select>
+            <Form.Label>Choose Local File</Form.Label>
+            <Form.Control
+              type="file"
+              accept=".txt,.md,.tex,.json,.zip"
+              onChange={(e) => setSelectedUploadFile(e.target.files?.[0] || null)}
+            />
+            <div className="text-muted small mt-2">
+              Upload a single activity text file now, or a JSON activity bundle. Zip support is next.
+            </div>
           </Form.Group>
-
-          {uploadMode === 'google' ? (
-            <>
-              <Form.Group className="mb-2">
-                <Form.Control
-                  name="name"
-                  placeholder="Activity ID"
-                  value={newActivity.name}
-                  onChange={handleUploadFieldChange}
-                />
-              </Form.Group>
-              <Form.Group className="mb-2">
-                <Form.Control
-                  name="title"
-                  placeholder="Title"
-                  value={newActivity.title}
-                  onChange={handleUploadFieldChange}
-                />
-              </Form.Group>
-              <Form.Group className="mb-2">
-                <Form.Control
-                  name="sheet_url"
-                  placeholder="Google Sheet or Doc URL"
-                  value={newActivity.sheet_url}
-                  onChange={handleUploadFieldChange}
-                />
-              </Form.Group>
-              <Form.Group>
-                <Form.Control
-                  name="order_index"
-                  type="number"
-                  placeholder="Order Index"
-                  value={newActivity.order_index}
-                  onChange={handleUploadFieldChange}
-                />
-              </Form.Group>
-            </>
-          ) : (
-            <>
-              <Form.Group className="mb-3">
-                <Form.Label>Choose Local File</Form.Label>
-                <Form.Control
-                  type="file"
-                  accept=".txt,.md,.tex,.json,.zip"
-                  onChange={(e) => setSelectedUploadFile(e.target.files?.[0] || null)}
-                />
-                <div className="text-muted small mt-2">
-                  Upload a single activity text file now, or a JSON activity bundle. Zip support is next.
-                </div>
-              </Form.Group>
-              <Form.Group className="mb-2">
-                <Form.Control
-                  name="name"
-                  placeholder="Optional Activity ID override"
-                  value={newActivity.name}
-                  onChange={handleUploadFieldChange}
-                />
-              </Form.Group>
-              <Form.Group>
-                <Form.Control
-                  name="order_index"
-                  type="number"
-                  placeholder="Optional Order Index"
-                  value={newActivity.order_index}
-                  onChange={handleUploadFieldChange}
-                />
-              </Form.Group>
-            </>
-          )}
+          <Form.Group className="mb-2">
+            <Form.Control
+              name="name"
+              placeholder="Optional Activity ID override"
+              value={newActivity.name}
+              onChange={handleUploadFieldChange}
+            />
+          </Form.Group>
+          <Form.Group>
+            <Form.Control
+              name="order_index"
+              type="number"
+              placeholder="Optional Order Index"
+              value={newActivity.order_index}
+              onChange={handleUploadFieldChange}
+            />
+          </Form.Group>
           {uploadNote ? (
             <Alert variant="warning" className="mt-3 mb-0">
               {uploadNote}
@@ -592,7 +478,7 @@ export default function ManageActivitiesPage() {
             Cancel
           </Button>
           <Button variant="primary" onClick={handleUpload}>
-            {uploadMode === 'file' ? 'Upload from Drive' : 'Continue'}
+            Upload File
           </Button>
         </Modal.Footer>
       </Modal>
@@ -687,34 +573,6 @@ export default function ManageActivitiesPage() {
         </Modal.Footer>
       </Modal>
 
-      {pendingActivity?.sheet_url && pendingActivity.sheet_url.trim() !== '' && (
-        <Modal show={showShareModal} onHide={() => setShowShareModal(false)}>
-          <Modal.Header closeButton>
-            <Modal.Title>Share Document Access</Modal.Title>
-          </Modal.Header>
-          <Modal.Body>
-            <p>If your activity uses a Google Sheet or Doc, please ensure it is shared with:</p>
-            <code>{SERVICE_ACCOUNT_EMAIL}</code>
-            <p className="mt-3">
-              Click "Continue" once you've shared access or if no document is being used.
-            </p>
-          </Modal.Body>
-          <Modal.Footer>
-            <Button
-              variant="secondary"
-              onClick={() => {
-                setShowShareModal(false);
-                setShowUploadModal(true);
-              }}
-            >
-              Back
-            </Button>
-            <Button variant="primary" onClick={confirmShareAndCheckAccess}>
-              Continue
-            </Button>
-          </Modal.Footer>
-        </Modal>
-      )}
     </Container>
   );
 }

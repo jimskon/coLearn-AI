@@ -21,6 +21,13 @@ const emptyUploadActivity = {
   order_index: '',
 };
 
+const emptyCreateDraft = {
+  title: '',
+  duration_minutes: '45',
+  mode: 'group',
+  description: '',
+};
+
 function slugifyActivityName(value) {
   return String(value || '')
     .trim()
@@ -58,6 +65,7 @@ export default function ManageActivitiesPage() {
   const [showGoogleModal, setShowGoogleModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
 
   const [downloadSelection, setDownloadSelection] = useState({});
   const [selectedUploadFile, setSelectedUploadFile] = useState(null);
@@ -65,6 +73,9 @@ export default function ManageActivitiesPage() {
   const [googleImportUrl, setGoogleImportUrl] = useState('');
   const [googleImportMode, setGoogleImportMode] = useState('remote');
   const [googleImportNote, setGoogleImportNote] = useState('');
+  const [createDraft, setCreateDraft] = useState(emptyCreateDraft);
+  const [createNote, setCreateNote] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 
@@ -115,6 +126,10 @@ export default function ManageActivitiesPage() {
 
   const handleUploadFieldChange = (e) => {
     setNewActivity((prev) => ({ ...prev, [e.target.name]: e.target.value }));
+  };
+
+  const handleCreateDraftFieldChange = (e) => {
+    setCreateDraft((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
   const resetUploadState = () => {
@@ -288,8 +303,10 @@ export default function ManageActivitiesPage() {
     }
   };
 
-  const openCreatePlaceholder = () => {
-    alert('Create Activity is the next step. We will wire this button into the new authoring flow.');
+  const openCreateModal = () => {
+    setCreateDraft(emptyCreateDraft);
+    setCreateNote('');
+    setShowCreateModal(true);
   };
 
   const openDownloadPlaceholder = () => {
@@ -357,6 +374,52 @@ export default function ManageActivitiesPage() {
     } catch (err) {
       console.error('Download failed:', err);
       alert(err?.message || 'Failed to download selected activities.');
+    }
+  };
+
+  const handleCreateDraft = async () => {
+    setCreateNote('');
+
+    if (!createDraft.title.trim() || !createDraft.description.trim()) {
+      setCreateNote('Enter both an activity title and an initial description.');
+      return;
+    }
+
+    const durationMinutes = parseInt(createDraft.duration_minutes, 10);
+    if (!Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+      setCreateNote('Enter a valid duration in minutes.');
+      return;
+    }
+
+    setCreateBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/creator-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          title: createDraft.title.trim(),
+          duration_minutes: durationMinutes,
+          mode: createDraft.mode,
+          description: createDraft.description,
+          createdBy: user?.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        setCreateNote(data.error || 'Failed to create the draft activity.');
+        return;
+      }
+
+      setShowCreateModal(false);
+      await refreshActivities();
+      navigate(`/editor/${data.id}`);
+    } catch (err) {
+      console.error('Create draft failed:', err);
+      setCreateNote('Failed to create the draft activity.');
+    } finally {
+      setCreateBusy(false);
     }
   };
 
@@ -444,7 +507,7 @@ export default function ManageActivitiesPage() {
       </Table>
 
       <div className="d-flex flex-wrap gap-2 align-items-center mb-4">
-        <Button variant="success" onClick={openCreatePlaceholder}>
+        <Button variant="success" onClick={openCreateModal}>
           Create
         </Button>
         <Button variant="primary" onClick={() => setShowUploadModal(true)}>
@@ -457,6 +520,83 @@ export default function ManageActivitiesPage() {
           Google
         </Button>
       </div>
+
+      <Modal show={showCreateModal} onHide={() => !createBusy && setShowCreateModal(false)} size="lg">
+        <Modal.Header closeButton={!createBusy}>
+          <Modal.Title>Create Activity Draft</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>Activity Title</Form.Label>
+            <Form.Control
+              name="title"
+              value={createDraft.title}
+              onChange={handleCreateDraftFieldChange}
+              placeholder="Sorting Warmup"
+              autoFocus
+            />
+          </Form.Group>
+
+          <div className="row g-3 mb-3">
+            <div className="col-md-4">
+              <Form.Group>
+                <Form.Label>Duration (minutes)</Form.Label>
+                <Form.Control
+                  type="number"
+                  min="1"
+                  name="duration_minutes"
+                  value={createDraft.duration_minutes}
+                  onChange={handleCreateDraftFieldChange}
+                />
+              </Form.Group>
+            </div>
+            <div className="col-md-8">
+              <Form.Group>
+                <Form.Label>Activity Type</Form.Label>
+                <Form.Select
+                  name="mode"
+                  value={createDraft.mode}
+                  onChange={handleCreateDraftFieldChange}
+                >
+                  <option value="group">Group</option>
+                  <option value="demo">Demo</option>
+                  <option value="test">Test</option>
+                </Form.Select>
+              </Form.Group>
+            </div>
+          </div>
+
+          <Form.Group>
+            <Form.Label>Initial Description</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={10}
+              name="description"
+              value={createDraft.description}
+              onChange={handleCreateDraftFieldChange}
+              placeholder="Describe the learning goals, topic, structure, constraints, and any starting ideas for the activity. This can be long."
+            />
+          </Form.Group>
+
+          <div className="text-muted small mt-3">
+            We will create a first local draft using the class metadata and this description, then open it in the editor.
+          </div>
+
+          {createNote ? (
+            <Alert variant="warning" className="mt-3 mb-0">
+              {createNote}
+            </Alert>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowCreateModal(false)} disabled={createBusy}>
+            Cancel
+          </Button>
+          <Button variant="success" onClick={handleCreateDraft} disabled={createBusy}>
+            Create Draft
+          </Button>
+        </Modal.Footer>
+      </Modal>
 
       <Modal show={showUploadModal} onHide={() => setShowUploadModal(false)}>
         <Modal.Header closeButton>

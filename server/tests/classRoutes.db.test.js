@@ -304,6 +304,52 @@ test('class activity routes can create a local stored activity', async () => {
   assert.equal(row.sheet_url, null);
 });
 
+test('creator draft route creates a local draft from the template and class metadata', async () => {
+  await ensureSchema();
+  const creatorId = await createUser('creator');
+  const className = uniqueName('CreatorClass');
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, level, topic_domain, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+    [className, 'This class focuses on collaboration and code reading.', 'First-year college', 'Computer Science', creatorId]
+  );
+  const classId = remember('classes', classResult.insertId);
+
+  const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
+    method: 'POST',
+    body: {
+      title: 'Sorting Warmup',
+      duration_minutes: 35,
+      mode: 'demo',
+      description: 'Introduce insertion sort with a small trace and one reflection prompt.',
+      createdBy: creatorId,
+    },
+  });
+
+  assert.equal(create.status, 201);
+  assert.equal(create.body.title, 'Sorting Warmup');
+  assert.equal(create.body.source_type, 'local');
+  assert.equal(create.body.mode, 'demo');
+  assert.equal(create.body.duration_minutes, 35);
+  assert.match(create.body.content_text, /\\title\{Sorting Warmup\}/);
+  assert.match(create.body.content_text, /\\mode\{demo\}/);
+  assert.match(create.body.content_text, /\\studentlevel\{First-year college\}/);
+  assert.match(create.body.content_text, /\\activitycontext\{Computer Science\}/);
+  assert.match(create.body.content_text, /Target duration: 35 minutes\./);
+  assert.match(create.body.content_text, /Introduce insertion sort with a small trace and one reflection prompt\./);
+  remember('activities', create.body.id);
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text, is_test
+       FROM pogil_activities
+      WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(row.source_type, 'local');
+  assert.equal(row.is_test, 0);
+  assert.match(row.content_text, /This class focuses on collaboration and code reading\./);
+});
+
 test('activity creation rejects missing required fields before database insert', async () => {
   await ensureSchema();
   const classId = await createClassRecord();

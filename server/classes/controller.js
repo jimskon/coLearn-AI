@@ -1,7 +1,11 @@
 const db = require('../db');
+const fs = require('node:fs');
+const path = require('node:path');
 const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
 const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
+
+const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
 
 // Get all classes
 exports.getAllClasses = async (req, res) => {
@@ -305,6 +309,125 @@ async function getUniqueActivityName(baseName, classId) {
   }
   return `${normalizedBase}_${suffix}`;
 }
+
+function sanitizeHeaderValue(value, fallback = '') {
+  return String(value == null ? fallback : value)
+    .replace(/\r\n/g, ' ')
+    .replace(/\r/g, ' ')
+    .replace(/\n/g, ' ')
+    .replace(/[{}]/g, '')
+    .trim() || fallback;
+}
+
+function normalizeTextBlock(value, fallback = 'Not specified.') {
+  const normalized = String(value == null ? '' : value)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim();
+  return normalized || fallback;
+}
+
+function renderCreatorTemplate({
+  title,
+  mode,
+  durationMinutes,
+  classLevel,
+  classTopicDomain,
+  classDescription,
+  activityDescription,
+}) {
+  const template = fs.readFileSync(CREATOR_TEMPLATE_PATH, 'utf8');
+
+  return template
+    .replace('{{TITLE}}', sanitizeHeaderValue(title, 'New Activity'))
+    .replace('{{MODE}}', sanitizeHeaderValue(mode, 'group'))
+    .replace('{{CLASS_LEVEL}}', sanitizeHeaderValue(classLevel, 'Not specified'))
+    .replace('{{CLASS_TOPIC_DOMAIN}}', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
+    .replace('{{DURATION_MINUTES}}', String(durationMinutes))
+    .replace('{{CLASS_DESCRIPTION_BLOCK}}', normalizeTextBlock(classDescription))
+    .replace('{{ACTIVITY_DESCRIPTION_BLOCK}}', normalizeTextBlock(activityDescription));
+}
+
+exports.createCreatorDraft = async (req, res) => {
+  const classId = req.params.id;
+  const {
+    title,
+    duration_minutes,
+    mode = 'group',
+    description,
+    createdBy,
+  } = req.body || {};
+
+  const normalizedTitle = String(title || '').trim();
+  const normalizedDescription = String(description || '').trim();
+  const durationMinutes = Number(duration_minutes);
+  const normalizedMode = String(mode || 'group').trim().toLowerCase();
+
+  if (!normalizedTitle || !normalizedDescription || !createdBy || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+    return res.status(400).json({
+      error: 'title, description, duration_minutes, and createdBy are required.',
+    });
+  }
+
+  if (!['group', 'demo', 'test'].includes(normalizedMode)) {
+    return res.status(400).json({ error: 'mode must be group, demo, or test.' });
+  }
+
+  try {
+    const [classes] = await db.query(
+      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      [classId]
+    );
+
+    if (!classes.length) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    const classRow = classes[0];
+    const orderIndex = await getNextOrderIndex(classId);
+    const name = await getUniqueActivityName(normalizedTitle, classId);
+    const contentText = renderCreatorTemplate({
+      title: normalizedTitle,
+      mode: normalizedMode,
+      durationMinutes: Math.round(durationMinutes),
+      classLevel: classRow.level,
+      classTopicDomain: classRow.topic_domain,
+      classDescription: classRow.description,
+      activityDescription: normalizedDescription,
+    });
+
+    const [result] = await db.query(
+      `INSERT INTO pogil_activities
+         (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by, is_test)
+       VALUES (?, ?, NULL, 'local', ?, ?, ?, ?, ?)`,
+      [
+        name,
+        normalizedTitle,
+        contentText,
+        orderIndex,
+        classId,
+        createdBy,
+        normalizedMode === 'test' ? 1 : 0,
+      ]
+    );
+
+    return res.status(201).json({
+      id: Number(result.insertId),
+      name,
+      title: normalizedTitle,
+      source_type: 'local',
+      content_text: contentText,
+      order_index: orderIndex,
+      class_id: Number(classId),
+      created_by: createdBy,
+      mode: normalizedMode,
+      duration_minutes: Math.round(durationMinutes),
+    });
+  } catch (err) {
+    console.error('Error creating creator draft:', err);
+    return res.status(500).json({ error: 'Failed to create draft activity.' });
+  }
+};
 
 async function insertImportedActivity({
   classId,

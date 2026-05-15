@@ -1,0 +1,27 @@
+\title{{TITLE}}
+\mode{{MODE}}
+\studentlevel{{CLASS_LEVEL}}
+\activitycontext{{CLASS_TOPIC_DOMAIN}}
+
+\section{Draft Brief}
+Target duration: {{DURATION_MINUTES}} minutes.
+
+Class description:
+{{CLASS_DESCRIPTION_BLOCK}}
+
+Initial activity brief:
+{{ACTIVITY_DESCRIPTION_BLOCK}}
+
+\section{Introduction}
+\questiongroup{Question Group 1}
+
+\question{Replace this question with your own prompt.}
+\textresponse{3}
+\sampleresponses{
+Sample answer
+}
+\feedbackprompt{
+Accept any reasonable response.
+}
+\endquestion
+\endquestiongroup

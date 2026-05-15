@@ -425,10 +425,13 @@ export default function ManageActivitiesPage() {
       setShowCreateModal(false);
       await refreshActivities();
       if (data.generation_status === 'fallback') {
+        const preview = data.generation_debug_preview
+          ? `\n\nModel output preview:\n${data.generation_debug_preview}`
+          : '';
         window.alert(
           data.generation_error
-            ? `The system saved a fallback draft instead of a model-generated draft: ${data.generation_error}`
-            : 'The system saved a fallback draft instead of a model-generated draft.'
+            ? `The system saved a fallback draft instead of a model-generated draft: ${data.generation_error}${preview}`
+            : `The system saved a fallback draft instead of a model-generated draft.${preview}`
         );
       }
       navigate(`/editor/${data.id}`);

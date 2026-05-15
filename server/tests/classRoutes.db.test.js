@@ -6,6 +6,7 @@ const express = require('express');
 
 const classRoutes = require('../classes/routes');
 const db = require('../db');
+const activityCreator = require('../utils/activityCreator');
 
 function uniqueName(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -315,42 +316,58 @@ test('creator draft route creates a local draft from the template and class meta
   );
   const classId = remember('classes', classResult.insertId);
 
-  const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
-    method: 'POST',
-    body: {
-      title: 'Sorting Warmup',
-      duration_minutes: 35,
-      mode: 'demo',
-      description: 'Introduce insertion sort with a small trace and one reflection prompt.',
-      selected_model: 'gpt-5-mini',
-      createdBy: creatorId,
-    },
-  });
+  const originalGenerator = activityCreator.generateActivityDraft;
+  activityCreator.generateActivityDraft = async () => [
+    '\\title{Sorting Warmup}',
+    '\\mode{demo}',
+    '\\studentlevel{First-year college}',
+    '\\activitycontext{Computer Science}',
+    '\\section{Introduction}',
+    '\\questiongroup{Predictions}',
+    '\\question{What do you predict insertion sort will do first?}',
+    '\\textresponse{3}',
+    '\\sampleresponses{Students predict the first comparison or swap.}',
+    '\\feedbackprompt{Accept any reasonable prediction grounded in the problem.}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
 
-  assert.equal(create.status, 201);
-  assert.equal(create.body.title, 'Sorting Warmup');
-  assert.equal(create.body.source_type, 'local');
-  assert.equal(create.body.mode, 'demo');
-  assert.equal(create.body.duration_minutes, 35);
-  assert.equal(create.body.selected_model, 'gpt-5-mini');
-  assert.match(create.body.content_text, /\\title\{Sorting Warmup\}/);
-  assert.match(create.body.content_text, /\\mode\{demo\}/);
-  assert.match(create.body.content_text, /\\studentlevel\{First-year college\}/);
-  assert.match(create.body.content_text, /\\activitycontext\{Computer Science\}/);
-  assert.match(create.body.content_text, /Target duration: 35 minutes\./);
-  assert.match(create.body.content_text, /Requested generation model: gpt-5-mini\./);
-  assert.match(create.body.content_text, /Introduce insertion sort with a small trace and one reflection prompt\./);
-  remember('activities', create.body.id);
+  try {
+    const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
+      method: 'POST',
+      body: {
+        title: 'Sorting Warmup',
+        duration_minutes: 35,
+        mode: 'demo',
+        description: 'Introduce insertion sort with a small trace and one reflection prompt.',
+        selected_model: 'gpt-5-mini',
+        createdBy: creatorId,
+      },
+    });
 
-  const [[row]] = await db.query(
-    `SELECT source_type, content_text, is_test
-       FROM pogil_activities
-      WHERE id = ?`,
-    [create.body.id]
-  );
-  assert.equal(row.source_type, 'local');
-  assert.equal(row.is_test, 0);
-  assert.match(row.content_text, /This class focuses on collaboration and code reading\./);
+    assert.equal(create.status, 201);
+    assert.equal(create.body.title, 'Sorting Warmup');
+    assert.equal(create.body.source_type, 'local');
+    assert.equal(create.body.mode, 'demo');
+    assert.equal(create.body.duration_minutes, 35);
+    assert.equal(create.body.selected_model, 'gpt-5-mini');
+    assert.match(create.body.content_text, /\\title\{Sorting Warmup\}/);
+    assert.match(create.body.content_text, /\\mode\{demo\}/);
+    assert.match(create.body.content_text, /\\questiongroup\{Predictions\}/);
+    remember('activities', create.body.id);
+
+    const [[row]] = await db.query(
+      `SELECT source_type, content_text, is_test
+         FROM pogil_activities
+        WHERE id = ?`,
+      [create.body.id]
+    );
+    assert.equal(row.source_type, 'local');
+    assert.equal(row.is_test, 0);
+    assert.match(row.content_text, /What do you predict insertion sort will do first\?/);
+  } finally {
+    activityCreator.generateActivityDraft = originalGenerator;
+  }
 });
 
 test('activity creation rejects missing required fields before database insert', async () => {

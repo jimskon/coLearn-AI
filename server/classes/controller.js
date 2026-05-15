@@ -1,11 +1,9 @@
 const db = require('../db');
-const fs = require('node:fs');
-const path = require('node:path');
 const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
 const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
+const activityCreator = require('../utils/activityCreator');
 
-const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
 const CREATOR_MODEL_OPTIONS = new Set([
   'gpt-4o-mini',
   'gpt-5-mini',
@@ -317,46 +315,6 @@ async function getUniqueActivityName(baseName, classId) {
   return `${normalizedBase}_${suffix}`;
 }
 
-function sanitizeHeaderValue(value, fallback = '') {
-  return String(value == null ? fallback : value)
-    .replace(/\r\n/g, ' ')
-    .replace(/\r/g, ' ')
-    .replace(/\n/g, ' ')
-    .replace(/[{}]/g, '')
-    .trim() || fallback;
-}
-
-function normalizeTextBlock(value, fallback = 'Not specified.') {
-  const normalized = String(value == null ? '' : value)
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .trim();
-  return normalized || fallback;
-}
-
-function renderCreatorTemplate({
-  title,
-  mode,
-  durationMinutes,
-  selectedModel,
-  classLevel,
-  classTopicDomain,
-  classDescription,
-  activityDescription,
-}) {
-  const template = fs.readFileSync(CREATOR_TEMPLATE_PATH, 'utf8');
-
-  return template
-    .replace('{{TITLE}}', sanitizeHeaderValue(title, 'New Activity'))
-    .replace('{{MODE}}', sanitizeHeaderValue(mode, 'group'))
-    .replace('{{CLASS_LEVEL}}', sanitizeHeaderValue(classLevel, 'Not specified'))
-    .replace('{{CLASS_TOPIC_DOMAIN}}', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
-    .replace('{{DURATION_MINUTES}}', String(durationMinutes))
-    .replace('{{SELECTED_MODEL}}', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
-    .replace('{{CLASS_DESCRIPTION_BLOCK}}', normalizeTextBlock(classDescription))
-    .replace('{{ACTIVITY_DESCRIPTION_BLOCK}}', normalizeTextBlock(activityDescription));
-}
-
 exports.createCreatorDraft = async (req, res) => {
   const classId = req.params.id;
   const {
@@ -401,7 +359,7 @@ exports.createCreatorDraft = async (req, res) => {
     const classRow = classes[0];
     const orderIndex = await getNextOrderIndex(classId);
     const name = await getUniqueActivityName(normalizedTitle, classId);
-    const contentText = renderCreatorTemplate({
+    const contentText = await activityCreator.generateActivityDraft({
       title: normalizedTitle,
       mode: normalizedMode,
       durationMinutes: Math.round(durationMinutes),

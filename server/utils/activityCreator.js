@@ -54,9 +54,19 @@ function stripCodeFences(text) {
 function normalizeGeneratedDraft(text, fallbackInput) {
   const cleaned = stripCodeFences(text);
   if (!cleaned.includes('\\title{') || !cleaned.includes('\\questiongroup{')) {
-    return renderFallbackTemplate(fallbackInput);
+    return {
+      text: renderFallbackTemplate(fallbackInput),
+      usedFallback: true,
+      reason: 'Model output did not pass activity markup validation.',
+      rawOutput: cleaned,
+    };
   }
-  return cleaned;
+  return {
+    text: cleaned,
+    usedFallback: false,
+    reason: null,
+    rawOutput: cleaned,
+  };
 }
 
 async function generateWithOpenAI({
@@ -131,17 +141,24 @@ async function generateActivityDraft(input) {
       text: renderFallbackTemplate(fallbackInput),
       generation_status: 'fallback',
       generation_error: 'OPENAI_API_KEY is not configured for live generation.',
+      raw_model_output: null,
     };
   }
 
   try {
     const generated = await generateWithOpenAI(fallbackInput);
     const normalized = normalizeGeneratedDraft(generated, fallbackInput);
-    const usedFallback = normalized === renderFallbackTemplate(fallbackInput);
+    if (normalized.usedFallback) {
+      console.warn(
+        '[activityCreator] Falling back after validation failure. Raw model output preview:\n',
+        String(normalized.rawOutput || '').slice(0, 2000)
+      );
+    }
     return {
-      text: normalized,
-      generation_status: usedFallback ? 'fallback' : 'generated',
-      generation_error: usedFallback ? 'Model output did not pass activity markup validation.' : null,
+      text: normalized.text,
+      generation_status: normalized.usedFallback ? 'fallback' : 'generated',
+      generation_error: normalized.reason,
+      raw_model_output: normalized.usedFallback ? normalized.rawOutput : null,
     };
   } catch (err) {
     console.error('Activity draft generation failed, falling back to template:', err);
@@ -149,6 +166,7 @@ async function generateActivityDraft(input) {
       text: renderFallbackTemplate(fallbackInput),
       generation_status: 'fallback',
       generation_error: err?.message || 'Generation failed.',
+      raw_model_output: null,
     };
   }
 }

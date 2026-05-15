@@ -400,6 +400,9 @@ exports.createCreatorDraft = async (req, res) => {
       selected_model: normalizedSelectedModel,
       generation_status: generation.generation_status,
       generation_error: generation.generation_error,
+      generation_debug_preview: generation.raw_model_output
+        ? String(generation.raw_model_output).slice(0, 500)
+        : null,
     });
   } catch (err) {
     console.error('Error creating creator draft:', err);

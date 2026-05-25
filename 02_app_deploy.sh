@@ -162,6 +162,19 @@ ensure_database_schema_if_empty() {
   fi
 }
 
+run_repo_migrations() {
+  local migrations_script="${APP_DIR}/migrations/run-all.sh"
+  if [[ -x "$migrations_script" ]]; then
+    info "Running repository migrations"
+    (cd "$APP_DIR" && bash "$migrations_script")
+  elif [[ -f "$migrations_script" ]]; then
+    info "Running repository migrations"
+    (cd "$APP_DIR" && bash "$migrations_script")
+  else
+    warn "No migrations/run-all.sh found; skipping migrations"
+  fi
+}
+
 write_env_files() {
   info "Writing server environment to $ENV_FILE"
   write_key_value PORT "$PORT" "$ENV_FILE"
@@ -309,6 +322,7 @@ main() {
   write_env_files
   install_app_deps_and_build
   ensure_database_schema_if_empty
+  run_repo_migrations
   bootstrap_app_root
   setup_cxx_runner
   start_app_pm2

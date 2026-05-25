@@ -519,6 +519,19 @@ FLUSH PRIVILEGES;"
   fi
 }
 
+run_repo_migrations() {
+  local migrations_script="${APP_DIR}/migrations/run-all.sh"
+  if [[ -x "$migrations_script" ]]; then
+    info "Running repository migrations"
+    (cd "$APP_DIR" && bash "$migrations_script")
+  elif [[ -f "$migrations_script" ]]; then
+    info "Running repository migrations"
+    (cd "$APP_DIR" && bash "$migrations_script")
+  else
+    warn "No migrations/run-all.sh found; skipping migrations"
+  fi
+}
+
 bootstrap_app_root() {
   [[ "$BOOTSTRAP_APP_ROOT" == "1" ]] || return
 
@@ -965,6 +978,7 @@ main() {
   create_or_update_env
   install_app_deps_and_build
   setup_database
+  run_repo_migrations
   bootstrap_app_root
   setup_firewall
   setup_cxx_runner
@@ -975,4 +989,3 @@ main() {
 }
 
 main "$@"
-

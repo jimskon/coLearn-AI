@@ -39,61 +39,26 @@ Browser → nginx → Node/Express → MariaDB
 
 ## Installation (Production)
 
-### 1. Configure Environment
+Use the documented installer scripts that are in this repo:
 
-Create:
+- [colearn_install_README.md](/tmp/colearn-main-prep/colearn_install_README.md) for the recommended two-stage flow
+- [install_colearn_ai.sh](/tmp/colearn-main-prep/install_colearn_ai.sh) for the all-in-one installer
 
-/opt/coLearn-AI/server/.env
+For a fresh install or a brand-new server, the repo must include an up-to-date `schema.sql` snapshot at the repo root. After importing that snapshot, the install scripts also run `migrations/run-all.sh` so the database lands on the latest schema.
 
-Include:
+Typical two-stage flow:
 
-PORT=4000  
-NODE_ENV=production  
-DB_HOST=localhost  
-DB_PORT=3306  
-DB_USER=...  
-DB_PASSWORD=...  
-DB_NAME=...  
-SESSION_SECRET=...  
-
----
-
-### 2. Run Installer
-
-chmod +x install_colearn_ai_from_env.sh
-
-sudo DOMAIN=jimskon.com \
-WWW_DOMAIN=www.jimskon.com \
-APP_USER=skon \
-APP_DIR=/opt/coLearn-AI \
-ENABLE_CERTBOT=0 \
-ENABLE_CXX_RUNNER=1 \
-CXX_RUNNER_DIR=/opt/cxx-runner \
-CXX_RUNNER_REPO_URL=https://github.com/jimskon/coLearn-AI-cxx-runner.git \
-./install_colearn_ai_from_env.sh
-
----
-
-### 3. Verify
-
-pm2 status  
-pm2 logs colearn-ai  
-sudo nginx -t  
-curl -I http://jimskon.com  
-
----
-
-### 4. Enable HTTPS
-
-Rerun installer with ENABLE_CERTBOT=1
+1. Run [01_server_bootstrap.sh](/tmp/colearn-main-prep/01_server_bootstrap.sh) as `root`
+2. Run [02_app_deploy.sh](/tmp/colearn-main-prep/02_app_deploy.sh) as the application user
+3. Run [03_post_install_check.sh](/tmp/colearn-main-prep/03_post_install_check.sh) to verify the deployment
 
 ---
 
 ## Notes
 
-- Installer recreates database from scratch  
-- Not safe for upgrading a live system  
-- Frontend uses same-origin API (/api)
+- Fresh installs depend on a current repo-root `schema.sql` snapshot
+- Install scripts also run `migrations/run-all.sh` to reach the latest schema
+- Frontend uses same-origin API (`/api`)
 
 ---
 

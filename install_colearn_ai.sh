@@ -37,6 +37,7 @@ NODE_MAJOR="${NODE_MAJOR:-20}"
 CLIENT_ORIGIN="${CLIENT_ORIGIN:-}"
 SESSION_SECRET="${SESSION_SECRET:-$(openssl rand -hex 32)}"
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com}"
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 
 DB_HOST="${DB_HOST:-127.0.0.1}"
 DB_PORT="${DB_PORT:-3306}"
@@ -460,6 +461,9 @@ create_or_update_env() {
   write_env_value SESSION_SECRET "$SESSION_SECRET" "$ENV_FILE"
   write_env_value CLIENT_ORIGIN "$CLIENT_ORIGIN" "$ENV_FILE"
   write_env_value SERVICE_ACCOUNT_EMAIL "$SERVICE_ACCOUNT_EMAIL" "$ENV_FILE"
+  if [[ -n "$OPENAI_API_KEY" ]]; then
+    write_env_value OPENAI_API_KEY "$OPENAI_API_KEY" "$ENV_FILE"
+  fi
 
   chown "$APP_USER:$APP_USER" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
@@ -513,7 +517,11 @@ FLUSH PRIVILEGES;"
 
   if [[ "$table_count" -eq 0 ]]; then
     info "Database is empty; importing schema from $SCHEMA_FILE"
-    mariadb -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$SCHEMA_FILE"
+    {
+      printf 'SET FOREIGN_KEY_CHECKS=0;\n'
+      cat "$SCHEMA_FILE"
+      printf '\nSET FOREIGN_KEY_CHECKS=1;\n'
+    } | mariadb -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME"
   else
     info "Database already contains ${table_count} tables; schema import skipped"
   fi

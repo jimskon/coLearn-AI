@@ -534,8 +534,10 @@ install_or_refresh_nginx_config() {
     info "Writing HTTP nginx config"
     setup_nginx_http
   fi
-  rm -f /etc/nginx/sites-enabled/default
-  ln -sf "$SITE_CONF" "$SITE_LINK"
+  rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+  if [[ "$SITE_CONF" != "$SITE_LINK" ]]; then
+    ln -sf "$SITE_CONF" "$SITE_LINK"
+  fi
   nginx -t
   systemctl reload nginx
 }

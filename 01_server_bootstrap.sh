@@ -26,6 +26,10 @@ ENABLE_CXX_RUNNER_PROXY="${ENABLE_CXX_RUNNER_PROXY:-ask}"
 CXX_RUNNER_PORT="${CXX_RUNNER_PORT:-5055}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 
+PKG_MANAGER=""
+OS_FAMILY="unknown"
+ADMIN_GROUP="sudo"
+
 MYSQL_AUTH_FILE=""
 MARIADB_ROOT_SOCKET_OK=0
 MARIADB_ROOT_PASSWORD_OK=0
@@ -50,6 +54,42 @@ trap 'echo "${LOG_PREFIX} ERROR: command failed at line ${LINENO}" >&2' ERR
 
 require_root() { [[ "$EUID" -eq 0 ]] || die "Run with sudo or as root."; }
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+detect_platform() {
+  if command_exists apt-get; then
+    PKG_MANAGER="apt"
+    OS_FAMILY="debian"
+    ADMIN_GROUP="sudo"
+  elif command_exists dnf; then
+    PKG_MANAGER="dnf"
+    OS_FAMILY="rhel"
+    ADMIN_GROUP="wheel"
+  elif command_exists yum; then
+    PKG_MANAGER="yum"
+    OS_FAMILY="rhel"
+    ADMIN_GROUP="wheel"
+  else
+    die "Unsupported package manager. Expected apt-get, dnf, or yum."
+  fi
+}
+
+pkg_update() {
+  case "$PKG_MANAGER" in
+    apt) apt-get update -y ;;
+    dnf) dnf makecache -y ;;
+    yum) yum makecache -y ;;
+    *) die "pkg_update called before platform detection" ;;
+  esac
+}
+
+pkg_install() {
+  case "$PKG_MANAGER" in
+    apt) DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
+    dnf) dnf install -y "$@" ;;
+    yum) yum install -y "$@" ;;
+    *) die "pkg_install called before platform detection" ;;
+  esac
+}
 
 prompt_default() {
   local var_name="$1"
@@ -157,19 +197,30 @@ resolve_settings() {
   prompt_default NODE_MAJOR "Node major version" "$NODE_MAJOR"
   prompt_default CXX_RUNNER_PORT "C++ runner port" "$CXX_RUNNER_PORT"
 
-  SITE_CONF="/etc/nginx/sites-available/${SITE_NAME}.conf"
-  SITE_LINK="/etc/nginx/sites-enabled/${SITE_NAME}.conf"
+  if [[ "$OS_FAMILY" == "rhel" ]]; then
+    SITE_CONF="/etc/nginx/conf.d/${SITE_NAME}.conf"
+    SITE_LINK="$SITE_CONF"
+  else
+    SITE_CONF="/etc/nginx/sites-available/${SITE_NAME}.conf"
+    SITE_LINK="/etc/nginx/sites-enabled/${SITE_NAME}.conf"
+  fi
   CERT_FULLCHAIN="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
   CERT_PRIVKEY="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
 }
 
 ensure_base_packages() {
-  info "Updating apt package lists"
-  apt-get update -y
+  info "Updating package metadata"
+  pkg_update
   info "Installing system packages"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    ca-certificates curl gnupg git build-essential ufw jq openssl \
-    nginx mariadb-server mariadb-client
+  if [[ "$OS_FAMILY" == "rhel" ]]; then
+    pkg_install \
+      ca-certificates curl gnupg2 git gcc gcc-c++ make jq openssl \
+      nginx mariadb-server mariadb
+  else
+    pkg_install \
+      ca-certificates curl gnupg git build-essential ufw jq openssl \
+      nginx mariadb-server mariadb-client
+  fi
 }
 
 ensure_node() {
@@ -184,7 +235,7 @@ ensure_node() {
   if [[ "$need_install" -eq 1 ]]; then
     info "Installing Node.js ${NODE_MAJOR}.x"
     curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+    pkg_install nodejs
   else
     info "Node.js already installed: $(node -v)"
   fi
@@ -200,8 +251,12 @@ ensure_app_user() {
       die "User ${APP_USER} does not exist. Create it first or rerun with CREATE_APP_USER=1."
     fi
     info "Creating application owner user ${APP_USER}"
-    adduser --disabled-password --gecos "" "$APP_USER"
-    usermod -aG sudo "$APP_USER"
+    if [[ "$OS_FAMILY" == "rhel" ]]; then
+      useradd -m "$APP_USER"
+    else
+      adduser --disabled-password --gecos "" "$APP_USER"
+    fi
+    usermod -aG "$ADMIN_GROUP" "$APP_USER"
   fi
   mkdir -p "$APP_DIR"
   chown "$APP_USER:$APP_USER" "$APP_DIR"
@@ -226,8 +281,16 @@ ensure_mariadb() {
   info "Ensuring MariaDB is enabled and running"
   systemctl enable mariadb
   systemctl start mariadb
+  local bind_cfg=""
   if [[ -f /etc/mysql/mariadb.conf.d/50-server.cnf ]]; then
-    sed -i 's/^\s*bind-address\s*=.*/bind-address = 127.0.0.1/' /etc/mysql/mariadb.conf.d/50-server.cnf || true
+    bind_cfg="/etc/mysql/mariadb.conf.d/50-server.cnf"
+  elif [[ -f /etc/my.cnf.d/mariadb-server.cnf ]]; then
+    bind_cfg="/etc/my.cnf.d/mariadb-server.cnf"
+  elif [[ -f /etc/my.cnf.d/server.cnf ]]; then
+    bind_cfg="/etc/my.cnf.d/server.cnf"
+  fi
+  if [[ -n "$bind_cfg" ]]; then
+    sed -i 's/^\s*bind-address\s*=.*/bind-address = 127.0.0.1/' "$bind_cfg" || true
     systemctl restart mariadb
   fi
   if mysql_try_socket_root; then
@@ -499,7 +562,10 @@ maybe_install_cert() {
     return 0
   fi
   [[ -n "$ADMIN_EMAIL" ]] || prompt_default ADMIN_EMAIL "Certbot contact email" "admin@${DOMAIN}"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y certbot python3-certbot-nginx
+  if [[ "$OS_FAMILY" == "rhel" ]]; then
+    pkg_install epel-release || true
+  fi
+  pkg_install certbot python3-certbot-nginx
   install_or_refresh_nginx_config
   certbot --nginx --non-interactive --agree-tos --redirect -m "$ADMIN_EMAIL" -d "$DOMAIN" -d "$WWW_DOMAIN"
   [[ -f "$CERT_FULLCHAIN" && -f "$CERT_PRIVKEY" ]] || die "Certbot did not create the expected certificate files."
@@ -507,10 +573,22 @@ maybe_install_cert() {
 }
 
 setup_firewall() {
-  info "Configuring UFW"
-  ufw allow OpenSSH || true
-  ufw allow 'Nginx Full' || true
-  ufw --force enable || true
+  if command_exists ufw; then
+    info "Configuring UFW"
+    ufw allow OpenSSH || true
+    ufw allow 'Nginx Full' || true
+    ufw --force enable || true
+  elif command_exists firewall-cmd; then
+    info "Configuring firewalld"
+    systemctl enable firewalld || true
+    systemctl start firewalld || true
+    firewall-cmd --permanent --add-service=ssh || true
+    firewall-cmd --permanent --add-service=http || true
+    firewall-cmd --permanent --add-service=https || true
+    firewall-cmd --reload || true
+  else
+    warn "No supported firewall tool found; skipping firewall configuration"
+  fi
 }
 
 maybe_install_docker() {
@@ -518,8 +596,12 @@ maybe_install_docker() {
     return 0
   fi
   info "Ensuring Docker is installed"
-  DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 || \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose
+  if [[ "$OS_FAMILY" == "rhel" ]]; then
+    pkg_install dnf-plugins-core || true
+    pkg_install docker docker-compose-plugin || pkg_install docker docker-compose
+  else
+    pkg_install docker.io docker-compose-v2 || pkg_install docker.io docker-compose
+  fi
   systemctl enable docker
   systemctl start docker
   usermod -aG docker "$APP_USER" || true
@@ -617,6 +699,7 @@ print_summary() {
 
 main() {
   require_root
+  detect_platform
   load_config_if_present
   resolve_settings
   ensure_base_packages

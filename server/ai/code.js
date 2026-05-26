@@ -185,6 +185,7 @@ function issuesToWarnings(issues) {
 
 const BOUNDARY_TAGS = new Set([
     "title", "name", "studentlevel", "activitycontext", "aicodeguidance", "section",
+    "text",
     "questiongroup", "endquestiongroup",
     "question", "endquestion",
     "textresponse", "sampleresponses", "feedbackprompt", "followupprompt",

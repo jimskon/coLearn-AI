@@ -509,6 +509,9 @@ CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8m
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${pw_esc}';
 ALTER USER '${DB_USER}'@'localhost' IDENTIFIED BY '${pw_esc}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'localhost';
+CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${pw_esc}';
+ALTER USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${pw_esc}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'127.0.0.1';
 FLUSH PRIVILEGES;"
 
   local table_count
@@ -878,7 +881,12 @@ install_or_refresh_nginx_config() {
   rm -f /etc/nginx/sites-enabled/default
   ln -sf "$SITE_CONF" "$SITE_LINK"
   nginx -t
-  systemctl reload nginx
+  systemctl enable nginx
+  if systemctl is-active --quiet nginx; then
+    systemctl reload nginx
+  else
+    systemctl start nginx
+  fi
 }
 
 maybe_install_cert() {

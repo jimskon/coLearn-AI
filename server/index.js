@@ -1,14 +1,8 @@
-// In server/index.js
-
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 const path = require('path');
 require('dotenv').config({
   path: path.join(__dirname, '.env'),
   override: true
 });
-
-//const path = require('path');
-require('dotenv').config({ path: path.join(__dirname, '.env') });
 
 const express = require('express');
 const cors = require('cors');
@@ -25,13 +19,19 @@ const db = require('./db'); // Make sure db is accessible
 const staticDir = path.join(__dirname, '../client/dist');
 app.use(express.json());
 
-// ✅ CORS config goes AFTER app exists
+// Use CLIENT_ORIGIN when present, while keeping the historical allowlist as a fallback.
+const configuredOrigins = (process.env.CLIENT_ORIGIN || '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
 const allowedOrigins = new Set([
+  ...configuredOrigins,
   "https://colearn-ai.com",
   "https://www.colearn-ai.com",
   "https://jimskon.com",
   "https://csits.kenyon.edu",
-    "https://csdev.kenyon.edu",
+  "https://csdev.kenyon.edu",
   "https://snhu.colearn-ai.com"
 ]);
 
@@ -228,4 +228,3 @@ io.on('connection', (socket) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`ITS server with Socket.IO running on port ${PORT}`);
 });
-

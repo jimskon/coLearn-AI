@@ -21,6 +21,7 @@ DB_PASSWORD="${DB_PASSWORD:-}"
 CLIENT_ORIGIN="${CLIENT_ORIGIN:-}"
 SESSION_SECRET="${SESSION_SECRET:-}"
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com}"
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 APP_ROOT_NAME="${APP_ROOT_NAME:-Administrator}"
 APP_ROOT_EMAIL="${APP_ROOT_EMAIL:-}"
 APP_ROOT_PASSWORD="${APP_ROOT_PASSWORD:-}"
@@ -156,9 +157,26 @@ ensure_database_schema_if_empty() {
   table_count="${table_count:-0}"
   if [[ "$table_count" -eq 0 ]]; then
     info "Database is empty; importing schema from $SCHEMA_FILE"
-    mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$SCHEMA_FILE"
+    {
+      printf 'SET FOREIGN_KEY_CHECKS=0;\n'
+      cat "$SCHEMA_FILE"
+      printf '\nSET FOREIGN_KEY_CHECKS=1;\n'
+    } | mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" "$DB_NAME"
   else
     info "Database already contains ${table_count} tables; schema import skipped"
+  fi
+}
+
+run_repo_migrations() {
+  local migrations_script="${APP_DIR}/migrations/run-all.sh"
+  if [[ -x "$migrations_script" ]]; then
+    info "Running repository migrations"
+    (cd "$APP_DIR" && bash "$migrations_script")
+  elif [[ -f "$migrations_script" ]]; then
+    info "Running repository migrations"
+    (cd "$APP_DIR" && bash "$migrations_script")
+  else
+    warn "No migrations/run-all.sh found; skipping migrations"
   fi
 }
 
@@ -174,6 +192,9 @@ write_env_files() {
   write_key_value SESSION_SECRET "$SESSION_SECRET" "$ENV_FILE"
   write_key_value CLIENT_ORIGIN "$CLIENT_ORIGIN" "$ENV_FILE"
   write_key_value SERVICE_ACCOUNT_EMAIL "$SERVICE_ACCOUNT_EMAIL" "$ENV_FILE"
+  if [[ -n "$OPENAI_API_KEY" ]]; then
+    write_key_value OPENAI_API_KEY "$OPENAI_API_KEY" "$ENV_FILE"
+  fi
   chmod 600 "$ENV_FILE"
   local client_env="${APP_DIR}/client/.env"
   info "Writing client environment to $client_env"
@@ -309,6 +330,7 @@ main() {
   write_env_files
   install_app_deps_and_build
   ensure_database_schema_if_empty
+  run_repo_migrations
   bootstrap_app_root
   setup_cxx_runner
   start_app_pm2

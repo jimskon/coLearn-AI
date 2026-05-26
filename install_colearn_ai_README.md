@@ -11,7 +11,8 @@ It is designed to be rerunnable and safer than the earlier versions.
 - clones or updates the coLearn-AI repo
 - writes or updates `server/.env`
 - creates the application database and database user
-- imports `schema.sql` only if the database is empty
+- imports `schema.sql` from the repo root only if the database is empty
+- runs `migrations/run-all.sh` after bootstrap so the schema lands on the latest version
 - creates or updates a coLearn-AI `root` user in the `users` table
 - configures nginx to serve the built client and proxy `/api/`
 - optionally requests a Let’s Encrypt certificate with certbot
@@ -26,7 +27,7 @@ Those should be gathered carefully and added to the environment after install.
 
 - Ubuntu 24.04 or similar
 - DNS for the target domain points to this server before requesting TLS
-- the app repo contains `server/`, `client/`, and a `schema.sql`
+- the app repo contains `server/`, `client/`, and a repo-root `schema.sql`
 - the app’s server uses a `users` table with at least these columns:
   - `name`
   - `email`
@@ -36,7 +37,7 @@ Those should be gathered carefully and added to the environment after install.
 ## Typical run
 
 ```bash
-sudo bash install_colearn_ai_v2.sh
+sudo bash install_colearn_ai.sh
 ```
 
 You can also preseed values through environment variables.
@@ -62,7 +63,7 @@ APP_ROOT_NAME="Administrator" \
 APP_ROOT_EMAIL=admin@example.edu \
 APP_ROOT_PASSWORD='replace-me' \
 DB_ROOT_PASSWORD='replace-me-too' \
-bash install_colearn_ai_v2.sh
+bash install_colearn_ai.sh
 ```
 
 ## Important prompts during install

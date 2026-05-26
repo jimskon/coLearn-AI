@@ -145,6 +145,11 @@ That material belongs in your operational docs, not hardcoded into a bootstrap s
 
 You can run the scripts interactively, but config files make the process more repeatable.
 
+The repo includes starter templates you can copy and edit:
+
+- `install.conf.template`
+- `deploy.conf.template`
+
 ## Example `install.conf` for stage 1
 
 ```bash
@@ -184,6 +189,14 @@ ENABLE_DOCKER=1
 ENABLE_CXX_RUNNER_PROXY=1
 CXX_RUNNER_PORT=5055
 NODE_MAJOR=20
+```
+
+If students will browse by IP address instead of a local hostname, use the IP
+for both `DOMAIN` and `WWW_DOMAIN`. For example:
+
+```bash
+DOMAIN=10.192.145.179
+WWW_DOMAIN=10.192.145.179
 ```
 
 ## Example `deploy.conf` for stage 2
@@ -243,10 +256,18 @@ APP_ROOT_PASSWORD=replace_me
 BOOTSTRAP_APP_ROOT=1
 SERVER_ENTRY=server/index.js
 ENABLE_CXX_RUNNER=1
-CXX_RUNNER_REPO_URL=https://github.com/jimskon/coLearn-AI-cxx-runner.git
+CXX_RUNNER_REPO_URL=https://github.com/your-org/cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+```
+
+If students browse by IP address, keep the same exact IP in all three places:
+
+```bash
+DOMAIN=10.192.145.179
+WWW_DOMAIN=10.192.145.179
+CLIENT_ORIGIN=http://10.192.145.179
 ```
 
 ## Mapping note: `deploy.conf` vs `server/.env`

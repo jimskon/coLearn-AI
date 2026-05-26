@@ -55,6 +55,30 @@ trap 'echo "${LOG_PREFIX} ERROR: command failed at line ${LINENO}" >&2' ERR
 require_root() { [[ "$EUID" -eq 0 ]] || die "Run with sudo or as root."; }
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+is_local_host_target() {
+  local target="$1"
+  [[ "$target" == "localhost" || "$target" == *.local || "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+default_www_domain() {
+  local domain="$1"
+  if is_local_host_target "$domain"; then
+    printf '%s' "$domain"
+  else
+    printf 'www.%s' "$domain"
+  fi
+}
+
+default_client_origin() {
+  local domain="$1"
+  local enable_certbot="$2"
+  if [[ "$enable_certbot" == "0" ]] || is_local_host_target "$domain"; then
+    printf 'http://%s' "$domain"
+  else
+    printf 'https://%s' "$domain"
+  fi
+}
+
 detect_platform() {
   if command_exists apt-get; then
     PKG_MANAGER="apt"
@@ -180,9 +204,9 @@ resolve_settings() {
   fi
   [[ -n "$APP_USER" && "$APP_USER" != "root" ]] || die "APP_USER cannot be blank or root."
 
-  prompt_default DOMAIN "Primary domain" "colearn.example.edu"
+  prompt_default DOMAIN "Primary domain" "colearn.local"
   if [[ -z "$WWW_DOMAIN" ]]; then
-    WWW_DOMAIN="www.${DOMAIN}"
+    WWW_DOMAIN="$(default_www_domain "$DOMAIN")"
   fi
   prompt_default WWW_DOMAIN "Alias / www domain" "$WWW_DOMAIN"
   prompt_default APP_DIR "Application directory" "$APP_DIR"
@@ -633,6 +657,8 @@ resolve_cxx_proxy_setting() {
 
 write_stage2_template() {
   local template_file="${APP_DIR}/deploy.conf.template"
+  local client_origin
+  client_origin="$(default_client_origin "$DOMAIN" "$ENABLE_CERTBOT")"
   info "Writing stage-2 config template to $template_file"
   cat > "$template_file" <<EOFCONF
 REPO_URL=https://github.com/jimskon/coLearn-AI.git
@@ -647,7 +673,7 @@ DB_PORT=3306
 DB_NAME=${DB_NAME}
 DB_USER=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
-CLIENT_ORIGIN=https://${DOMAIN}
+CLIENT_ORIGIN=${client_origin}
 SESSION_SECRET=
 SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com
 APP_ROOT_NAME=Administrator
@@ -655,8 +681,8 @@ APP_ROOT_EMAIL=admin@${DOMAIN}
 APP_ROOT_PASSWORD=
 BOOTSTRAP_APP_ROOT=1
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=0
-CXX_RUNNER_REPO_URL=
+ENABLE_CXX_RUNNER=${ENABLE_CXX_RUNNER_PROXY_FINAL}
+CXX_RUNNER_REPO_URL=https://github.com/jimskon/coLearn-AI-cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=${CXX_RUNNER_PORT}

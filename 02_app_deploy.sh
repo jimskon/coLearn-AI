@@ -30,7 +30,7 @@ APP_ROOT_PASSWORD="${APP_ROOT_PASSWORD:-}"
 BOOTSTRAP_APP_ROOT="${BOOTSTRAP_APP_ROOT:-1}"
 SERVER_ENTRY="${SERVER_ENTRY:-server/index.js}"
 ENABLE_CXX_RUNNER="${ENABLE_CXX_RUNNER:-0}"
-CXX_RUNNER_REPO_URL="${CXX_RUNNER_REPO_URL:-}"
+CXX_RUNNER_REPO_URL="${CXX_RUNNER_REPO_URL:-https://github.com/jimskon/coLearn-AI-cxx-runner.git}"
 CXX_RUNNER_DIR="${CXX_RUNNER_DIR:-/opt/cxx-runner}"
 CXX_RUNNER_BRANCH="${CXX_RUNNER_BRANCH:-main}"
 CXX_RUNNER_PORT="${CXX_RUNNER_PORT:-5055}"
@@ -41,6 +41,29 @@ info() { echo "${LOG_PREFIX} $*"; }
 warn() { echo "${LOG_PREFIX} WARNING: $*" >&2; }
 die() { echo "${LOG_PREFIX} ERROR: $*" >&2; exit 1; }
 trap 'echo "${LOG_PREFIX} ERROR: command failed at line ${LINENO}" >&2' ERR
+
+is_local_host_target() {
+  local target="$1"
+  [[ "$target" == "localhost" || "$target" == *.local || "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+default_www_domain() {
+  local domain="$1"
+  if is_local_host_target "$domain"; then
+    printf '%s' "$domain"
+  else
+    printf 'www.%s' "$domain"
+  fi
+}
+
+default_client_origin() {
+  local domain="$1"
+  if is_local_host_target "$domain"; then
+    printf 'http://%s' "$domain"
+  else
+    printf 'https://%s' "$domain"
+  fi
+}
 
 prompt_default() {
   local var_name="$1"
@@ -110,7 +133,7 @@ resolve_settings() {
   prompt_default REPO_BRANCH "Application git branch" "$REPO_BRANCH"
   prompt_default APP_DIR "Application directory" "$APP_DIR"
   prompt_default DOMAIN "Primary domain" "$DOMAIN"
-  if [[ -z "$WWW_DOMAIN" ]]; then WWW_DOMAIN="www.${DOMAIN}"; fi
+  if [[ -z "$WWW_DOMAIN" ]]; then WWW_DOMAIN="$(default_www_domain "$DOMAIN")"; fi
   prompt_default WWW_DOMAIN "Alias / www domain" "$WWW_DOMAIN"
   prompt_default PORT "Node/Express port" "$PORT"
   prompt_default DB_HOST "Database host" "$DB_HOST"
@@ -118,7 +141,7 @@ resolve_settings() {
   prompt_default DB_NAME "Database name" "$DB_NAME"
   prompt_default DB_USER "Database user" "$DB_USER"
   prompt_secret_keep DB_PASSWORD "Database password"
-  if [[ -z "$CLIENT_ORIGIN" ]]; then CLIENT_ORIGIN="https://${DOMAIN}"; fi
+  if [[ -z "$CLIENT_ORIGIN" ]]; then CLIENT_ORIGIN="$(default_client_origin "$DOMAIN")"; fi
   prompt_default CLIENT_ORIGIN "Client origin" "$CLIENT_ORIGIN"
   if [[ -z "$SESSION_SECRET" ]]; then SESSION_SECRET="$(openssl rand -hex 32)"; fi
   prompt_secret_keep SESSION_SECRET "Session secret"
@@ -127,6 +150,12 @@ resolve_settings() {
   prompt_default APP_ROOT_EMAIL "coLearn-AI root email" "$APP_ROOT_EMAIL"
   prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
   prompt_secret_keep EMAIL_PASS "Outgoing email app password"
+  if [[ "$ENABLE_CXX_RUNNER" == "1" ]]; then
+    prompt_default CXX_RUNNER_REPO_URL "C++ runner git repo URL" "$CXX_RUNNER_REPO_URL"
+    prompt_default CXX_RUNNER_DIR "C++ runner directory" "$CXX_RUNNER_DIR"
+    prompt_default CXX_RUNNER_BRANCH "C++ runner git branch" "$CXX_RUNNER_BRANCH"
+    prompt_default CXX_RUNNER_PORT "C++ runner port" "$CXX_RUNNER_PORT"
+  fi
   if [[ -z "$ENV_FILE" ]]; then ENV_FILE="${APP_DIR}/server/.env"; fi
 }
 
@@ -318,7 +347,7 @@ print_summary() {
   echo "Application user:          ${APP_USER}"
   echo "Application directory:     ${APP_DIR}"
   echo "Repo URL / branch:         ${REPO_URL} / ${REPO_BRANCH}"
-  echo "Public URL:                https://${DOMAIN}"
+  echo "Public URL:                ${CLIENT_ORIGIN}"
   echo "Server env file:           ${ENV_FILE}"
   echo "Node port:                 ${PORT}"
   echo "App DB name/user:          ${DB_NAME} / ${DB_USER}"

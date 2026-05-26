@@ -94,6 +94,24 @@ You also need the repo URL for stage 2.
 
 For a robust unattended setup, prefer an **HTTPS repo URL** unless you have already set up SSH deploy keys for the app user.
 
+## Common student/lab setup
+
+For local classroom or lab installs on firewalled machines, the simplest working setup is usually:
+
+- no SSL
+- no Docker
+- no `/cxx-run/` proxy
+- one local hostname used consistently in the browser and config files
+
+In that case:
+
+- set `ENABLE_CERTBOT=0`
+- set `ENABLE_DOCKER=0`
+- set `ENABLE_CXX_RUNNER_PROXY=0`
+- use `http://...` for `CLIENT_ORIGIN`
+
+The hostname in `CLIENT_ORIGIN` must match the exact address students use in the browser, or CORS can fail.
+
 ---
 
 # Secrets and manual items
@@ -148,6 +166,26 @@ CXX_RUNNER_PORT=5055
 NODE_MAJOR=20
 ```
 
+## Example `install.conf` for a local firewalled lab server
+
+```bash
+DOMAIN=colearn.local
+WWW_DOMAIN=colearn.local
+APP_USER=colearn
+APP_DIR=/opt/coLearn-AI
+DB_NAME=colearn_db
+DB_USER=colearn_user
+DB_PASSWORD=replace_me
+SET_DB_ROOT_PASSWORD=ask
+PORT=4000
+SITE_NAME=colearn-ai
+ENABLE_CERTBOT=0
+ENABLE_DOCKER=0
+ENABLE_CXX_RUNNER_PROXY=0
+CXX_RUNNER_PORT=5055
+NODE_MAJOR=20
+```
+
 ## Example `deploy.conf` for stage 2
 
 ```bash
@@ -177,6 +215,62 @@ CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
 ```
+
+## Example `deploy.conf` for a local firewalled lab server
+
+```bash
+REPO_URL=https://github.com/jimskon/coLearn-AI.git
+REPO_BRANCH=main
+APP_USER=colearn
+APP_DIR=/opt/coLearn-AI
+PORT=4000
+DOMAIN=colearn.local
+WWW_DOMAIN=colearn.local
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_NAME=colearn_db
+DB_USER=colearn_user
+DB_PASSWORD=replace_me
+CLIENT_ORIGIN=http://colearn.local
+SESSION_SECRET=replace_with_a_long_random_secret
+OPENAI_API_KEY=replace_me
+EMAIL_USER=replace_me
+EMAIL_PASS=replace_me
+SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com
+APP_ROOT_NAME=Administrator
+APP_ROOT_EMAIL=admin@colearn.local
+APP_ROOT_PASSWORD=replace_me
+BOOTSTRAP_APP_ROOT=1
+SERVER_ENTRY=server/index.js
+ENABLE_CXX_RUNNER=0
+CXX_RUNNER_REPO_URL=
+CXX_RUNNER_DIR=/opt/cxx-runner
+CXX_RUNNER_BRANCH=main
+CXX_RUNNER_PORT=5055
+```
+
+## Mapping note: `deploy.conf` vs `server/.env`
+
+`deploy.conf` is the installer input file. It contains both:
+
+- deploy-only values such as `REPO_URL`, `REPO_BRANCH`, `APP_USER`, and `APP_DIR`
+- runtime values that are written into `server/.env`
+
+Common runtime values students will recognize from `server/.env` include:
+
+- `PORT`
+- `DB_HOST`
+- `DB_PORT`
+- `DB_NAME`
+- `DB_USER`
+- `DB_PASSWORD`
+- `SESSION_SECRET`
+- `OPENAI_API_KEY`
+- `EMAIL_USER`
+- `EMAIL_PASS`
+- `CLIENT_ORIGIN`
+
+So the names do not have to match perfectly across every variable. The goal is for `deploy.conf` to contain enough information for stage 2 to generate the correct runtime env files.
 
 ---
 

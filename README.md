@@ -39,18 +39,22 @@ Browser → nginx → Node/Express → MariaDB
 
 ## Installation (Production)
 
-Use the documented installer scripts that are in this repo:
+The recommended install method is the three-stage server install flow in this repo:
 
-- [colearn_install_README.md](/tmp/colearn-main-prep/colearn_install_README.md) for the recommended two-stage flow
-- [install_colearn_ai.sh](/tmp/colearn-main-prep/install_colearn_ai.sh) for the all-in-one installer
+- [colearn_install_README.md](colearn_install_README.md)
+- [01_server_bootstrap.sh](01_server_bootstrap.sh)
+- [02_app_deploy.sh](02_app_deploy.sh)
+- [03_post_install_check.sh](03_post_install_check.sh)
 
 For a fresh install or a brand-new server, the repo must include an up-to-date `schema.sql` snapshot at the repo root. After importing that snapshot, the install scripts also run `migrations/run-all.sh` so the database lands on the latest schema.
 
-Typical two-stage flow:
+Typical install flow:
 
-1. Run [01_server_bootstrap.sh](/tmp/colearn-main-prep/01_server_bootstrap.sh) as `root`
-2. Run [02_app_deploy.sh](/tmp/colearn-main-prep/02_app_deploy.sh) as the application user
-3. Run [03_post_install_check.sh](/tmp/colearn-main-prep/03_post_install_check.sh) to verify the deployment
+1. Run [01_server_bootstrap.sh](01_server_bootstrap.sh) as `root`
+2. Run [02_app_deploy.sh](02_app_deploy.sh) as the application user
+3. Run [03_post_install_check.sh](03_post_install_check.sh) to verify the deployment
+
+The older one-shot installer, [install_colearn_ai.sh](install_colearn_ai.sh), is still in the repo, but it is not the recommended default path for new installs.
 
 ---
 

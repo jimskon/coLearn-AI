@@ -1,12 +1,12 @@
 #!/bin/bash
 # scripts/export_schema.sh
-# Export the current DB schema to server/schema.sql using credentials in server/.env
+# Export the current DB schema to schema.sql using credentials in server/.env
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$ROOT_DIR/server/.env"
-OUTPUT_FILE="$ROOT_DIR/server/schema.sql"
+OUTPUT_FILE="$ROOT_DIR/schema.sql"
 
 if [ ! -f "$ENV_FILE" ]; then
   echo "❌ ERROR: $ENV_FILE not found"

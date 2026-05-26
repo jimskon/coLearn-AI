@@ -372,7 +372,6 @@ test('saveActivitySource rejects missing text and 404s for missing activity', as
   assert.equal(missing.status, 404);
   assert.deepEqual(missing.body, { error: 'Activity not found' });
 });
-
 test('createActivity inserts a new activity and returns its payload', async () => {
   const creator = await createUser('creator');
   const classId = await createClassRecord();

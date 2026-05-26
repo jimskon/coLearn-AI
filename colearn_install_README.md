@@ -54,6 +54,8 @@ It:
 - builds the client
 - writes `server/.env`
 - writes `client/.env`
+- imports repo-root `schema.sql` if the application database is empty
+- runs `migrations/run-all.sh` so the DB reaches the latest schema
 - creates or updates the coLearn-AI root application user in the app database
 - optionally clones/builds the C++ runner from git
 - starts the Node app with PM2

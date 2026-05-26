@@ -83,6 +83,7 @@ export default function ManageActivitiesPage() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  const [classInfo, setClassInfo] = useState(null);
   const [activities, setActivities] = useState([]);
   const [newActivity, setNewActivity] = useState(emptyUploadActivity);
 
@@ -115,13 +116,21 @@ export default function ManageActivitiesPage() {
     }
   };
 
+  const refreshClassInfo = async () => {
+    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}`, {
+      credentials: 'include',
+    });
+    const data = await res.json();
+    setClassInfo(data && !data.error ? data : null);
+  };
+
   useEffect(() => {
     if (!canManage) {
       navigate('/dashboard');
       return;
     }
 
-    refreshActivities().catch((err) => {
+    Promise.all([refreshClassInfo(), refreshActivities()]).catch((err) => {
       console.error('Fetch error:', err);
     });
   }, [canManage, classId, navigate]);
@@ -493,7 +502,14 @@ export default function ManageActivitiesPage() {
 
   return (
     <Container>
-      <h2 className="mb-4">Manage POGIL Activities for Class {classId}</h2>
+      <div className="mb-4">
+        <h2 className="mb-2">
+          Manage POGIL Activities for {classInfo?.name || `Class ${classId}`}
+        </h2>
+        {classInfo?.description ? (
+          <p className="text-muted mb-0">{classInfo.description}</p>
+        ) : null}
+      </div>
 
       <h4>Current Activities</h4>
       <Table striped bordered hover responsive className="mb-4">

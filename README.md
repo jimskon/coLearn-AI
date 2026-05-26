@@ -37,7 +37,7 @@ Browser → nginx → Node/Express → MariaDB
 
 ---
 
-## Installation (Production)
+## Installation
 
 The recommended install method is the three-stage server install flow in this repo:
 
@@ -55,6 +55,20 @@ Typical install flow:
 3. Run [03_post_install_check.sh](03_post_install_check.sh) to verify the deployment
 
 The older one-shot installer, [install_colearn_ai.sh](install_colearn_ai.sh), is still in the repo, but it is not the recommended default path for new installs.
+
+For local classroom or lab servers behind a firewall, it is normal to run without SSL:
+
+- set `ENABLE_CERTBOT=0` in `install.conf`
+- use `http://...` for `CLIENT_ORIGIN` in `deploy.conf`
+- make `DOMAIN`, `WWW_DOMAIN`, and `CLIENT_ORIGIN` match the exact hostname students will use in their browser
+
+For example, if students will browse to `http://colearn.local`, then use:
+
+```bash
+DOMAIN=colearn.local
+WWW_DOMAIN=colearn.local
+CLIENT_ORIGIN=http://colearn.local
+```
 
 ---
 

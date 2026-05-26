@@ -42,6 +42,8 @@ Browser → nginx → Node/Express → MariaDB
 The recommended install method is the three-stage server install flow in this repo:
 
 - [colearn_install_README.md](colearn_install_README.md)
+- [install.conf.template](install.conf.template)
+- [deploy.conf.template](deploy.conf.template)
 - [01_server_bootstrap.sh](01_server_bootstrap.sh)
 - [02_app_deploy.sh](02_app_deploy.sh)
 - [03_post_install_check.sh](03_post_install_check.sh)
@@ -63,12 +65,12 @@ For local classroom or lab servers behind a firewall, it is normal to run withou
 - use `http://...` for `CLIENT_ORIGIN` in `deploy.conf`
 - make `DOMAIN`, `WWW_DOMAIN`, and `CLIENT_ORIGIN` match the exact hostname students will use in their browser
 
-For example, if students will browse to `http://colearn.local`, then use:
+For example, if students will browse to `http://10.192.145.179`, then use:
 
 ```bash
-DOMAIN=colearn.local
-WWW_DOMAIN=colearn.local
-CLIENT_ORIGIN=http://colearn.local
+DOMAIN=10.192.145.179
+WWW_DOMAIN=10.192.145.179
+CLIENT_ORIGIN=http://10.192.145.179
 ```
 
 ---

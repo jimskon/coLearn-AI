@@ -1,0 +1,21 @@
+# Stage 1 bootstrap example for a local classroom server behind a firewall.
+# Use one exact hostname or IP consistently. If students will browse to
+# http://10.192.145.179, set DOMAIN and WWW_DOMAIN to 10.192.145.179.
+
+DOMAIN=colearn.local
+WWW_DOMAIN=colearn.local
+APP_USER=colearn
+APP_DIR=/opt/coLearn-AI
+
+DB_NAME=colearn_db
+DB_USER=colearn_user
+DB_PASSWORD=replace_me
+SET_DB_ROOT_PASSWORD=ask
+
+PORT=4000
+SITE_NAME=colearn-ai
+ENABLE_CERTBOT=0
+ENABLE_DOCKER=1
+ENABLE_CXX_RUNNER_PROXY=1
+CXX_RUNNER_PORT=5055
+NODE_MAJOR=20

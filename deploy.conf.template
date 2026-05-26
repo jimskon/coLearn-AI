@@ -1,26 +1,36 @@
 REPO_URL=https://github.com/jimskon/coLearn-AI.git
 REPO_BRANCH=main
-APP_USER=skon
+APP_USER=colearn
 APP_DIR=/opt/coLearn-AI
 PORT=4000
-DOMAIN=jimskon.com
-WWW_DOMAIN=www.jimskon.com
+
+# For local classroom installs behind a firewall, use one exact hostname or IP
+# everywhere. If students browse to http://10.192.145.179, set all three to
+# 10.192.145.179.
+DOMAIN=colearn.local
+WWW_DOMAIN=colearn.local
+
 DB_HOST=127.0.0.1
 DB_PORT=3306
+DB_NAME=colearn_db
+DB_USER=colearn_user
+DB_PASSWORD=replace_me
 
-DB_NAME=colearnai_db
-DB_USER=colearnai_user
-DB_PASSWORD=KenyonPhilander707Chase
-CLIENT_ORIGIN=https://jimskon.com
-SESSION_SECRET=
+CLIENT_ORIGIN=http://colearn.local
+SESSION_SECRET=replace_with_a_long_random_secret
+OPENAI_API_KEY=replace_me
+EMAIL_USER=replace_me
+EMAIL_PASS=replace_me
 SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com
+
 APP_ROOT_NAME=Administrator
-APP_ROOT_EMAIL=admin@jimskon.com
-APP_ROOT_PASSWORD=
+APP_ROOT_EMAIL=admin@colearn.local
+APP_ROOT_PASSWORD=replace_me
 BOOTSTRAP_APP_ROOT=1
+
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=0
-CXX_RUNNER_REPO_URL=
+ENABLE_CXX_RUNNER=1
+CXX_RUNNER_REPO_URL=https://github.com/jimskon/coLearn-AI-cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055

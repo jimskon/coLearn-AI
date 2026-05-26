@@ -48,10 +48,16 @@ async function main() {
         id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(191) NOT NULL UNIQUE,
         description TEXT DEFAULT NULL,
+        level VARCHAR(255) DEFAULT NULL,
+        topic_domain VARCHAR(255) DEFAULT NULL,
         created_by INT DEFAULT NULL,
         CONSTRAINT pogil_classes_created_by_fk
           FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
       );
+
+      ALTER TABLE pogil_classes
+        ADD COLUMN IF NOT EXISTS level VARCHAR(255) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL;
 
       CREATE TABLE IF NOT EXISTS courses (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -98,6 +104,10 @@ async function main() {
         CONSTRAINT pogil_activities_created_by_fk
           FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
       );
+
+      ALTER TABLE pogil_activities
+        MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+        MODIFY COLUMN content_text LONGTEXT NULL;
 
       CREATE TABLE IF NOT EXISTS activity_instances (
         id INT AUTO_INCREMENT PRIMARY KEY,

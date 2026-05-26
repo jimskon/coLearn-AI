@@ -12,6 +12,8 @@ export default function ActivityEditor() {
   const [elements, setElements] = useState([]);
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [copySuccess, setCopySuccess] = useState('');
+  const [saveStatus, setSaveStatus] = useState('');
+  const [saveBusy, setSaveBusy] = useState(false);
   const [previewKey, setPreviewKey] = useState(Date.now());
   const [autoCompileEnabled, setAutoCompileEnabled] = useState(true);
 
@@ -321,15 +323,11 @@ export default function ActivityEditor() {
         const activityData = await res.json();
         setActivity(activityData);
 
-        let sourceLines = null;
-        if (activityData?.sheet_url) {
-          const docRes = await fetch(
-            `${API_BASE_URL}/api/activities/preview-doc?docUrl=${encodeURIComponent(activityData.sheet_url)}`
-          );
-          const { lines } = await docRes.json();
-          sourceLines = Array.isArray(lines) ? lines : [];
-          await syncActivityIsTest(activityData, sourceLines);
-        }
+        const sourceRes = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`);
+        if (!sourceRes.ok) throw new Error(`activity source failed ${sourceRes.status}`);
+        const sourceBody = await sourceRes.json();
+        const sourceLines = Array.isArray(sourceBody?.lines) ? sourceBody.lines : [];
+        await syncActivityIsTest(activityData, sourceLines);
 
         const cached = localStorage.getItem(`activity-${activityId}`);
         if (cached) {
@@ -394,17 +392,14 @@ export default function ActivityEditor() {
   };
 
   const handleRecover = async () => {
-    if (!activity?.sheet_url) return;
-
     const confirmed = window.confirm(
       'This will discard all unsaved changes and recover the original text from the source document. Are you sure?'
     );
     if (!confirmed) return;
 
     try {
-      const res = await fetch(
-        `${API_BASE_URL}/api/activities/preview-doc?docUrl=${encodeURIComponent(activity.sheet_url)}`
-      );
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`);
+      if (!res.ok) throw new Error(`activity source failed ${res.status}`);
       const { lines } = await res.json();
       await syncActivityIsTest(activity, Array.isArray(lines) ? lines : []);
       const recoveredText = lines.join('\n');
@@ -413,6 +408,40 @@ export default function ActivityEditor() {
       handleCompile(recoveredText, 'manual');
     } catch (err) {
       console.error('Failed to recover original text', err);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaveStatus('');
+    setSaveBusy(true);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ text: rawText }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body?.error || `save failed ${res.status}`);
+      }
+
+      setActivity((prev) => ({
+        ...(prev || {}),
+        source_type: 'local',
+        title: body?.title || prev?.title,
+        content_text: rawText,
+      }));
+      localStorage.setItem(`activity-${activityId}`, rawText);
+      setSaveStatus('Saved locally.');
+      setTimeout(() => setSaveStatus(''), 2000);
+    } catch (err) {
+      console.error('Failed to save activity source', err);
+      setSaveStatus(`Save failed: ${err?.message || String(err)}`);
+    } finally {
+      setSaveBusy(false);
     }
   };
 
@@ -598,6 +627,15 @@ export default function ActivityEditor() {
           />
 
           <Button
+            variant="success"
+            className="me-2"
+            onClick={handleSave}
+            disabled={busy || saveBusy}
+          >
+            {saveBusy ? 'Saving…' : 'Save'}
+          </Button>
+
+          <Button
             variant="outline-secondary"
             className="me-2"
             onClick={handleCheck}
@@ -649,6 +687,14 @@ export default function ActivityEditor() {
       </div>
 
       {copySuccess && <Alert variant="info" className="py-1">{copySuccess}</Alert>}
+      {saveStatus && (
+        <Alert
+          variant={saveStatus.startsWith('Save failed') ? 'danger' : 'success'}
+          className="py-1"
+        >
+          {saveStatus}
+        </Alert>
+      )}
 
       <Row className="editor-body">
         {/* LEFT: editor + gutter */}

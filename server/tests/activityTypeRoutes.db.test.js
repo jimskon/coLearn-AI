@@ -118,6 +118,12 @@ async function ensureSchema() {
   `);
 
   await db.query(`
+    ALTER TABLE pogil_activities
+      MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      MODIFY COLUMN content_text LONGTEXT DEFAULT NULL
+  `);
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS activity_instances (
       id INT AUTO_INCREMENT PRIMARY KEY,
       activity_id INT NOT NULL,
@@ -232,7 +238,11 @@ function createDocBodyLines(lines) {
 
 function loadRouters({ docsById = {} } = {}) {
   const googleAuthPath = require.resolve('../utils/googleAuth');
+  const activityContentPath = require.resolve('../utils/activityContent');
+  const activityTypePath = require.resolve('../utils/activityType');
+  const courseControllerPath = require.resolve('../courses/controller');
   const courseRoutesPath = require.resolve('../courses/routes');
+  const activityInstancesControllerPath = require.resolve('../activity_instances/controller');
   const activityInstanceRoutesPath = require.resolve('../activity_instances/routes');
 
   const fakeGoogleApis = {
@@ -258,7 +268,11 @@ function loadRouters({ docsById = {} } = {}) {
   };
 
   delete require.cache[googleAuthPath];
+  delete require.cache[activityContentPath];
+  delete require.cache[activityTypePath];
+  delete require.cache[courseControllerPath];
   delete require.cache[courseRoutesPath];
+  delete require.cache[activityInstancesControllerPath];
   delete require.cache[activityInstanceRoutesPath];
 
   const googleAuth = require(googleAuthPath);
@@ -277,7 +291,11 @@ function loadRouters({ docsById = {} } = {}) {
       Module._load = originalLoad;
       googleAuth.authorize = originalAuthorize;
       delete require.cache[googleAuthPath];
+      delete require.cache[activityContentPath];
+      delete require.cache[activityTypePath];
+      delete require.cache[courseControllerPath];
       delete require.cache[courseRoutesPath];
+      delete require.cache[activityInstancesControllerPath];
       delete require.cache[activityInstanceRoutesPath];
     },
   };

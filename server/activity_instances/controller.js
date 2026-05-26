@@ -3,6 +3,7 @@ const db = require('../db');
 const { google } = require('googleapis');
 const { authorize } = require('../utils/googleAuth');
 const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
+const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
@@ -284,32 +285,17 @@ async function getParsedActivityDoc(req, res) {
   const { instanceId } = req.params;
   try {
     const [rows] = await db.query(`
-      SELECT a.sheet_url
+      SELECT a.id, a.sheet_url, a.source_type, a.content_text
       FROM activity_instances ai
       JOIN pogil_activities a ON ai.activity_id = a.id
       WHERE ai.id = ?
     `, [instanceId]);
 
-    if (!rows.length || !rows[0].sheet_url) {
-      return res.status(404).json({ error: 'No sheet_url found' });
+    if (!rows.length) {
+      return res.status(404).json({ error: 'Activity source not found' });
     }
 
-    const docId = rows[0].sheet_url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
-    if (!docId) throw new Error('Invalid sheet_url');
-
-    const auth = authorize();
-    const docs = google.docs({ version: 'v1', auth });
-    const doc = await docs.documents.get({ documentId: docId });
-
-    const lines = doc.data.body.content
-      .map(block => {
-        if (!block.paragraph?.elements) return null;
-        return block.paragraph.elements
-          .map(e => e.textRun?.content || '')
-          .join('')
-          .replace(/\r?\n$/, '');
-      })
-      .filter((line) => line !== null && line !== '');
+    const lines = await loadActivitySourceLines(rows[0]);
 
     res.json({ lines });
   } catch (err) {
@@ -353,7 +339,7 @@ async function ensureDemoInstance(req, res) {
     }
 
     const [[activityRow]] = await conn.query(
-      `SELECT id, is_test, sheet_url
+      `SELECT id, is_test, sheet_url, source_type, content_text
          FROM pogil_activities
         WHERE id = ?`,
       [activityId]
@@ -769,7 +755,7 @@ async function setupMultipleGroupInstances(req, res) {
 
     // Look up DB truth
     const [[activityRow]] = await conn.query(
-      `SELECT is_test, sheet_url FROM pogil_activities WHERE id = ?`,
+      `SELECT is_test, sheet_url, source_type, content_text FROM pogil_activities WHERE id = ?`,
       [activityId]
     );
 
@@ -812,27 +798,9 @@ async function setupMultipleGroupInstances(req, res) {
     // ✅ Compute total_groups from doc (used by BOTH tests and non-tests)
     let computedTotalGroups = 1;
     try {
-      const sheetUrl = activityRow?.sheet_url || '';
-      const docId = sheetUrl.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
-
-      if (docId) {
-        const auth = authorize();
-        const docs = google.docs({ version: 'v1', auth });
-        const doc = await docs.documents.get({ documentId: docId });
-
-        const lines = (doc.data.body?.content || [])
-          .map(block => {
-            if (!block.paragraph?.elements) return null;
-            return block.paragraph.elements
-              .map(e => e.textRun?.content || '')
-              .join('')
-              .trim();
-          })
-          .filter(Boolean);
-
-        const groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
-        computedTotalGroups = groupCount > 0 ? groupCount : 1;
-      }
+      const lines = await loadActivitySourceLines(activityRow || {});
+      const groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
+      computedTotalGroups = groupCount > 0 ? groupCount : 1;
     } catch (e) {
       console.warn('⚠️ setupMultipleGroupInstances: failed to compute total_groups; defaulting to 1', e);
       computedTotalGroups = 1;
@@ -1453,9 +1421,9 @@ async function refreshTotalGroups(req, res) {
   const { instanceId } = req.params;
 
   try {
-    // 1) Look up the activity + sheet_url for this instance
+    // 1) Look up the activity source for this instance
     const [[row]] = await db.query(
-      `SELECT ai.activity_id, a.sheet_url, a.is_test
+      `SELECT ai.activity_id, a.sheet_url, a.source_type, a.content_text, a.is_test
        FROM activity_instances ai
        JOIN pogil_activities a ON ai.activity_id = a.id
        WHERE ai.id = ?`,
@@ -1466,32 +1434,7 @@ async function refreshTotalGroups(req, res) {
       return res.status(404).json({ error: 'Activity instance not found' });
     }
 
-    if (!row.sheet_url) {
-      await db.query(
-        `UPDATE activity_instances SET total_groups = 1 WHERE id = ?`,
-        [instanceId]
-      );
-      return res.json({ success: true, groupCount: 1, isTest: false });
-    }
-
-    const docId = row.sheet_url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
-    if (!docId) {
-      throw new Error(`Invalid sheet_url for instance ${instanceId}: ${row.sheet_url}`);
-    }
-
-    const auth = authorize();
-    const docs = google.docs({ version: 'v1', auth });
-    const doc = await docs.documents.get({ documentId: docId });
-
-    const lines = (doc.data.body?.content || [])
-      .map(block => {
-        if (!block.paragraph?.elements) return null;
-        return block.paragraph.elements
-          .map(e => e.textRun?.content || '')
-          .join('')
-          .trim();
-      })
-      .filter(Boolean);
+    const lines = await loadActivitySourceLines(row);
 
     let groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
     if (groupCount <= 0) groupCount = 1;
@@ -1655,7 +1598,7 @@ function parseScoreSpec(specRaw) {
 // Helper: flatten Google doc into trimmed lines (same as you already do)
 async function loadTestQuestionsForInstance(instanceId) {
   const [[row]] = await db.query(
-    `SELECT ai.activity_id, a.sheet_url
+    `SELECT ai.activity_id, a.sheet_url, a.source_type, a.content_text
      FROM activity_instances ai
      JOIN pogil_activities a ON ai.activity_id = a.id
      WHERE ai.id = ?`,
@@ -1663,21 +1606,7 @@ async function loadTestQuestionsForInstance(instanceId) {
   );
 
   if (!row) throw new Error(`Activity instance ${instanceId} not found`);
-  if (!row.sheet_url) throw new Error(`No sheet_url for activity_id ${row.activity_id}`);
-
-  const docId = row.sheet_url.match(/\/d\/([a-zA-Z0-9-_]+)/)?.[1];
-  if (!docId) throw new Error(`Invalid sheet_url: ${row.sheet_url}`);
-
-  const auth = authorize();
-  const docs = google.docs({ version: 'v1', auth });
-  const doc = await docs.documents.get({ documentId: docId });
-
-  const lines = (doc.data.body?.content || [])
-    .map(block => {
-      if (!block.paragraph?.elements) return null;
-      return block.paragraph.elements.map(e => e.textRun?.content || '').join('').trim();
-    })
-    .filter(Boolean);
+  const lines = await loadActivitySourceLines(row);
 
   const questions = [];
   let current = null;

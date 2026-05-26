@@ -1,4 +1,4 @@
-const { extractGoogleFileId } = require('./googleIds');
+const { fetchGoogleDocLinesByUrl, loadActivitySourceLines } = require('./activityContent');
 
 function normalizeActivityType(rawMode) {
   const mode = String(rawMode || '').trim().toLowerCase();
@@ -33,34 +33,13 @@ function inferActivityTypeFromLines(lines, { fallbackIsTest = false } = {}) {
   return fallbackIsTest ? 'test' : 'group';
 }
 
-async function fetchActivityLinesFromDocUrl(sheetUrl) {
-  const { google } = require('googleapis');
-  const { authorize } = require('./googleAuth');
-  const docId = extractGoogleFileId(sheetUrl);
-  if (!docId) {
-    throw new Error('Invalid Google Doc URL');
-  }
-
-  const auth = await authorize();
-  const docs = google.docs({ version: 'v1', auth });
-  const doc = await docs.documents.get({ documentId: docId });
-
-  return (doc.data.body?.content || [])
-    .flatMap((item) => item.paragraph?.elements || [])
-    .map((element) => element.textRun?.content?.replace(/\r?\n$/, ''))
-    .filter(Boolean);
-}
+const fetchActivityLinesFromDocUrl = fetchGoogleDocLinesByUrl;
 
 async function inferActivityTypeFromActivity(activity) {
   const fallbackIsTest = Number(activity?.is_test) === 1;
-  const sheetUrl = activity?.sheet_url || '';
-
-  if (!sheetUrl) {
-    return fallbackIsTest ? 'test' : 'group';
-  }
 
   try {
-    const lines = await fetchActivityLinesFromDocUrl(sheetUrl);
+    const lines = await loadActivitySourceLines(activity);
     return inferActivityTypeFromLines(lines, { fallbackIsTest });
   } catch (err) {
     console.warn('[activityType] Falling back to DB flag:', err.message);

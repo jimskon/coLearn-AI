@@ -79,7 +79,7 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
 // Keeps everything else as-is. Works for any \SomeTag{ ... } (including section*, link, image, etc.)
 function collapseBracedCommands(rawLines) {
   const startsTag = (s) =>
-    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|table|image|link|file|pythonturtle|cpp|include)\{/.test(s);
+    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|table|image|link|file|pythonturtle|cpp|include)\{/.test(s);
   const out = [];
   let buf = null;
   let depth = 0;
@@ -837,6 +837,23 @@ export function parseSheetToBlocks(lines, options = {}) {
       }
 
       blocks.push({ type: 'header', tag, content: format(content) });
+      continue;
+    }
+
+    const textArgs = parseCommandArgs(trimmed, 'text');
+    if (textArgs) {
+      flushCurrentBlock();
+      const [content = ''] = textArgs;
+      const formatted = format(content);
+
+      if (currentQuestion) {
+        currentQuestion.prompt += (currentQuestion.prompt ? ' ' : '') + formatted;
+      } else {
+        blocks.push({
+          type: 'text',
+          content: formatted,
+        });
+      }
       continue;
     }
 

@@ -115,6 +115,12 @@ async function ensureSchema() {
   `);
 
   await db.query(`
+    ALTER TABLE pogil_activities
+      MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      MODIFY COLUMN content_text LONGTEXT DEFAULT NULL
+  `);
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS activity_instances (
       id INT AUTO_INCREMENT PRIMARY KEY,
       activity_id INT NOT NULL,
@@ -387,6 +393,34 @@ test('by-activity returns grouped instance rows with members, timer fields, and 
   assert.equal(response.body.groups[0].section_timer_duration_minutes, 10);
   assert.equal(response.body.groups[0].members.length, 1);
   assert.equal(response.body.groups[0].members[0].student_id, student.id);
+});
+
+test('preview-doc for an instance returns local stored activity content', async () => {
+  const instructor = await createUser('instructor');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId });
+  const contentText = [
+    '\\title{Stored Local Activity}',
+    '\\mode{group}',
+    '',
+    '\\questiongroup{One}',
+    '\\question{Local question?}',
+  ].join('\n');
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET source_type = 'local',
+            content_text = ?
+      WHERE id = ?`,
+    [contentText, activityId]
+  );
+
+  const response = await requestJson(instructor, `/api/activity-instances/${instanceId}/preview-doc`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.lines, contentText.split('\n'));
 });
 
 test('heartbeat marks membership connected, starts a timer anchor, and assigns active student', async () => {

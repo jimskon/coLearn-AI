@@ -12,6 +12,7 @@ export default function ManageActivitiesPage() {
   const { user } = useUser();
   const navigate = useNavigate();
 
+  const [classInfo, setClassInfo] = useState(null);
   const [activities, setActivities] = useState([]);
   const [newActivity, setNewActivity] = useState({
     name: '',
@@ -34,13 +35,17 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    fetch(`${API_BASE_URL}/api/classes/${classId}/activities`)
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          setActivities(data);
+    Promise.all([
+      fetch(`${API_BASE_URL}/api/classes/${classId}`, { credentials: 'include' }).then((res) => res.json()),
+      fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, { credentials: 'include' }).then((res) => res.json()),
+    ])
+      .then(([classData, activitiesData]) => {
+        setClassInfo(classData && !classData.error ? classData : null);
+
+        if (Array.isArray(activitiesData)) {
+          setActivities(activitiesData);
         } else {
-          console.error("Unexpected response format:", data);
+          console.error("Unexpected response format:", activitiesData);
         }
       })
       .catch(err => {
@@ -202,7 +207,14 @@ export default function ManageActivitiesPage() {
 
   return (
     <Container>
-      <h2 className="mb-4">Manage POGIL Activities for Class {classId}</h2>
+      <div className="mb-4">
+        <h2 className="mb-2">
+          Manage POGIL Activities for {classInfo?.name || `Class ${classId}`}
+        </h2>
+        {classInfo?.description ? (
+          <p className="text-muted mb-0">{classInfo.description}</p>
+        ) : null}
+      </div>
 
       <Form className="mb-4">
         <h4>Add New Activity</h4>

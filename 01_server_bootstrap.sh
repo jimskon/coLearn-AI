@@ -386,7 +386,8 @@ FLUSH PRIVILEGES;"
 
 setup_nginx_http() {
   mkdir -p /var/www/html
-  cat > "$SITE_CONF" <<EOFHTTP
+  if [[ "$WWW_DOMAIN" != "$DOMAIN" ]]; then
+    cat > "$SITE_CONF" <<EOFHTTP
 server {
     listen 80;
     listen [::]:80;
@@ -426,6 +427,41 @@ server {
         proxy_read_timeout 600s;
     }
 EOFHTTP
+  else
+    cat > "$SITE_CONF" <<EOFHTTP
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+    root ${APP_DIR}/client/dist;
+    index index.html;
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location ^~ /socket.io/ {
+        proxy_pass http://127.0.0.1:${PORT}/socket.io/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering off;
+    }
+    location /api/ {
+        proxy_pass http://127.0.0.1:${PORT}/api/;
+        proxy_http_version 1.1;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 600s;
+    }
+EOFHTTP
+  fi
   if [[ "$ENABLE_CXX_RUNNER_PROXY_FINAL" == "1" ]]; then
     cat >> "$SITE_CONF" <<EOFCXX
     location /cxx-run/ {
@@ -448,7 +484,8 @@ EOFFOOT
 }
 
 setup_nginx_https() {
-  cat > "$SITE_CONF" <<EOFHTTPS
+  if [[ "$WWW_DOMAIN" != "$DOMAIN" ]]; then
+    cat > "$SITE_CONF" <<EOFHTTPS
 server {
     listen 80;
     listen [::]:80;
@@ -508,6 +545,51 @@ server {
         proxy_read_timeout 600s;
     }
 EOFHTTPS
+  else
+    cat > "$SITE_CONF" <<EOFHTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://${DOMAIN}\$request_uri; }
+}
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${DOMAIN};
+    ssl_certificate ${CERT_FULLCHAIN};
+    ssl_certificate_key ${CERT_PRIVKEY};
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+    root ${APP_DIR}/client/dist;
+    index index.html;
+    location ^~ /socket.io/ {
+        proxy_pass http://127.0.0.1:${PORT}/socket.io/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering off;
+    }
+    location /api/ {
+        proxy_pass http://127.0.0.1:${PORT}/api/;
+        proxy_http_version 1.1;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 600s;
+    }
+EOFHTTPS
+  fi
   if [[ "$ENABLE_CXX_RUNNER_PROXY_FINAL" == "1" ]]; then
     cat >> "$SITE_CONF" <<EOFCXX2
     location /cxx-run/ {

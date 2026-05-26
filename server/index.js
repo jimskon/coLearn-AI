@@ -19,34 +19,34 @@ const db = require('./db'); // Make sure db is accessible
 const staticDir = path.join(__dirname, '../client/dist');
 app.use(express.json());
 
-// Use CLIENT_ORIGIN when present, while keeping the historical allowlist as a fallback.
-const configuredOrigins = (process.env.CLIENT_ORIGIN || '')
-  .split(',')
-  .map(origin => origin.trim())
-  .filter(Boolean);
+const normalizeOrigin = (origin) => origin.replace(/\/+$/, '');
 
-const allowedOrigins = new Set([
-  ...configuredOrigins,
-  "https://colearn-ai.com",
-  "https://www.colearn-ai.com",
-  "https://jimskon.com",
-  "https://csits.kenyon.edu",
-  "https://csdev.kenyon.edu",
-  "https://snhu.colearn-ai.com"
-]);
+const configuredOrigins = new Set(
+  (process.env.CLIENT_ORIGIN || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean)
+    .map(normalizeOrigin)
+);
 
-app.use(cors({
+if (configuredOrigins.size === 0) {
+  console.warn('[cors] CLIENT_ORIGIN is empty; browser-origin requests will be rejected.');
+}
+
+const corsOptions = {
   origin: (origin, cb) => {
     if (!origin) return cb(null, true); // allow curl/health checks
-    if (allowedOrigins.has(origin)) return cb(null, true);
+    if (configuredOrigins.has(normalizeOrigin(origin))) return cb(null, true);
     return cb(new Error("Not allowed by CORS"));
   },
   credentials: true,
   methods: ["GET","POST","PUT","DELETE","OPTIONS"],
   allowedHeaders: ["Content-Type","Authorization"]
-}));
+};
 
-app.options("*", cors());
+app.use(cors(corsOptions));
+
+app.options("*", cors(corsOptions));
 app.use((req, res, next) => {
   res.setHeader('X-POGIL-PID', String(process.pid));
   next();

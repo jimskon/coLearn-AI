@@ -198,7 +198,7 @@ write_env_files() {
   chmod 600 "$ENV_FILE"
   local client_env="${APP_DIR}/client/.env"
   info "Writing client environment to $client_env"
-  write_key_value VITE_API_BASE_URL "https://${DOMAIN}" "$client_env"
+  write_key_value VITE_API_BASE_URL "$CLIENT_ORIGIN" "$client_env"
 }
 
 install_app_deps_and_build() {

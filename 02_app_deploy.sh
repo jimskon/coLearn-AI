@@ -22,6 +22,8 @@ CLIENT_ORIGIN="${CLIENT_ORIGIN:-}"
 SESSION_SECRET="${SESSION_SECRET:-}"
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+EMAIL_USER="${EMAIL_USER:-}"
+EMAIL_PASS="${EMAIL_PASS:-}"
 APP_ROOT_NAME="${APP_ROOT_NAME:-Administrator}"
 APP_ROOT_EMAIL="${APP_ROOT_EMAIL:-}"
 APP_ROOT_PASSWORD="${APP_ROOT_PASSWORD:-}"
@@ -123,6 +125,8 @@ resolve_settings() {
   if [[ -z "$APP_ROOT_EMAIL" ]]; then APP_ROOT_EMAIL="admin@${DOMAIN}"; fi
   prompt_default APP_ROOT_NAME "coLearn-AI root display name" "$APP_ROOT_NAME"
   prompt_default APP_ROOT_EMAIL "coLearn-AI root email" "$APP_ROOT_EMAIL"
+  prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
+  prompt_secret_keep EMAIL_PASS "Outgoing email app password"
   if [[ -z "$ENV_FILE" ]]; then ENV_FILE="${APP_DIR}/server/.env"; fi
 }
 
@@ -194,6 +198,12 @@ write_env_files() {
   write_key_value SERVICE_ACCOUNT_EMAIL "$SERVICE_ACCOUNT_EMAIL" "$ENV_FILE"
   if [[ -n "$OPENAI_API_KEY" ]]; then
     write_key_value OPENAI_API_KEY "$OPENAI_API_KEY" "$ENV_FILE"
+  fi
+  if [[ -n "$EMAIL_USER" ]]; then
+    write_key_value EMAIL_USER "$EMAIL_USER" "$ENV_FILE"
+  fi
+  if [[ -n "$EMAIL_PASS" ]]; then
+    write_key_value EMAIL_PASS "$EMAIL_PASS" "$ENV_FILE"
   fi
   chmod 600 "$ENV_FILE"
   local client_env="${APP_DIR}/client/.env"

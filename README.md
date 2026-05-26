@@ -56,9 +56,10 @@ Typical install flow:
 
 The older one-shot installer, [install_colearn_ai.sh](install_colearn_ai.sh), is still in the repo, but it is not the recommended default path for new installs.
 
-For local classroom or lab servers behind a firewall, it is normal to run without SSL:
+For local classroom or lab servers behind a firewall, it is normal to run without SSL while still enabling the Docker-based C++ runner:
 
 - set `ENABLE_CERTBOT=0` in `install.conf`
+- keep Docker and the C++ runner enabled if students need local code execution
 - use `http://...` for `CLIENT_ORIGIN` in `deploy.conf`
 - make `DOMAIN`, `WWW_DOMAIN`, and `CLIENT_ORIGIN` match the exact hostname students will use in their browser
 

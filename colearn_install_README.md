@@ -99,15 +99,15 @@ For a robust unattended setup, prefer an **HTTPS repo URL** unless you have alre
 For local classroom or lab installs on firewalled machines, the simplest working setup is usually:
 
 - no SSL
-- no Docker
-- no `/cxx-run/` proxy
+- Docker enabled for the C++ runner
+- `/cxx-run/` proxy enabled when students will use the runner
 - one local hostname used consistently in the browser and config files
 
 In that case:
 
 - set `ENABLE_CERTBOT=0`
-- set `ENABLE_DOCKER=0`
-- set `ENABLE_CXX_RUNNER_PROXY=0`
+- set `ENABLE_DOCKER=1`
+- set `ENABLE_CXX_RUNNER_PROXY=1`
 - use `http://...` for `CLIENT_ORIGIN`
 
 The hostname in `CLIENT_ORIGIN` must match the exact address students use in the browser, or CORS can fail.
@@ -180,8 +180,8 @@ SET_DB_ROOT_PASSWORD=ask
 PORT=4000
 SITE_NAME=colearn-ai
 ENABLE_CERTBOT=0
-ENABLE_DOCKER=0
-ENABLE_CXX_RUNNER_PROXY=0
+ENABLE_DOCKER=1
+ENABLE_CXX_RUNNER_PROXY=1
 CXX_RUNNER_PORT=5055
 NODE_MAJOR=20
 ```
@@ -242,8 +242,8 @@ APP_ROOT_EMAIL=admin@colearn.local
 APP_ROOT_PASSWORD=replace_me
 BOOTSTRAP_APP_ROOT=1
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=0
-CXX_RUNNER_REPO_URL=
+ENABLE_CXX_RUNNER=1
+CXX_RUNNER_REPO_URL=https://github.com/your-org/cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055

@@ -6,6 +6,7 @@ const express = require('express');
 
 const classRoutes = require('../classes/routes');
 const db = require('../db');
+const activityCreator = require('../utils/activityCreator');
 
 function uniqueName(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -22,6 +23,25 @@ function remember(kind, id) {
   const numericId = Number(id);
   if (Number.isFinite(numericId)) created[kind].add(numericId);
   return numericId;
+}
+
+async function ensureSchema() {
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS pogil_classes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(191) NOT NULL UNIQUE,
+      description TEXT DEFAULT NULL,
+      level VARCHAR(255) DEFAULT NULL,
+      topic_domain VARCHAR(255) DEFAULT NULL,
+      created_by INT DEFAULT NULL
+    )
+  `);
+
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS level VARCHAR(255) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL
+  `);
 }
 
 async function cleanupCreatedRows() {
@@ -58,8 +78,8 @@ async function createUser(role = 'student') {
 
 async function createClassRecord() {
   const [result] = await db.query(
-    'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
-    [uniqueName('Class'), 'Class for route tests', null]
+    'INSERT INTO pogil_classes (name, description, level, topic_domain, created_by) VALUES (?, ?, ?, ?, ?)',
+    [uniqueName('Class'), 'Class for route tests', null, null, null]
   );
   return remember('classes', result.insertId);
 }
@@ -115,14 +135,19 @@ test.after(async () => {
 });
 
 test('class routes create, list, update, fetch, and delete a class', async () => {
+  await ensureSchema();
   const name = uniqueName('Intro CS');
   const description = 'Collaborative intro course';
+  const level = 'First-year college';
+  const topicDomain = 'Computer Science';
 
   const create = await requestJson('/api/classes', {
     method: 'POST',
     body: {
       name,
       description,
+      level,
+      topic_domain: topicDomain,
       createdBy: null,
     },
   });
@@ -130,6 +155,8 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
   assert.equal(create.status, 201);
   assert.equal(create.body.name, name);
   assert.equal(create.body.description, description);
+  assert.equal(create.body.level, level);
+  assert.equal(create.body.topic_domain, topicDomain);
   assert.equal(create.body.created_by, null);
   assert.equal(typeof create.body.id, 'number');
   remember('classes', create.body.id);
@@ -140,11 +167,15 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
 
   const updatedName = `${name} Updated`;
   const updatedDescription = 'Updated collaborative intro course';
+  const updatedLevel = 'Advanced undergraduate';
+  const updatedTopicDomain = 'Software Development';
   const update = await requestJson(`/api/classes/${create.body.id}`, {
     method: 'PUT',
     body: {
       name: updatedName,
       description: updatedDescription,
+      level: updatedLevel,
+      topic_domain: updatedTopicDomain,
     },
   });
 
@@ -153,6 +184,8 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
     id: String(create.body.id),
     name: updatedName,
     description: updatedDescription,
+    level: updatedLevel,
+    topic_domain: updatedTopicDomain,
   });
 
   const fetchOne = await requestJson(`/api/classes/${create.body.id}`);
@@ -160,6 +193,8 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
   assert.equal(fetchOne.body.id, create.body.id);
   assert.equal(fetchOne.body.name, updatedName);
   assert.equal(fetchOne.body.description, updatedDescription);
+  assert.equal(fetchOne.body.level, updatedLevel);
+  assert.equal(fetchOne.body.topic_domain, updatedTopicDomain);
 
   const remove = await requestJson(`/api/classes/${create.body.id}`, {
     method: 'DELETE',
@@ -172,6 +207,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
 });
 
 test('class activity routes create, list, update, and delete an activity', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
   const creatorId = await createUser('creator');
   const activityName = uniqueName('activity').toLowerCase();
@@ -231,7 +267,125 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.deepEqual(listAfterDelete.body, []);
 });
 
+test('class activity routes can create a local stored activity', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const activityName = uniqueName('local-activity').toLowerCase();
+  const contentText = '\\title{Local Upload}\\mode{group}\n\\questiongroup{One}';
+
+  const create = await requestJson(`/api/classes/${classId}/activities`, {
+    method: 'POST',
+    body: {
+      name: activityName,
+      title: 'Local Upload',
+      source_type: 'local',
+      content_text: contentText,
+      order_index: 1,
+      createdBy: creatorId,
+    },
+  });
+
+  assert.equal(create.status, 201);
+  assert.equal(create.body.name, activityName);
+  assert.equal(create.body.title, 'Local Upload');
+  assert.equal(create.body.source_type, 'local');
+  assert.equal(create.body.content_text, contentText);
+  assert.equal(create.body.sheet_url, null);
+  remember('activities', create.body.id);
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text, sheet_url
+       FROM pogil_activities
+      WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(row.source_type, 'local');
+  assert.equal(row.content_text, contentText);
+  assert.equal(row.sheet_url, null);
+});
+
+test('creator draft route creates a local draft from the template and class metadata', async () => {
+  await ensureSchema();
+  const creatorId = await createUser('creator');
+  const className = uniqueName('CreatorClass');
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, level, topic_domain, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+    [className, 'This class focuses on collaboration and code reading.', 'First-year college', 'Computer Science', creatorId]
+  );
+  const classId = remember('classes', classResult.insertId);
+
+  const originalGenerator = activityCreator.generateActivityDraft;
+  let capturedInput = null;
+  activityCreator.generateActivityDraft = async (input) => {
+    capturedInput = input;
+    return {
+      text: [
+        '\\title{Sorting Warmup}',
+        '\\mode{demo}',
+        '\\studentlevel{First-year college}',
+        '\\activitycontext{Computer Science}',
+        '\\section{Learning Objectives}',
+        '\\questiongroup{Predictions}',
+        '\\question{What do you predict insertion sort will do first?}',
+        '\\textresponse{3}',
+        '\\sampleresponses{Students predict the first comparison or swap.}',
+        '\\feedbackprompt{Accept any reasonable prediction grounded in the problem.}',
+        '\\endquestion',
+        '\\endquestiongroup',
+      ].join('\n'),
+      generation_status: 'generated',
+      generation_error: null,
+    };
+  };
+
+  try {
+    const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
+      method: 'POST',
+      body: {
+        title: 'Sorting Warmup',
+        duration_minutes: 35,
+        mode: 'demo',
+        description: 'Introduce insertion sort with a small trace and one reflection prompt.',
+        selected_model: 'gpt-5-mini',
+        major_sections: ['Learning Objectives', 'Application', 'Reflection'],
+        createdBy: creatorId,
+      },
+    });
+
+    assert.equal(create.status, 201);
+    assert.equal(create.body.title, 'Sorting Warmup');
+    assert.equal(create.body.source_type, 'local');
+    assert.equal(create.body.mode, 'demo');
+    assert.equal(create.body.duration_minutes, 35);
+    assert.equal(create.body.selected_model, 'gpt-5-mini');
+    assert.deepEqual(create.body.major_sections, ['Learning Objectives', 'Application', 'Reflection']);
+    assert.equal(create.body.generation_status, 'generated');
+    assert.equal(create.body.generation_error, null);
+    assert.match(create.body.content_text, /\\title\{Sorting Warmup\}/);
+    assert.match(create.body.content_text, /\\mode\{demo\}/);
+    assert.match(create.body.content_text, /\\section\{Learning Objectives\}/);
+    assert.match(create.body.content_text, /\\questiongroup\{Predictions\}/);
+    assert.deepEqual(capturedInput?.majorSections, ['Learning Objectives', 'Application', 'Reflection']);
+    remember('activities', create.body.id);
+
+    const [[row]] = await db.query(
+      `SELECT source_type, content_text, is_test
+         FROM pogil_activities
+        WHERE id = ?`,
+      [create.body.id]
+    );
+    assert.equal(row.source_type, 'local');
+    assert.equal(row.is_test, 0);
+    assert.match(row.content_text, /What do you predict insertion sort will do first\?/);
+  } finally {
+    activityCreator.generateActivityDraft = originalGenerator;
+  }
+});
+
 test('activity creation rejects missing required fields before database insert', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
 
   const response = await requestJson(`/api/classes/${classId}/activities`, {
@@ -247,6 +401,7 @@ test('activity creation rejects missing required fields before database insert',
 });
 
 test('enrollment routes enroll a student by course code and list enrollments', async () => {
+  await ensureSchema();
   const classId = await createClassRecord();
   const instructorId = await createUser('instructor');
   const studentId = await createUser('student');
@@ -288,6 +443,7 @@ test('enrollment routes enroll a student by course code and list enrollments', a
 });
 
 test('enroll by code returns 404 for an unknown course code', async () => {
+  await ensureSchema();
   const studentId = await createUser('student');
 
   const response = await requestJson('/api/classes/enroll-by-code', {

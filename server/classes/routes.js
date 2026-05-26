@@ -23,6 +23,7 @@ router.delete('/:id', classController.deleteClass);
 // ✅ Activities for a class
 router.get('/:id/activities', classController.getActivitiesByClass);
 router.post('/:id/activities', classController.createActivityForClass);
+router.post('/:id/creator-draft', classController.createCreatorDraft);
 router.put('/:id/activities/:activityName', classController.updateActivityForClass);
 router.delete('/:classId/activities/:activityId', classController.deleteActivityFromClass);
 
@@ -31,6 +32,7 @@ router.get('/:id', classController.getClassById);
 
 // ✅ NEW: Import activities from a folder
 router.post('/:id/import-folder', requireAuth, classController.importFolderActivities);
+router.post('/:id/import-google', requireAuth, classController.importGoogleActivities);
 
 
 module.exports = router;

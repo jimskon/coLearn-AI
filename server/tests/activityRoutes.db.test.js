@@ -98,6 +98,12 @@ async function ensureSchema() {
   `);
 
   await db.query(`
+    ALTER TABLE pogil_activities
+      MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
+      MODIFY COLUMN content_text LONGTEXT DEFAULT NULL
+  `);
+
+  await db.query(`
     CREATE TABLE IF NOT EXISTS activity_instances (
       id INT AUTO_INCREMENT PRIMARY KEY,
       activity_id INT NOT NULL,
@@ -242,6 +248,130 @@ test('activity storage columns default existing-style inserts to remote with no 
   assert.equal(row.content_text, null);
 });
 
+test('getActivitySource returns stored local content without reading Google Docs', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: creator.id });
+  const contentText = [
+    '\\title{Local Activity}',
+    '\\mode{group}',
+    '',
+    '\\questiongroup{One}',
+    '\\question{What do you notice?}',
+  ].join('\n');
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET source_type = 'local',
+            content_text = ?
+      WHERE id = ?`,
+    [contentText, activity.id]
+  );
+
+  const response = await requestJson(null, `/api/activities/${activity.id}/source`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.activity_id, activity.id);
+  assert.equal(response.body.source_type, 'local');
+  assert.deepEqual(response.body.lines, contentText.split('\n'));
+  assert.equal(response.body.text, contentText);
+});
+
+test('saveActivitySource converts a remote activity into a local one and stores the text', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({
+    classId,
+    createdBy: creator.id,
+    title: 'Original Remote Title',
+  });
+  const contentText = [
+    '\\title{Saved Local Title}',
+    '\\mode{group}',
+    '',
+    '\\questiongroup{One}',
+    '\\question{Saved locally?}',
+  ].join('\n');
+
+  const response = await requestJson(creator, `/api/activities/${activity.id}/source`, {
+    method: 'PUT',
+    body: { text: contentText },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.activity_id, activity.id);
+  assert.equal(response.body.source_type, 'local');
+  assert.equal(response.body.title, 'Saved Local Title');
+  assert.equal(response.body.text, contentText);
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text, title, sheet_url
+       FROM pogil_activities
+      WHERE id = ?`,
+    [activity.id]
+  );
+
+  assert.equal(row.source_type, 'local');
+  assert.equal(row.content_text, contentText);
+  assert.equal(row.title, 'Saved Local Title');
+  assert.equal(row.sheet_url, activity.sheet_url);
+});
+
+test('saveActivitySource updates stored text for an already-local activity', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: creator.id });
+  const firstText = '\\title{First}\\mode{group}';
+  const secondText = '\\title{Second}\\mode{group}\n\\questiongroup{One}';
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET source_type = 'local',
+            content_text = ?
+      WHERE id = ?`,
+    [firstText, activity.id]
+  );
+
+  const response = await requestJson(creator, `/api/activities/${activity.id}/source`, {
+    method: 'PUT',
+    body: { text: secondText },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.source_type, 'local');
+  assert.equal(response.body.title, 'Second');
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text, title
+       FROM pogil_activities
+      WHERE id = ?`,
+    [activity.id]
+  );
+
+  assert.equal(row.source_type, 'local');
+  assert.equal(row.content_text, secondText);
+  assert.equal(row.title, 'Second');
+});
+
+test('saveActivitySource rejects missing text and 404s for missing activity', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: creator.id });
+
+  const bad = await requestJson(creator, `/api/activities/${activity.id}/source`, {
+    method: 'PUT',
+    body: {},
+  });
+  assert.equal(bad.status, 400);
+  assert.deepEqual(bad.body, { error: 'text is required' });
+
+  const missing = await requestJson(creator, '/api/activities/999999/source', {
+    method: 'PUT',
+    body: { text: '\\title{Missing}' },
+  });
+  assert.equal(missing.status, 404);
+  assert.deepEqual(missing.body, { error: 'Activity not found' });
+});
 test('createActivity inserts a new activity and returns its payload', async () => {
   const creator = await createUser('creator');
   const classId = await createClassRecord();

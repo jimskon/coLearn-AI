@@ -133,26 +133,24 @@ export default function ActivityPreview() {
 
         setActivity(activityData);
 
-        const url = String(activityData?.sheet_url || '').trim();
-        console.log("[ActivityPreview] activity loaded", { id: activityData?.id, url });
+        console.log("[ActivityPreview] activity loaded", {
+          id: activityData?.id,
+          sourceType: activityData?.source_type || 'remote',
+        });
 
-        if (!url || url === 'undefined') {
-          console.warn("[ActivityPreview] No sheet_url on activity; nothing to preview.");
-          setBlocks([]);
-          setFileContents({});
-          return;
-        }
-
-        const docRes = await fetch(
-          `${API_BASE_URL}/api/activities/preview-doc?docUrl=${encodeURIComponent(url)}`,
+        const sourceRes = await fetch(
+          `${API_BASE_URL}/api/activities/${activityId}/source`,
           { credentials: 'include' }
         );
-        if (!docRes.ok) throw new Error(`preview-doc failed ${docRes.status}`);
+        if (!sourceRes.ok) throw new Error(`activity source failed ${sourceRes.status}`);
 
-        const body = await docRes.json();
+        const body = await sourceRes.json();
         const lines = body?.lines || [];
 
-        console.log("[ActivityPreview] preview-doc lines", { count: lines.length });
+        console.log("[ActivityPreview] source lines", {
+          count: lines.length,
+          sourceType: body?.source_type || 'remote',
+        });
 
         const parsedRes = parseSheetToBlocks(lines, { returnIssues: true });
         const parsed = parsedRes.blocks;

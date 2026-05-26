@@ -1,6 +1,24 @@
 const db = require('../db');
 const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
+const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
+const activityCreator = require('../utils/activityCreator');
+
+const CREATOR_MODEL_OPTIONS = new Set([
+  'gpt-4o-mini',
+  'gpt-5-mini',
+  'gpt-4o',
+  'gpt-5.1',
+  'gpt-5.2',
+]);
+
+const CREATOR_MAJOR_SECTION_OPTIONS = [
+  'Learning Objectives',
+  'Exploration',
+  'Concept Invention',
+  'Application',
+  'Reflection',
+];
 
 // Get all classes
 exports.getAllClasses = async (req, res) => {
@@ -14,13 +32,20 @@ exports.getAllClasses = async (req, res) => {
 };
 
 exports.createClass = async (req, res) => {
-  const { name, description, createdBy } = req.body;
+  const { name, description, level = null, topic_domain = null, createdBy } = req.body;
   try {
     const [result] = await db.query(
-      'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
-      [name, description, createdBy]
+      'INSERT INTO pogil_classes (name, description, level, topic_domain, created_by) VALUES (?, ?, ?, ?, ?)',
+      [name, description, level, topic_domain, createdBy]
     );
-    res.status(201).json({ id: Number(result.insertId), name, description, created_by: createdBy });
+    res.status(201).json({
+      id: Number(result.insertId),
+      name,
+      description,
+      level,
+      topic_domain,
+      created_by: createdBy,
+    });
   } catch (err) {
     console.error("Error creating class:", err);
     res.status(500).json({ error: 'Failed to create class' });
@@ -28,13 +53,13 @@ exports.createClass = async (req, res) => {
 };
 
 exports.updateClass = async (req, res) => {
-  const { name, description } = req.body;
+  const { name, description, level = null, topic_domain = null } = req.body;
   try {
     await db.query(
-      'UPDATE pogil_classes SET name = ?, description = ? WHERE id = ?',
-      [name, description, req.params.id]
+      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ? WHERE id = ?',
+      [name, description, level, topic_domain, req.params.id]
     );
-    res.json({ id: req.params.id, name, description });
+    res.json({ id: req.params.id, name, description, level, topic_domain });
   } catch (err) {
     console.error("Error updating class:", err);
     res.status(500).json({ error: 'Failed to update class' });
@@ -67,27 +92,59 @@ exports.getActivitiesByClass = async (req, res) => {
 
 exports.createActivityForClass = async (req, res) => {
   const classId = req.params.id;
-  const { name, title, sheet_url, order_index, createdBy } = req.body;
+  const {
+    name,
+    title,
+    sheet_url,
+    order_index,
+    createdBy,
+    source_type = 'remote',
+    content_text = null,
+  } = req.body;
 
   if (!name || !title || order_index === undefined || createdBy === undefined) {
     return res.status(400).json({
       error: 'Missing required fields',
-      received: { name, title, sheet_url, order_index, createdBy }
+      received: { name, title, sheet_url, order_index, createdBy, source_type }
     });
+  }
+
+  const normalizedSourceType = String(source_type || 'remote').toLowerCase() === 'local'
+    ? 'local'
+    : 'remote';
+
+  if (normalizedSourceType === 'remote' && (!sheet_url || String(sheet_url).trim() === '')) {
+    return res.status(400).json({ error: 'Remote activities require a Google Sheet or Doc URL.' });
+  }
+
+  if (normalizedSourceType === 'local' && (content_text == null || String(content_text) === '')) {
+    return res.status(400).json({ error: 'Local activities require content_text.' });
   }
 
   try {
     const [result] = await db.query(
-      'INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, title, sheet_url, order_index, classId, createdBy]
+      `INSERT INTO pogil_activities
+         (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        name,
+        title,
+        normalizedSourceType === 'remote' ? sheet_url : null,
+        normalizedSourceType,
+        normalizedSourceType === 'local' ? content_text : null,
+        order_index,
+        classId,
+        createdBy,
+      ]
     );
 
-    // ✅ RETURN THE INSERTED ID
     res.status(201).json({
-      id: Number(result.insertId),          // <--- THIS IS THE FIX
+      id: Number(result.insertId),
       name,
       title,
-      sheet_url,
+      sheet_url: normalizedSourceType === 'remote' ? sheet_url : null,
+      source_type: normalizedSourceType,
+      content_text: normalizedSourceType === 'local' ? content_text : null,
       order_index,
       class_id: Number(classId),
       created_by: createdBy
@@ -216,27 +273,243 @@ exports.getClassById = async (req, res) => {
   }
 };
 
-const { getFilesInFolder, getFileMetadata } = require('../utils/googleDrive'); // helper you'll create below
+const { getFilesInFolder, getFileMetadata } = require('../utils/googleDrive');
+
+function slugifyActivityName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 180);
+}
+
+function isGoogleFolderUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'drive.google.com' && parsed.pathname.includes('/folders/');
+  } catch {
+    return false;
+  }
+}
+
+async function getNextOrderIndex(classId) {
+  const [[row]] = await db.query(
+    `SELECT COALESCE(MAX(order_index), -1) AS max_order
+       FROM pogil_activities
+      WHERE class_id = ?`,
+    [classId]
+  );
+  return Number(row?.max_order ?? -1) + 1;
+}
+
+async function getUniqueActivityName(baseName, classId) {
+  const normalizedBase = slugifyActivityName(baseName) || `activity_${Date.now()}`;
+
+  const [existing] = await db.query(
+    `SELECT name FROM pogil_activities WHERE class_id = ? AND name LIKE ?`,
+    [classId, `${normalizedBase}%`]
+  );
+
+  const taken = new Set(existing.map((row) => row.name));
+  if (!taken.has(normalizedBase)) {
+    return normalizedBase;
+  }
+
+  let suffix = 2;
+  while (taken.has(`${normalizedBase}_${suffix}`)) {
+    suffix += 1;
+  }
+  return `${normalizedBase}_${suffix}`;
+}
+
+exports.createCreatorDraft = async (req, res) => {
+  const classId = req.params.id;
+  const {
+    title,
+    duration_minutes,
+    mode = 'group',
+    description,
+    selected_model = 'gpt-5-mini',
+    major_sections = CREATOR_MAJOR_SECTION_OPTIONS,
+    createdBy,
+  } = req.body || {};
+
+  const normalizedTitle = String(title || '').trim();
+  const normalizedDescription = String(description || '').trim();
+  const durationMinutes = Number(duration_minutes);
+  const normalizedMode = String(mode || 'group').trim().toLowerCase();
+  const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
+  const normalizedMajorSections = Array.isArray(major_sections)
+    ? CREATOR_MAJOR_SECTION_OPTIONS.filter((sectionName) => major_sections.includes(sectionName))
+    : [];
+
+  if (!normalizedTitle || !normalizedDescription || !createdBy || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
+    return res.status(400).json({
+      error: 'title, description, duration_minutes, and createdBy are required.',
+    });
+  }
+
+  if (!['group', 'demo', 'test'].includes(normalizedMode)) {
+    return res.status(400).json({ error: 'mode must be group, demo, or test.' });
+  }
+
+  if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
+    return res.status(400).json({ error: 'selected_model is not supported.' });
+  }
+
+  if (!normalizedMajorSections.length) {
+    return res.status(400).json({ error: 'major_sections must include at least one supported section.' });
+  }
+
+  try {
+    const [classes] = await db.query(
+      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      [classId]
+    );
+
+    if (!classes.length) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    const classRow = classes[0];
+    const orderIndex = await getNextOrderIndex(classId);
+    const name = await getUniqueActivityName(normalizedTitle, classId);
+    const generation = await activityCreator.generateActivityDraft({
+      title: normalizedTitle,
+      mode: normalizedMode,
+      durationMinutes: Math.round(durationMinutes),
+      selectedModel: normalizedSelectedModel,
+      majorSections: normalizedMajorSections,
+      classLevel: classRow.level,
+      classTopicDomain: classRow.topic_domain,
+      classDescription: classRow.description,
+      activityDescription: normalizedDescription,
+    });
+    const fallbackDiagnostics = generation.generation_status === 'fallback'
+      ? [
+          '',
+          '\\section{Generation Diagnostics}',
+          `Status: ${generation.generation_status}`,
+          `Error: ${generation.generation_error || 'Unknown fallback reason.'}`,
+          '',
+          generation.raw_model_output
+            ? ['Model output preview:', String(generation.raw_model_output).trim()].join('\n')
+            : 'Model output preview: (none captured; generation likely failed before a usable response was returned.)',
+        ].join('\n')
+      : '';
+
+    const contentText = generation.text + fallbackDiagnostics;
+
+    const [result] = await db.query(
+      `INSERT INTO pogil_activities
+         (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by, is_test)
+       VALUES (?, ?, NULL, 'local', ?, ?, ?, ?, ?)`,
+      [
+        name,
+        normalizedTitle,
+        contentText,
+        orderIndex,
+        classId,
+        createdBy,
+        normalizedMode === 'test' ? 1 : 0,
+      ]
+    );
+
+    return res.status(201).json({
+      id: Number(result.insertId),
+      name,
+      title: normalizedTitle,
+      source_type: 'local',
+      content_text: contentText,
+      order_index: orderIndex,
+      class_id: Number(classId),
+      created_by: createdBy,
+      mode: normalizedMode,
+      duration_minutes: Math.round(durationMinutes),
+      selected_model: normalizedSelectedModel,
+      major_sections: normalizedMajorSections,
+      generation_status: generation.generation_status,
+      generation_error: generation.generation_error,
+      generation_debug_preview: generation.raw_model_output
+        ? String(generation.raw_model_output).slice(0, 500)
+        : null,
+    });
+  } catch (err) {
+    console.error('Error creating creator draft:', err);
+    return res.status(500).json({ error: 'Failed to create draft activity.' });
+  }
+};
+
+async function insertImportedActivity({
+  classId,
+  createdBy,
+  title,
+  orderIndex,
+  googleUrl,
+  importMode,
+}) {
+  const name = await getUniqueActivityName(title, classId);
+
+  if (importMode === 'local') {
+    const lines = await fetchGoogleDocLinesByUrl(googleUrl);
+    const contentText = lines.join('\n');
+
+    const [result] = await db.query(
+      `INSERT INTO pogil_activities
+         (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
+       VALUES (?, ?, ?, 'local', ?, ?, ?, ?)`,
+      [name, title, null, contentText, orderIndex, classId, createdBy]
+    );
+
+    return {
+      id: Number(result.insertId),
+      name,
+      title,
+      sheet_url: null,
+      source_type: 'local',
+      content_text: contentText,
+      order_index: orderIndex,
+      class_id: Number(classId),
+      created_by: createdBy,
+    };
+  }
+
+  const [result] = await db.query(
+    `INSERT INTO pogil_activities
+       (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
+     VALUES (?, ?, ?, 'remote', NULL, ?, ?, ?)`,
+    [name, title, googleUrl, orderIndex, classId, createdBy]
+  );
+
+  return {
+    id: Number(result.insertId),
+    name,
+    title,
+    sheet_url: googleUrl,
+    source_type: 'remote',
+    content_text: null,
+    order_index: orderIndex,
+    class_id: Number(classId),
+    created_by: createdBy,
+  };
+}
 
 exports.importFolderActivities = async (req, res) => {
   const { id: classId } = req.params;
-  const { folderUrl } = req.body;
+  const { folderUrl, import_mode = 'remote' } = req.body;
   const createdBy = req.user.id;
-
-  console.log("Received import folder request:", req.body);
-
+  const importMode = String(import_mode || 'remote').toLowerCase() === 'local' ? 'local' : 'remote';
 
   try {
     const folderId = extractGoogleFileId(folderUrl);
     if (!folderId) {
-      return res.status(400).json({ error: "Invalid folder URL" });
+      return res.status(400).json({ error: 'Invalid folder URL' });
     }
 
     const files = await getFilesInFolder(folderId);
-    console.log(`Found ${files.length} files in folder ${folderId}`);
-
     const inserted = [];
-
+    const nextOrderIndex = await getNextOrderIndex(classId);
     const sortedFiles = files.sort((a, b) =>
       a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
     );
@@ -244,44 +517,69 @@ exports.importFolderActivities = async (req, res) => {
     for (const [index, file] of sortedFiles.entries()) {
       const metadata = await getFileMetadata(file.id);
       const title = metadata.name;
-      const url = `https://docs.google.com/document/d/${file.id}`;
+      const googleUrl = `https://docs.google.com/document/d/${file.id}`;
 
-      const name = title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '_')
-        .replace(/^_+|_+$/g, '');
-
-      // Check for existing activity with same name in this class
-      const [existing] = await db.query(
-        `SELECT id FROM pogil_activities WHERE name = ? AND class_id = ?`,
-        [name, classId]
-      );
-
-      if (existing.length > 0) {
-        console.log(`⚠️ Skipping duplicate: ${name}`);
-        continue; // skip to next file
-      }
-
-      const [result] = await db.query(
-        `INSERT INTO pogil_activities (name, title, sheet_url, order_index, class_id, created_by)
-   VALUES (?, ?, ?, ?, ?, ?)`,
-        [name, title, url, index + 1, classId, createdBy]
-      );
-
-      inserted.push({
-        id: Number(result.insertId),
-        name,
+      const item = await insertImportedActivity({
+        classId,
+        createdBy,
         title,
-        sheet_url: url,
-        order_index: index + 1,
-        class_id: Number(classId),
-        created_by: createdBy
+        orderIndex: nextOrderIndex + index,
+        googleUrl,
+        importMode,
       });
+
+      inserted.push(item);
     }
 
-    res.json({ imported: inserted });
+    res.json({ imported: inserted, import_mode: importMode });
   } catch (err) {
-    console.error("Import folder error:", err);
-    res.status(500).json({ error: "Failed to import from folder." });
+    console.error('Import folder error:', err);
+    res.status(500).json({ error: 'Failed to import from folder.' });
+  }
+};
+
+exports.importGoogleActivities = async (req, res) => {
+  const { id: classId } = req.params;
+  const { url, import_mode = 'remote' } = req.body;
+  const createdBy = req.user.id;
+  const importMode = String(import_mode || 'remote').toLowerCase() === 'local' ? 'local' : 'remote';
+
+  if (!url || String(url).trim() === '') {
+    return res.status(400).json({ error: 'A Google Doc, Sheet, or folder link is required.' });
+  }
+
+  const trimmedUrl = String(url).trim();
+
+  if (isGoogleFolderUrl(trimmedUrl)) {
+    req.body.folderUrl = trimmedUrl;
+    req.body.import_mode = importMode;
+    return exports.importFolderActivities(req, res);
+  }
+
+  const googleId = extractGoogleFileId(trimmedUrl);
+  if (!googleId) {
+    return res.status(400).json({ error: 'Invalid Google URL.' });
+  }
+
+  if (importMode === 'local' && !trimmedUrl.includes('/document/')) {
+    return res.status(400).json({ error: 'Import into local currently supports Google Docs only.' });
+  }
+
+  try {
+    const metadata = await getFileMetadata(googleId);
+    const nextOrderIndex = await getNextOrderIndex(classId);
+    const item = await insertImportedActivity({
+      classId,
+      createdBy,
+      title: metadata.name,
+      orderIndex: nextOrderIndex,
+      googleUrl: trimmedUrl,
+      importMode,
+    });
+
+    res.status(201).json({ imported: [item], import_mode: importMode });
+  } catch (err) {
+    console.error('Google import error:', err);
+    res.status(500).json({ error: 'Failed to import from Google.' });
   }
 };

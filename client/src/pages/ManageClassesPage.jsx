@@ -3,13 +3,23 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
-import { Table, Button, Form, Container } from 'react-bootstrap';
+import { Table, Button, Form, Container, Modal } from 'react-bootstrap';
 
 export default function ManageClassesPage() {
   const { user } = useUser();
   const navigate = useNavigate();
   const [classes, setClasses] = useState([]);
-  const [newClass, setNewClass] = useState({ name: '', description: '' });
+  const [showClassModal, setShowClassModal] = useState(false);
+  const emptyForm = {
+    id: null,
+    name: '',
+    level: '',
+    topic_domain: '',
+    description: '',
+  };
+  const [classForm, setClassForm] = useState(emptyForm);
+  const [isSaving, setIsSaving] = useState(false);
+  const [modalError, setModalError] = useState('');
 
   useEffect(() => {
     if (!user || (user.role !== 'root' && user.role !== 'creator')) {
@@ -21,20 +31,22 @@ export default function ManageClassesPage() {
     }
   }, [user, navigate]);
 
-  const handleChange = (e) => {
-    setNewClass({ ...newClass, [e.target.name]: e.target.value });
+  const openCreateModal = () => {
+    setClassForm(emptyForm);
+    setModalError('');
+    setShowClassModal(true);
   };
 
-  const handleAdd = async (e) => {
-    e?.preventDefault?.();
-    const res = await fetch(`${API_BASE_URL}/api/classes`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...newClass, createdBy: user.id })
+  const openEditModal = (classRow) => {
+    setClassForm({
+      id: classRow.id,
+      name: classRow.name || '',
+      level: classRow.level || '',
+      topic_domain: classRow.topic_domain || '',
+      description: classRow.description || '',
     });
-    const data = await res.json();
-    setClasses([...classes, data]);
-    setNewClass({ name: '', description: '' });
+    setModalError('');
+    setShowClassModal(true);
   };
 
   const handleDelete = async (id) => {
@@ -42,56 +54,81 @@ export default function ManageClassesPage() {
     setClasses(classes.filter(c => c.id !== id));
   };
 
-  const handleFieldChange = (id, field, value) => {
-    setClasses(classes.map(c =>
-      c.id === id ? { ...c, [field]: value } : c
-    ));
+  const handleModalFieldChange = (e) => {
+    setClassForm({ ...classForm, [e.target.name]: e.target.value });
   };
 
-  const handleUpdate = async (updatedClass) => {
-    const res = await fetch(`${API_BASE_URL}/api/classes/${updatedClass.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updatedClass)
-    });
-    const data = await res.json();
-    setClasses(classes.map(c => c.id === data.id ? data : c));
+  const handleSaveClass = async (e) => {
+    e?.preventDefault?.();
+    const trimmedName = classForm.name.trim();
+
+    if (!trimmedName) {
+      setModalError('Class name is required.');
+      return;
+    }
+
+    setIsSaving(true);
+    setModalError('');
+
+    const payload = {
+      name: trimmedName,
+      level: classForm.level.trim() || null,
+      topic_domain: classForm.topic_domain.trim() || null,
+      description: classForm.description.trim() || null,
+    };
+
+    try {
+      const isEditing = Boolean(classForm.id);
+      const res = await fetch(
+        isEditing
+          ? `${API_BASE_URL}/api/classes/${classForm.id}`
+          : `${API_BASE_URL}/api/classes`,
+        {
+          method: isEditing ? 'PUT' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(
+            isEditing ? payload : { ...payload, createdBy: user.id }
+          ),
+        }
+      );
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to save class');
+      }
+
+      if (isEditing) {
+        setClasses(classes.map(c => (String(c.id) === String(data.id) ? data : c)));
+      } else {
+        setClasses([...classes, data]);
+      }
+
+      setShowClassModal(false);
+      setClassForm(emptyForm);
+    } catch (err) {
+      setModalError(err.message || 'Failed to save class');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
     <Container>
       <h2 className="mb-4">Manage Classes</h2>
 
-      <Form className="mb-4" onSubmit={handleAdd}>
-        <h4>Add New Class</h4>
-        <Form.Group className="mb-2" controlId="formClassName">
-          <Form.Label>Class Name</Form.Label>
-          <Form.Control
-            type="text"
-            placeholder="Enter class name"
-            name="name"
-            value={newClass.name}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Form.Group className="mb-2" controlId="formDescription">
-          <Form.Label>Description</Form.Label>
-          <Form.Control
-            type="text"
-            placeholder="Enter description"
-            name="description"
-            value={newClass.description}
-            onChange={handleChange}
-          />
-        </Form.Group>
-        <Button type="submit" variant="primary">Add Class</Button>
-      </Form>
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <h4 className="mb-0">Existing Classes</h4>
+        <Button type="button" variant="primary" onClick={openCreateModal}>
+          Create Class
+        </Button>
+      </div>
 
-      <h4>Existing Classes</h4>
       <Table striped bordered hover>
         <thead>
           <tr>
             <th>Name</th>
+            <th>Level</th>
+            <th>Topic / Domain</th>
             <th>Description</th>
             <th style={{ width: '30%' }}>Actions</th>
           </tr>
@@ -99,22 +136,12 @@ export default function ManageClassesPage() {
         <tbody>
           {classes.map(c => (
             <tr key={c.id}>
+              <td>{c.name}</td>
+              <td>{c.level || <span className="text-muted">—</span>}</td>
+              <td>{c.topic_domain || <span className="text-muted">—</span>}</td>
+              <td>{c.description || <span className="text-muted">—</span>}</td>
               <td>
-                <Form.Control
-                  type="text"
-                  value={c.name}
-                  onChange={e => handleFieldChange(c.id, 'name', e.target.value)}
-                />
-              </td>
-              <td>
-                <Form.Control
-                  type="text"
-                  value={c.description}
-                  onChange={e => handleFieldChange(c.id, 'description', e.target.value)}
-                />
-              </td>
-              <td>
-                <Button type="button" variant="success" size="sm" onClick={() => handleUpdate(c)} className="me-2">Update</Button>
+                <Button type="button" variant="success" size="sm" onClick={() => openEditModal(c)} className="me-2">Update</Button>
                 <Button type="button" variant="info" size="sm" onClick={() => navigate(`/class/${c.id}`)} className="me-2">Manage</Button>
                 <Button type="button" variant="danger" size="sm" onClick={() => handleDelete(c.id)}>Delete</Button>
               </td>
@@ -122,6 +149,67 @@ export default function ManageClassesPage() {
           ))}
         </tbody>
       </Table>
+
+      <Modal show={showClassModal} onHide={() => !isSaving && setShowClassModal(false)} centered>
+        <Modal.Header closeButton={!isSaving}>
+          <Modal.Title>{classForm.id ? 'Update Class' : 'Create Class'}</Modal.Title>
+        </Modal.Header>
+        <Form onSubmit={handleSaveClass}>
+          <Modal.Body>
+            <Form.Group className="mb-3" controlId="className">
+              <Form.Label>Class Name</Form.Label>
+              <Form.Control
+                type="text"
+                name="name"
+                value={classForm.name}
+                onChange={handleModalFieldChange}
+                placeholder="Enter class name"
+                autoFocus
+              />
+            </Form.Group>
+            <Form.Group className="mb-3" controlId="classLevel">
+              <Form.Label>Level</Form.Label>
+              <Form.Control
+                type="text"
+                name="level"
+                value={classForm.level}
+                onChange={handleModalFieldChange}
+                placeholder="First-year college"
+              />
+            </Form.Group>
+            <Form.Group className="mb-3" controlId="classTopicDomain">
+              <Form.Label>Topic / Domain</Form.Label>
+              <Form.Control
+                type="text"
+                name="topic_domain"
+                value={classForm.topic_domain}
+                onChange={handleModalFieldChange}
+                placeholder="Computer Science"
+              />
+            </Form.Group>
+            <Form.Group controlId="classDescription">
+              <Form.Label>Description</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={3}
+                name="description"
+                value={classForm.description}
+                onChange={handleModalFieldChange}
+                placeholder="Describe the class"
+              />
+            </Form.Group>
+            {modalError ? <div className="text-danger mt-3">{modalError}</div> : null}
+          </Modal.Body>
+          <Modal.Footer>
+            <Button type="button" variant="secondary" onClick={() => setShowClassModal(false)} disabled={isSaving}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={isSaving}>
+              {classForm.id ? 'Save Changes' : 'Create Class'}
+            </Button>
+          </Modal.Footer>
+        </Form>
+      </Modal>
     </Container>
   );
 }

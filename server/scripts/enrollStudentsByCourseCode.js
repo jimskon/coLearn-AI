@@ -9,6 +9,7 @@
 
 const axios = require('axios');
 const readline = require('readline');
+const db = require('../db');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
@@ -42,9 +43,11 @@ function getRandomName() {
 // ---------------- user helpers ----------------
 
 async function getUserByEmail(email) {
-  // Your working admin endpoint.
-  const res = await axios.get(`${BASE_URL}/users/admin/users`);
-  return (res.data || []).find(u => u.email === email) || null;
+  const [[user]] = await db.query(
+    'SELECT id, name, email, role FROM users WHERE email = ?',
+    [email]
+  );
+  return user || null;
 }
 
 async function pollForUser(email, { attempts = 12, delayMs = 250 } = {}) {
@@ -60,8 +63,9 @@ async function ensureRole(user, desiredRole) {
   if (!user?.id) return user;
   if (user.role !== desiredRole) {
     console.log(`→ Updating role for ${user.email} from ${user.role} to ${desiredRole}`);
-    await axios.put(`${BASE_URL}/users/admin/users/${user.id}/role`, { role: desiredRole });
-    return { ...user, role: desiredRole };
+    await db.query('UPDATE users SET role = ? WHERE id = ?', [desiredRole, user.id]);
+    const updatedUser = await getUserByEmail(user.email);
+    return updatedUser || { ...user, role: desiredRole };
   }
   return user;
 }
@@ -79,7 +83,7 @@ async function registerOrReuseUser(email, name, desiredRole) {
       return ensureRole(payload, desiredRole);
     }
 
-    console.warn(`ℹ️ Register returned no user for ${email}. Polling admin list...`);
+    console.warn(`ℹ️ Register returned no user for ${email}. Polling database...`);
     const user = await pollForUser(email);
     if (!user) throw new Error(`User with email ${email} not found after registration.`);
     console.log(`✔ Reused existing user ${email} (id ${user.id})`);
@@ -89,7 +93,7 @@ async function registerOrReuseUser(email, name, desiredRole) {
     if (error.response?.status === 409) {
       console.warn(`⚠️ Email already exists for ${email}. Reusing existing user.`);
       const existingUser = await pollForUser(email);
-      if (!existingUser) throw new Error(`Existing user ${email} not retrievable from admin list.`);
+      if (!existingUser) throw new Error(`Existing user ${email} not retrievable from database.`);
       console.log(`✔ Reused existing user ${email} (id ${existingUser.id})`);
       return ensureRole(existingUser, desiredRole);
     }

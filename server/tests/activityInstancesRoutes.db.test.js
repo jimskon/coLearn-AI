@@ -755,7 +755,8 @@ test('submit-group does not rotate active student after final group completion',
   assert.equal(response.body.success, true);
   assert.equal(response.body.completed_groups, 2);
   assert.equal(response.body.progress_status, 'completed');
-  assert.ok(!Object.prototype.hasOwnProperty.call(response.body, 'activeStudentId'));
+  assert.ok(Object.prototype.hasOwnProperty.call(response.body, 'activeStudentId'));
+  assert.equal(response.body.activeStudentId, null);
 
   const [[instance]] = await db.query(
     `SELECT completed_groups, progress_status, active_student_id
@@ -764,7 +765,50 @@ test('submit-group does not rotate active student after final group completion',
   );
   assert.equal(Number(instance.completed_groups), 2);
   assert.equal(instance.progress_status, 'completed');
-  assert.equal(Number(instance.active_student_id), studentA.id);
+  assert.equal(instance.active_student_id, null);
+});
+
+test('heartbeat does not reactivate a completed activity instance', async () => {
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: student.id, classId });
+  const activityId = await createActivity({ classId, createdBy: student.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    totalGroups: 2,
+    completedGroups: 2,
+    progressStatus: 'completed',
+    activeStudentId: student.id,
+  });
+  await addGroupMember({
+    instanceId,
+    studentId: student.id,
+    role: 'facilitator',
+    connected: true,
+    lastHeartbeat: '2026-05-01 12:00:00',
+  });
+
+  const response = await requestJson(student, `/api/activity-instances/${instanceId}/heartbeat`, {
+    method: 'POST',
+    body: {
+      userId: student.id,
+      timerInfo: {},
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.becameActive, false);
+  assert.equal(response.body.activeStudentId, null);
+
+  const [[instance]] = await db.query(
+    `SELECT active_student_id, progress_status
+     FROM activity_instances WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(instance.progress_status, 'completed');
+  assert.equal(instance.active_student_id, null);
 });
 
 test('clear responses resets progress and timer fields on the instance', async () => {

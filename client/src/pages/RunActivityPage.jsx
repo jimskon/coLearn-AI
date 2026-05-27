@@ -614,7 +614,9 @@ export default function RunActivityPage({
       setActivity((prev) => (prev ? { ...prev, ...patch } : prev));
 
       // If some patch fields live elsewhere, update them too:
-      if (patch.activeStudentId != null) setActiveStudentId(patch.activeStudentId);
+      if (Object.prototype.hasOwnProperty.call(patch, 'activeStudentId')) {
+        setActiveStudentId(patch.activeStudentId != null ? Number(patch.activeStudentId) : null);
+      }
     }
 
     socket.on('instance:state', onInstanceState);
@@ -2866,8 +2868,8 @@ export default function RunActivityPage({
           : prev
       ));
 
-      if (result?.activeStudentId != null) {
-        setActiveStudentId(Number(result.activeStudentId));
+      if (Object.prototype.hasOwnProperty.call(result || {}, 'activeStudentId')) {
+        setActiveStudentId(result.activeStudentId != null ? Number(result.activeStudentId) : null);
       }
 
       if (advancedByServer) {

@@ -765,6 +765,7 @@ test('submit-group does not rotate active student after final group completion',
   );
   assert.equal(Number(instance.completed_groups), 2);
   assert.equal(instance.progress_status, 'completed');
+
   assert.equal(instance.active_student_id, null);
 });
 

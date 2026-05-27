@@ -833,11 +833,16 @@ export default function RunActivityPage({
         const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/active-student`, {
           credentials: 'include',
         }); const data = await res.json();
+        if (Object.prototype.hasOwnProperty.call(data || {}, 'activeStudentId')) {
+          const rawId = data.activeStudentId;
+          const nextId =
+            rawId != null && Number.isFinite(Number(rawId)) && Number(rawId) > 0
+              ? Number(rawId)
+              : null;
 
-        const nextId = Number(data?.activeStudentId);
-
-        if (Number.isFinite(nextId) && nextId > 0 && nextId !== activeStudentIdRef.current) {
-          setActiveStudentId(nextId);
+          if (nextId !== activeStudentIdRef.current) {
+            setActiveStudentId(nextId);
+          }
         }
       } catch { }
     }, 5000);
@@ -846,6 +851,7 @@ export default function RunActivityPage({
   }, [instanceId, isTestMode]);
 
   useEffect(() => {
+    if (String(activity?.progress_status || '').toLowerCase() === 'completed') return;
     const sendHeartbeat = async () => {
       if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
       try {
@@ -871,6 +877,7 @@ export default function RunActivityPage({
     user?.id,
     instanceId,
     groups,
+    activity?.progress_status,
     currentTimedSection?.key,
     currentTimedSection?.minutes,
   ]);

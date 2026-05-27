@@ -681,7 +681,7 @@ async function getActiveStudent(req, res) {
 
   try {
     const [[instance]] = await db.query(
-      `SELECT active_student_id FROM activity_instances WHERE id = ?`,
+      `SELECT active_student_id, progress_status FROM activity_instances WHERE id = ?`,
       [instanceId]
     );
 
@@ -689,7 +689,15 @@ async function getActiveStudent(req, res) {
       return res.status(404).json({ error: 'Activity instance not found' });
     }
 
-    const activeStudentId = instance.active_student_id;
+    const isCompleted = String(instance.progress_status || '').toLowerCase() === 'completed';
+    if (isCompleted && instance.active_student_id != null) {
+      await db.query(
+        `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
+        [instanceId]
+      );
+    }
+
+    const activeStudentId = isCompleted ? null : instance.active_student_id;
     //console.log("Active student ID for instance", instanceId, "is", activeStudentId);
     res.json({ activeStudentId });
   } catch (err) {

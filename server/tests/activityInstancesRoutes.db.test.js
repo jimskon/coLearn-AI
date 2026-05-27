@@ -765,6 +765,7 @@ test('submit-group does not rotate active student after final group completion',
   );
   assert.equal(Number(instance.completed_groups), 2);
   assert.equal(instance.progress_status, 'completed');
+
   assert.equal(instance.active_student_id, null);
 });
 
@@ -800,6 +801,34 @@ test('heartbeat does not reactivate a completed activity instance', async () => 
   assert.equal(response.status, 200);
   assert.equal(response.body.success, true);
   assert.equal(response.body.becameActive, false);
+  assert.equal(response.body.activeStudentId, null);
+
+  const [[instance]] = await db.query(
+    `SELECT active_student_id, progress_status
+     FROM activity_instances WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(instance.progress_status, 'completed');
+  assert.equal(instance.active_student_id, null);
+});
+
+test('active-student returns null for completed activity instances and clears stale active user', async () => {
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: student.id, classId });
+  const activityId = await createActivity({ classId, createdBy: student.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    totalGroups: 2,
+    completedGroups: 2,
+    progressStatus: 'completed',
+    activeStudentId: student.id,
+  });
+
+  const response = await requestJson(student, `/api/activity-instances/${instanceId}/active-student`);
+
+  assert.equal(response.status, 200);
   assert.equal(response.body.activeStudentId, null);
 
   const [[instance]] = await db.query(

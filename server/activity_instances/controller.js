@@ -37,6 +37,39 @@ function normalizeActiveRotationMode(raw) {
   return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
 }
 
+function countQuestionGroups(lines = []) {
+  const count = (Array.isArray(lines) ? lines : [])
+    .filter((line) => String(line || '').trimStart().startsWith('\\questiongroup'))
+    .length;
+  return count > 0 ? count : 1;
+}
+
+async function syncTotalGroupsFromSource(conn, instanceId, activitySource, fallbackTotalGroups) {
+  const storedTotalGroups = Number(fallbackTotalGroups) || 0;
+
+  try {
+    const lines = await loadActivitySourceLines(activitySource || {});
+    const canonicalTotalGroups = countQuestionGroups(lines);
+
+    if (instanceId && canonicalTotalGroups !== storedTotalGroups) {
+      await conn.query(
+        `UPDATE activity_instances
+         SET total_groups = ?
+         WHERE id = ?`,
+        [canonicalTotalGroups, instanceId]
+      );
+    }
+
+    return canonicalTotalGroups;
+  } catch (err) {
+    console.warn('⚠️ Unable to refresh total_groups from activity source; using stored DB value instead.', {
+      instanceId,
+      message: err?.message || String(err),
+    });
+    return storedTotalGroups;
+  }
+}
+
 async function resolveTestOwnerStudentId(conn, instanceId, fallbackUserId = null) {
   const [[inst]] = await conn.query(
     `SELECT submitted_by_user_id
@@ -458,6 +491,25 @@ async function getActivityInstanceById(req, res) {
       return res.status(403).json({ error: 'This activity is currently hidden.' });
     }
 
+    const [[activitySource]] = await db.query(
+      `SELECT source_type, content_text, sheet_url
+       FROM pogil_activities
+       WHERE id = ?`,
+      [instance.activity_id]
+    );
+
+    if (activitySource) {
+      const canonicalTotalGroups = await syncTotalGroupsFromSource(
+        db,
+        id,
+        activitySource,
+        instance.total_groups
+      );
+      if (canonicalTotalGroups > 0) {
+        instance.total_groups = canonicalTotalGroups;
+      }
+    }
+
 
     res.json(instance);
   } catch (err) {
@@ -827,8 +879,7 @@ async function setupMultipleGroupInstances(req, res) {
     let computedTotalGroups = 1;
     try {
       const lines = await loadActivitySourceLines(activityRow || {});
-      const groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
-      computedTotalGroups = groupCount > 0 ? groupCount : 1;
+      computedTotalGroups = countQuestionGroups(lines);
     } catch (e) {
       console.warn('⚠️ setupMultipleGroupInstances: failed to compute total_groups; defaulting to 1', e);
       computedTotalGroups = 1;
@@ -1047,10 +1098,15 @@ async function submitGroupResponses(req, res) {
 
     // ---- 4) Recompute cached progress from i=1..total_groups using istate ----
     const [[meta]] = await conn.query(
-      `SELECT total_groups, active_rotation_mode FROM activity_instances WHERE id = ?`,
+      `SELECT ai.total_groups, ai.active_rotation_mode, a.sheet_url, a.source_type, a.content_text
+       FROM activity_instances ai
+       JOIN pogil_activities a ON a.id = ai.activity_id
+       WHERE ai.id = ?`,
       [instanceId]
     );
-    const totalGroups = Number(meta?.total_groups) || 0;
+    const totalGroups = meta
+      ? await syncTotalGroupsFromSource(conn, instanceId, meta, meta.total_groups)
+      : 0;
     const activeRotationMode = normalizeActiveRotationMode(meta?.active_rotation_mode);
 
     let completedGroups = 0;
@@ -1482,8 +1538,7 @@ async function refreshTotalGroups(req, res) {
 
     const lines = await loadActivitySourceLines(row);
 
-    let groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
-    if (groupCount <= 0) groupCount = 1;
+    const groupCount = countQuestionGroups(lines);
 
     const activityType = inferActivityTypeFromLines(lines, {
       fallbackIsTest: Number(row.is_test) === 1,

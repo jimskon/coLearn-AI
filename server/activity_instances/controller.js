@@ -1066,8 +1066,11 @@ async function submitGroupResponses(req, res) {
 
 
     const shouldRotateActive =
-      activeRotationMode === 'submit' ||
-      (activeRotationMode === 'group' && shouldAdvance);
+      progressStatus !== 'completed' &&
+      (
+        activeRotationMode === 'submit' ||
+        (activeRotationMode === 'group' && shouldAdvance)
+      );
 
     // ---- 5) Rotate active student among connected members ----
     const [connected] = await conn.query(

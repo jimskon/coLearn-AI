@@ -72,10 +72,9 @@ export default function ActivityPythonBlock({
   }, [responseKey]);
 
   // --- live update plumbing (unchanged) ---
-  const debounceMs = 300;
-  const broadcastTimerRef = useRef(null);
   const lastInitialRef = useRef(initialCode ?? '');
-  const lastSentRef = useRef(initialCode ?? '');
+  const lastBroadcastRef = useRef(initialCode ?? '');
+  const lastCommittedRef = useRef(initialCode ?? '');
   const pendingRemoteRef = useRef(null);
 
 
@@ -100,32 +99,24 @@ export default function ActivityPythonBlock({
     else {
       setCode(next);
       setSavedCode(next);
-      lastSentRef.current = next;
+      lastBroadcastRef.current = next;
+      lastCommittedRef.current = next;
       pendingRemoteRef.current = null;
     }
   }, [initialCode, isEditing]);
 
-  useEffect(() => () => {
-    if (broadcastTimerRef.current) clearTimeout(broadcastTimerRef.current);
-  }, []);
-
   const sendUpstream = (val, { broadcastOnly = false } = {}) => {
     if (!onCodeChange || !responseKey) return;
-    if (val === lastSentRef.current) return;
-    lastSentRef.current = val;
-    onCodeChange(
-      responseKey,
-      val,
-      broadcastOnly ? { __broadcastOnly: true } : undefined
-    );
-  };
-
-  const scheduleBroadcast = (val) => {
-    if (broadcastTimerRef.current) clearTimeout(broadcastTimerRef.current);
-    broadcastTimerRef.current = setTimeout(() => {
-      sendUpstream(val, { broadcastOnly: true });
-      broadcastTimerRef.current = null;
-    }, debounceMs);
+    if (broadcastOnly) {
+      if (val === lastBroadcastRef.current) return;
+      lastBroadcastRef.current = val;
+      onCodeChange(responseKey, val, { __broadcastOnly: true });
+      return;
+    }
+    if (val === lastCommittedRef.current) return;
+    lastCommittedRef.current = val;
+    lastBroadcastRef.current = val;
+    onCodeChange(responseKey, val);
   };
 
   const flushPendingRemoteIfAny = () => {
@@ -134,7 +125,8 @@ export default function ActivityPythonBlock({
       pendingRemoteRef.current = null;
       setCode(incoming);
       setSavedCode(incoming);
-      lastSentRef.current = incoming;
+      lastBroadcastRef.current = incoming;
+      lastCommittedRef.current = incoming;
     }
   };
 
@@ -177,10 +169,6 @@ export default function ActivityPythonBlock({
   };
 
   const runPython = () => {
-    if (broadcastTimerRef.current) {
-      clearTimeout(broadcastTimerRef.current);
-      broadcastTimerRef.current = null;
-    }
     if (editable && code !== savedCode) {
       sendUpstream(code, { broadcastOnly: false });
       setSavedCode(code);
@@ -209,10 +197,6 @@ export default function ActivityPythonBlock({
 
   const handleDoneEditing = () => {
     setIsEditing(false);
-    if (broadcastTimerRef.current) {
-      clearTimeout(broadcastTimerRef.current);
-      broadcastTimerRef.current = null;
-    }
     if (editable && code !== savedCode) {
       sendUpstream(code, { broadcastOnly: false });
       setSavedCode(code);
@@ -237,7 +221,7 @@ export default function ActivityPythonBlock({
       const newPos = start + indent.length;
 
       setCode(newValue);
-      if (editable) scheduleBroadcast(newValue);
+      if (editable) sendUpstream(newValue, { broadcastOnly: true });
       selectionRef.current = { start: newPos, end: newPos };
       return;
     }
@@ -256,7 +240,7 @@ export default function ActivityPythonBlock({
       const newPos = start + insert.length;
 
       setCode(newValue);
-      if (editable) scheduleBroadcast(newValue);
+      if (editable) sendUpstream(newValue, { broadcastOnly: true });
       selectionRef.current = { start: newPos, end: newPos };
       return;
     }
@@ -382,7 +366,7 @@ export default function ActivityPythonBlock({
             onChange={(e) => {
               const v = e.target.value;
               setCode(v);
-              if (editable) scheduleBroadcast(v);
+              if (editable) sendUpstream(v, { broadcastOnly: true });
             }}
             onKeyDown={handleKeyDown}
             onBlur={handleDoneEditing}

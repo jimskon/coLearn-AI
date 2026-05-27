@@ -502,6 +502,7 @@ async function recordHeartbeat(req, res) {
 
     const [[inst]] = await db.query(
       `SELECT active_student_id,
+              progress_status,
               section_timer_key,
               section_timer_duration_minutes,
               section_timer_started_at,
@@ -596,6 +597,25 @@ async function recordHeartbeat(req, res) {
       activePresent = !!row?.present;
     }
 
+    const isCompleted = String(inst.progress_status || '').toLowerCase() === 'completed';
+
+    if (isCompleted) {
+      if (inst.active_student_id != null) {
+        await db.query(
+          `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
+          [instanceId]
+        );
+      }
+      const completedPatch = { ...(timerPatch || {}), activeStudentId: null };
+      global.emitInstanceState?.(Number(instanceId), completedPatch);
+      return res.json({
+        success: true,
+        becameActive: false,
+        activeStudentId: null,
+        ...(timerPatch || {}),
+      });
+    }
+
     if (!inst.active_student_id || !activePresent) {
       const [[presentCaller]] = await db.query(
         `SELECT student_id FROM group_members
@@ -661,7 +681,7 @@ async function getActiveStudent(req, res) {
 
   try {
     const [[instance]] = await db.query(
-      `SELECT active_student_id FROM activity_instances WHERE id = ?`,
+      `SELECT active_student_id, progress_status FROM activity_instances WHERE id = ?`,
       [instanceId]
     );
 
@@ -669,7 +689,15 @@ async function getActiveStudent(req, res) {
       return res.status(404).json({ error: 'Activity instance not found' });
     }
 
-    const activeStudentId = instance.active_student_id;
+    const isCompleted = String(instance.progress_status || '').toLowerCase() === 'completed';
+    if (isCompleted && instance.active_student_id != null) {
+      await db.query(
+        `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
+        [instanceId]
+      );
+    }
+
+    const activeStudentId = isCompleted ? null : instance.active_student_id;
     //console.log("Active student ID for instance", instanceId, "is", activeStudentId);
     res.json({ activeStudentId });
   } catch (err) {
@@ -1055,19 +1083,35 @@ async function submitGroupResponses(req, res) {
     const progressStatus =
       totalGroups > 0 && completedGroups >= totalGroups ? 'completed' : 'in_progress';
 
-    await conn.query(
-      `UPDATE activity_instances
-       SET completed_groups = ?, progress_status = ?
-       WHERE id = ?`,
-      [completedGroups, progressStatus, instanceId]
-    );
+    if (progressStatus === 'completed') {
+      await conn.query(
+        `UPDATE activity_instances
+         SET completed_groups = ?, progress_status = ?, active_student_id = NULL
+         WHERE id = ?`,
+        [completedGroups, progressStatus, instanceId]
+      );
+    } else {
+      await conn.query(
+        `UPDATE activity_instances
+         SET completed_groups = ?, progress_status = ?
+         WHERE id = ?`,
+        [completedGroups, progressStatus, instanceId]
+      );
+    }
 
-    emitPatch = { completed_groups: completedGroups, progress_status: progressStatus };
+    emitPatch = {
+      completed_groups: completedGroups,
+      progress_status: progressStatus,
+      ...(progressStatus === 'completed' ? { activeStudentId: null } : {}),
+    };
 
 
     const shouldRotateActive =
-      activeRotationMode === 'submit' ||
-      (activeRotationMode === 'group' && shouldAdvance);
+      progressStatus !== 'completed' &&
+      (
+        activeRotationMode === 'submit' ||
+        (activeRotationMode === 'group' && shouldAdvance)
+      );
 
     // ---- 5) Rotate active student among connected members ----
     const [connected] = await conn.query(
@@ -1103,7 +1147,9 @@ async function submitGroupResponses(req, res) {
 
     return res.json({
       success: true, completed_groups: completedGroups, progress_status: progressStatus,
-      ...(emitPatch?.activeStudentId ? { activeStudentId: emitPatch.activeStudentId } : {}),
+      ...(emitPatch && Object.prototype.hasOwnProperty.call(emitPatch, 'activeStudentId')
+        ? { activeStudentId: emitPatch.activeStudentId }
+        : {}),
 
     });
   } catch (err) {

@@ -599,6 +599,30 @@ export default function RunActivityPage({
     setLastEditTs,
   });
 
+  const loadActivity = useRunActivityData({
+    instanceId,
+    user,
+    setActivity,
+    setActiveStudentId,
+    setGroupMembers,
+    setExistingAnswers,
+    setCodeFeedbackShown,
+    setTextFeedbackShown,
+    setFollowupAnswers,
+    setNonLegacyForUI,
+    setFileContents,
+    setGroups,
+    setPreamble,
+    setFollowupsShown,
+    dirtyKeysRef,
+    dirtyTextQidsRef,
+    qidsNoFURef,
+    fileContentsRef,
+    loadingRef,
+    stripHtml,
+    isNoAI,
+  });
+
   useEffect(() => {
     if (!activityPaused) return;
     const activeEl = document.activeElement;
@@ -761,7 +785,7 @@ export default function RunActivityPage({
     if (user?.id) {
       loadActivity();
     }
-  }, [user?.id, instanceId]);
+  }, [user?.id, instanceId, loadActivity]);
 
 
   useEffect(() => {
@@ -956,22 +980,6 @@ export default function RunActivityPage({
   ]);
 
 
-  if (loading) {
-    return (
-      <Container className="mt-4">
-        <Spinner animation="border" />
-      </Container>
-    );
-  }
-
-  if (!user) {
-    return (
-      <Container className="mt-4">
-        <Alert variant="danger">User not loaded. Please log in again.</Alert>
-      </Container>
-    );
-  }
-
   async function saveResponse(instanceId, key, value) {
     await fetch(`${API_BASE_URL}/api/responses/draft-bulk`, {
       method: 'POST',
@@ -984,29 +992,6 @@ export default function RunActivityPage({
       }),
     });
   }
-  const loadActivity = useRunActivityData({
-    instanceId,
-    user,
-    setActivity,
-    setActiveStudentId,
-    setGroupMembers,
-    setExistingAnswers,
-    setCodeFeedbackShown,
-    setTextFeedbackShown,
-    setFollowupAnswers,
-    setNonLegacyForUI,
-    setFileContents,
-    setGroups,
-    setPreamble,
-    setFollowupsShown,
-    dirtyKeysRef,
-    dirtyTextQidsRef,
-    qidsNoFURef,
-    fileContentsRef,
-    loadingRef,
-    stripHtml,
-    isNoAI,
-  });
 
   async function loadHistory() {
     try {
@@ -1056,6 +1041,22 @@ export default function RunActivityPage({
       console.error('Failed to load response history', err);
       setHistoryRows([]);
     }
+  }
+
+  if (loading) {
+    return (
+      <Container className="mt-4">
+        <Spinner animation="border" />
+      </Container>
+    );
+  }
+
+  if (!user) {
+    return (
+      <Container className="mt-4">
+        <Alert variant="danger">User not loaded. Please log in again.</Alert>
+      </Container>
+    );
   }
 
   async function evaluateResponseWithAI(

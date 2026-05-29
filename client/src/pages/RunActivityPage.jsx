@@ -14,6 +14,7 @@ import { RUN_ACTIVITY_MODES } from './run-activity/modes';
 import useRunModePolicy from './run-activity/useRunModePolicy';
 import useRunActivityData from './run-activity/useRunActivityData';
 import useRunActivitySync from './run-activity/useRunActivitySync';
+import useRunActivityResponses from './run-activity/useRunActivityResponses';
 
 import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBanner';
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
@@ -250,14 +251,6 @@ export default function RunActivityPage({
 
   const effectiveViewMode = canViewHistory ? viewMode : 'latest';
 
-  const codeByKeyRef = useRef(Object.create(null));
-
-  const dirtyKeysRef = useRef(new Set());
-
-  // Tracks which base questions have been edited since last AI evaluation.
-  // Prevents loadActivity() from rehydrating stale suggestions while student is revising.
-  const dirtyTextQidsRef = useRef(new Set());
-
   function emitTextAIState(qid, { f1, fm, af }) {
     if (!socket || !instanceId || !user?.id) return;
 
@@ -329,53 +322,21 @@ export default function RunActivityPage({
       });
     }*/
 
-  function clearTextSuggestionForQid(qid) {
-    setTextFeedbackShown((prev) => {
-      const next = { ...prev };
-      delete next[qid];
-      return next;
-    });
-  }
-
   const [lastEditTs, setLastEditTs] = useState(0);
   const { instanceId } = useParams();
   const location = useLocation();
   const courseName = location.state?.courseName;
-  const [followupsShown, setFollowupsShown] = useState({});
-  const [followupAnswers, setFollowupAnswers] = useState({});
-
-  const [codeFeedbackShown, setCodeFeedbackShown] = useState({});
-  const [fileContents, setFileContents] = useState({});
-  const fileContentsRef = useRef(fileContents);
   const loadingRef = useRef(false);
   const codeVersionsRef = useRef({});
   const qidsNoFURef = useRef(new Set());
-  const [codeViewMode, setCodeViewMode] = useState({});
-  const [localCode, setLocalCode] = useState({});
 
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
 
-
-  const [unansweredShown, setUnansweredShown] = useState({}); // { "1e": "Unanswered: ..." }
-  const [submitAlert, setSubmitAlert] = useState(null);
-
   const [groups, setGroups] = useState([]);
   const [activeStudentName, setActiveStudentName] = useState('');
   const [preamble, setPreamble] = useState([]);
-  const [existingAnswers, setExistingAnswers] = useState({});
-
-  const getLatestCode = (key) => {
-    // IMPORTANT: return null/undefined when missing, not ''
-    if (Object.prototype.hasOwnProperty.call(codeByKeyRef.current, key)) {
-      return codeByKeyRef.current[key];
-    }
-    if (existingAnswers?.[key]?.response != null) {
-      return existingAnswers[key].response;
-    }
-    return null;
-  };
 
   const currentGroupIndex = useMemo(() => {
     const completed = Number(activity?.completed_groups ?? 0);
@@ -391,7 +352,6 @@ export default function RunActivityPage({
 
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [textFeedbackShown, setTextFeedbackShown] = useState({});
 
 
   // per-group “ignore AI, let me continue” overrides
@@ -493,15 +453,6 @@ export default function RunActivityPage({
   ]);
 
 
-
-  const toggleCodeViewMode = (rk, next) =>
-    setCodeViewMode((prev) => ({ ...prev, [rk]: next }));
-
-  const updateLocalCode = (rk, code) => {
-    setLastEditTs(Date.now());
-    dirtyKeysRef.current.add(rk);
-    setLocalCode((prev) => ({ ...prev, [rk]: code }));
-  };
 
 
   const userRoles = groupMembers
@@ -608,6 +559,44 @@ export default function RunActivityPage({
     activity,
     isPlaygroundMode,
     isTestMode,
+  });
+
+  const {
+    codeByKeyRef,
+    dirtyKeysRef,
+    dirtyTextQidsRef,
+    followupsShown,
+    setFollowupsShown,
+    followupAnswers,
+    setFollowupAnswers,
+    codeFeedbackShown,
+    setCodeFeedbackShown,
+    fileContents,
+    setFileContents,
+    fileContentsRef,
+    codeViewMode,
+    localCode,
+    unansweredShown,
+    setUnansweredShown,
+    submitAlert,
+    setSubmitAlert,
+    existingAnswers,
+    setExistingAnswers,
+    textFeedbackShown,
+    setTextFeedbackShown,
+    getLatestCode,
+    clearTextSuggestionForQid,
+    toggleCodeViewMode,
+    updateLocalCode,
+    handleUpdateFileContents,
+    handleFileChange,
+    handleTextChange,
+    handleCodeChange,
+  } = useRunActivityResponses({
+    instanceId,
+    user,
+    isActive,
+    setLastEditTs,
   });
 
   useEffect(() => {
@@ -734,39 +723,6 @@ export default function RunActivityPage({
     }
     return { earned, max };
   }, [isTestMode, groups, existingAnswers]);
-
-  const handleUpdateFileContents = (updaterFn) => {
-    setSubmitAlert(null);
-    setLastEditTs(Date.now()); // ✅ prevents periodic loadActivity() from clobbering local file edits
-    setFileContents((prev) => {
-      const updated = updaterFn(prev);
-      fileContentsRef.current = updated;
-      return updated;
-    });
-  };
-
-
-
-  // For manual edits in <FileBlock> textareas
-  const handleFileChange = (fileKey, newText, meta = {}) => {
-    setSubmitAlert(null);
-    setLastEditTs(Date.now()); // ✅ prevents periodic loadActivity() from clobbering local file edits
-    const raw = meta.filename || fileKey || '';
-    const filename = raw.startsWith('file:') ? raw.slice('file:'.length) : raw;
-
-    setFileContents((prev) => {
-      const updated = { ...prev, [filename]: newText };
-      fileContentsRef.current = updated;
-      return updated;
-    });
-  };
-
-
-
-
-  useEffect(() => {
-    fileContentsRef.current = fileContents;
-  }, [fileContents]);
 
   useEffect(() => {
     if (!DEBUG_FILES) return;
@@ -2653,74 +2609,6 @@ export default function RunActivityPage({
     }
   }
 
-  async function handleCodeChange(responseKey, updatedCode, meta = {}) {
-
-    setSubmitAlert(null);
-
-    const baseQid = baseQidFromResponseKey(responseKey);
-    if (baseQid) {
-      setUnansweredShown((prev) => {
-        if (!prev[baseQid]) return prev;
-        const next = { ...prev };
-        delete next[baseQid];
-        return next;
-      });
-    }
-
-    const broadcastOnly = !!meta?.__broadcastOnly;
-
-    codeByKeyRef.current[responseKey] = updatedCode;
-
-    // If broadcast-only, still only the active student should broadcast
-    if (broadcastOnly) {
-      if (!isActive) return;
-      socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user.id });
-      return;
-    }
-
-    setLastEditTs(Date.now());
-    dirtyKeysRef.current.add(responseKey);
-
-    // ✅ Always reflect locally (so UI is consistent)
-    setExistingAnswers((prev) => ({
-      ...prev,
-      [responseKey]: { ...(prev[responseKey] || {}), response: updatedCode, type: 'text' },
-    }));
-
-    // ✅ Always save to DB (THIS fixes “revert on refresh”)
-    if (isActive) {
-      try {
-        await fetch(`${API_BASE_URL}/api/responses/draft`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            question_id: responseKey,
-            activity_instance_id: instanceId,
-            user_id: user?.id,
-            response: updatedCode,
-          }),
-        });
-        dirtyKeysRef.current.delete(responseKey);
-      } catch (err) {
-        console.error('handleCodeChange failed:', err);
-      }
-    }
-
-    // ✅ Only broadcast if active (THIS fixes observer lag behavior)
-    if (isActive) {
-      socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user.id });
-    }
-
-    // Clear guidance locally + for observers if active
-    setCodeFeedbackShown((prev) => ({ ...prev, [responseKey]: null }));
-    if (isActive) {
-      socket?.emit('feedback:update', { instanceId, responseKey, feedback: null, followup: null });
-    }
-  }
-
-
-
   // Helper: tri-band scores + feedback for a base question id like "1a"
   function getQuestionScores(qid, block) {
     const codeScoreRaw =
@@ -2980,7 +2868,12 @@ export default function RunActivityPage({
                       fileContents,
                       setFileContents: handleUpdateFileContents,
                       onFileChange: handleFileChange,
-                      onCodeChange: handleCodeChange,
+                      onCodeChange: (responseKey, code, extra) =>
+                        handleCodeChange(responseKey, code, {
+                          ...extra,
+                          socket,
+                          baseQidFromResponseKey,
+                        }),
                       codeFeedbackShown,
                       isInstructor,
                       allowLocalToggle: true,
@@ -2989,41 +2882,11 @@ export default function RunActivityPage({
                       onToggleViewMode: toggleCodeViewMode,
                       localCode,
                       onLocalCodeChange: updateLocalCode,
-                      onTextChange: (responseKey, value) => {
-                        setSubmitAlert(null);
-                        dirtyKeysRef.current.add(responseKey);
-                        const qid = baseQidFromResponseKey(responseKey);
-                        if (qid) {
-                          setUnansweredShown((prev) => {
-                            if (!prev[qid]) return prev;
-                            const next = { ...prev };
-                            delete next[qid];
-                            return next;
-                          });
-                        }
-
-                        if (qid) dirtyTextQidsRef.current.add(qid);
-
-                        setExistingAnswers((prev) => ({
-                          ...prev,
-                          [responseKey]: {
-                            ...(prev[responseKey] || {}),
-                            response: value,
-                            type: 'text',
-                          },
-                        }));
-
-                        if (isActive && socket) {
-                          socket.emit('response:update', {
-                            instanceId,
-                            responseKey,
-                            value,
-                            answeredBy: user.id,
-                          });
-                        }
-
-                        setLastEditTs(Date.now());
-                      },
+                      onTextChange: (responseKey, value) =>
+                        handleTextChange(responseKey, value, {
+                          baseQidFromResponseKey,
+                          socket,
+                        }),
                     });
 
                     if (!isTestMode || block.type !== 'question') {

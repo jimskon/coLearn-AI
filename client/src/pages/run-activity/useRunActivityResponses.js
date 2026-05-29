@@ -115,7 +115,7 @@ export default function useRunActivityResponses({
     }
 
     setLastEditTs(Date.now());
-  }, [instanceId, isActive, setLastEditTs, socket, user?.id]);
+  }, [instanceId, isActive, setLastEditTs, user?.id]);
 
   const handleCodeChange = useCallback(async (responseKey, updatedCode, meta = {}) => {
     setSubmitAlert(null);

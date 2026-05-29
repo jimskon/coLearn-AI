@@ -16,6 +16,8 @@ test('student mode marks the matching active student as active', () => {
   assert.equal(policy.isObserver, false);
   assert.equal(policy.canPollActiveStudent, true);
   assert.equal(policy.canSendHeartbeat, true);
+  assert.equal(policy.canUseLiveSync, true);
+  assert.equal(policy.persistResponses, true);
   assert.equal(policy.usesRealInstanceProgression, true);
 });
 
@@ -56,6 +58,8 @@ test('sandbox mode is always active and allows free navigation without real prog
   assert.equal(policy.isActive, true);
   assert.equal(policy.isObserver, false);
   assert.equal(policy.allowFreeNavigation, true);
+  assert.equal(policy.canUseLiveSync, false);
+  assert.equal(policy.persistResponses, false);
   assert.equal(policy.usesRealInstanceProgression, false);
 });
 

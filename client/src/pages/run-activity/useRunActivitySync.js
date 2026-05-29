@@ -4,6 +4,7 @@ import { io } from 'socket.io-client';
 import { API_BASE_URL } from '../../config';
 
 export default function useRunActivitySync({
+  enableLiveSync = true,
   instanceId,
   user,
   groups,
@@ -27,6 +28,11 @@ export default function useRunActivitySync({
   }, [activeStudentId]);
 
   useEffect(() => {
+    if (!enableLiveSync) {
+      setSocket(null);
+      return undefined;
+    }
+
     const s = io(API_BASE_URL, {
       transports: ['websocket'],
     });
@@ -36,7 +42,7 @@ export default function useRunActivitySync({
     return () => {
       s.disconnect();
     };
-  }, []);
+  }, [enableLiveSync]);
 
   useEffect(() => {
     if (!socket || !instanceId) return;
@@ -193,4 +199,3 @@ export default function useRunActivitySync({
 
   return socket;
 }
-

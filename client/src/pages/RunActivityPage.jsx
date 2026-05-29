@@ -325,6 +325,7 @@ export default function RunActivityPage({
   const [lastEditTs, setLastEditTs] = useState(0);
   const { instanceId } = useParams();
   const location = useLocation();
+  const requestedMode = new URLSearchParams(location.search).get('mode');
   const courseName = location.state?.courseName;
   const loadingRef = useRef(false);
   const codeVersionsRef = useRef({});
@@ -337,6 +338,7 @@ export default function RunActivityPage({
   const [groups, setGroups] = useState([]);
   const [activeStudentName, setActiveStudentName] = useState('');
   const [preamble, setPreamble] = useState([]);
+  const [sandboxGroupIndex, setSandboxGroupIndex] = useState(0);
 
   const currentGroupIndex = useMemo(() => {
     const completed = Number(activity?.completed_groups ?? 0);
@@ -543,8 +545,12 @@ export default function RunActivityPage({
     return () => clearInterval(interval);
   }, [sectionTimer.visible]);
 
-  const runMode = RUN_ACTIVITY_MODES.STUDENT;
+  const runMode =
+    requestedMode === RUN_ACTIVITY_MODES.SANDBOX
+      ? RUN_ACTIVITY_MODES.SANDBOX
+      : RUN_ACTIVITY_MODES.STUDENT;
   const {
+    isSandbox,
     isInstructor,
     isStudent,
     isActive,
@@ -552,6 +558,10 @@ export default function RunActivityPage({
     activityPaused,
     canPollActiveStudent,
     canSendHeartbeat,
+    canUseLiveSync,
+    allowFreeNavigation,
+    persistResponses,
+    usesRealInstanceProgression,
   } = useRunModePolicy({
     mode: runMode,
     user,
@@ -597,7 +607,17 @@ export default function RunActivityPage({
     user,
     isActive,
     setLastEditTs,
+    persistResponses,
+    emitLiveUpdates: canUseLiveSync,
   });
+
+  useEffect(() => {
+    if (!allowFreeNavigation) return;
+    setSandboxGroupIndex((prev) => {
+      const maxIndex = Math.max(0, groups.length - 1);
+      return prev > maxIndex ? maxIndex : prev;
+    });
+  }, [allowFreeNavigation, groups.length]);
 
   const loadActivity = useRunActivityData({
     instanceId,
@@ -805,6 +825,7 @@ export default function RunActivityPage({
   }
 
   const socket = useRunActivitySync({
+    enableLiveSync: canUseLiveSync,
     instanceId,
     user,
     groups,
@@ -823,6 +844,7 @@ export default function RunActivityPage({
 
 
   useEffect(() => {
+    if (!usesRealInstanceProgression) return;
     if (!isActive || !user?.id || !instanceId) return;
 
     const interval = setInterval(() => {
@@ -855,7 +877,7 @@ export default function RunActivityPage({
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
+  }, [usesRealInstanceProgression, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
 
   useEffect(() => {
     if (!activeStudentId) return;
@@ -2785,6 +2807,10 @@ export default function RunActivityPage({
             handleCodeChange={handleCodeChange}
             baseQidFromResponseKey={baseQidFromResponseKey}
             isObserver={isObserver}
+            isSandbox={isSandbox}
+            allowFreeNavigation={allowFreeNavigation}
+            sandboxGroupIndex={sandboxGroupIndex}
+            setSandboxGroupIndex={setSandboxGroupIndex}
             codeViewMode={codeViewMode}
             localCode={localCode}
             handleTextChange={handleTextChange}

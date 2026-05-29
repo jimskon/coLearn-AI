@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Button, Spinner } from 'react-bootstrap';
+import { Alert, Button, Form, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
 
 export default function RunActivityWorkspace({
@@ -29,6 +29,10 @@ export default function RunActivityWorkspace({
   handleCodeChange,
   baseQidFromResponseKey,
   isObserver,
+  isSandbox,
+  allowFreeNavigation,
+  sandboxGroupIndex,
+  setSandboxGroupIndex,
   codeViewMode,
   localCode,
   handleTextChange,
@@ -67,6 +71,28 @@ export default function RunActivityWorkspace({
         aria-disabled={activityPaused ? 'true' : undefined}
         style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
       >
+        {isSandbox && (
+          <Alert variant="secondary" className="mb-3">
+            Sandbox mode is using the shared activity workspace with local edits only.
+          </Alert>
+        )}
+
+        {allowFreeNavigation && groups.length > 0 && (
+          <Form.Group className="mb-3" controlId="sandbox-group-picker">
+            <Form.Label>Section</Form.Label>
+            <Form.Select
+              value={String(sandboxGroupIndex)}
+              onChange={(e) => setSandboxGroupIndex?.(Number(e.target.value))}
+            >
+              {groups.map((group, index) => (
+                <option key={`sandbox-group-${index}`} value={index}>
+                  Group {index + 1} - {group?.intro?.content || 'Untitled'}
+                </option>
+              ))}
+            </Form.Select>
+          </Form.Group>
+        )}
+
         {renderBlocks(preamble, {
           editable: false,
           isActive: false,
@@ -90,6 +116,7 @@ export default function RunActivityWorkspace({
           const completedCount = Number(activity?.completed_groups ?? 0);
           const isComplete = index < completedCount;
           const isCurrent = index === completedCount;
+          const isSandboxGroup = !allowFreeNavigation || index === sandboxGroupIndex;
 
           const testEditable =
             isTestMode &&
@@ -98,14 +125,20 @@ export default function RunActivityWorkspace({
             !timeExpired &&
             !testLockState.lockedBefore;
 
-          const editable = isTestMode
+          const editable = isSandbox
+            ? isSandboxGroup
+            : isTestMode
             ? testEditable
             : (isActive && isCurrent && !isComplete);
 
           const showGroup =
+            allowFreeNavigation
+              ? isSandboxGroup
+              : (
             isTestMode
               ? true
-              : (isInstructor || isComplete || isCurrent);
+              : (isInstructor || isComplete || isCurrent)
+              );
 
           if (!showGroup) return null;
 
@@ -201,7 +234,7 @@ export default function RunActivityWorkspace({
                 );
               })}
 
-              {editable && !isTestMode && (
+              {editable && !isTestMode && !isSandbox && (
                 <div className="mt-2">
                   <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
                     {isSubmitting ? (
@@ -232,7 +265,7 @@ export default function RunActivityWorkspace({
           );
         })}
 
-        {isTestMode && isStudent && timeExpired && !isSubmitted && (
+        {isTestMode && isStudent && !isSandbox && timeExpired && !isSubmitted && (
           <Alert variant="warning" className="mt-3">
             <div className="d-flex justify-content-between align-items-center">
               <div>
@@ -245,7 +278,7 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {isTestMode && isStudent && !timeExpired && !isSubmitted && (
+        {isTestMode && isStudent && !isSandbox && !timeExpired && !isSubmitted && (
           <div className="mt-3">
             <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
               {isSubmitting ? (
@@ -260,7 +293,7 @@ export default function RunActivityWorkspace({
           </div>
         )}
 
-        {isTestMode && isInstructor && isSubmitted && (
+        {isTestMode && isInstructor && !isSandbox && isSubmitted && (
           <div className="mt-3 d-flex gap-2">
             <Button
               variant="warning"
@@ -278,7 +311,7 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {isTestMode && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
+        {isTestMode && !isSandbox && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
           <Alert variant="info" className="mt-3">
             Overall test score:{' '}
             <strong>

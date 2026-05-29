@@ -41,7 +41,9 @@ export default function computeRunModePolicy({
     activityPaused,
     canPollActiveStudent: mode === RUN_ACTIVITY_MODES.STUDENT && !isTestMode,
     canSendHeartbeat: mode === RUN_ACTIVITY_MODES.STUDENT,
+    canUseLiveSync: mode === RUN_ACTIVITY_MODES.STUDENT,
     allowFreeNavigation: isSandbox,
+    persistResponses: mode === RUN_ACTIVITY_MODES.STUDENT,
     usesRealInstanceProgression: mode === RUN_ACTIVITY_MODES.STUDENT,
   };
 }

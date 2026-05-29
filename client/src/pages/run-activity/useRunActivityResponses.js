@@ -7,6 +7,8 @@ export default function useRunActivityResponses({
   user,
   isActive,
   setLastEditTs,
+  persistResponses = true,
+  emitLiveUpdates = true,
 }) {
   const codeByKeyRef = useRef(Object.create(null));
   const dirtyKeysRef = useRef(new Set());
@@ -105,7 +107,7 @@ export default function useRunActivityResponses({
       },
     }));
 
-    if (isActive && socket) {
+    if (emitLiveUpdates && isActive && socket) {
       socket.emit('response:update', {
         instanceId,
         responseKey,
@@ -115,7 +117,7 @@ export default function useRunActivityResponses({
     }
 
     setLastEditTs(Date.now());
-  }, [instanceId, isActive, setLastEditTs, user?.id]);
+  }, [emitLiveUpdates, instanceId, isActive, setLastEditTs, user?.id]);
 
   const handleCodeChange = useCallback(async (responseKey, updatedCode, meta = {}) => {
     setSubmitAlert(null);
@@ -137,7 +139,7 @@ export default function useRunActivityResponses({
     codeByKeyRef.current[responseKey] = updatedCode;
 
     if (broadcastOnly) {
-      if (!isActive) return;
+      if (!emitLiveUpdates || !isActive) return;
       meta.socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user?.id });
       return;
     }
@@ -150,7 +152,7 @@ export default function useRunActivityResponses({
       [responseKey]: { ...(prev[responseKey] || {}), response: updatedCode, type: 'text' },
     }));
 
-    if (isActive) {
+    if (persistResponses && isActive) {
       try {
         await fetch(`${API_BASE_URL}/api/responses/draft`, {
           method: 'POST',
@@ -169,15 +171,15 @@ export default function useRunActivityResponses({
       }
     }
 
-    if (isActive) {
+    if (emitLiveUpdates && isActive) {
       meta.socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user?.id });
     }
 
     setCodeFeedbackShown((prev) => ({ ...prev, [responseKey]: null }));
-    if (isActive) {
+    if (emitLiveUpdates && isActive) {
       meta.socket?.emit('feedback:update', { instanceId, responseKey, feedback: null, followup: null });
     }
-  }, [instanceId, isActive, setLastEditTs, user?.id]);
+  }, [emitLiveUpdates, instanceId, isActive, persistResponses, setLastEditTs, user?.id]);
 
   return {
     codeByKeyRef,

@@ -9,11 +9,11 @@ import 'prismjs/components/prism-python';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { renderBlocks } from '../utils/parseSheet';
-import { io } from 'socket.io-client';
 import { parseUtcDbDatetime } from '../utils/time';
 import { RUN_ACTIVITY_MODES } from './run-activity/modes';
 import useRunModePolicy from './run-activity/useRunModePolicy';
 import useRunActivityData from './run-activity/useRunActivityData';
+import useRunActivitySync from './run-activity/useRunActivitySync';
 
 import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBanner';
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
@@ -345,7 +345,6 @@ export default function RunActivityPage({
   const [followupAnswers, setFollowupAnswers] = useState({});
 
   const [codeFeedbackShown, setCodeFeedbackShown] = useState({});
-  const [socket, setSocket] = useState(null);
   const [fileContents, setFileContents] = useState({});
   const fileContentsRef = useRef(fileContents);
   const loadingRef = useRef(false);
@@ -580,51 +579,6 @@ export default function RunActivityPage({
   }, [isTestMode, activity?.test_start_at]);
 
   useEffect(() => {
-    // Create exactly once
-    const s = io(API_BASE_URL, {
-      transports: ['websocket'], // optional but avoids long-polling weirdness
-    });
-
-    setSocket(s);
-
-    return () => {
-      s.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!socket) return;
-    if (!instanceId) return;
-
-    socket.emit('instance:join', { instanceId });
-
-    return () => {
-      socket.emit('instance:leave', { instanceId });
-    };
-  }, [socket, instanceId]);
-
-  useEffect(() => {
-    if (!socket) return;
-
-    function onInstanceState(msg) {
-      const msgId = msg?.instanceId;
-      const patch = msg?.patch;
-
-      if (String(msgId) !== String(instanceId)) return;
-      if (!patch || typeof patch !== 'object') return;
-
-      // IMPORTANT: patch your *activity instance* state (whatever variable holds it)
-      setActivity((prev) => (prev ? { ...prev, ...patch } : prev));
-
-      // If some patch fields live elsewhere, update them too:
-      if (patch.activeStudentId != null) setActiveStudentId(patch.activeStudentId);
-    }
-
-    socket.on('instance:state', onInstanceState);
-    return () => socket.off('instance:state', onInstanceState);
-  }, [socket, instanceId, setActiveStudentId]);
-
-  useEffect(() => {
     console.log('[RUN] isTestMode:', isTestMode);
   }, [isTestMode]);
 
@@ -822,61 +776,6 @@ export default function RunActivityPage({
     console.debug(`[${PAGE_TAG}] fileContents changed:`, sizes);
   }, [fileContents]);
 
-
-  const activeStudentIdRef = useRef(null);
-  useEffect(() => { activeStudentIdRef.current = activeStudentId; }, [activeStudentId]);
-
-  useEffect(() => {
-    if (!canPollActiveStudent) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/active-student`, {
-          credentials: 'include',
-        }); const data = await res.json();
-
-        const nextId = Number(data?.activeStudentId);
-
-        if (Number.isFinite(nextId) && nextId > 0 && nextId !== activeStudentIdRef.current) {
-          setActiveStudentId(nextId);
-        }
-      } catch { }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [instanceId, canPollActiveStudent]);
-
-  useEffect(() => {
-    if (!canSendHeartbeat) return;
-    const sendHeartbeat = async () => {
-      if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
-      try {
-        await fetch(
-          `${API_BASE_URL}/api/activity-instances/${instanceId}/heartbeat`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              userId: user.id,
-              sectionTimerKey: currentTimedSection?.key || null,
-              sectionTimerDurationMinutes: currentTimedSection?.minutes || null,
-            }),
-          }
-        );
-      } catch { }
-    };
-    sendHeartbeat();
-    const interval = setInterval(sendHeartbeat, 20000);
-    return () => clearInterval(interval);
-  }, [
-    canSendHeartbeat,
-    user?.id,
-    instanceId,
-    groups,
-    currentTimedSection?.key,
-    currentTimedSection?.minutes,
-  ]);
-
   useEffect(() => {
     const loadScript = (src) =>
       new Promise((resolve, reject) => {
@@ -925,90 +824,22 @@ export default function RunActivityPage({
     return null;
   }
 
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleUpdate = ({ responseKey, value, followupPrompt, answeredBy }) => {
-      // Ignore our own echoes
-      if (answeredBy && String(answeredBy) === String(user?.id)) return;
-
-      // Always mirror the updated response into prefill
-      setExistingAnswers((prev) => ({
-        ...prev,
-        [responseKey]: {
-          ...(prev[responseKey] || {}),
-          response: value,
-          type: 'text',
-        },
-      }));
-
-      // ✅ IMPORTANT: Only update/clear the yellow AI prompt on observers
-      // when we receive updates to the AI state keys themselves.
-      //
-      // Base answer typing (qid, table cells, etc) must NOT clear the prompt.
-
-      // If the server/active student pushes the suggestion text key (e.g., "2aF1")
-      const mF1 = String(responseKey || '').match(/^(.*)F1$/);
-      if (mF1) {
-        const qid = mF1[1];
-        const txt = String(value ?? '').trim();
-
-        setTextFeedbackShown((prev) => {
-          const next = { ...prev };
-          if (txt) next[qid] = txt;
-          else delete next[qid];
-          return next;
-        });
-        return;
-      }
-
-      // If the server/active student pushes the AI flag (e.g., "2aAF")
-      const mAF = String(responseKey || '').match(/^(.*)AF$/);
-      if (mAF) {
-        // AF is just status now. Do NOT clear feedback on "resolved".
-        // Feedback persistence is driven by F1 being non-empty.
-        return;
-      }
-
-    };
-
-    socket.on('response:update', handleUpdate);
-
-    socket.on('feedback:update', ({ responseKey, feedback, followup }) => {
-      setCodeFeedbackShown((prev) => ({
-        ...prev,
-        [responseKey]: feedback ?? null,
-      }));
-
-      const m = responseKey.match(/^(.*?)(?:code\d+)$/);
-      if (!m) return;
-      const qid = m[1];
-      const block = findQuestionBlockByQid(qid);
-
-      // If it's code-only: NEVER show follow-ups; guidance only.
-      /*if (block && isCodeOnlyByBlock(block)) {
-        setFollowupsShown((prev) => {
-          const next = { ...prev };
-          delete next[qid];
-          return next;
-        });
-        return;
-      }*/
-
-      // Otherwise (text/table), allow/clear follow-ups as sent
-      setFollowupsShown((prev) => {
-        const next = { ...prev };
-        if (typeof followup === 'string' && followup.trim()) next[qid] = followup;
-        else delete next[qid];
-        return next;
-      });
-    });
-
-    return () => {
-      socket.off('response:update', handleUpdate);
-      socket.off('feedback:update');
-    };
-  }, [socket, groups, user?.id]);
+  const socket = useRunActivitySync({
+    instanceId,
+    user,
+    groups,
+    canPollActiveStudent,
+    canSendHeartbeat,
+    currentTimedSection,
+    setActivity,
+    activeStudentId,
+    setActiveStudentId,
+    setExistingAnswers,
+    setTextFeedbackShown,
+    setCodeFeedbackShown,
+    setFollowupsShown,
+    findQuestionBlockByQid,
+  });
 
 
   useEffect(() => {

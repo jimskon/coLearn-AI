@@ -128,6 +128,7 @@ export default function RunActivityWorkspace({
               key={`group-${index}`}
               className="mb-4"
               data-current-group={editable ? 'true' : undefined}
+              data-sandbox-group={isSandbox ? String(index) : undefined}
             >
               {group.prelude?.length > 0 &&
                 renderBlocks(group.prelude, {
@@ -214,6 +215,31 @@ export default function RunActivityWorkspace({
                   </div>
                 );
               })}
+
+              {isSandbox && (
+                <div className="mt-2">
+                  <Button onClick={() => handleSubmit(false, index)} disabled={isSubmitting}>
+                    {isSubmitting ? 'Checking…' : 'Submit Group'}
+                  </Button>
+                </div>
+              )}
+
+              {isSandbox && (() => {
+                const questionBlocks = group.content.filter((b) => b?.type === 'question');
+                if (!questionBlocks.length) return null;
+                const statuses = questionBlocks.map((b) => {
+                  const qid = `${b.groupId}${b.id}`;
+                  return String(existingAnswers?.[`${qid}S`]?.response || '').toLowerCase();
+                });
+                const allAccepted = statuses.length > 0 && statuses.every((s) => s === 'complete');
+                const anyEvaluated = statuses.some(Boolean);
+                if (!anyEvaluated) return null;
+                return (
+                  <Alert variant={allAccepted ? 'success' : 'warning'} className="mt-2">
+                    {allAccepted ? 'Accepted' : 'Needs revision'}
+                  </Alert>
+                );
+              })()}
 
               {editable && !isTestMode && !isSandbox && (
                 <div className="mt-2">

@@ -1507,7 +1507,7 @@ export default function RunActivityPage({
     });
     return answers;
   }
-  async function handleSubmit(forceOverride = false) {
+  async function handleSubmit(forceOverride = false, targetGroupIndex = null) {
     const attemptParts = [];
     let retriesRequired = 1;
     let groupNum;
@@ -1593,7 +1593,10 @@ export default function RunActivityPage({
       blocks = groups.flatMap((g) => [g.intro, ...(g.content || [])]);
     } else {
       // ✅ LEARNING MODE: unchanged behavior (one group at a time)
-      container = document.querySelector('[data-current-group="true"]');
+      const submitGroupIndex = isSandbox ? Number(targetGroupIndex ?? 0) : currentGroupIndex;
+      container = isSandbox
+        ? document.querySelector(`[data-sandbox-group="${submitGroupIndex}"]`)
+        : document.querySelector('[data-current-group="true"]');
       if (!container) {
         alert('Error: No editable group found.');
         setIsSubmitting(false);
@@ -1608,16 +1611,16 @@ export default function RunActivityPage({
         editableContainerAttr: container?.getAttribute('data-current-group'),
       });*/
 
-      if (currentGroupIndex >= groups.length) {
+      if (submitGroupIndex >= groups.length) {
         setIsSubmitting(false);
         return;
       }
 
-      const currentGroup = groups[currentGroupIndex];
+      const currentGroup = groups[submitGroupIndex];
 
       // ✅ backend groupNum must be derived from instance progress (NOT block.groupId)
       const completedCount = Number(activity?.completed_groups ?? 0);
-      groupNum = completedCount + 1; // ✅ 1-based, ALWAYS
+      groupNum = isSandbox ? submitGroupIndex + 1 : completedCount + 1; // ✅ 1-based, ALWAYS
 
       retriesRequired =
         Number(currentGroup?.intro?.retriesRequired ?? 1) || 1;
@@ -1990,7 +1993,7 @@ export default function RunActivityPage({
             }
 
             if (data?.canContinue === true) {
-              setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
+              setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
             }
           } finally {
             clearTimeout(timeoutId);
@@ -2230,7 +2233,7 @@ export default function RunActivityPage({
 
         // If backend says retries threshold reached for this group, enable bypass button
         if (ai?.canContinue === true) {
-          setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
+          setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
         }
         /*console.log('[RETRY GATE]', {
           qid,
@@ -2241,7 +2244,7 @@ export default function RunActivityPage({
 
         // If backend says retries threshold reached for this group, enable bypass button
         if (ai?.canContinue === true) {
-          setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
+          setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
         }
 
         // ✅ Default accept unless AI explicitly rejects
@@ -2355,6 +2358,22 @@ export default function RunActivityPage({
       pendingRevision,
       answers,
     };
+
+    if (isSandbox) {
+      setExistingAnswers((prev) => {
+        const next = { ...prev };
+        Object.entries(answers).forEach(([key, value]) => {
+          next[key] = {
+            ...(next[key] || {}),
+            response: value,
+            type: 'text',
+          };
+        });
+        return next;
+      });
+      setIsSubmitting(false);
+      return;
+    }
 
     try {
       const response = await fetch(

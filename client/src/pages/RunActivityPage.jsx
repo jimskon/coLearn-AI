@@ -251,11 +251,11 @@ export default function RunActivityPage({
 
   const effectiveViewMode = canViewHistory ? viewMode : 'latest';
 
-  function emitTextAIState(qid, { f1, fm, af }) {
-    if (!socket || !instanceId || !user?.id) return;
+  function emitTextAIState(socketInstance, qid, { f1, fm, af }) {
+    if (!socketInstance || !instanceId || !user?.id) return;
 
     if (f1 !== undefined) {
-      socket.emit('response:update', {
+      socketInstance.emit('response:update', {
         instanceId,
         responseKey: `${qid}F1`,
         value: f1 ?? '',
@@ -264,7 +264,7 @@ export default function RunActivityPage({
     }
 
     if (fm !== undefined) {
-      socket.emit('response:update', {
+      socketInstance.emit('response:update', {
         instanceId,
         responseKey: `${qid}FM`,
         value: fm ?? '',
@@ -273,7 +273,7 @@ export default function RunActivityPage({
     }
 
     if (af !== undefined) {
-      socket.emit('response:update', {
+      socketInstance.emit('response:update', {
         instanceId,
         responseKey: `${qid}AF`,
         value: af ?? '',
@@ -2177,7 +2177,7 @@ export default function RunActivityPage({
       delete answers[`${qid}AF`];
 
       // Only clear the visible feedback box before re-eval
-      emitTextAIState(qid, { f1: '' });
+      emitTextAIState(socket, qid, { f1: '' });
       if (!looksCodeOnlyNow && !isTestMode) {
         const dbgInput = String(aiInput ?? '').trim();
         /*console.log('[EVALDBG]', {
@@ -2243,7 +2243,7 @@ export default function RunActivityPage({
           });
         }
 
-        emitTextAIState(qid, {
+        emitTextAIState(socket, qid, {
           af: answers[`${qid}AF`],
           f1: answers[`${qid}F1`],
           fm: answers[`${qid}FM`],

@@ -15,10 +15,10 @@ import useRunModePolicy from './run-activity/useRunModePolicy';
 import useRunActivityData from './run-activity/useRunActivityData';
 import useRunActivitySync from './run-activity/useRunActivitySync';
 import useRunActivityResponses from './run-activity/useRunActivityResponses';
+import RunActivityWorkspace from './run-activity/RunActivityWorkspace';
 
 import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBanner';
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
-import QuestionScorePanel from '../components/QuestionScorePanel';
 import RunActivityHistoryView from '../components/RunActivityHistoryView';
 import ActivityLoadingOverlay from '../components/ActivityLoadingOverlay';
 
@@ -2692,7 +2692,6 @@ export default function RunActivityPage({
   }
 
   const isSubmitted = !!activity?.submitted_at;
-  let globalQuestionCounter = 0;
 
 
   return (
@@ -2759,265 +2758,47 @@ export default function RunActivityPage({
             title="Full Submission History"
           />
         ) : (
-          <div style={{ position: 'relative' }}>
-            {activityPaused && (
-              <div
-                className="d-flex align-items-center justify-content-center"
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  zIndex: 20,
-                  background: 'rgba(255,255,255,0.45)',
-                  backdropFilter: 'grayscale(0.15)',
-                }}
-              >
-                <div className="px-3 py-2 rounded border bg-light text-muted fw-semibold shadow-sm">
-                  Paused
-                </div>
-              </div>
-            )}
-            <div
-              aria-disabled={activityPaused ? 'true' : undefined}
-              style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
-            >
-            {renderBlocks(preamble, {
-              editable: false,
-              isActive: false,
-              mode: 'run',
-              codeFeedbackShown,
-              unansweredShown,
-              isInstructor,
-              allowLocalToggle: true,
-              isObserver: !isActive,
-              codeViewMode,
-              onToggleViewMode: toggleCodeViewMode,
-              localCode,
-              onLocalCodeChange: updateLocalCode,
-              prefill: existingAnswers,
-              fileContents,
-              setFileContents: handleUpdateFileContents,
-              onFileChange: handleFileChange,
-            })}
-
-            {groups.map((group, index) => {
-              const completedCount = Number(activity?.completed_groups ?? 0);
-              const isComplete = index < completedCount;
-              const isCurrent = index === completedCount;
-
-              const testEditable =
-                isTestMode &&
-                isStudent &&
-                !isSubmitted &&
-                !timeExpired &&
-                !testLockState.lockedBefore;
-
-              const editable = isTestMode
-                ? testEditable
-                : (isActive && isCurrent && !isComplete);
-
-              const showGroup =
-                isTestMode
-                  ? true
-                  : (isInstructor || isComplete || isCurrent);
-
-              if (!showGroup) return null;
-
-              return (
-                <div
-                  key={`group-${index}`}
-                  className="mb-4"
-                  data-current-group={editable ? 'true' : undefined}
-                >
-                  {group.prelude?.length > 0 &&
-                    renderBlocks(group.prelude, {
-                      editable: false,
-                      isActive: false,
-                      mode: 'run',
-                      prefill: existingAnswers,
-                      currentGroupIndex: index,
-                      codeFeedbackShown,
-                      unansweredShown,
-                    })}
-
-                  <p>
-                    <strong>{index + 1}.</strong> {group.intro.content}
-                  </p>
-
-                  {DEBUG_FILES &&
-                    console.debug(
-                      `[${PAGE_TAG}] renderBlocks(group ${index + 1}) file sizes:`,
-                      Object.fromEntries(
-                        Object.entries(fileContents).map(([k, v]) => [
-                          k,
-                          (v ?? '').length,
-                        ])
-                      )
-                    )}
-
-                  {group.content.map((block, bIndex) => {
-                    const renderedBlock = renderBlocks([block], {
-                      editable,
-                      isActive,
-                      mode: 'run',
-                      prefill: existingAnswers,
-                      currentGroupIndex: index,
-                      textFeedbackShown,
-                      unansweredShown,
-                      socket,
-                      instanceId,
-                      answeredBy: user?.id,
-                      fileContents,
-                      setFileContents: handleUpdateFileContents,
-                      onFileChange: handleFileChange,
-                      onCodeChange: (responseKey, code, extra) =>
-                        handleCodeChange(responseKey, code, {
-                          ...extra,
-                          socket,
-                          baseQidFromResponseKey,
-                        }),
-                      codeFeedbackShown,
-                      isInstructor,
-                      allowLocalToggle: true,
-                      isObserver,
-                      codeViewMode,
-                      onToggleViewMode: toggleCodeViewMode,
-                      localCode,
-                      onLocalCodeChange: updateLocalCode,
-                      onTextChange: (responseKey, value) =>
-                        handleTextChange(responseKey, value, {
-                          baseQidFromResponseKey,
-                          socket,
-                        }),
-                    });
-
-                    if (!isTestMode || block.type !== 'question') {
-                      return (
-                        <div key={`group-${index}-block-${bIndex}`}>
-                          {renderedBlock}
-                        </div>
-                      );
-                    }
-
-                    const qid = `${block.groupId}${block.id}`;
-                    globalQuestionCounter += 1;
-                    const scores = getQuestionScores(qid, block);
-
-                    const allowEdit = isTestMode && isInstructor && isSubmitted;
-                    const showScorePanel =
-                      isTestMode &&
-                      (isInstructor || isSubmitted);
-                    const displayNumber = nonLegacyForUI ? qid : globalQuestionCounter;
-
-                    return (
-                      <div key={`group-${index}-block-${bIndex}`} className="mb-2">
-                        {renderedBlock}
-
-                        {showScorePanel && (
-                          <QuestionScorePanel
-                            qid={qid}
-                            displayNumber={displayNumber}
-                            scores={scores}
-                            allowEdit={allowEdit}
-                            onSave={handleSaveQuestionScores}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {editable && !isTestMode && (
-                    <div className="mt-2">
-                      <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
-                        {isSubmitting ? (
-                          <>
-                            <Spinner animation="border" size="sm" className="me-2" />
-                            Loading...
-                          </>
-                        ) : isPlaygroundMode ? (
-                          'Next'
-                        ) : (
-                          'Submit and Continue'
-                        )}
-                      </Button>
-
-                      {!isPlaygroundMode && canBypassGroups[index] === true && (
-                        <Button
-                          variant="outline-secondary"
-                          size="sm"
-                          className="ms-2"
-                          onClick={() => handleSubmit(true)}
-                        >
-                          Continue without addressing AI feedback
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {isTestMode && isStudent && timeExpired && !isSubmitted && (
-              <Alert variant="warning" className="mt-3">
-                <div className="d-flex justify-content-between align-items-center">
-                  <div>
-                    <strong>Time is up.</strong> Your test is now locked. Press Submit to record your answers.
-                  </div>
-                  <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
-                    {isSubmitting ? 'Submitting…' : 'Submit Test'}
-                  </Button>
-                </div>
-              </Alert>
-            )}
-
-            {isTestMode && isStudent && !timeExpired && !isSubmitted && (
-              <div className="mt-3">
-                <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
-                  {isSubmitting ? (
-                    <>
-                      <Spinner animation="border" size="sm" className="me-2" />
-                      Submitting...
-                    </>
-                  ) : (
-                    'Submit Test'
-                  )}
-                </Button>
-              </div>
-            )}
-
-            {isTestMode && isInstructor && isSubmitted && (
-              <div className="mt-3 d-flex gap-2">
-                <Button
-                  variant="warning"
-                  onClick={() => handleRegradeTest()}
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? 'Regrading…' : 'Regrade Test'}
-                </Button>
-              </div>
-            )}
-
-            {groups.length > 0 && Number(activity?.completed_groups ?? 0) >= groups.length && (
-              <Alert variant="success" className="mt-3">
-                Activity is complete! Review your responses above.
-              </Alert>
-            )}
-
-            {isTestMode && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
-              <Alert variant="info" className="mt-3">
-                Overall test score:{' '}
-                <strong>
-                  {overallTestTotals.earned}/{overallTestTotals.max}
-                </strong>{' '}
-                (
-                {(
-                  (overallTestTotals.earned / overallTestTotals.max) *
-                  100
-                ).toFixed(1)}
-                %)
-              </Alert>
-            )}
-            </div>
-          </div>
+          <RunActivityWorkspace
+            activityPaused={activityPaused}
+            renderBlocks={renderBlocks}
+            preamble={preamble}
+            codeFeedbackShown={codeFeedbackShown}
+            unansweredShown={unansweredShown}
+            isInstructor={isInstructor}
+            isActive={isActive}
+            toggleCodeViewMode={toggleCodeViewMode}
+            updateLocalCode={updateLocalCode}
+            existingAnswers={existingAnswers}
+            fileContents={fileContents}
+            handleUpdateFileContents={handleUpdateFileContents}
+            handleFileChange={handleFileChange}
+            groups={groups}
+            activity={activity}
+            isTestMode={isTestMode}
+            isStudent={isStudent}
+            isSubmitted={isSubmitted}
+            timeExpired={timeExpired}
+            testLockState={testLockState}
+            socket={socket}
+            instanceId={instanceId}
+            user={user}
+            handleCodeChange={handleCodeChange}
+            baseQidFromResponseKey={baseQidFromResponseKey}
+            isObserver={isObserver}
+            codeViewMode={codeViewMode}
+            localCode={localCode}
+            handleTextChange={handleTextChange}
+            textFeedbackShown={textFeedbackShown}
+            nonLegacyForUI={nonLegacyForUI}
+            getQuestionScores={getQuestionScores}
+            handleSaveQuestionScores={handleSaveQuestionScores}
+            handleSubmit={handleSubmit}
+            isSubmitting={isSubmitting}
+            isPlaygroundMode={isPlaygroundMode}
+            canBypassGroups={canBypassGroups}
+            handleRegradeTest={handleRegradeTest}
+            overallTestTotals={overallTestTotals}
+          />
         )}
       </Container>
 

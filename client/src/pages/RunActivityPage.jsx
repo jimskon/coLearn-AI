@@ -622,6 +622,7 @@ export default function RunActivityPage({
   const loadActivity = useRunActivityData({
     instanceId,
     user,
+    loadResponses: persistResponses,
     setActivity,
     setActiveStudentId,
     setGroupMembers,

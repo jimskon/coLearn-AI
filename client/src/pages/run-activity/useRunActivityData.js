@@ -7,6 +7,7 @@ import { parseUtcDbDatetime } from '../../utils/time';
 export default function useRunActivityData({
   instanceId,
   user,
+  loadResponses = true,
   setActivity,
   setActiveStudentId,
   setGroupMembers,
@@ -97,61 +98,69 @@ export default function useRunActivityData({
         }
       }
 
-      const answersRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/responses`, {
-        credentials: 'include',
-      });
-      const answersData = await answersRes.json();
+      if (loadResponses) {
+        const answersRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/responses`, {
+          credentials: 'include',
+        });
+        const answersData = await answersRes.json();
 
-      setExistingAnswers((prev) => {
-        const next = { ...prev };
+        setExistingAnswers((prev) => {
+          const next = { ...prev };
 
-        for (const [k, v] of Object.entries(answersData || {})) {
-          if (dirtyKeysRef.current.has(k)) continue;
-          next[k] = v;
+          for (const [k, v] of Object.entries(answersData || {})) {
+            if (dirtyKeysRef.current.has(k)) continue;
+            next[k] = v;
+          }
+
+          return next;
+        });
+
+        setCodeFeedbackShown((prev) => {
+          const merged = { ...prev };
+          for (const [key, entry] of Object.entries(answersData)) {
+            if (
+              entry &&
+              Object.prototype.hasOwnProperty.call(entry, 'python_feedback')
+            ) {
+              merged[key] = entry.python_feedback;
+            }
+          }
+          return merged;
+        });
+
+        const restoredTextFeedback = {};
+
+        for (const [key, entry] of Object.entries(answersData || {})) {
+          if (!key.endsWith('F1')) continue;
+          const qid = key.slice(0, -2);
+
+          if (dirtyTextQidsRef.current.has(qid)) continue;
+
+          const text = (entry?.response || '').trim();
+          if (!text) continue;
+
+          restoredTextFeedback[qid] = text;
         }
 
-        return next;
-      });
+        setTextFeedbackShown((prev) => ({ ...prev, ...restoredTextFeedback }));
 
-      setCodeFeedbackShown((prev) => {
-        const merged = { ...prev };
+        const restoredFollowups = {};
         for (const [key, entry] of Object.entries(answersData)) {
-          if (
-            entry &&
-            Object.prototype.hasOwnProperty.call(entry, 'python_feedback')
-          ) {
-            merged[key] = entry.python_feedback;
+          if (!key.endsWith('FA1')) continue;
+          const text = (entry?.response || '').trim();
+          if (text) {
+            restoredFollowups[key] = text;
           }
         }
-        return merged;
-      });
-
-      const restoredTextFeedback = {};
-
-      for (const [key, entry] of Object.entries(answersData || {})) {
-        if (!key.endsWith('F1')) continue;
-        const qid = key.slice(0, -2);
-
-        if (dirtyTextQidsRef.current.has(qid)) continue;
-
-        const text = (entry?.response || '').trim();
-        if (!text) continue;
-
-        restoredTextFeedback[qid] = text;
-      }
-
-      setTextFeedbackShown((prev) => ({ ...prev, ...restoredTextFeedback }));
-
-      const restoredFollowups = {};
-      for (const [key, entry] of Object.entries(answersData)) {
-        if (!key.endsWith('FA1')) continue;
-        const text = (entry?.response || '').trim();
-        if (text) {
-          restoredFollowups[key] = text;
+        if (Object.keys(restoredFollowups).length > 0) {
+          setFollowupAnswers((prev) => ({ ...prev, ...restoredFollowups }));
         }
-      }
-      if (Object.keys(restoredFollowups).length > 0) {
-        setFollowupAnswers((prev) => ({ ...prev, ...restoredFollowups }));
+      } else {
+        setExistingAnswers({});
+        setCodeFeedbackShown({});
+        setTextFeedbackShown({});
+        setFollowupAnswers({});
+        setFollowupsShown({});
       }
 
       {
@@ -308,6 +317,7 @@ export default function useRunActivityData({
   }, [
     instanceId,
     user,
+    loadResponses,
     setActivity,
     setActiveStudentId,
     setGroupMembers,
@@ -329,4 +339,3 @@ export default function useRunActivityData({
     isNoAI,
   ]);
 }
-

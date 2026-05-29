@@ -11,6 +11,8 @@ import { API_BASE_URL } from '../config';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { io } from 'socket.io-client';
 import { parseUtcDbDatetime } from '../utils/time';
+import { RUN_ACTIVITY_MODES } from './run-activity/modes';
+import useRunModePolicy from './run-activity/useRunModePolicy';
 
 import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBanner';
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
@@ -635,24 +637,23 @@ export default function RunActivityPage({
     return () => clearInterval(interval);
   }, [sectionTimer.visible]);
 
-  const isInstructor =
-    user?.role === 'instructor' ||
-    user?.role === 'root' ||
-    user?.role === 'creator';
-  const isStudent = user?.role === 'student';
-
-  // In test mode, every student is their own "active" user.
-  // In POGIL mode, only the activeStudentId is editable.
-  const isActive =
-    !!user &&
-    (
-      isPlaygroundMode ||
-      (isTestMode && isStudent) ||
-      (activeStudentId != null && String(user.id) === String(activeStudentId))
-    );
-
-  const isObserver = !isActive;
-  const activityPaused = Number(activity?.section_timer_paused) === 1;
+  const runMode = RUN_ACTIVITY_MODES.STUDENT;
+  const {
+    isInstructor,
+    isStudent,
+    isActive,
+    isObserver,
+    activityPaused,
+    canPollActiveStudent,
+    canSendHeartbeat,
+  } = useRunModePolicy({
+    mode: runMode,
+    user,
+    activeStudentId,
+    activity,
+    isPlaygroundMode,
+    isTestMode,
+  });
 
   useEffect(() => {
     if (!activityPaused) return;
@@ -825,7 +826,7 @@ export default function RunActivityPage({
   useEffect(() => { activeStudentIdRef.current = activeStudentId; }, [activeStudentId]);
 
   useEffect(() => {
-    if (isTestMode) return;
+    if (!canPollActiveStudent) return;
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/active-student`, {
@@ -841,9 +842,10 @@ export default function RunActivityPage({
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [instanceId, isTestMode]);
+  }, [instanceId, canPollActiveStudent]);
 
   useEffect(() => {
+    if (!canSendHeartbeat) return;
     const sendHeartbeat = async () => {
       if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
       try {
@@ -866,6 +868,7 @@ export default function RunActivityPage({
     const interval = setInterval(sendHeartbeat, 20000);
     return () => clearInterval(interval);
   }, [
+    canSendHeartbeat,
     user?.id,
     instanceId,
     groups,

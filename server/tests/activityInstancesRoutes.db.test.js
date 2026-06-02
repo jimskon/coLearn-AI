@@ -755,7 +755,8 @@ test('submit-group does not rotate active student after final group completion',
   assert.equal(response.body.success, true);
   assert.equal(response.body.completed_groups, 2);
   assert.equal(response.body.progress_status, 'completed');
-  assert.ok(!Object.prototype.hasOwnProperty.call(response.body, 'activeStudentId'));
+  assert.ok(Object.prototype.hasOwnProperty.call(response.body, 'activeStudentId'));
+  assert.equal(response.body.activeStudentId, null);
 
   const [[instance]] = await db.query(
     `SELECT completed_groups, progress_status, active_student_id
@@ -764,7 +765,174 @@ test('submit-group does not rotate active student after final group completion',
   );
   assert.equal(Number(instance.completed_groups), 2);
   assert.equal(instance.progress_status, 'completed');
-  assert.equal(Number(instance.active_student_id), studentA.id);
+
+  assert.equal(instance.active_student_id, null);
+});
+
+test('submit-group recomputes total groups from source before marking completion', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    groupNumber: 1,
+    totalGroups: 3,
+    completedGroups: 2,
+    progressStatus: 'in_progress',
+    activeStudentId: studentA.id,
+    activeRotationMode: 'submit',
+  });
+  await addGroupMember({ instanceId, studentId: studentA.id, role: 'facilitator', connected: true, lastHeartbeat: '2026-05-01 12:00:00' });
+  await addGroupMember({ instanceId, studentId: studentB.id, role: 'analyst', connected: true, lastHeartbeat: '2026-05-01 12:00:01' });
+
+  const contentText = [
+    '\\questiongroup{One}',
+    '\\question{Q1}',
+    '\\textresponse{1}',
+    '\\endquestion',
+    '\\endquestiongroup',
+    '\\questiongroup{Two}',
+    '\\question{Q2}',
+    '\\textresponse{1}',
+    '\\endquestion',
+    '\\endquestiongroup',
+    '\\questiongroup{Three}',
+    '\\question{Q3}',
+    '\\textresponse{1}',
+    '\\endquestion',
+    '\\endquestiongroup',
+    '\\questiongroup{Four}',
+    '\\question{Q4}',
+    '\\textresponse{1}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET source_type = 'local',
+            content_text = ?
+      WHERE id = ?`,
+    [contentText, activityId]
+  );
+
+  await db.query(
+    `INSERT INTO responses (activity_instance_id, question_id, response, response_type, answered_by_user_id)
+     VALUES
+       (?, '1state', 'complete', 'text', ?),
+       (?, '2state', 'complete', 'text', ?)`,
+    [instanceId, studentA.id, instanceId, studentA.id]
+  );
+
+  const response = await requestJson(studentA, `/api/activity-instances/${instanceId}/submit-group`, {
+    method: 'POST',
+    body: {
+      studentId: studentA.id,
+      groupNum: 3,
+      retriesRequired: 1,
+      attempt: {
+        submissionString: '3a=done',
+        blocked: false,
+        canAdvance: true,
+        unanswered: [],
+        answers: {
+          '3a': 'done',
+          '3aS': 'complete',
+        },
+      },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.completed_groups, 3);
+  assert.equal(response.body.progress_status, 'in_progress');
+  assert.equal(response.body.activeStudentId, studentB.id);
+
+  const [[instance]] = await db.query(
+    `SELECT total_groups, completed_groups, progress_status, active_student_id
+     FROM activity_instances WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(Number(instance.total_groups), 4);
+  assert.equal(Number(instance.completed_groups), 3);
+  assert.equal(instance.progress_status, 'in_progress');
+  assert.equal(Number(instance.active_student_id), studentB.id);
+});
+
+test('heartbeat does not reactivate a completed activity instance', async () => {
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: student.id, classId });
+  const activityId = await createActivity({ classId, createdBy: student.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    totalGroups: 2,
+    completedGroups: 2,
+    progressStatus: 'completed',
+    activeStudentId: student.id,
+  });
+  await addGroupMember({
+    instanceId,
+    studentId: student.id,
+    role: 'facilitator',
+    connected: true,
+    lastHeartbeat: '2026-05-01 12:00:00',
+  });
+
+  const response = await requestJson(student, `/api/activity-instances/${instanceId}/heartbeat`, {
+    method: 'POST',
+    body: {
+      userId: student.id,
+      timerInfo: {},
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.becameActive, false);
+  assert.equal(response.body.activeStudentId, null);
+
+  const [[instance]] = await db.query(
+    `SELECT active_student_id, progress_status
+     FROM activity_instances WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(instance.progress_status, 'completed');
+  assert.equal(instance.active_student_id, null);
+});
+
+test('active-student returns null for completed activity instances and clears stale active user', async () => {
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: student.id, classId });
+  const activityId = await createActivity({ classId, createdBy: student.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    totalGroups: 2,
+    completedGroups: 2,
+    progressStatus: 'completed',
+    activeStudentId: student.id,
+  });
+
+  const response = await requestJson(student, `/api/activity-instances/${instanceId}/active-student`);
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.activeStudentId, null);
+
+  const [[instance]] = await db.query(
+    `SELECT active_student_id, progress_status
+     FROM activity_instances WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(instance.progress_status, 'completed');
+  assert.equal(instance.active_student_id, null);
 });
 
 test('clear responses resets progress and timer fields on the instance', async () => {

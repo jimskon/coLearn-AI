@@ -37,6 +37,39 @@ function normalizeActiveRotationMode(raw) {
   return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
 }
 
+function countQuestionGroups(lines = []) {
+  const count = (Array.isArray(lines) ? lines : [])
+    .filter((line) => String(line || '').trimStart().startsWith('\\questiongroup'))
+    .length;
+  return count > 0 ? count : 1;
+}
+
+async function syncTotalGroupsFromSource(conn, instanceId, activitySource, fallbackTotalGroups) {
+  const storedTotalGroups = Number(fallbackTotalGroups) || 0;
+
+  try {
+    const lines = await loadActivitySourceLines(activitySource || {});
+    const canonicalTotalGroups = countQuestionGroups(lines);
+
+    if (instanceId && canonicalTotalGroups !== storedTotalGroups) {
+      await conn.query(
+        `UPDATE activity_instances
+         SET total_groups = ?
+         WHERE id = ?`,
+        [canonicalTotalGroups, instanceId]
+      );
+    }
+
+    return canonicalTotalGroups;
+  } catch (err) {
+    console.warn('⚠️ Unable to refresh total_groups from activity source; using stored DB value instead.', {
+      instanceId,
+      message: err?.message || String(err),
+    });
+    return storedTotalGroups;
+  }
+}
+
 async function resolveTestOwnerStudentId(conn, instanceId, fallbackUserId = null) {
   const [[inst]] = await conn.query(
     `SELECT submitted_by_user_id
@@ -424,6 +457,7 @@ async function getActivityInstanceById(req, res) {
     const [[instance]] = await db.query(
       `SELECT
          ai.id,
+         ai.activity_id,
          ai.course_id,
          ai.submitted_by_user_id,
          ai.group_number,
@@ -456,6 +490,25 @@ async function getActivityInstanceById(req, res) {
 
     if (instance.hidden && req.user?.role === 'student') {
       return res.status(403).json({ error: 'This activity is currently hidden.' });
+    }
+
+    const [[activitySource]] = await db.query(
+      `SELECT source_type, content_text, sheet_url
+       FROM pogil_activities
+       WHERE id = ?`,
+      [instance.activity_id]
+    );
+
+    if (activitySource) {
+      const canonicalTotalGroups = await syncTotalGroupsFromSource(
+        db,
+        id,
+        activitySource,
+        instance.total_groups
+      );
+      if (canonicalTotalGroups > 0) {
+        instance.total_groups = canonicalTotalGroups;
+      }
     }
 
 
@@ -502,6 +555,7 @@ async function recordHeartbeat(req, res) {
 
     const [[inst]] = await db.query(
       `SELECT active_student_id,
+              progress_status,
               section_timer_key,
               section_timer_duration_minutes,
               section_timer_started_at,
@@ -596,6 +650,25 @@ async function recordHeartbeat(req, res) {
       activePresent = !!row?.present;
     }
 
+    const isCompleted = String(inst.progress_status || '').toLowerCase() === 'completed';
+
+    if (isCompleted) {
+      if (inst.active_student_id != null) {
+        await db.query(
+          `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
+          [instanceId]
+        );
+      }
+      const completedPatch = { ...(timerPatch || {}), activeStudentId: null };
+      global.emitInstanceState?.(Number(instanceId), completedPatch);
+      return res.json({
+        success: true,
+        becameActive: false,
+        activeStudentId: null,
+        ...(timerPatch || {}),
+      });
+    }
+
     if (!inst.active_student_id || !activePresent) {
       const [[presentCaller]] = await db.query(
         `SELECT student_id FROM group_members
@@ -661,7 +734,7 @@ async function getActiveStudent(req, res) {
 
   try {
     const [[instance]] = await db.query(
-      `SELECT active_student_id FROM activity_instances WHERE id = ?`,
+      `SELECT active_student_id, progress_status FROM activity_instances WHERE id = ?`,
       [instanceId]
     );
 
@@ -669,7 +742,15 @@ async function getActiveStudent(req, res) {
       return res.status(404).json({ error: 'Activity instance not found' });
     }
 
-    const activeStudentId = instance.active_student_id;
+    const isCompleted = String(instance.progress_status || '').toLowerCase() === 'completed';
+    if (isCompleted && instance.active_student_id != null) {
+      await db.query(
+        `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
+        [instanceId]
+      );
+    }
+
+    const activeStudentId = isCompleted ? null : instance.active_student_id;
     //console.log("Active student ID for instance", instanceId, "is", activeStudentId);
     res.json({ activeStudentId });
   } catch (err) {
@@ -799,8 +880,7 @@ async function setupMultipleGroupInstances(req, res) {
     let computedTotalGroups = 1;
     try {
       const lines = await loadActivitySourceLines(activityRow || {});
-      const groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
-      computedTotalGroups = groupCount > 0 ? groupCount : 1;
+      computedTotalGroups = countQuestionGroups(lines);
     } catch (e) {
       console.warn('⚠️ setupMultipleGroupInstances: failed to compute total_groups; defaulting to 1', e);
       computedTotalGroups = 1;
@@ -1019,10 +1099,15 @@ async function submitGroupResponses(req, res) {
 
     // ---- 4) Recompute cached progress from i=1..total_groups using istate ----
     const [[meta]] = await conn.query(
-      `SELECT total_groups, active_rotation_mode FROM activity_instances WHERE id = ?`,
+      `SELECT ai.total_groups, ai.active_rotation_mode, a.sheet_url, a.source_type, a.content_text
+       FROM activity_instances ai
+       JOIN pogil_activities a ON a.id = ai.activity_id
+       WHERE ai.id = ?`,
       [instanceId]
     );
-    const totalGroups = Number(meta?.total_groups) || 0;
+    const totalGroups = meta
+      ? await syncTotalGroupsFromSource(conn, instanceId, meta, meta.total_groups)
+      : 0;
     const activeRotationMode = normalizeActiveRotationMode(meta?.active_rotation_mode);
 
     let completedGroups = 0;
@@ -1055,14 +1140,27 @@ async function submitGroupResponses(req, res) {
     const progressStatus =
       totalGroups > 0 && completedGroups >= totalGroups ? 'completed' : 'in_progress';
 
-    await conn.query(
-      `UPDATE activity_instances
-       SET completed_groups = ?, progress_status = ?
-       WHERE id = ?`,
-      [completedGroups, progressStatus, instanceId]
-    );
+    if (progressStatus === 'completed') {
+      await conn.query(
+        `UPDATE activity_instances
+         SET completed_groups = ?, progress_status = ?, active_student_id = NULL
+         WHERE id = ?`,
+        [completedGroups, progressStatus, instanceId]
+      );
+    } else {
+      await conn.query(
+        `UPDATE activity_instances
+         SET completed_groups = ?, progress_status = ?
+         WHERE id = ?`,
+        [completedGroups, progressStatus, instanceId]
+      );
+    }
 
-    emitPatch = { completed_groups: completedGroups, progress_status: progressStatus };
+    emitPatch = {
+      completed_groups: completedGroups,
+      progress_status: progressStatus,
+      ...(progressStatus === 'completed' ? { activeStudentId: null } : {}),
+    };
 
 
     const shouldRotateActive =
@@ -1106,7 +1204,9 @@ async function submitGroupResponses(req, res) {
 
     return res.json({
       success: true, completed_groups: completedGroups, progress_status: progressStatus,
-      ...(emitPatch?.activeStudentId ? { activeStudentId: emitPatch.activeStudentId } : {}),
+      ...(emitPatch && Object.prototype.hasOwnProperty.call(emitPatch, 'activeStudentId')
+        ? { activeStudentId: emitPatch.activeStudentId }
+        : {}),
 
     });
   } catch (err) {
@@ -1439,8 +1539,7 @@ async function refreshTotalGroups(req, res) {
 
     const lines = await loadActivitySourceLines(row);
 
-    let groupCount = lines.filter(line => line.startsWith('\\questiongroup')).length;
-    if (groupCount <= 0) groupCount = 1;
+    const groupCount = countQuestionGroups(lines);
 
     const activityType = inferActivityTypeFromLines(lines, {
       fallbackIsTest: Number(row.is_test) === 1,

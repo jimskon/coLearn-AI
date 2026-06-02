@@ -832,6 +832,7 @@ export default function RunActivityPage({
     groups,
     canPollActiveStudent,
     canSendHeartbeat,
+    progressStatus: activity?.progress_status,
     currentTimedSection,
     setActivity,
     activeStudentId,
@@ -2421,8 +2422,8 @@ export default function RunActivityPage({
           : prev
       ));
 
-      if (result?.activeStudentId != null) {
-        setActiveStudentId(Number(result.activeStudentId));
+      if (Object.prototype.hasOwnProperty.call(result || {}, 'activeStudentId')) {
+        setActiveStudentId(result.activeStudentId != null ? Number(result.activeStudentId) : null);
       }
 
       if (advancedByServer) {

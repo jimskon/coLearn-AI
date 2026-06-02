@@ -10,6 +10,7 @@ export default function useRunActivitySync({
   groups,
   canPollActiveStudent,
   canSendHeartbeat,
+  progressStatus,
   currentTimedSection,
   setActivity,
   activeStudentId,
@@ -66,7 +67,9 @@ export default function useRunActivitySync({
 
       setActivity((prev) => (prev ? { ...prev, ...patch } : prev));
 
-      if (patch.activeStudentId != null) setActiveStudentId(patch.activeStudentId);
+      if (Object.prototype.hasOwnProperty.call(patch, 'activeStudentId')) {
+        setActiveStudentId(patch.activeStudentId != null ? Number(patch.activeStudentId) : null);
+      }
     }
 
     socket.on('instance:state', onInstanceState);
@@ -82,10 +85,16 @@ export default function useRunActivitySync({
         });
         const data = await res.json();
 
-        const nextId = Number(data?.activeStudentId);
+        if (Object.prototype.hasOwnProperty.call(data || {}, 'activeStudentId')) {
+          const rawId = data.activeStudentId;
+          const nextId =
+            rawId != null && Number.isFinite(Number(rawId)) && Number(rawId) > 0
+              ? Number(rawId)
+              : null;
 
-        if (Number.isFinite(nextId) && nextId > 0 && nextId !== activeStudentIdRef.current) {
-          setActiveStudentId(nextId);
+          if (nextId !== activeStudentIdRef.current) {
+            setActiveStudentId(nextId);
+          }
         }
       } catch { }
     }, 5000);
@@ -95,6 +104,7 @@ export default function useRunActivitySync({
 
   useEffect(() => {
     if (!canSendHeartbeat) return;
+    if (String(progressStatus || '').toLowerCase() === 'completed') return;
     const sendHeartbeat = async () => {
       if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
       try {
@@ -121,6 +131,7 @@ export default function useRunActivitySync({
     user?.id,
     instanceId,
     groups,
+    progressStatus,
     currentTimedSection?.key,
     currentTimedSection?.minutes,
   ]);

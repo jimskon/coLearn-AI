@@ -31,6 +31,11 @@ export default function RunActivityWorkspace({
   isObserver,
   isSandbox,
   allowFreeNavigation,
+  canEditAnswers,
+  canSubmitGroup,
+  canSubmitTest,
+  canRegradeTests,
+  canSaveInstructorScores,
   codeViewMode,
   localCode,
   handleTextChange,
@@ -100,6 +105,7 @@ export default function RunActivityWorkspace({
           const isCurrent = index === completedCount;
 
           const testEditable =
+            canEditAnswers &&
             isTestMode &&
             isStudent &&
             !isSubmitted &&
@@ -107,10 +113,10 @@ export default function RunActivityWorkspace({
             !testLockState.lockedBefore;
 
           const editable = isSandbox
-            ? true
+            ? canEditAnswers
             : isTestMode
             ? testEditable
-            : (isActive && isCurrent && !isComplete);
+            : (canEditAnswers && isActive && isCurrent && !isComplete);
 
           const showGroup =
             isSandbox
@@ -193,7 +199,11 @@ export default function RunActivityWorkspace({
                 globalQuestionCounter += 1;
                 const scores = getQuestionScores(qid, block);
 
-                const allowEdit = isTestMode && isInstructor && isSubmitted;
+                const allowEdit =
+                  canSaveInstructorScores &&
+                  isTestMode &&
+                  isInstructor &&
+                  isSubmitted;
                 const showScorePanel =
                   isTestMode &&
                   (isInstructor || isSubmitted);
@@ -216,7 +226,7 @@ export default function RunActivityWorkspace({
                 );
               })}
 
-              {isSandbox && (
+              {isSandbox && canSubmitGroup && (
                 <div className="mt-2">
                   <Button onClick={() => handleSubmit(false, index)} disabled={isSubmitting}>
                     {isSubmitting ? 'Checking…' : 'Submit Group'}
@@ -241,7 +251,7 @@ export default function RunActivityWorkspace({
                 );
               })()}
 
-              {editable && !isTestMode && !isSandbox && (
+              {editable && canSubmitGroup && !isTestMode && !isSandbox && (
                 <div className="mt-2">
                   <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
                     {isSubmitting ? (
@@ -272,7 +282,7 @@ export default function RunActivityWorkspace({
           );
         })}
 
-        {isTestMode && isStudent && !isSandbox && timeExpired && !isSubmitted && (
+        {canSubmitTest && isTestMode && isStudent && !isSandbox && timeExpired && !isSubmitted && (
           <Alert variant="warning" className="mt-3">
             <div className="d-flex justify-content-between align-items-center">
               <div>
@@ -285,7 +295,7 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {isTestMode && isStudent && !isSandbox && !timeExpired && !isSubmitted && (
+        {canSubmitTest && isTestMode && isStudent && !isSandbox && !timeExpired && !isSubmitted && (
           <div className="mt-3">
             <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
               {isSubmitting ? (
@@ -300,7 +310,7 @@ export default function RunActivityWorkspace({
           </div>
         )}
 
-        {isTestMode && isInstructor && !isSandbox && isSubmitted && (
+        {canRegradeTests && isTestMode && isInstructor && !isSandbox && isSubmitted && (
           <div className="mt-3 d-flex gap-2">
             <Button
               variant="warning"

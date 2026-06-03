@@ -10,7 +10,7 @@ import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { renderBlocks } from '../utils/parseSheet';
 import { parseUtcDbDatetime } from '../utils/time';
-import { RUN_ACTIVITY_MODES } from './run-activity/modes';
+import { normalizeRunActivityMode } from './run-activity/modes';
 import useRunModePolicy from './run-activity/useRunModePolicy';
 import useRunActivityData from './run-activity/useRunActivityData';
 import useRunActivitySync from './run-activity/useRunActivitySync';
@@ -545,10 +545,7 @@ export default function RunActivityPage({
     return () => clearInterval(interval);
   }, [sectionTimer.visible]);
 
-  const runMode =
-    requestedMode === RUN_ACTIVITY_MODES.SANDBOX
-      ? RUN_ACTIVITY_MODES.SANDBOX
-      : RUN_ACTIVITY_MODES.STUDENT;
+  const runMode = normalizeRunActivityMode(requestedMode, { user });
   const {
     isSandbox,
     isInstructor,
@@ -560,8 +557,17 @@ export default function RunActivityPage({
     canSendHeartbeat,
     canUseLiveSync,
     allowFreeNavigation,
-    persistResponses,
-    usesRealInstanceProgression,
+    canEditAnswers,
+    canSubmitGroup,
+    canSubmitTest,
+    canRunAI,
+    canPersistDrafts,
+    canPersistSubmissions,
+    canPersistAIResults,
+    canRegradeTests,
+    canSaveInstructorScores,
+    canRefreshInstanceMetadata,
+    loadPersistedResponses,
   } = useRunModePolicy({
     mode: runMode,
     user,
@@ -607,7 +613,7 @@ export default function RunActivityPage({
     user,
     isActive,
     setLastEditTs,
-    persistResponses,
+    persistResponses: canPersistDrafts,
     emitLiveUpdates: canUseLiveSync,
   });
 
@@ -622,7 +628,8 @@ export default function RunActivityPage({
   const loadActivity = useRunActivityData({
     instanceId,
     user,
-    loadResponses: persistResponses,
+    loadResponses: loadPersistedResponses,
+    canRefreshInstanceMetadata,
     setActivity,
     setActiveStudentId,
     setGroupMembers,
@@ -846,7 +853,7 @@ export default function RunActivityPage({
 
 
   useEffect(() => {
-    if (!usesRealInstanceProgression) return;
+    if (!canPersistDrafts) return;
     if (!isActive || !user?.id || !instanceId) return;
 
     const interval = setInterval(() => {
@@ -879,7 +886,7 @@ export default function RunActivityPage({
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [usesRealInstanceProgression, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
+  }, [canPersistDrafts, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
 
   useEffect(() => {
     if (!activeStudentId) return;
@@ -1005,6 +1012,7 @@ export default function RunActivityPage({
 
 
   async function saveResponse(instanceId, key, value) {
+    if (!canPersistDrafts) return;
     await fetch(`${API_BASE_URL}/api/responses/draft-bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1096,6 +1104,7 @@ export default function RunActivityPage({
   ) {
     // ✅ TEST MODE: no AI feedback at all
     if (isTestMode) return { accepted: true, feedback: null };
+    if (!canRunAI) return { accepted: true, feedback: null };
 
     const qid = `${questionBlock.groupId}${questionBlock.id}`;
     const qText = getQuestionText(questionBlock, qid);
@@ -1142,6 +1151,7 @@ export default function RunActivityPage({
       answeredByUserId: Number(answeredByUserId ?? user?.id),
       retriesRequired: Number(retriesRequired) || 1,
       submissionString: String(submissionString || ""),
+      dryRun: !canPersistAIResults,
     };
 
     try {
@@ -1526,16 +1536,30 @@ export default function RunActivityPage({
 
         const answers = collectVisibleAnswersFromContainer(container);
 
-        await fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            instanceId,
-            userId: user.id,
-            answers,
-          }),
-        });
+        if (canPersistDrafts) {
+          await fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              instanceId,
+              userId: user.id,
+              answers,
+            }),
+          });
+        } else {
+          setExistingAnswers((prev) => {
+            const next = { ...prev };
+            Object.entries(answers).forEach(([key, value]) => {
+              next[key] = {
+                ...(next[key] || {}),
+                response: value,
+                type: 'text',
+              };
+            });
+            return next;
+          });
+        }
 
         // do NOT call setCurrentGroupIndex(...)
         // instead update the activity state that actually drives progression
@@ -1557,6 +1581,7 @@ export default function RunActivityPage({
     let groupSubmissionString = null;
     let container = null;
     let blocks = null;
+    const useTestSubmissionFlow = isTestMode && canSubmitTest;
     function clearCodeFeedbackForQid(qid, codeCells) {
       setCodeFeedbackShown((prev) => {
         const next = { ...prev };
@@ -1588,7 +1613,7 @@ export default function RunActivityPage({
 
 
     // ✅ TEST MODE: collect from the whole page + all question blocks
-    if (isTestMode) {
+    if (useTestSubmissionFlow) {
       container = document;
 
       // Grab ALL blocks from ALL groups so we grade everything.
@@ -1651,7 +1676,7 @@ export default function RunActivityPage({
 
 
     // ---------- TEST MODE PATH ----------
-    if (isTestMode) {
+    if (useTestSubmissionFlow) {
       try {
         const { answers, questions } = buildTestSubmissionPayload(
           blocks,
@@ -1934,6 +1959,7 @@ export default function RunActivityPage({
             answeredByUserId: Number(user?.id),
             retriesRequired,
             submissionString: groupSubmissionString,
+            dryRun: !canPersistAIResults,
 
             // ✅ new
             outputText,
@@ -2356,7 +2382,7 @@ export default function RunActivityPage({
       answers,
     };
 
-    if (isSandbox) {
+    if (!canPersistSubmissions) {
       setExistingAnswers((prev) => {
         const next = { ...prev };
         Object.entries(answers).forEach(([key, value]) => {
@@ -2488,6 +2514,7 @@ export default function RunActivityPage({
 
   async function handleRegradeTest() {
     if (isSubmitting) return;
+    if (!canRegradeTests) return;
 
     console.log('[REGRD] click', {
       t: Date.now(),
@@ -2591,6 +2618,7 @@ export default function RunActivityPage({
   // Instructor override: save edited per-question scores & feedback
   async function handleSaveQuestionScores(qid, local) {
     if (!activity || !instanceId || !user?.id) return;
+    if (!canSaveInstructorScores) return;
 
     const answers = {};
 
@@ -2826,6 +2854,11 @@ export default function RunActivityPage({
             isObserver={isObserver}
             isSandbox={isSandbox}
             allowFreeNavigation={allowFreeNavigation}
+            canEditAnswers={canEditAnswers}
+            canSubmitGroup={canSubmitGroup}
+            canSubmitTest={canSubmitTest}
+            canRegradeTests={canRegradeTests}
+            canSaveInstructorScores={canSaveInstructorScores}
             sandboxGroupIndex={sandboxGroupIndex}
             setSandboxGroupIndex={setSandboxGroupIndex}
             codeViewMode={codeViewMode}

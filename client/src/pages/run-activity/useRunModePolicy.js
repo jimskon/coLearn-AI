@@ -1,10 +1,9 @@
 import { useMemo } from 'react';
 
-import { RUN_ACTIVITY_MODES } from './modes';
 import computeRunModePolicy from './computeRunModePolicy';
 
 export default function useRunModePolicy({
-  mode = RUN_ACTIVITY_MODES.STUDENT,
+  mode,
   user,
   activeStudentId,
   activity,

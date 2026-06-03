@@ -8,6 +8,7 @@ export default function useRunActivityData({
   instanceId,
   user,
   loadResponses = true,
+  canRefreshInstanceMetadata = true,
   setActivity,
   setActiveStudentId,
   setGroupMembers,
@@ -45,7 +46,7 @@ export default function useRunActivityData({
 
       let effective = instanceData;
 
-      if (!effective.total_groups) {
+      if (!effective.total_groups && canRefreshInstanceMetadata) {
         await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/refresh-groups`, {
           credentials: 'include',
         });
@@ -318,6 +319,7 @@ export default function useRunActivityData({
     instanceId,
     user,
     loadResponses,
+    canRefreshInstanceMetadata,
     setActivity,
     setActiveStudentId,
     setGroupMembers,

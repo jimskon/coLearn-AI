@@ -128,3 +128,26 @@ test('requirements-only response evaluation rejects plainly off-prompt text befo
   assert.equal(typeof response.body.feedback, 'string');
   assert.match(response.body.feedback, /answer|detail|question|response/i);
 });
+
+test('dry-run response evaluation skips persistent retry bookkeeping', async () => {
+  const response = await postJson('/api/ai/evaluate-response', {
+    questionText: 'What does this program print?',
+    studentAnswer: 'not sure',
+    sampleResponse: 'It prints hello.',
+    feedbackPrompt: 'Require the printed output.',
+    guidance: 'Follow-ups: default',
+    instanceId: 999999,
+    groupNum: 1,
+    answeredByUserId: 15,
+    retriesRequired: 2,
+    submissionString: 'not sure',
+    dryRun: true,
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.accepted, false);
+  assert.equal(response.body.canContinue, false);
+  assert.equal(response.body.retryCount, 0);
+  assert.equal(response.body.retriesRequired, 2);
+  assert.equal(typeof response.body.feedback, 'string');
+});

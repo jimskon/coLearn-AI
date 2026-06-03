@@ -1512,6 +1512,7 @@ export default function RunActivityPage({
     const attemptParts = [];
     let retriesRequired = 1;
     let groupNum;
+    let submitGroupIndex = null;
     if (isSubmitting) return;
     // ✅ PLAYGROUND MODE: skip ALL evaluation logic
     if (isSubmitting) return;
@@ -1594,7 +1595,7 @@ export default function RunActivityPage({
       blocks = groups.flatMap((g) => [g.intro, ...(g.content || [])]);
     } else {
       // ✅ LEARNING MODE: unchanged behavior (one group at a time)
-      const submitGroupIndex = isSandbox ? Number(targetGroupIndex ?? 0) : currentGroupIndex;
+      submitGroupIndex = isSandbox ? Number(targetGroupIndex ?? 0) : currentGroupIndex;
       container = isSandbox
         ? document.querySelector(`[data-sandbox-group="${submitGroupIndex}"]`)
         : document.querySelector('[data-current-group="true"]');
@@ -2243,11 +2244,6 @@ export default function RunActivityPage({
           progressAllowed,
         });*/
 
-        // If backend says retries threshold reached for this group, enable bypass button
-        if (ai?.canContinue === true) {
-          setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
-        }
-
         // ✅ Default accept unless AI explicitly rejects
         accepted = ai.accepted !== false;
         feedback = typeof ai.feedback === 'string' ? ai.feedback : '';
@@ -2450,7 +2446,7 @@ export default function RunActivityPage({
 
       setCanBypassGroups((prev) => {
         const next = { ...prev };
-        delete next[currentGroupIndex];
+        delete next[submitGroupIndex];
         return next;
       });
 
@@ -2466,7 +2462,7 @@ export default function RunActivityPage({
         });
       }
 
-      if (currentGroupIndex + 1 === groups.length) {
+      if (submitGroupIndex + 1 === groups.length) {
         await fetch(`${API_BASE_URL}/api/responses/mark-complete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

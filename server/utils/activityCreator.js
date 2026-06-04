@@ -54,6 +54,26 @@ function stripCodeFences(text) {
   return fenced ? fenced[1].trim() : raw;
 }
 
+function extractJsonObject(text) {
+  const raw = stripCodeFences(text);
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    const first = raw.indexOf('{');
+    const last = raw.lastIndexOf('}');
+    if (first >= 0 && last > first) {
+      return JSON.parse(raw.slice(first, last + 1));
+    }
+    throw new Error('Model response was not valid JSON.');
+  }
+}
+
+function normalizeStringList(value) {
+  return Array.isArray(value)
+    ? value.filter((item) => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : [];
+}
+
 function normalizeLearningObjectivesSection(text) {
   const lines = String(text || '').split(/\r?\n/);
   const startIndex = lines.findIndex((line) => line.trim() === '\\section{Learning Objectives}');
@@ -206,6 +226,69 @@ async function generateWithOpenAI({
   return raw;
 }
 
+async function reviseWithOpenAI({
+  currentText,
+  revisionRequest,
+  selectedModel,
+  title,
+  classLevel,
+  classTopicDomain,
+  classDescription,
+  parseIssues,
+}) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const houseStyle = fs.readFileSync(MARKUP_HOUSE_STYLE_PATH, 'utf8').trim();
+
+  const system = [
+    'You are an expert instructional designer revising coLearn-AI activity markup.',
+    'Return only strict JSON with keys: proposedDocText, summary, warnings.',
+    'proposedDocText must be the complete revised activity markup, not a patch and not commentary.',
+    'summary and warnings must be arrays of short strings.',
+    'Preserve valid activity syntax and existing structure unless the creator request requires a change.',
+    'For targeted requests such as "change 3a" or "add after 4b", make the smallest coherent edit that satisfies the request.',
+    'Do not put activity commands such as \\pythonturtle, \\python, \\question, or \\section inside \\sampleresponses{...}, \\feedbackprompt{...}, or \\followupprompt{...}.',
+    'Keep sample responses and feedback prompts plain text.',
+    'Never omit required closing tags such as \\endquestion and \\endquestiongroup.',
+    'Use this house-style example as syntax guidance:',
+    houseStyle,
+  ].join('\n');
+
+  const issuesBlock = Array.isArray(parseIssues) && parseIssues.length
+    ? parseIssues
+        .slice(0, 20)
+        .map((issue) => `- ${issue.severity || issue.code || 'issue'} line ${issue.line || '?'}: ${issue.message || issue.context || ''}`)
+        .join('\n')
+    : 'No parser issues reported by the client.';
+
+  const user = [
+    `Activity title: ${title || 'Untitled activity'}`,
+    `Class level: ${classLevel || 'Not specified'}`,
+    `Topic/domain: ${classTopicDomain || 'Not specified'}`,
+    `Class description:\n${classDescription || 'Not specified.'}`,
+    `Creator request:\n${revisionRequest}`,
+    `Current parser issues:\n${issuesBlock}`,
+    'Current activity markup:',
+    currentText,
+    '',
+    'Revise the current activity markup now. Return strict JSON only.',
+  ].join('\n\n');
+
+  const request = {
+    model: selectedModel,
+    instructions: system,
+    input: user,
+    text: { format: { type: 'text' } },
+    max_output_tokens: 9000,
+  };
+
+  if (!String(selectedModel || '').startsWith('gpt-5')) {
+    request.temperature = 0.45;
+  }
+
+  const response = await openai.responses.create(request);
+  return response.output_text || '';
+}
+
 async function generateActivityDraft(input) {
   const fallbackInput = {
     title: input.title,
@@ -252,8 +335,87 @@ async function generateActivityDraft(input) {
   }
 }
 
+async function reviseActivityDraft(input) {
+  const currentText = String(input.currentText || '').trim();
+  const revisionRequest = String(input.revisionRequest || '').trim();
+
+  if (!currentText || !revisionRequest) {
+    return {
+      proposedDocText: currentText,
+      summary: [],
+      warnings: ['Both currentText and revisionRequest are required.'],
+      generation_status: 'fallback',
+      generation_error: 'Missing revision input.',
+      raw_model_output: null,
+    };
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || apiKey === 'test-key') {
+    return {
+      proposedDocText: currentText,
+      summary: [],
+      warnings: ['OPENAI_API_KEY is not configured for live revision. The current draft was returned unchanged.'],
+      generation_status: 'fallback',
+      generation_error: 'OPENAI_API_KEY is not configured for live revision.',
+      raw_model_output: null,
+    };
+  }
+
+  try {
+    const raw = await reviseWithOpenAI({
+      currentText,
+      revisionRequest,
+      selectedModel: input.selectedModel || 'gpt-5-mini',
+      title: input.title,
+      classLevel: input.classLevel,
+      classTopicDomain: input.classTopicDomain,
+      classDescription: input.classDescription,
+      parseIssues: input.parseIssues,
+    });
+    const parsed = extractJsonObject(raw);
+    const proposed = stripCodeFences(
+      parsed.proposedDocText ||
+      parsed.proposed_doc_text ||
+      parsed.markup ||
+      ''
+    ).trim();
+
+    if (!proposed.includes('\\title{') || !proposed.includes('\\questiongroup{')) {
+      return {
+        proposedDocText: currentText,
+        summary: [],
+        warnings: ['The model response did not contain a complete activity draft, so the current draft was returned unchanged.'],
+        generation_status: 'fallback',
+        generation_error: 'Model output did not pass activity markup validation.',
+        raw_model_output: raw,
+      };
+    }
+
+    return {
+      proposedDocText: proposed,
+      summary: normalizeStringList(parsed.summary),
+      warnings: normalizeStringList(parsed.warnings),
+      generation_status: 'generated',
+      generation_error: null,
+      raw_model_output: raw,
+    };
+  } catch (err) {
+    console.error('Activity draft revision failed:', err);
+    return {
+      proposedDocText: currentText,
+      summary: [],
+      warnings: ['Revision failed; the current draft was returned unchanged.'],
+      generation_status: 'fallback',
+      generation_error: err?.message || 'Revision failed.',
+      raw_model_output: null,
+    };
+  }
+}
+
 module.exports = {
   generateActivityDraft,
+  reviseActivityDraft,
   renderFallbackTemplate,
   normalizeGeneratedDraft,
 };

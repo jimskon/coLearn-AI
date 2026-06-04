@@ -40,6 +40,53 @@ exports.createResponse = async (req, res) => {
   }
 };
 
+exports.saveDraftResponse = async (req, res) => {
+  const instanceId = Number(req.body?.activity_instance_id ?? req.body?.instanceId);
+  const questionId = String(req.body?.question_id ?? req.body?.questionId ?? '').trim();
+  const userId = Number(req.body?.user_id ?? req.body?.answeredBy ?? req.body?.answered_by_user_id);
+  const responseText = req.body?.response ?? req.body?.responseText ?? '';
+  const responseType = String(
+    req.body?.response_type ??
+    req.body?.responseType ??
+    (/code\d*$/i.test(questionId) ? 'python' : 'text')
+  ).trim() || 'text';
+
+  if (!isPositiveInteger(instanceId) || !isPositiveInteger(userId) || !questionId) {
+    return res.status(400).json({
+      error: 'Missing/invalid activity_instance_id, user_id, or question_id',
+    });
+  }
+
+  if (!isValidQuestionId(questionId)) {
+    return res.status(400).json({
+      error: `Invalid question_id: ${questionId}`,
+    });
+  }
+
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(responseType)) {
+    return res.status(400).json({ error: 'Invalid response_type' });
+  }
+
+  try {
+    await db.query(
+      `INSERT INTO response_drafts
+         (activity_instance_id, question_id, response_type, response, answered_by_user_id)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         response = VALUES(response),
+         response_type = VALUES(response_type),
+         answered_by_user_id = VALUES(answered_by_user_id),
+         updated_at = CURRENT_TIMESTAMP`,
+      [instanceId, questionId, responseType, String(responseText ?? ''), userId]
+    );
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('❌ Error saving compatibility response draft:', err);
+    res.status(500).json({ error: 'Failed to save response draft' });
+  }
+};
+
 exports.createOrUpdateCodeResponse = async (req, res) => {
   const { activity_instance_id, question_id, user_id, response } = req.body;
 

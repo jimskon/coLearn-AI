@@ -342,6 +342,67 @@ test('single draft save rejects invalid question ids', async () => {
   assert.match(response.body.error, /Invalid question_id/);
 });
 
+test('compat draft route upserts code drafts without AI evaluation', async () => {
+  const { student, instanceId } = await createFixture();
+
+  const response = await requestJson(student, '/api/responses/draft', {
+    method: 'POST',
+    body: {
+      activity_instance_id: instanceId,
+      question_id: '1acode1',
+      user_id: student.id,
+      response: 'print("draft only")',
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { success: true });
+
+  const [[draft]] = await db.query(
+    `SELECT response, response_type, answered_by_user_id
+     FROM response_drafts
+     WHERE activity_instance_id = ? AND question_id = ?`,
+    [instanceId, '1acode1']
+  );
+  assert.equal(draft.response, 'print("draft only")');
+  assert.equal(draft.response_type, 'python');
+  assert.equal(Number(draft.answered_by_user_id), student.id);
+});
+
+test('compat draft-bulk route uses bulk draft save semantics', async () => {
+  const { student, instanceId } = await createFixture();
+
+  const response = await requestJson(student, '/api/responses/draft-bulk', {
+    method: 'POST',
+    body: {
+      instanceId,
+      userId: student.id,
+      answers: {
+        '1a': 'alpha via compat route',
+        '1b': 'beta via compat route',
+      },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { success: true, saved: 2 });
+
+  const [rows] = await db.query(
+    `SELECT question_id, response
+     FROM response_drafts
+     WHERE activity_instance_id = ?
+     ORDER BY question_id`,
+    [instanceId]
+  );
+  assert.deepEqual(
+    rows.map((row) => [row.question_id, row.response]),
+    [
+      ['1a', 'alpha via compat route'],
+      ['1b', 'beta via compat route'],
+    ]
+  );
+});
+
 test('code draft save stores python draft and returns mocked AI feedback', async () => {
   const { student, instanceId } = await createFixture();
 

@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Container, Row, Col, Button, Form, Alert, Modal, Spinner, Tabs, Tab } from 'react-bootstrap';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
 
 export default function ActivityEditor() {
   const { activityId } = useParams();
+  const navigate = useNavigate();
 
   const [activity, setActivity] = useState(null);
   const [rawText, setRawText] = useState('');
@@ -14,6 +15,8 @@ export default function ActivityEditor() {
   const [copySuccess, setCopySuccess] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
+  const [sandboxBusy, setSandboxBusy] = useState(false);
+  const [sandboxError, setSandboxError] = useState('');
   const [previewKey, setPreviewKey] = useState(Date.now());
   const [autoCompileEnabled, setAutoCompileEnabled] = useState(true);
 
@@ -411,6 +414,26 @@ export default function ActivityEditor() {
     }
   };
 
+  const openSandbox = async () => {
+    setSandboxError('');
+    setSandboxBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/sandbox-instance`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.instanceId) {
+        throw new Error(data.error || 'Failed to open sandbox.');
+      }
+      navigate(`/run/${data.instanceId}?mode=creator_sandbox`);
+    } catch (err) {
+      setSandboxError(err?.message || String(err));
+    } finally {
+      setSandboxBusy(false);
+    }
+  };
+
   const handleSave = async () => {
     setSaveStatus('');
     setSaveBusy(true);
@@ -654,6 +677,15 @@ export default function ActivityEditor() {
           </Button>
 
           <Button
+            variant="outline-primary"
+            className="me-2"
+            onClick={openSandbox}
+            disabled={busy || sandboxBusy || !activity}
+          >
+            {sandboxBusy ? 'Opening…' : 'Sandbox'}
+          </Button>
+
+          <Button
             variant="secondary"
             className="me-2"
             onClick={handleCopy}
@@ -686,6 +718,7 @@ export default function ActivityEditor() {
         </div>
       </div>
 
+      {sandboxError && <Alert variant="danger" className="py-1">{sandboxError}</Alert>}
       {copySuccess && <Alert variant="info" className="py-1">{copySuccess}</Alert>}
       {saveStatus && (
         <Alert

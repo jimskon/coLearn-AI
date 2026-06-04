@@ -60,3 +60,6 @@ bootstrap-summary.txt
 /server/package-lock.json
 /package-lock.json
 /server/package-lock.json
+
+test-results/
+playwright-report/

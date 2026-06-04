@@ -7,6 +7,10 @@ const controller = require('./controller');
 // Draft text response (single field)
 router.post('/', controller.createResponse);
 
+// Back-compat for the unified RunActivity draft editor path.
+router.post('/draft', controller.saveDraftResponse);
+router.post('/draft-bulk', controller.bulkSaveResponses);
+
 // Draft code response (with AI feedback)
 router.post('/code', controller.createOrUpdateCodeResponse);
 

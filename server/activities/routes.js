@@ -119,6 +119,7 @@ router.get('/check-access', async (req, res) => {
 
 router.get('/:id/source', controller.getActivitySource);
 router.put('/:id/source', controller.saveActivitySource);
+router.post('/:id/sandbox-instance', controller.ensureSandboxInstance);
 
 // GET /activities/:name
 router.get('/:id', controller.getActivity);

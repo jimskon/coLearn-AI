@@ -2134,9 +2134,7 @@ export function renderBlocks(blocks, options = {}) {
                     value={prefill?.[responseKey]?.response || ''}
                     readOnly={
                       !editable ||
-                      lockMainResponse ||
-                      prefill?.[`${responseKey}S`] === 'complete' ||
-                      prefill?.[`${responseKey}S`]?.response === 'complete'
+                      lockMainResponse
                     }
                     className="mt-2"
                     style={{ resize: 'vertical' }}

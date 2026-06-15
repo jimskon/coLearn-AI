@@ -473,6 +473,84 @@ exports.createCreatorDraft = async (req, res) => {
   }
 };
 
+exports.reviseCreatorDraft = async (req, res) => {
+  const classId = Number(req.params.id);
+  const activityId = Number(req.params.activityId);
+  const {
+    request,
+    doc_text,
+    selected_model = 'gpt-5-mini',
+    parse_issues = [],
+  } = req.body || {};
+
+  const revisionRequest = String(request || '').trim();
+  const currentText = String(doc_text || '').trim();
+  const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
+
+  if (!classId || !activityId) {
+    return res.status(400).json({ error: 'Valid class and activity ids are required.' });
+  }
+
+  if (!revisionRequest || !currentText) {
+    return res.status(400).json({ error: 'request and doc_text are required.' });
+  }
+
+  if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
+    return res.status(400).json({ error: 'selected_model is not supported.' });
+  }
+
+  try {
+    const [[classRow]] = await db.query(
+      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      [classId]
+    );
+
+    if (!classRow) {
+      return res.status(404).json({ error: 'Class not found' });
+    }
+
+    const [[activity]] = await db.query(
+      `SELECT id, title, class_id, source_type
+         FROM pogil_activities
+        WHERE id = ? AND class_id = ?
+        LIMIT 1`,
+      [activityId, classId]
+    );
+
+    if (!activity) {
+      return res.status(404).json({ error: 'Draft activity not found for this class.' });
+    }
+
+    const revision = await activityCreator.reviseActivityDraft({
+      currentText,
+      revisionRequest,
+      selectedModel: normalizedSelectedModel,
+      title: activity.title,
+      classLevel: classRow.level,
+      classTopicDomain: classRow.topic_domain,
+      classDescription: classRow.description,
+      parseIssues: Array.isArray(parse_issues) ? parse_issues : [],
+    });
+
+    return res.json({
+      activity_id: activityId,
+      class_id: classId,
+      proposedDocText: revision.proposedDocText,
+      proposed_doc_text: revision.proposedDocText,
+      summary: revision.summary || [],
+      warnings: revision.warnings || [],
+      generation_status: revision.generation_status,
+      generation_error: revision.generation_error,
+      generation_debug_preview: revision.raw_model_output
+        ? String(revision.raw_model_output).slice(0, 500)
+        : null,
+    });
+  } catch (err) {
+    console.error('Error revising creator draft:', err);
+    return res.status(500).json({ error: 'Failed to revise draft activity.' });
+  }
+};
+
 async function insertImportedActivity({
   classId,
   createdBy,

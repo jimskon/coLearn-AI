@@ -8,13 +8,17 @@ import 'prismjs/components/prism-python';
 
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
-import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
-import { io } from 'socket.io-client';
+import { renderBlocks } from '../utils/parseSheet';
 import { parseUtcDbDatetime } from '../utils/time';
+import { normalizeRunActivityMode } from './run-activity/modes';
+import useRunModePolicy from './run-activity/useRunModePolicy';
+import useRunActivityData from './run-activity/useRunActivityData';
+import useRunActivitySync from './run-activity/useRunActivitySync';
+import useRunActivityResponses from './run-activity/useRunActivityResponses';
+import RunActivityWorkspace from './run-activity/RunActivityWorkspace';
 
 import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBanner';
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
-import QuestionScorePanel from '../components/QuestionScorePanel';
 import RunActivityHistoryView from '../components/RunActivityHistoryView';
 import ActivityLoadingOverlay from '../components/ActivityLoadingOverlay';
 
@@ -247,19 +251,11 @@ export default function RunActivityPage({
 
   const effectiveViewMode = canViewHistory ? viewMode : 'latest';
 
-  const codeByKeyRef = useRef(Object.create(null));
-
-  const dirtyKeysRef = useRef(new Set());
-
-  // Tracks which base questions have been edited since last AI evaluation.
-  // Prevents loadActivity() from rehydrating stale suggestions while student is revising.
-  const dirtyTextQidsRef = useRef(new Set());
-
-  function emitTextAIState(qid, { f1, fm, af }) {
-    if (!socket || !instanceId || !user?.id) return;
+  function emitTextAIState(socketInstance, qid, { f1, fm, af }) {
+    if (!socketInstance || !instanceId || !user?.id) return;
 
     if (f1 !== undefined) {
-      socket.emit('response:update', {
+      socketInstance.emit('response:update', {
         instanceId,
         responseKey: `${qid}F1`,
         value: f1 ?? '',
@@ -268,7 +264,7 @@ export default function RunActivityPage({
     }
 
     if (fm !== undefined) {
-      socket.emit('response:update', {
+      socketInstance.emit('response:update', {
         instanceId,
         responseKey: `${qid}FM`,
         value: fm ?? '',
@@ -277,7 +273,7 @@ export default function RunActivityPage({
     }
 
     if (af !== undefined) {
-      socket.emit('response:update', {
+      socketInstance.emit('response:update', {
         instanceId,
         responseKey: `${qid}AF`,
         value: af ?? '',
@@ -326,54 +322,23 @@ export default function RunActivityPage({
       });
     }*/
 
-  function clearTextSuggestionForQid(qid) {
-    setTextFeedbackShown((prev) => {
-      const next = { ...prev };
-      delete next[qid];
-      return next;
-    });
-  }
-
   const [lastEditTs, setLastEditTs] = useState(0);
   const { instanceId } = useParams();
   const location = useLocation();
+  const requestedMode = new URLSearchParams(location.search).get('mode');
   const courseName = location.state?.courseName;
-  const [followupsShown, setFollowupsShown] = useState({});
-  const [followupAnswers, setFollowupAnswers] = useState({});
-
-  const [codeFeedbackShown, setCodeFeedbackShown] = useState({});
-  const [socket, setSocket] = useState(null);
-  const [fileContents, setFileContents] = useState({});
-  const fileContentsRef = useRef(fileContents);
   const loadingRef = useRef(false);
   const codeVersionsRef = useRef({});
   const qidsNoFURef = useRef(new Set());
-  const [codeViewMode, setCodeViewMode] = useState({});
-  const [localCode, setLocalCode] = useState({});
 
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
 
-
-  const [unansweredShown, setUnansweredShown] = useState({}); // { "1e": "Unanswered: ..." }
-  const [submitAlert, setSubmitAlert] = useState(null);
-
   const [groups, setGroups] = useState([]);
   const [activeStudentName, setActiveStudentName] = useState('');
   const [preamble, setPreamble] = useState([]);
-  const [existingAnswers, setExistingAnswers] = useState({});
-
-  const getLatestCode = (key) => {
-    // IMPORTANT: return null/undefined when missing, not ''
-    if (Object.prototype.hasOwnProperty.call(codeByKeyRef.current, key)) {
-      return codeByKeyRef.current[key];
-    }
-    if (existingAnswers?.[key]?.response != null) {
-      return existingAnswers[key].response;
-    }
-    return null;
-  };
+  const [sandboxGroupIndex, setSandboxGroupIndex] = useState(0);
 
   const currentGroupIndex = useMemo(() => {
     const completed = Number(activity?.completed_groups ?? 0);
@@ -389,7 +354,6 @@ export default function RunActivityPage({
 
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [textFeedbackShown, setTextFeedbackShown] = useState({});
 
 
   // per-group “ignore AI, let me continue” overrides
@@ -492,15 +456,6 @@ export default function RunActivityPage({
 
 
 
-  const toggleCodeViewMode = (rk, next) =>
-    setCodeViewMode((prev) => ({ ...prev, [rk]: next }));
-
-  const updateLocalCode = (rk, code) => {
-    setLastEditTs(Date.now());
-    dirtyKeysRef.current.add(rk);
-    setLocalCode((prev) => ({ ...prev, [rk]: code }));
-  };
-
 
   const userRoles = groupMembers
     .filter((m) => String(m.student_id) === String(user.id))
@@ -577,53 +532,6 @@ export default function RunActivityPage({
   }, [isTestMode, activity?.test_start_at]);
 
   useEffect(() => {
-    // Create exactly once
-    const s = io(API_BASE_URL, {
-      transports: ['websocket'], // optional but avoids long-polling weirdness
-    });
-
-    setSocket(s);
-
-    return () => {
-      s.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!socket) return;
-    if (!instanceId) return;
-
-    socket.emit('instance:join', { instanceId });
-
-    return () => {
-      socket.emit('instance:leave', { instanceId });
-    };
-  }, [socket, instanceId]);
-
-  useEffect(() => {
-    if (!socket) return;
-
-    function onInstanceState(msg) {
-      const msgId = msg?.instanceId;
-      const patch = msg?.patch;
-
-      if (String(msgId) !== String(instanceId)) return;
-      if (!patch || typeof patch !== 'object') return;
-
-      // IMPORTANT: patch your *activity instance* state (whatever variable holds it)
-      setActivity((prev) => (prev ? { ...prev, ...patch } : prev));
-
-      // If some patch fields live elsewhere, update them too:
-      if (Object.prototype.hasOwnProperty.call(patch, 'activeStudentId')) {
-        setActiveStudentId(patch.activeStudentId != null ? Number(patch.activeStudentId) : null);
-      }
-    }
-
-    socket.on('instance:state', onInstanceState);
-    return () => socket.off('instance:state', onInstanceState);
-  }, [socket, instanceId, setActiveStudentId]);
-
-  useEffect(() => {
     console.log('[RUN] isTestMode:', isTestMode);
   }, [isTestMode]);
 
@@ -637,24 +545,111 @@ export default function RunActivityPage({
     return () => clearInterval(interval);
   }, [sectionTimer.visible]);
 
-  const isInstructor =
-    user?.role === 'instructor' ||
-    user?.role === 'root' ||
-    user?.role === 'creator';
-  const isStudent = user?.role === 'student';
+  const runMode = normalizeRunActivityMode(requestedMode, { user });
+  const {
+    isSandbox,
+    isInstructor,
+    isStudent,
+    isActive,
+    isObserver,
+    activityPaused,
+    canPollActiveStudent,
+    canSendHeartbeat,
+    canUseLiveSync,
+    allowFreeNavigation,
+    canEditAnswers,
+    canSubmitGroup,
+    canSubmitTest,
+    canRunAI,
+    canPersistDrafts,
+    canPersistSubmissions,
+    canPersistAIResults,
+    canRegradeTests,
+    canSaveInstructorScores,
+    canRefreshInstanceMetadata,
+    loadPersistedResponses,
+  } = useRunModePolicy({
+    mode: runMode,
+    user,
+    activeStudentId,
+    activity,
+    isPlaygroundMode,
+    isTestMode,
+  });
 
-  // In test mode, every student is their own "active" user.
-  // In POGIL mode, only the activeStudentId is editable.
-  const isActive =
-    !!user &&
-    (
-      isPlaygroundMode ||
-      (isTestMode && isStudent) ||
-      (activeStudentId != null && String(user.id) === String(activeStudentId))
-    );
+  const {
+    codeByKeyRef,
+    dirtyKeysRef,
+    dirtyTextQidsRef,
+    followupsShown,
+    setFollowupsShown,
+    followupAnswers,
+    setFollowupAnswers,
+    codeFeedbackShown,
+    setCodeFeedbackShown,
+    fileContents,
+    setFileContents,
+    fileContentsRef,
+    codeViewMode,
+    localCode,
+    unansweredShown,
+    setUnansweredShown,
+    submitAlert,
+    setSubmitAlert,
+    existingAnswers,
+    setExistingAnswers,
+    textFeedbackShown,
+    setTextFeedbackShown,
+    getLatestCode,
+    clearTextSuggestionForQid,
+    toggleCodeViewMode,
+    updateLocalCode,
+    handleUpdateFileContents,
+    handleFileChange,
+    handleTextChange,
+    handleCodeChange,
+  } = useRunActivityResponses({
+    instanceId,
+    user,
+    isActive,
+    setLastEditTs,
+    persistResponses: canPersistDrafts,
+    emitLiveUpdates: canUseLiveSync,
+  });
 
-  const isObserver = !isActive;
-  const activityPaused = Number(activity?.section_timer_paused) === 1;
+  useEffect(() => {
+    if (!allowFreeNavigation) return;
+    setSandboxGroupIndex((prev) => {
+      const maxIndex = Math.max(0, groups.length - 1);
+      return prev > maxIndex ? maxIndex : prev;
+    });
+  }, [allowFreeNavigation, groups.length]);
+
+  const loadActivity = useRunActivityData({
+    instanceId,
+    user,
+    loadResponses: loadPersistedResponses,
+    canRefreshInstanceMetadata,
+    setActivity,
+    setActiveStudentId,
+    setGroupMembers,
+    setExistingAnswers,
+    setCodeFeedbackShown,
+    setTextFeedbackShown,
+    setFollowupAnswers,
+    setNonLegacyForUI,
+    setFileContents,
+    setGroups,
+    setPreamble,
+    setFollowupsShown,
+    dirtyKeysRef,
+    dirtyTextQidsRef,
+    qidsNoFURef,
+    fileContentsRef,
+    loadingRef,
+    stripHtml,
+    isNoAI,
+  });
 
   useEffect(() => {
     if (!activityPaused) return;
@@ -781,39 +776,6 @@ export default function RunActivityPage({
     return { earned, max };
   }, [isTestMode, groups, existingAnswers]);
 
-  const handleUpdateFileContents = (updaterFn) => {
-    setSubmitAlert(null);
-    setLastEditTs(Date.now()); // ✅ prevents periodic loadActivity() from clobbering local file edits
-    setFileContents((prev) => {
-      const updated = updaterFn(prev);
-      fileContentsRef.current = updated;
-      return updated;
-    });
-  };
-
-
-
-  // For manual edits in <FileBlock> textareas
-  const handleFileChange = (fileKey, newText, meta = {}) => {
-    setSubmitAlert(null);
-    setLastEditTs(Date.now()); // ✅ prevents periodic loadActivity() from clobbering local file edits
-    const raw = meta.filename || fileKey || '';
-    const filename = raw.startsWith('file:') ? raw.slice('file:'.length) : raw;
-
-    setFileContents((prev) => {
-      const updated = { ...prev, [filename]: newText };
-      fileContentsRef.current = updated;
-      return updated;
-    });
-  };
-
-
-
-
-  useEffect(() => {
-    fileContentsRef.current = fileContents;
-  }, [fileContents]);
-
   useEffect(() => {
     if (!DEBUG_FILES) return;
     const sizes = Object.fromEntries(
@@ -821,66 +783,6 @@ export default function RunActivityPage({
     );
     console.debug(`[${PAGE_TAG}] fileContents changed:`, sizes);
   }, [fileContents]);
-
-
-  const activeStudentIdRef = useRef(null);
-  useEffect(() => { activeStudentIdRef.current = activeStudentId; }, [activeStudentId]);
-
-  useEffect(() => {
-    if (isTestMode) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/active-student`, {
-          credentials: 'include',
-        }); const data = await res.json();
-        if (Object.prototype.hasOwnProperty.call(data || {}, 'activeStudentId')) {
-          const rawId = data.activeStudentId;
-          const nextId =
-            rawId != null && Number.isFinite(Number(rawId)) && Number(rawId) > 0
-              ? Number(rawId)
-              : null;
-
-          if (nextId !== activeStudentIdRef.current) {
-            setActiveStudentId(nextId);
-          }
-        }
-      } catch { }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [instanceId, isTestMode]);
-
-  useEffect(() => {
-    if (String(activity?.progress_status || '').toLowerCase() === 'completed') return;
-    const sendHeartbeat = async () => {
-      if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
-      try {
-        await fetch(
-          `${API_BASE_URL}/api/activity-instances/${instanceId}/heartbeat`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              userId: user.id,
-              sectionTimerKey: currentTimedSection?.key || null,
-              sectionTimerDurationMinutes: currentTimedSection?.minutes || null,
-            }),
-          }
-        );
-      } catch { }
-    };
-    sendHeartbeat();
-    const interval = setInterval(sendHeartbeat, 20000);
-    return () => clearInterval(interval);
-  }, [
-    user?.id,
-    instanceId,
-    groups,
-    activity?.progress_status,
-    currentTimedSection?.key,
-    currentTimedSection?.minutes,
-  ]);
 
   useEffect(() => {
     const loadScript = (src) =>
@@ -911,7 +813,7 @@ export default function RunActivityPage({
     if (user?.id) {
       loadActivity();
     }
-  }, [user?.id, instanceId]);
+  }, [user?.id, instanceId, loadActivity]);
 
 
   useEffect(() => {
@@ -930,93 +832,28 @@ export default function RunActivityPage({
     return null;
   }
 
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleUpdate = ({ responseKey, value, followupPrompt, answeredBy }) => {
-      // Ignore our own echoes
-      if (answeredBy && String(answeredBy) === String(user?.id)) return;
-
-      // Always mirror the updated response into prefill
-      setExistingAnswers((prev) => ({
-        ...prev,
-        [responseKey]: {
-          ...(prev[responseKey] || {}),
-          response: value,
-          type: 'text',
-        },
-      }));
-
-      // ✅ IMPORTANT: Only update/clear the yellow AI prompt on observers
-      // when we receive updates to the AI state keys themselves.
-      //
-      // Base answer typing (qid, table cells, etc) must NOT clear the prompt.
-
-      // If the server/active student pushes the suggestion text key (e.g., "2aF1")
-      const mF1 = String(responseKey || '').match(/^(.*)F1$/);
-      if (mF1) {
-        const qid = mF1[1];
-        const txt = String(value ?? '').trim();
-
-        setTextFeedbackShown((prev) => {
-          const next = { ...prev };
-          if (txt) next[qid] = txt;
-          else delete next[qid];
-          return next;
-        });
-        return;
-      }
-
-      // If the server/active student pushes the AI flag (e.g., "2aAF")
-      const mAF = String(responseKey || '').match(/^(.*)AF$/);
-      if (mAF) {
-        // AF is just status now. Do NOT clear feedback on "resolved".
-        // Feedback persistence is driven by F1 being non-empty.
-        return;
-      }
-
-    };
-
-    socket.on('response:update', handleUpdate);
-
-    socket.on('feedback:update', ({ responseKey, feedback, followup }) => {
-      setCodeFeedbackShown((prev) => ({
-        ...prev,
-        [responseKey]: feedback ?? null,
-      }));
-
-      const m = responseKey.match(/^(.*?)(?:code\d+)$/);
-      if (!m) return;
-      const qid = m[1];
-      const block = findQuestionBlockByQid(qid);
-
-      // If it's code-only: NEVER show follow-ups; guidance only.
-      /*if (block && isCodeOnlyByBlock(block)) {
-        setFollowupsShown((prev) => {
-          const next = { ...prev };
-          delete next[qid];
-          return next;
-        });
-        return;
-      }*/
-
-      // Otherwise (text/table), allow/clear follow-ups as sent
-      setFollowupsShown((prev) => {
-        const next = { ...prev };
-        if (typeof followup === 'string' && followup.trim()) next[qid] = followup;
-        else delete next[qid];
-        return next;
-      });
-    });
-
-    return () => {
-      socket.off('response:update', handleUpdate);
-      socket.off('feedback:update');
-    };
-  }, [socket, groups, user?.id]);
+  const socket = useRunActivitySync({
+    enableLiveSync: canUseLiveSync,
+    instanceId,
+    user,
+    groups,
+    canPollActiveStudent,
+    canSendHeartbeat,
+    progressStatus: activity?.progress_status,
+    currentTimedSection,
+    setActivity,
+    activeStudentId,
+    setActiveStudentId,
+    setExistingAnswers,
+    setTextFeedbackShown,
+    setCodeFeedbackShown,
+    setFollowupsShown,
+    findQuestionBlockByQid,
+  });
 
 
   useEffect(() => {
+    if (!canPersistDrafts) return;
     if (!isActive || !user?.id || !instanceId) return;
 
     const interval = setInterval(() => {
@@ -1049,7 +886,7 @@ export default function RunActivityPage({
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
+  }, [canPersistDrafts, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
 
   useEffect(() => {
     if (!activeStudentId) return;
@@ -1174,23 +1011,8 @@ export default function RunActivityPage({
   ]);
 
 
-  if (loading) {
-    return (
-      <Container className="mt-4">
-        <Spinner animation="border" />
-      </Container>
-    );
-  }
-
-  if (!user) {
-    return (
-      <Container className="mt-4">
-        <Alert variant="danger">User not loaded. Please log in again.</Alert>
-      </Container>
-    );
-  }
-
   async function saveResponse(instanceId, key, value) {
+    if (!canPersistDrafts) return;
     await fetch(`${API_BASE_URL}/api/responses/draft-bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1201,308 +1023,6 @@ export default function RunActivityPage({
         answers: { [key]: value },
       }),
     });
-  }
-
-  async function loadActivity() {
-    if (loadingRef.current) {
-      //console.log('[RUNDBG] loadActivity SKIP (already loading)', { t: Date.now() });
-      return;
-    }
-
-    loadingRef.current = true;
-    //console.log('[RUNDBG] loadActivity ENTER', { t: Date.now() });
-
-    try {
-      const instanceRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
-        credentials: 'include',
-      }); const instanceData = await instanceRes.json();
-
-      /*console.log('[RUNDBG] loadActivity fetched completed_groups', {
-        completed_groups: instanceData?.completed_groups,
-        total_groups: instanceData?.total_groups,
-      });*/
-
-      setActivity(instanceData);
-
-      let effective = instanceData;
-
-      if (!effective.total_groups) {
-        await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/refresh-groups`, {
-          credentials: 'include',
-        });
-
-        const updatedRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
-          credentials: 'include',
-        });
-        const updatedData = await updatedRes.json();
-
-        setActivity(updatedData);
-        effective = updatedData;
-      }
-
-      const activeRes = await fetch(
-        `${API_BASE_URL}/api/activity-instances/${instanceId}/active-student`,
-        {
-          credentials: 'include',
-        }
-      );
-      const activeData = await activeRes.json();
-      setActiveStudentId(activeData.activeStudentId);
-
-      const groupRes = await fetch(`${API_BASE_URL}/api/groups/instance/${instanceId}`, {
-        credentials: 'include',
-      });
-      const groupData = await groupRes.json();
-      let userGroup = null;
-      if (user?.id) {
-        userGroup = groupData.groups.find((g) =>
-          g.members.some((m) => m.student_id === user.id)
-        );
-      }
-
-      if (userGroup) {
-        setGroupMembers(userGroup.members);
-      } else {
-        const elevated =
-          user?.role === 'instructor' ||
-          user?.role === 'root' ||
-          user?.role === 'creator';
-        if (elevated) {
-          const activeId = activeData?.activeStudentId;
-          const activeGroup = groupData.groups.find((g) =>
-            g.members.some((m) => String(m.student_id) === String(activeId))
-          );
-          const fallbackGroup = groupData.groups?.[0];
-          setGroupMembers(
-            activeGroup?.members || fallbackGroup?.members || []
-          );
-        }
-      }
-
-      const answersRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/responses`, {
-        credentials: 'include',
-      });
-      const answersData = await answersRes.json();
-
-      setExistingAnswers((prev) => {
-        const next = { ...prev };
-
-        for (const [k, v] of Object.entries(answersData || {})) {
-          // Do NOT overwrite anything the student has edited locally but not fully settled
-          if (dirtyKeysRef.current.has(k)) continue;
-          next[k] = v;
-        }
-
-        return next;
-      });
-
-
-
-      // 2) Restore code feedback (per-code-cell feedback from backend)
-      setCodeFeedbackShown((prev) => {
-        const merged = { ...prev };
-        for (const [key, entry] of Object.entries(answersData)) {
-          if (
-            entry &&
-            Object.prototype.hasOwnProperty.call(entry, 'python_feedback')
-          ) {
-            merged[key] = entry.python_feedback;
-          }
-        }
-        return merged;
-      });
-
-      // 3) Restore per-question feedback (F1) for BOTH accepted and not-accepted
-
-      const restoredTextFeedback = {};
-
-      for (const [key, entry] of Object.entries(answersData || {})) {
-        if (!key.endsWith('F1')) continue;
-        const qid = key.slice(0, -2);
-
-        if (dirtyTextQidsRef.current.has(qid)) continue;
-
-        const text = (entry?.response || '').trim();
-        if (!text) continue;
-
-        restoredTextFeedback[qid] = text;
-      }
-
-      setTextFeedbackShown((prev) => ({ ...prev, ...restoredTextFeedback }));
-
-
-      // 4) Restore stored follow-up *answers* (e.g., "2aFA1"), if you ever use them
-      const restoredFollowups = {};
-      for (const [key, entry] of Object.entries(answersData)) {
-        if (!key.endsWith('FA1')) continue;
-        const text = (entry?.response || '').trim();
-        if (text) {
-          restoredFollowups[key] = text;
-        }
-      }
-      if (Object.keys(restoredFollowups).length > 0) {
-        setFollowupAnswers((prev) => ({ ...prev, ...restoredFollowups }));
-      }
-
-
-      // Parse activity source structure (remote Google Doc or local DB text)
-      {
-        const docRes = await fetch(
-          `${API_BASE_URL}/api/activity-instances/${instanceId}/preview-doc`
-        );
-        if (!docRes.ok) throw new Error(`instance preview failed ${docRes.status}`);
-        const { lines } = await docRes.json();
-        // ---- compute test + legacy flags from the fresh instanceData ----
-        const isTestNow =
-          (!!instanceData?.test_start_at && Number(instanceData?.test_duration_minutes) > 0) ||
-          instanceData?.is_test === 1;
-
-        const cutoff = new Date(Date.UTC(2026, 0, 1, 0, 0, 0)); // 2026-01-01 UTC
-        const startNow = instanceData?.test_start_at
-          ? parseUtcDbDatetime(instanceData.test_start_at)
-          : null;
-
-        const isNonLegacyNow =
-          isTestNow && startNow && startNow.getTime() >= cutoff.getTime();
-
-        console.log('[RUN] parse flags:', {
-          test_start_at: instanceData?.test_start_at,
-          startNow,
-          isTestNow,
-          isNonLegacyNow,
-        });
-        setNonLegacyForUI(!!isNonLegacyNow);
-
-        const parsed = parseSheetToBlocks(lines, {
-          legacyTestNumbering: !isNonLegacyNow,
-          returnIssues: true,
-        });
-
-        const blocks = parsed.blocks;
-        const meta = parsed.meta || {};
-
-        const activityContextBlock = blocks.find(
-          (b) => b.type === 'header' && b.tag === 'activitycontext'
-        );
-        const studentLevelBlock = blocks.find(
-          (b) => b.type === 'header' && b.tag === 'studentlevel'
-        );
-        const aiCodeGuideBlock = blocks.find(
-          (b) => b.type === 'header' && b.tag === 'aicodeguidance'
-        );
-
-        const activitycontext = stripHtml(activityContextBlock?.content || '');
-        const studentlevel = stripHtml(studentLevelBlock?.content || '');
-        const aicodeguidance = stripHtml(aiCodeGuideBlock?.content || '');
-
-        setActivity((prev) => ({
-          ...prev,
-          ...instanceData,
-          activitycontext,
-          studentlevel,
-          aicodeguidance,
-          meta,
-        }));
-
-
-        const files = {};
-        for (const block of blocks) {
-          if (block.type === 'file' && block.filename) {
-            files[block.filename] = block.content || '';
-          }
-        }
-        setFileContents(() => {
-          const updated = { ...files };
-          fileContentsRef.current = updated;
-          return updated;
-        });
-
-        // group/preamble logic
-        const grouped = [];
-        const preamble = [];
-        let seenAnyGroup = false;
-        let currentGroup = null;
-        let betweenGroups = [];
-        let activeSection = null;
-
-        for (const block of blocks) {
-          // Sections act as context markers for later groups; they do not own
-          // a nested subtree in the parsed document model.
-          if (block.type === 'section') {
-            activeSection = {
-              key: block.key || null,
-              title: block.title || '',
-              minutes: Number(block.minutes) || null,
-            };
-          }
-
-          if (block.type === 'groupIntro') {
-            if (currentGroup) grouped.push(currentGroup);
-            currentGroup = {
-              intro: block,
-              prelude: [],
-              content: [],
-              section: activeSection ? { ...activeSection } : null,
-            };
-            if (seenAnyGroup && betweenGroups.length) {
-              currentGroup.prelude.push(...betweenGroups);
-              betweenGroups = [];
-            }
-            seenAnyGroup = true;
-            continue;
-          }
-          if (block.type === 'endGroup') {
-            if (currentGroup) {
-              grouped.push(currentGroup);
-              currentGroup = null;
-            }
-            continue;
-          }
-          if (currentGroup) {
-            currentGroup.content.push(block);
-          } else {
-            if (!seenAnyGroup) preamble.push(block);
-            else betweenGroups.push(block);
-          }
-        }
-        if (currentGroup) grouped.push(currentGroup);
-        if (betweenGroups.length) {
-          if (grouped.length)
-            grouped[grouped.length - 1].content.push(...betweenGroups);
-          else preamble.push(...betweenGroups);
-        }
-
-        setGroups(grouped);
-
-        // rebuild locked-FU set
-        const noSet = new Set();
-        for (const g of grouped) {
-          for (const b of [g.intro, ...(g.content || [])]) {
-            if (b?.type === 'question') {
-              const qid = `${b.groupId}${b.id}`;
-              if (
-                isNoAI(b?.followups?.[0]) ||
-                isNoAI(b?.feedback?.[0])
-              ) {
-                noSet.add(qid);
-              }
-            }
-          }
-        }
-        qidsNoFURef.current = noSet;
-        setPreamble(preamble);
-        setFollowupsShown((prev) => {
-          const next = { ...prev };
-          for (const qid of qidsNoFURef.current) delete next[qid];
-          return next;
-        });
-      }
-    } catch (err) {
-      console.error('Failed to load activity data', err);
-    } finally {
-      loadingRef.current = false;
-      //console.log('[RUNDBG] loadActivity EXIT', { t: Date.now() });
-    }
   }
 
   async function loadHistory() {
@@ -1555,6 +1075,22 @@ export default function RunActivityPage({
     }
   }
 
+  if (loading) {
+    return (
+      <Container className="mt-4">
+        <Spinner animation="border" />
+      </Container>
+    );
+  }
+
+  if (!user) {
+    return (
+      <Container className="mt-4">
+        <Alert variant="danger">User not loaded. Please log in again.</Alert>
+      </Container>
+    );
+  }
+
   async function evaluateResponseWithAI(
     questionBlock,
     studentAnswer,
@@ -1568,6 +1104,7 @@ export default function RunActivityPage({
   ) {
     // ✅ TEST MODE: no AI feedback at all
     if (isTestMode) return { accepted: true, feedback: null };
+    if (!canRunAI) return { accepted: true, feedback: null };
 
     const qid = `${questionBlock.groupId}${questionBlock.id}`;
     const qText = getQuestionText(questionBlock, qid);
@@ -1614,6 +1151,7 @@ export default function RunActivityPage({
       answeredByUserId: Number(answeredByUserId ?? user?.id),
       retriesRequired: Number(retriesRequired) || 1,
       submissionString: String(submissionString || ""),
+      dryRun: !canPersistAIResults,
     };
 
     try {
@@ -1980,10 +1518,11 @@ export default function RunActivityPage({
     });
     return answers;
   }
-  async function handleSubmit(forceOverride = false) {
+  async function handleSubmit(forceOverride = false, targetGroupIndex = null) {
     const attemptParts = [];
     let retriesRequired = 1;
     let groupNum;
+    let submitGroupIndex = null;
     if (isSubmitting) return;
     // ✅ PLAYGROUND MODE: skip ALL evaluation logic
     if (isSubmitting) return;
@@ -1997,16 +1536,30 @@ export default function RunActivityPage({
 
         const answers = collectVisibleAnswersFromContainer(container);
 
-        await fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            instanceId,
-            userId: user.id,
-            answers,
-          }),
-        });
+        if (canPersistDrafts) {
+          await fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              instanceId,
+              userId: user.id,
+              answers,
+            }),
+          });
+        } else {
+          setExistingAnswers((prev) => {
+            const next = { ...prev };
+            Object.entries(answers).forEach(([key, value]) => {
+              next[key] = {
+                ...(next[key] || {}),
+                response: value,
+                type: 'text',
+              };
+            });
+            return next;
+          });
+        }
 
         // do NOT call setCurrentGroupIndex(...)
         // instead update the activity state that actually drives progression
@@ -2028,6 +1581,7 @@ export default function RunActivityPage({
     let groupSubmissionString = null;
     let container = null;
     let blocks = null;
+    const useTestSubmissionFlow = isTestMode && canSubmitTest;
     function clearCodeFeedbackForQid(qid, codeCells) {
       setCodeFeedbackShown((prev) => {
         const next = { ...prev };
@@ -2059,14 +1613,17 @@ export default function RunActivityPage({
 
 
     // ✅ TEST MODE: collect from the whole page + all question blocks
-    if (isTestMode) {
+    if (useTestSubmissionFlow) {
       container = document;
 
       // Grab ALL blocks from ALL groups so we grade everything.
       blocks = groups.flatMap((g) => [g.intro, ...(g.content || [])]);
     } else {
       // ✅ LEARNING MODE: unchanged behavior (one group at a time)
-      container = document.querySelector('[data-current-group="true"]');
+      submitGroupIndex = isSandbox ? Number(targetGroupIndex ?? 0) : currentGroupIndex;
+      container = isSandbox
+        ? document.querySelector(`[data-sandbox-group="${submitGroupIndex}"]`)
+        : document.querySelector('[data-current-group="true"]');
       if (!container) {
         alert('Error: No editable group found.');
         setIsSubmitting(false);
@@ -2081,16 +1638,16 @@ export default function RunActivityPage({
         editableContainerAttr: container?.getAttribute('data-current-group'),
       });*/
 
-      if (currentGroupIndex >= groups.length) {
+      if (submitGroupIndex >= groups.length) {
         setIsSubmitting(false);
         return;
       }
 
-      const currentGroup = groups[currentGroupIndex];
+      const currentGroup = groups[submitGroupIndex];
 
       // ✅ backend groupNum must be derived from instance progress (NOT block.groupId)
       const completedCount = Number(activity?.completed_groups ?? 0);
-      groupNum = completedCount + 1; // ✅ 1-based, ALWAYS
+      groupNum = isSandbox ? submitGroupIndex + 1 : completedCount + 1; // ✅ 1-based, ALWAYS
 
       retriesRequired =
         Number(currentGroup?.intro?.retriesRequired ?? 1) || 1;
@@ -2119,7 +1676,7 @@ export default function RunActivityPage({
 
 
     // ---------- TEST MODE PATH ----------
-    if (isTestMode) {
+    if (useTestSubmissionFlow) {
       try {
         const { answers, questions } = buildTestSubmissionPayload(
           blocks,
@@ -2402,6 +1959,7 @@ export default function RunActivityPage({
             answeredByUserId: Number(user?.id),
             retriesRequired,
             submissionString: groupSubmissionString,
+            dryRun: !canPersistAIResults,
 
             // ✅ new
             outputText,
@@ -2463,7 +2021,7 @@ export default function RunActivityPage({
             }
 
             if (data?.canContinue === true) {
-              setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
+              setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
             }
           } finally {
             clearTimeout(timeoutId);
@@ -2674,7 +2232,7 @@ export default function RunActivityPage({
       delete answers[`${qid}AF`];
 
       // Only clear the visible feedback box before re-eval
-      emitTextAIState(qid, { f1: '' });
+      emitTextAIState(socket, qid, { f1: '' });
       if (!looksCodeOnlyNow && !isTestMode) {
         const dbgInput = String(aiInput ?? '').trim();
         /*console.log('[EVALDBG]', {
@@ -2703,7 +2261,7 @@ export default function RunActivityPage({
 
         // If backend says retries threshold reached for this group, enable bypass button
         if (ai?.canContinue === true) {
-          setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
+          setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
         }
         /*console.log('[RETRY GATE]', {
           qid,
@@ -2711,11 +2269,6 @@ export default function RunActivityPage({
           canContinue: ai.canContinue,
           progressAllowed,
         });*/
-
-        // If backend says retries threshold reached for this group, enable bypass button
-        if (ai?.canContinue === true) {
-          setCanBypassGroups((prev) => ({ ...prev, [currentGroupIndex]: true }));
-        }
 
         // ✅ Default accept unless AI explicitly rejects
         accepted = ai.accepted !== false;
@@ -2740,7 +2293,7 @@ export default function RunActivityPage({
           });
         }
 
-        emitTextAIState(qid, {
+        emitTextAIState(socket, qid, {
           af: answers[`${qid}AF`],
           f1: answers[`${qid}F1`],
           fm: answers[`${qid}FM`],
@@ -2829,6 +2382,22 @@ export default function RunActivityPage({
       answers,
     };
 
+    if (!canPersistSubmissions) {
+      setExistingAnswers((prev) => {
+        const next = { ...prev };
+        Object.entries(answers).forEach(([key, value]) => {
+          next[key] = {
+            ...(next[key] || {}),
+            response: value,
+            type: 'text',
+          };
+        });
+        return next;
+      });
+      setIsSubmitting(false);
+      return;
+    }
+
     try {
       const response = await fetch(
         `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
@@ -2903,7 +2472,7 @@ export default function RunActivityPage({
 
       setCanBypassGroups((prev) => {
         const next = { ...prev };
-        delete next[currentGroupIndex];
+        delete next[submitGroupIndex];
         return next;
       });
 
@@ -2919,7 +2488,7 @@ export default function RunActivityPage({
         });
       }
 
-      if (currentGroupIndex + 1 === groups.length) {
+      if (submitGroupIndex + 1 === groups.length) {
         await fetch(`${API_BASE_URL}/api/responses/mark-complete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2945,6 +2514,7 @@ export default function RunActivityPage({
 
   async function handleRegradeTest() {
     if (isSubmitting) return;
+    if (!canRegradeTests) return;
 
     console.log('[REGRD] click', {
       t: Date.now(),
@@ -3048,6 +2618,7 @@ export default function RunActivityPage({
   // Instructor override: save edited per-question scores & feedback
   async function handleSaveQuestionScores(qid, local) {
     if (!activity || !instanceId || !user?.id) return;
+    if (!canSaveInstructorScores) return;
 
     const answers = {};
 
@@ -3105,74 +2676,6 @@ export default function RunActivityPage({
       alert('Error saving updated scores. Please try again.');
     }
   }
-
-  async function handleCodeChange(responseKey, updatedCode, meta = {}) {
-
-    setSubmitAlert(null);
-
-    const baseQid = baseQidFromResponseKey(responseKey);
-    if (baseQid) {
-      setUnansweredShown((prev) => {
-        if (!prev[baseQid]) return prev;
-        const next = { ...prev };
-        delete next[baseQid];
-        return next;
-      });
-    }
-
-    const broadcastOnly = !!meta?.__broadcastOnly;
-
-    codeByKeyRef.current[responseKey] = updatedCode;
-
-    // If broadcast-only, still only the active student should broadcast
-    if (broadcastOnly) {
-      if (!isActive) return;
-      socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user.id });
-      return;
-    }
-
-    setLastEditTs(Date.now());
-    dirtyKeysRef.current.add(responseKey);
-
-    // ✅ Always reflect locally (so UI is consistent)
-    setExistingAnswers((prev) => ({
-      ...prev,
-      [responseKey]: { ...(prev[responseKey] || {}), response: updatedCode, type: 'text' },
-    }));
-
-    // ✅ Always save to DB (THIS fixes “revert on refresh”)
-    if (isActive) {
-      try {
-        await fetch(`${API_BASE_URL}/api/responses/draft`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            question_id: responseKey,
-            activity_instance_id: instanceId,
-            user_id: user?.id,
-            response: updatedCode,
-          }),
-        });
-        dirtyKeysRef.current.delete(responseKey);
-      } catch (err) {
-        console.error('handleCodeChange failed:', err);
-      }
-    }
-
-    // ✅ Only broadcast if active (THIS fixes observer lag behavior)
-    if (isActive) {
-      socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user.id });
-    }
-
-    // Clear guidance locally + for observers if active
-    setCodeFeedbackShown((prev) => ({ ...prev, [responseKey]: null }));
-    if (isActive) {
-      socket?.emit('feedback:update', { instanceId, responseKey, feedback: null, followup: null });
-    }
-  }
-
-
 
   // Helper: tri-band scores + feedback for a base question id like "1a"
   function getQuestionScores(qid, block) {
@@ -3256,7 +2759,6 @@ export default function RunActivityPage({
   }
 
   const isSubmitted = !!activity?.submitted_at;
-  let globalQuestionCounter = 0;
 
 
   return (
@@ -3323,290 +2825,56 @@ export default function RunActivityPage({
             title="Full Submission History"
           />
         ) : (
-          <div style={{ position: 'relative' }}>
-            {activityPaused && (
-              <div
-                className="d-flex align-items-center justify-content-center"
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  zIndex: 20,
-                  background: 'rgba(255,255,255,0.45)',
-                  backdropFilter: 'grayscale(0.15)',
-                }}
-              >
-                <div className="px-3 py-2 rounded border bg-light text-muted fw-semibold shadow-sm">
-                  Paused
-                </div>
-              </div>
-            )}
-            <div
-              aria-disabled={activityPaused ? 'true' : undefined}
-              style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
-            >
-            {renderBlocks(preamble, {
-              editable: false,
-              isActive: false,
-              mode: 'run',
-              codeFeedbackShown,
-              unansweredShown,
-              isInstructor,
-              allowLocalToggle: true,
-              isObserver: !isActive,
-              codeViewMode,
-              onToggleViewMode: toggleCodeViewMode,
-              localCode,
-              onLocalCodeChange: updateLocalCode,
-              prefill: existingAnswers,
-              fileContents,
-              setFileContents: handleUpdateFileContents,
-              onFileChange: handleFileChange,
-            })}
-
-            {groups.map((group, index) => {
-              const completedCount = Number(activity?.completed_groups ?? 0);
-              const isComplete = index < completedCount;
-              const isCurrent = index === completedCount;
-
-              const testEditable =
-                isTestMode &&
-                isStudent &&
-                !isSubmitted &&
-                !timeExpired &&
-                !testLockState.lockedBefore;
-
-              const editable = isTestMode
-                ? testEditable
-                : (isActive && isCurrent && !isComplete);
-
-              const showGroup =
-                isTestMode
-                  ? true
-                  : (isInstructor || isComplete || isCurrent);
-
-              if (!showGroup) return null;
-
-              return (
-                <div
-                  key={`group-${index}`}
-                  className="mb-4"
-                  data-current-group={editable ? 'true' : undefined}
-                >
-                  {group.prelude?.length > 0 &&
-                    renderBlocks(group.prelude, {
-                      editable: false,
-                      isActive: false,
-                      mode: 'run',
-                      prefill: existingAnswers,
-                      currentGroupIndex: index,
-                      codeFeedbackShown,
-                      unansweredShown,
-                    })}
-
-                  <p>
-                    <strong>{index + 1}.</strong> {group.intro.content}
-                  </p>
-
-                  {DEBUG_FILES &&
-                    console.debug(
-                      `[${PAGE_TAG}] renderBlocks(group ${index + 1}) file sizes:`,
-                      Object.fromEntries(
-                        Object.entries(fileContents).map(([k, v]) => [
-                          k,
-                          (v ?? '').length,
-                        ])
-                      )
-                    )}
-
-                  {group.content.map((block, bIndex) => {
-                    const renderedBlock = renderBlocks([block], {
-                      editable,
-                      isActive,
-                      mode: 'run',
-                      prefill: existingAnswers,
-                      currentGroupIndex: index,
-                      textFeedbackShown,
-                      unansweredShown,
-                      socket,
-                      instanceId,
-                      answeredBy: user?.id,
-                      fileContents,
-                      setFileContents: handleUpdateFileContents,
-                      onFileChange: handleFileChange,
-                      onCodeChange: handleCodeChange,
-                      codeFeedbackShown,
-                      isInstructor,
-                      allowLocalToggle: true,
-                      isObserver,
-                      codeViewMode,
-                      onToggleViewMode: toggleCodeViewMode,
-                      localCode,
-                      onLocalCodeChange: updateLocalCode,
-                      onTextChange: (responseKey, value) => {
-                        setSubmitAlert(null);
-                        dirtyKeysRef.current.add(responseKey);
-                        const qid = baseQidFromResponseKey(responseKey);
-                        if (qid) {
-                          setUnansweredShown((prev) => {
-                            if (!prev[qid]) return prev;
-                            const next = { ...prev };
-                            delete next[qid];
-                            return next;
-                          });
-                        }
-
-                        if (qid) dirtyTextQidsRef.current.add(qid);
-
-                        setExistingAnswers((prev) => ({
-                          ...prev,
-                          [responseKey]: {
-                            ...(prev[responseKey] || {}),
-                            response: value,
-                            type: 'text',
-                          },
-                        }));
-
-                        if (isActive && socket) {
-                          socket.emit('response:update', {
-                            instanceId,
-                            responseKey,
-                            value,
-                            answeredBy: user.id,
-                          });
-                        }
-
-                        setLastEditTs(Date.now());
-                      },
-                    });
-
-                    if (!isTestMode || block.type !== 'question') {
-                      return (
-                        <div key={`group-${index}-block-${bIndex}`}>
-                          {renderedBlock}
-                        </div>
-                      );
-                    }
-
-                    const qid = `${block.groupId}${block.id}`;
-                    globalQuestionCounter += 1;
-                    const scores = getQuestionScores(qid, block);
-
-                    const allowEdit = isTestMode && isInstructor && isSubmitted;
-                    const showScorePanel =
-                      isTestMode &&
-                      (isInstructor || isSubmitted);
-                    const displayNumber = nonLegacyForUI ? qid : globalQuestionCounter;
-
-                    return (
-                      <div key={`group-${index}-block-${bIndex}`} className="mb-2">
-                        {renderedBlock}
-
-                        {showScorePanel && (
-                          <QuestionScorePanel
-                            qid={qid}
-                            displayNumber={displayNumber}
-                            scores={scores}
-                            allowEdit={allowEdit}
-                            onSave={handleSaveQuestionScores}
-                          />
-                        )}
-                      </div>
-                    );
-                  })}
-
-                  {editable && !isTestMode && (
-                    <div className="mt-2">
-                      <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
-                        {isSubmitting ? (
-                          <>
-                            <Spinner animation="border" size="sm" className="me-2" />
-                            Loading...
-                          </>
-                        ) : isPlaygroundMode ? (
-                          'Next'
-                        ) : (
-                          'Submit and Continue'
-                        )}
-                      </Button>
-
-                      {!isPlaygroundMode && canBypassGroups[index] === true && (
-                        <Button
-                          variant="outline-secondary"
-                          size="sm"
-                          className="ms-2"
-                          onClick={() => handleSubmit(true)}
-                        >
-                          Continue without addressing AI feedback
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-
-            {isTestMode && isStudent && timeExpired && !isSubmitted && (
-              <Alert variant="warning" className="mt-3">
-                <div className="d-flex justify-content-between align-items-center">
-                  <div>
-                    <strong>Time is up.</strong> Your test is now locked. Press Submit to record your answers.
-                  </div>
-                  <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
-                    {isSubmitting ? 'Submitting…' : 'Submit Test'}
-                  </Button>
-                </div>
-              </Alert>
-            )}
-
-            {isTestMode && isStudent && !timeExpired && !isSubmitted && (
-              <div className="mt-3">
-                <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
-                  {isSubmitting ? (
-                    <>
-                      <Spinner animation="border" size="sm" className="me-2" />
-                      Submitting...
-                    </>
-                  ) : (
-                    'Submit Test'
-                  )}
-                </Button>
-              </div>
-            )}
-
-            {isTestMode && isInstructor && isSubmitted && (
-              <div className="mt-3 d-flex gap-2">
-                <Button
-                  variant="warning"
-                  onClick={() => handleRegradeTest()}
-                  disabled={isSubmitting}
-                >
-                  {isSubmitting ? 'Regrading…' : 'Regrade Test'}
-                </Button>
-              </div>
-            )}
-
-            {groups.length > 0 && Number(activity?.completed_groups ?? 0) >= groups.length && (
-              <Alert variant="success" className="mt-3">
-                Activity is complete! Review your responses above.
-              </Alert>
-            )}
-
-            {isTestMode && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
-              <Alert variant="info" className="mt-3">
-                Overall test score:{' '}
-                <strong>
-                  {overallTestTotals.earned}/{overallTestTotals.max}
-                </strong>{' '}
-                (
-                {(
-                  (overallTestTotals.earned / overallTestTotals.max) *
-                  100
-                ).toFixed(1)}
-                %)
-              </Alert>
-            )}
-            </div>
-          </div>
+          <RunActivityWorkspace
+            activityPaused={activityPaused}
+            renderBlocks={renderBlocks}
+            preamble={preamble}
+            codeFeedbackShown={codeFeedbackShown}
+            unansweredShown={unansweredShown}
+            isInstructor={isInstructor}
+            isActive={isActive}
+            toggleCodeViewMode={toggleCodeViewMode}
+            updateLocalCode={updateLocalCode}
+            existingAnswers={existingAnswers}
+            fileContents={fileContents}
+            handleUpdateFileContents={handleUpdateFileContents}
+            handleFileChange={handleFileChange}
+            groups={groups}
+            activity={activity}
+            isTestMode={isTestMode}
+            isStudent={isStudent}
+            isSubmitted={isSubmitted}
+            timeExpired={timeExpired}
+            testLockState={testLockState}
+            socket={socket}
+            instanceId={instanceId}
+            user={user}
+            handleCodeChange={handleCodeChange}
+            baseQidFromResponseKey={baseQidFromResponseKey}
+            isObserver={isObserver}
+            isSandbox={isSandbox}
+            allowFreeNavigation={allowFreeNavigation}
+            canEditAnswers={canEditAnswers}
+            canSubmitGroup={canSubmitGroup}
+            canSubmitTest={canSubmitTest}
+            canRegradeTests={canRegradeTests}
+            canSaveInstructorScores={canSaveInstructorScores}
+            sandboxGroupIndex={sandboxGroupIndex}
+            setSandboxGroupIndex={setSandboxGroupIndex}
+            codeViewMode={codeViewMode}
+            localCode={localCode}
+            handleTextChange={handleTextChange}
+            textFeedbackShown={textFeedbackShown}
+            nonLegacyForUI={nonLegacyForUI}
+            getQuestionScores={getQuestionScores}
+            handleSaveQuestionScores={handleSaveQuestionScores}
+            handleSubmit={handleSubmit}
+            isSubmitting={isSubmitting}
+            isPlaygroundMode={isPlaygroundMode}
+            canBypassGroups={canBypassGroups}
+            handleRegradeTest={handleRegradeTest}
+            overallTestTotals={overallTestTotals}
+          />
         )}
       </Container>
 

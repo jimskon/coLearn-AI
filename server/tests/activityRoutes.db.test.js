@@ -114,6 +114,14 @@ async function ensureSchema() {
       start_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  await db.query(`
+    ALTER TABLE activity_instances
+      ADD COLUMN IF NOT EXISTS total_groups INT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS completed_groups INT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS progress_status VARCHAR(32) NOT NULL DEFAULT 'not_started',
+      ADD COLUMN IF NOT EXISTS active_rotation_mode VARCHAR(16) NOT NULL DEFAULT 'submit'
+  `);
 }
 
 async function createUser(role = 'instructor', name = null) {
@@ -520,6 +528,61 @@ test('deleteActivity removes an activity by its route name parameter', async () 
     [activity.id]
   );
   assert.equal(Number(count.count), 0);
+});
+
+test('sandbox-instance creates and reuses a creator sandbox run instance', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: creator.id, classId });
+  const activity = await insertActivity({
+    name: uniqueValue('sandboxable').toLowerCase(),
+    classId,
+    createdBy: creator.id,
+  });
+
+  const first = await requestJson(creator, '/api/activities/' + activity.id + '/sandbox-instance', {
+    method: 'POST',
+  });
+
+  assert.equal(first.status, 201);
+  assert.equal(typeof first.body.instanceId, 'number');
+  assert.equal(first.body.created, true);
+
+  const second = await requestJson(creator, '/api/activities/' + activity.id + '/sandbox-instance', {
+    method: 'POST',
+  });
+
+  assert.equal(second.status, 200);
+  assert.deepEqual(second.body, { instanceId: first.body.instanceId, created: false });
+
+  const [[row]] = await db.query(
+    `SELECT activity_id, course_id, progress_status, active_student_id, active_rotation_mode
+     FROM activity_instances
+     WHERE id = ?`,
+    [first.body.instanceId]
+  );
+  assert.equal(Number(row.activity_id), activity.id);
+  assert.equal(Number(row.course_id), courseId);
+  assert.equal(row.progress_status, 'not_started');
+  assert.equal(row.active_rotation_mode, 'sandbox');
+  assert.equal(Number(row.active_student_id), creator.id);
+});
+
+test('sandbox-instance reports a clear error when no course exists for the activity class', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({
+    name: uniqueValue('sandbox-no-course').toLowerCase(),
+    classId,
+    createdBy: creator.id,
+  });
+
+  const response = await requestJson(creator, '/api/activities/' + activity.id + '/sandbox-instance', {
+    method: 'POST',
+  });
+
+  assert.equal(response.status, 400);
+  assert.match(response.body.error, /Create a course/);
 });
 
 test('launchActivityInstance resolves an activity by name and creates an instance row', async () => {

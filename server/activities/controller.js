@@ -118,6 +118,101 @@ exports.saveActivitySource = async (req, res) => {
   }
 };
 
+exports.ensureSandboxInstance = async (req, res) => {
+  const activityId = Number(req.params.id);
+  const userId = Number(req.user?.id);
+  const userRole = String(req.user?.role || '');
+
+  if (!activityId) {
+    return res.status(400).json({ error: 'Invalid activity id.' });
+  }
+
+  if (!userId || !['instructor', 'creator', 'root'].includes(userRole)) {
+    return res.status(403).json({ error: 'Only instructors and creators can open the sandbox.' });
+  }
+
+  const conn = await db.getConnection();
+  const lockName = `activitySandbox:${activityId}:${userId}`;
+
+  try {
+    const [[lockRow]] = await conn.query('SELECT GET_LOCK(?, 5) AS got', [lockName]);
+    if (!lockRow?.got) {
+      return res.status(409).json({ error: 'Sandbox is being opened. Try again.' });
+    }
+
+    const [[activity]] = await conn.query(
+      `SELECT id, class_id
+         FROM pogil_activities
+        WHERE id = ?`,
+      [activityId]
+    );
+
+    if (!activity) {
+      return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    const [[course]] = await conn.query(
+      `SELECT id
+         FROM courses
+        WHERE class_id = ?
+        ORDER BY id ASC
+        LIMIT 1`,
+      [activity.class_id]
+    );
+
+    if (!course?.id) {
+      return res.status(400).json({
+        error: 'Create a course for this class before opening the activity sandbox.',
+      });
+    }
+
+    const courseId = Number(course.id);
+
+    const [[existing]] = await conn.query(
+      `SELECT id AS instance_id
+         FROM activity_instances
+        WHERE activity_id = ?
+          AND course_id = ?
+          AND active_student_id = ?
+          AND active_rotation_mode = 'sandbox'
+        ORDER BY id ASC
+        LIMIT 1`,
+      [activityId, courseId, userId]
+    );
+
+    if (existing?.instance_id) {
+      return res.json({ instanceId: Number(existing.instance_id), created: false });
+    }
+
+    const [[nextRow]] = await conn.query(
+      `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_group_number
+         FROM activity_instances
+        WHERE activity_id = ? AND course_id = ?`,
+      [activityId, courseId]
+    );
+
+    const [result] = await conn.query(
+      `INSERT INTO activity_instances
+         (activity_id, course_id, status, group_number, total_groups, completed_groups,
+          progress_status, active_student_id, active_rotation_mode)
+       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, 'sandbox')`,
+      [activityId, courseId, Number(nextRow?.next_group_number) || 1, userId]
+    );
+
+    return res.status(201).json({ instanceId: Number(result.insertId), created: true });
+  } catch (err) {
+    console.error('ensureSandboxInstance error:', err);
+    return res.status(500).json({ error: 'Failed to open activity sandbox.' });
+  } finally {
+    try {
+      await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);
+    } catch (_) {
+      // ignore release errors
+    }
+    conn.release();
+  }
+};
+
 // Launch a new activity instance by activity ID
 exports.launchActivityInstance = async (req, res) => {
   const { courseId, groupNumber } = req.body;

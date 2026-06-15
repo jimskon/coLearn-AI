@@ -417,14 +417,8 @@ export default function ManageActivitiesPage() {
     }
   };
 
-  const openCreateModal = () => {
-    setCreateDraft({
-      ...emptyCreateDraft,
-      major_sections: [...emptyCreateDraft.major_sections],
-      section_minutes: { ...emptyCreateDraft.section_minutes },
-    });
-    setCreateNote('');
-    setShowCreateModal(true);
+  const openCreateWorkbench = () => {
+    navigate(`/class/${classId}/create`);
   };
 
   const openDownloadPlaceholder = () => {
@@ -577,7 +571,7 @@ export default function ManageActivitiesPage() {
             : `The system saved a fallback draft instead of a model-generated draft.${preview}`
         );
       }
-      navigate(`/editor/${data.id}`);
+      navigate(`/creator/${data.id}`);
     } catch (err) {
       console.error('Create draft failed:', err);
       setCreateNote('Failed to create the draft activity.');
@@ -681,9 +675,9 @@ export default function ManageActivitiesPage() {
         </tbody>
       </Table>
 
-      <div className="d-flex flex-wrap gap-2 align-items-center mb-2">
-        <Button variant="success" onClick={openCreateModal}>
-          Create Draft
+      <div className="d-flex flex-wrap gap-2 align-items-center mb-4">
+        <Button variant="success" onClick={openCreateWorkbench}>
+          Create
         </Button>
         <Button variant="primary" onClick={() => setShowUploadModal(true)}>
           Upload
@@ -842,7 +836,7 @@ export default function ManageActivitiesPage() {
           ) : null}
 
           <div className="text-muted small mt-3">
-            We will create a first local draft using the class metadata and this description, then open it in the editor.
+            We will create a first local draft using the class metadata and this description, then open it in the creator workbench.
           </div>
 
           {createNote ? (

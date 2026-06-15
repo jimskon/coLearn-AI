@@ -184,6 +184,7 @@ async function getCourseActivities(req, res) {
       JOIN group_members gm ON gm.activity_instance_id = ai2.id
       WHERE ai2.activity_id = a.id
         AND ai2.course_id = c.id
+        AND COALESCE(ai2.group_number, 1) <> 0
         AND gm.student_id = ?
       LIMIT 1
     ) AS instance_id,
@@ -195,6 +196,7 @@ async function getCourseActivities(req, res) {
       JOIN group_members gm ON gm.activity_instance_id = ai2.id
       WHERE ai2.activity_id = a.id
         AND ai2.course_id = c.id
+        AND COALESCE(ai2.group_number, 1) <> 0
         AND gm.student_id = ?
       LIMIT 1
     ) AS submitted_at,
@@ -206,6 +208,7 @@ async function getCourseActivities(req, res) {
       JOIN group_members gm ON gm.activity_instance_id = ai2.id
       WHERE ai2.activity_id = a.id
         AND ai2.course_id = c.id
+        AND COALESCE(ai2.group_number, 1) <> 0
         AND gm.student_id = ?
       LIMIT 1
     ) AS instance_status,
@@ -217,6 +220,7 @@ async function getCourseActivities(req, res) {
       JOIN group_members gm ON gm.activity_instance_id = ai2.id
       WHERE ai2.activity_id = a.id
         AND ai2.course_id = c.id
+        AND COALESCE(ai2.group_number, 1) <> 0
         AND gm.student_id = ?
       LIMIT 1
     ) AS progress_status,
@@ -228,6 +232,7 @@ async function getCourseActivities(req, res) {
       JOIN group_members gm ON gm.activity_instance_id = ai2.id
       WHERE ai2.activity_id = a.id
         AND ai2.course_id = c.id
+        AND COALESCE(ai2.group_number, 1) <> 0
         AND gm.student_id = ?
       LIMIT 1
     ) AS completed_groups,
@@ -239,6 +244,7 @@ async function getCourseActivities(req, res) {
       JOIN group_members gm ON gm.activity_instance_id = ai2.id
       WHERE ai2.activity_id = a.id
         AND ai2.course_id = c.id
+        AND COALESCE(ai2.group_number, 1) <> 0
         AND gm.student_id = ?
       LIMIT 1
     ) AS total_groups,
@@ -252,6 +258,7 @@ async function getCourseActivities(req, res) {
   LEFT JOIN activity_instances ai
     ON ai.activity_id = a.id
    AND ai.course_id = c.id
+   AND COALESCE(ai.group_number, 1) <> 0
   WHERE c.id = ?
   GROUP BY a.id, a.name, a.title, a.order_index, a.is_test
   ${studentHaving}

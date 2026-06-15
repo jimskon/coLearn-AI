@@ -22,6 +22,8 @@ export default function ActivityPreview() {
   const [blocks, setBlocks] = useState([]);
   const [fileContents, setFileContents] = useState({});
   const [skulptLoaded, setSkulptLoaded] = useState(false);
+  const [sandboxBusy, setSandboxBusy] = useState(false);
+  const [sandboxError, setSandboxError] = useState('');
 
   // NEW: local state used by renderBlocks / code blocks
   const [codeViewMode, setCodeViewMode] = useState({}); // { responseKey: 'active'|'local' }
@@ -198,6 +200,7 @@ export default function ActivityPreview() {
     Prism.highlightAll();
   }, [blocks, fileContents, codeViewMode, localCode]);
 
+
   const previewHeaders = blocks.filter((block) => block?.type === 'header');
   const previewSections = blocks.filter((block) => block?.type === 'section');
   const contentBlocks = blocks.filter((block) => block?.type !== 'header');
@@ -215,20 +218,67 @@ export default function ActivityPreview() {
   const formattedName = stripHtml(headerValue('name')).trim();
   const timedSections = previewSections.filter((block) => Number(block.minutes) > 0);
 
+
+  const openSandbox = async () => {
+    if (!activityId || sandboxBusy) return;
+
+    setSandboxError('');
+    setSandboxBusy(true);
+
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${activityId}/sandbox-instance`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.instanceId) {
+        throw new Error(data?.error || `Sandbox failed ${res.status}`);
+      }
+
+      navigate(`/run/${data.instanceId}?mode=sandbox`, {
+        state: { courseName: 'Sandbox' },
+      });
+    } catch (err) {
+      console.error('Failed to open sandbox:', err);
+      setSandboxError(err?.message || 'Unable to open sandbox mode.');
+    } finally {
+      setSandboxBusy(false);
+    }
+  };
+
   return (
     <Container>
       <div className="d-flex justify-content-between align-items-center mt-2 mb-2">
         <h2 className="mb-0">Preview: {activity?.title}</h2>
-        <Button
-          variant="secondary"
-          onClick={() => {
-            if (!returnTo) navigate(-1);
-            else navigate(returnTo);
-          }}
-        >
-          Back
-        </Button>
+        <div className="d-flex gap-2">
+          <Button
+            variant="outline-primary"
+            onClick={openSandbox}
+            disabled={!activity || sandboxBusy}
+          >
+            {sandboxBusy ? 'Opening...' : 'Sandbox'}
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (!returnTo) navigate(-1);
+              else navigate(returnTo);
+            }}
+          >
+            Back
+          </Button>
+        </div>
       </div>
+
+      {sandboxError && (
+        <div className="alert alert-danger py-2 mb-2">{sandboxError}</div>
+      )}
 
       <Card className="mb-3">
         <Card.Body>

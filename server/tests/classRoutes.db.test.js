@@ -350,6 +350,13 @@ test('creator draft route creates a local draft from the template and class meta
         description: 'Introduce insertion sort with a small trace and one reflection prompt.',
         selected_model: 'gpt-5-mini',
         major_sections: ['Learning Objectives', 'Application', 'Reflection'],
+        use_timed_sections: true,
+        timed_sections: [
+          { title: 'Learning Objectives', minutes: 10 },
+          { title: 'Application', minutes: 15 },
+          { title: 'Reflection', minutes: 10 },
+        ],
+        retries_required: 3,
         createdBy: creatorId,
       },
     });
@@ -361,6 +368,13 @@ test('creator draft route creates a local draft from the template and class meta
     assert.equal(create.body.duration_minutes, 35);
     assert.equal(create.body.selected_model, 'gpt-5-mini');
     assert.deepEqual(create.body.major_sections, ['Learning Objectives', 'Application', 'Reflection']);
+    assert.equal(create.body.use_timed_sections, true);
+    assert.deepEqual(create.body.timed_sections, [
+      { title: 'Learning Objectives', minutes: 10 },
+      { title: 'Application', minutes: 15 },
+      { title: 'Reflection', minutes: 10 },
+    ]);
+    assert.equal(create.body.retries_required, 3);
     assert.equal(create.body.generation_status, 'generated');
     assert.equal(create.body.generation_error, null);
     assert.match(create.body.content_text, /\\title\{Sorting Warmup\}/);

@@ -23,12 +23,46 @@ function normalizeTextBlock(value, fallback = 'Not specified.') {
   return normalized || fallback;
 }
 
+function normalizeTimedSections(timedSections) {
+  if (!Array.isArray(timedSections)) return [];
+
+  return timedSections
+    .map((section) => ({
+      title: sanitizeHeaderValue(section?.title, ''),
+      minutes: Number(section?.minutes),
+    }))
+    .filter((section) => section.title && Number.isFinite(section.minutes) && section.minutes > 0)
+    .map((section) => ({
+      title: section.title,
+      minutes: Math.round(section.minutes),
+    }));
+}
+
+function renderRequestedSectionMarkup(majorSections, timedSections) {
+  const normalizedMajorSections = Array.isArray(majorSections) ? majorSections : [];
+  const timingByTitle = new Map(
+    normalizeTimedSections(timedSections).map((section) => [section.title, section.minutes])
+  );
+
+  return normalizedMajorSections
+    .map((sectionName) => {
+      const title = sanitizeHeaderValue(sectionName, 'Section');
+      const minutes = timingByTitle.get(title);
+      return Number.isFinite(minutes)
+        ? `\\section{${title}}{${minutes}}`
+        : `\\section{${title}}`;
+    })
+    .join('\n');
+}
+
 function renderFallbackTemplate({
   title,
   mode,
   durationMinutes,
   selectedModel,
   majorSections,
+  timedSections,
+  retriesRequired,
   classLevel,
   classTopicDomain,
   classDescription,
@@ -43,7 +77,13 @@ function renderFallbackTemplate({
     .replace('__CLASS_TOPIC_DOMAIN__', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
     .replace('__DURATION_MINUTES__', String(durationMinutes))
     .replace('__SELECTED_MODEL__', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
+    .replace('__RETRIES_REQUIRED__', String(Math.max(0, Math.round(Number(retriesRequired) || 0))))
     .replace('__MAJOR_SECTIONS_BLOCK__', normalizeTextBlock((majorSections || []).join(', '), 'Not specified.'))
+    .replace('__TIMED_SECTIONS_BLOCK__', normalizeTextBlock(
+      normalizeTimedSections(timedSections).map((section) => `${section.title}: ${section.minutes} minutes`).join('\n'),
+      'No section timers requested.'
+    ))
+    .replace('__REQUESTED_SECTION_MARKUP__', renderRequestedSectionMarkup(majorSections, timedSections))
     .replace('__CLASS_DESCRIPTION_BLOCK__', normalizeTextBlock(classDescription))
     .replace('__ACTIVITY_DESCRIPTION_BLOCK__', normalizeTextBlock(activityDescription));
 }
@@ -56,7 +96,7 @@ function stripCodeFences(text) {
 
 function normalizeLearningObjectivesSection(text) {
   const lines = String(text || '').split(/\r?\n/);
-  const startIndex = lines.findIndex((line) => line.trim() === '\\section{Learning Objectives}');
+  const startIndex = lines.findIndex((line) => /^\\section\{Learning Objectives\}(?:\{\d+\})?$/.test(line.trim()));
 
   if (startIndex === -1) {
     return text;
@@ -124,8 +164,58 @@ function normalizeLearningObjectivesSection(text) {
   ].join('\n');
 }
 
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function applyRetriesDirective(text, retriesRequired) {
+  const count = Math.max(0, Math.round(Number(retriesRequired) || 0));
+  const directive = `\\retries{${count}}`;
+
+  if (/^\\retries\{\d+\}$/m.test(text)) {
+    return text.replace(/^\\retries\{\d+\}$/m, directive);
+  }
+
+  const lines = String(text || '').split(/\r?\n/);
+  const anchorIndex = lines.findIndex((line) => /^\\activitycontext\{/.test(line.trim()) || /^\\studentlevel\{/.test(line.trim()) || /^\\mode\{/.test(line.trim()));
+  const insertAt = anchorIndex >= 0 ? anchorIndex + 1 : 0;
+  lines.splice(insertAt, 0, directive);
+  return lines.join('\n');
+}
+
+function applyTimedSectionDirectives(text, timedSections) {
+  let nextText = String(text || '');
+
+  for (const section of normalizeTimedSections(timedSections)) {
+    const pattern = new RegExp(`^\\section\{${escapeRegExp(section.title)}\}(?:\{\d+\})?$`, 'm');
+    if (pattern.test(nextText)) {
+      nextText = nextText.replace(pattern, `\\section{${section.title}}{${section.minutes}}`);
+    }
+  }
+
+  return nextText;
+}
+
+function normalizePythonTurtleDirectives(text) {
+  return String(text || '').replace(/^\\pythonturtle\{(\d+\s*[xX]\s*\d+)\s*,\s*(\d+)\}$/gm, (match, dims, timeout) => {
+    const parsedTimeout = Number(timeout);
+    return Number.isFinite(parsedTimeout) && parsedTimeout > 0 && parsedTimeout < 1000
+      ? '\\pythonturtle{' + dims.replace(/\s+/g, '') + '}'
+      : match;
+  });
+}
+
 function normalizeGeneratedDraft(text, fallbackInput) {
-  const cleaned = normalizeLearningObjectivesSection(stripCodeFences(text));
+  const cleaned = normalizePythonTurtleDirectives(
+    applyTimedSectionDirectives(
+      applyRetriesDirective(
+        normalizeLearningObjectivesSection(stripCodeFences(text)),
+        fallbackInput.retriesRequired
+      ),
+      fallbackInput.timedSections
+    )
+  );
+
   if (!cleaned.includes('\\title{') || !cleaned.includes('\\questiongroup{')) {
     return {
       text: renderFallbackTemplate(fallbackInput),
@@ -148,6 +238,8 @@ async function generateWithOpenAI({
   durationMinutes,
   selectedModel,
   majorSections,
+  timedSections,
+  retriesRequired,
   classLevel,
   classTopicDomain,
   classDescription,
@@ -155,16 +247,20 @@ async function generateWithOpenAI({
 }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const houseStyle = fs.readFileSync(MARKUP_HOUSE_STYLE_PATH, 'utf8').trim();
+  const normalizedTimedSections = normalizeTimedSections(timedSections);
 
   const system = [
     'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
     'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
-    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\section{...}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\sampleresponses{...}, \\feedbackprompt{...}, \\endquestion, \\endquestiongroup.',
+    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\sampleresponses{...}, \\feedbackprompt{...}, \\endquestion, \\endquestiongroup.',
     'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
     'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
     'Keep each question concise. Keep sample responses and feedback prompts short.',
     'It is better to finish a complete compact activity than to begin a longer activity and stop halfway through.',
     'Treat Learning Objectives as a structural section, not as an interactive activity, unless the creator explicitly asks otherwise.',
+    'If a timed section plan is provided, use the exact section titles and emit them as \\section{Title}{minutes}.',
+    'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
+    'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
     'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp or \\python ... \\endpython. Never paste raw code directly into question text.',
     'Use the house-style example below as syntax guidance and imitate its structure when relevant.',
     'For mode=group, use collaborative prompts and progression.',
@@ -180,7 +276,11 @@ async function generateWithOpenAI({
     `Activity title: ${title}`,
     `Mode: ${mode}`,
     `Target duration (minutes): ${durationMinutes}`,
+    `Global retries required before bypass: ${Math.max(0, Math.round(Number(retriesRequired) || 0))}`,
     `Use these major sections in this order: ${(majorSections || []).join(' | ') || 'Learning Objectives | Exploration | Concept Invention | Application | Reflection'}`,
+    normalizedTimedSections.length
+      ? `Timed sections (use these exact titles and minutes):\n${normalizedTimedSections.map((section) => `- ${section.title}: ${section.minutes}`).join('\n')}`
+      : 'Timed sections: none requested.',
     `Class level: ${classLevel || 'Not specified'}`,
     `Topic/domain: ${classTopicDomain || 'Not specified'}`,
     `Class description:\n${classDescription || 'Not specified.'}`,
@@ -213,6 +313,8 @@ async function generateActivityDraft(input) {
     durationMinutes: input.durationMinutes,
     selectedModel: input.selectedModel,
     majorSections: input.majorSections,
+    timedSections: input.timedSections,
+    retriesRequired: input.retriesRequired,
     classLevel: input.classLevel,
     classTopicDomain: input.classTopicDomain,
     classDescription: input.classDescription,
@@ -254,6 +356,7 @@ async function generateActivityDraft(input) {
 
 module.exports = {
   generateActivityDraft,
-  renderFallbackTemplate,
   normalizeGeneratedDraft,
+  normalizeTimedSections,
+  renderFallbackTemplate,
 };

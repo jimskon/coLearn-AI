@@ -414,24 +414,28 @@ export default function ActivityEditor() {
     }
   };
 
-  const openSandbox = async () => {
-    setSandboxError('');
-    setSandboxBusy(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/sandbox-instance`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.instanceId) {
-        throw new Error(data.error || 'Failed to open sandbox.');
-      }
-      navigate(`/run/${data.instanceId}?mode=creator_sandbox`);
-    } catch (err) {
-      setSandboxError(err?.message || String(err));
-    } finally {
-      setSandboxBusy(false);
+  const saveActivitySource = async () => {
+    const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text: rawText }),
+    });
+
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body?.error || `save failed ${res.status}`);
     }
+
+    setActivity((prev) => ({
+      ...(prev || {}),
+      source_type: 'local',
+      title: body?.title || prev?.title,
+      content_text: rawText,
+    }));
+
+    localStorage.setItem(`activity-${activityId}`, rawText);
+    return body;
   };
 
   const handleSave = async () => {
@@ -439,25 +443,7 @@ export default function ActivityEditor() {
     setSaveBusy(true);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ text: rawText }),
-      });
-
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body?.error || `save failed ${res.status}`);
-      }
-
-      setActivity((prev) => ({
-        ...(prev || {}),
-        source_type: 'local',
-        title: body?.title || prev?.title,
-        content_text: rawText,
-      }));
-      localStorage.setItem(`activity-${activityId}`, rawText);
+      await saveActivitySource();
       setSaveStatus('Saved locally.');
       setTimeout(() => setSaveStatus(''), 2000);
     } catch (err) {
@@ -465,6 +451,42 @@ export default function ActivityEditor() {
       setSaveStatus(`Save failed: ${err?.message || String(err)}`);
     } finally {
       setSaveBusy(false);
+    }
+  };
+
+  const openSandbox = async () => {
+    if (!activityId || sandboxBusy) return;
+
+    setSaveStatus('');
+    setSandboxError('');
+    setSandboxBusy(true);
+
+    try {
+      await saveActivitySource();
+
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${activityId}/sandbox-instance`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.instanceId) {
+        throw new Error(data?.error || `sandbox failed ${res.status}`);
+      }
+
+      navigate(`/run/${data.instanceId}?mode=sandbox`, {
+        state: { courseName: 'Sandbox' },
+      });
+    } catch (err) {
+      console.error('Failed to open sandbox:', err);
+      setSandboxError(`Sandbox failed: ${err?.message || String(err)}`);
+    } finally {
+      setSandboxBusy(false);
     }
   };
 
@@ -665,6 +687,15 @@ export default function ActivityEditor() {
             disabled={busy}
           >
             Check
+          </Button>
+
+          <Button
+            variant="outline-primary"
+            className="me-2"
+            onClick={openSandbox}
+            disabled={busy || saveBusy || sandboxBusy || !activity}
+          >
+            {sandboxBusy ? 'Opening...' : 'Save & Sandbox'}
           </Button>
 
           <Button

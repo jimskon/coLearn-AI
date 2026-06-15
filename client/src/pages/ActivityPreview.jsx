@@ -200,25 +200,6 @@ export default function ActivityPreview() {
     Prism.highlightAll();
   }, [blocks, fileContents, codeViewMode, localCode]);
 
-  const openSandbox = async () => {
-    setSandboxError('');
-    setSandboxBusy(true);
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/sandbox-instance`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.instanceId) {
-        throw new Error(data.error || 'Failed to open sandbox.');
-      }
-      navigate(`/run/${data.instanceId}?mode=creator_sandbox`);
-    } catch (err) {
-      setSandboxError(err?.message || String(err));
-    } finally {
-      setSandboxBusy(false);
-    }
-  };
 
   const previewHeaders = blocks.filter((block) => block?.type === 'header');
   const previewSections = blocks.filter((block) => block?.type === 'section');
@@ -237,17 +218,51 @@ export default function ActivityPreview() {
   const formattedName = stripHtml(headerValue('name')).trim();
   const timedSections = previewSections.filter((block) => Number(block.minutes) > 0);
 
+
+  const openSandbox = async () => {
+    if (!activityId || sandboxBusy) return;
+
+    setSandboxError('');
+    setSandboxBusy(true);
+
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${activityId}/sandbox-instance`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.instanceId) {
+        throw new Error(data?.error || `Sandbox failed ${res.status}`);
+      }
+
+      navigate(`/run/${data.instanceId}?mode=sandbox`, {
+        state: { courseName: 'Sandbox' },
+      });
+    } catch (err) {
+      console.error('Failed to open sandbox:', err);
+      setSandboxError(err?.message || 'Unable to open sandbox mode.');
+    } finally {
+      setSandboxBusy(false);
+    }
+  };
+
   return (
     <Container>
       <div className="d-flex justify-content-between align-items-center mt-2 mb-2">
         <h2 className="mb-0">Preview: {activity?.title}</h2>
         <div className="d-flex gap-2">
           <Button
-            variant="primary"
+            variant="outline-primary"
             onClick={openSandbox}
-            disabled={sandboxBusy || !activity}
+            disabled={!activity || sandboxBusy}
           >
-            {sandboxBusy ? 'Opening…' : 'Sandbox'}
+            {sandboxBusy ? 'Opening...' : 'Sandbox'}
           </Button>
           <Button
             variant="secondary"

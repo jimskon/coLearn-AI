@@ -450,6 +450,120 @@ async function ensureDemoInstance(req, res) {
   }
 }
 
+async function ensureActivitySandboxInstance(req, res) {
+  const activityId = Number(req.params.activityId);
+  const requestedCourseId = Number(req.body?.courseId || req.query?.courseId || 0);
+  const userId = Number(req.user?.id);
+  const userRole = String(req.user?.role || '');
+
+  if (!activityId) {
+    return res.status(400).json({ error: 'Missing activity.' });
+  }
+
+  if (!userId) {
+    return res.status(401).json({ error: 'Login required.' });
+  }
+
+  if (!['instructor', 'creator', 'root'].includes(userRole)) {
+    return res.status(403).json({ error: 'Sandbox preview is available to instructors and creators.' });
+  }
+
+  const conn = await db.getConnection();
+  const lockName = `ensureActivitySandboxInstance:${activityId}:${userId}`;
+
+  try {
+    const [[lockRow]] = await conn.query(`SELECT GET_LOCK(?, 5) AS got`, [lockName]);
+    if (!lockRow?.got) {
+      return res.status(409).json({ error: 'Sandbox is being opened. Try again.' });
+    }
+
+    const [[activityRow]] = await conn.query(
+      `SELECT id, class_id
+         FROM pogil_activities
+        WHERE id = ?`,
+      [activityId]
+    );
+
+    if (!activityRow) {
+      return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    const courseParams = requestedCourseId
+      ? [activityRow.class_id, requestedCourseId]
+      : [activityRow.class_id, userId];
+    const courseSql = requestedCourseId
+      ? `SELECT id
+           FROM courses
+          WHERE class_id = ? AND id = ?
+          LIMIT 1`
+      : `SELECT id
+           FROM courses
+          WHERE class_id = ?
+          ORDER BY CASE WHEN instructor_id = ? THEN 0 ELSE 1 END, id ASC
+          LIMIT 1`;
+
+    const [[courseRow]] = await conn.query(courseSql, courseParams);
+    if (!courseRow?.id) {
+      return res.status(409).json({
+        error: 'This activity needs at least one course before sandbox mode can open.',
+      });
+    }
+
+    const courseId = Number(courseRow.id);
+
+    const [[existing]] = await conn.query(
+      `SELECT ai.id AS instance_id
+         FROM activity_instances ai
+         JOIN group_members gm ON gm.activity_instance_id = ai.id
+        WHERE ai.course_id = ?
+          AND ai.activity_id = ?
+          AND ai.group_number = 0
+          AND gm.student_id = ?
+        ORDER BY ai.id DESC
+        LIMIT 1`,
+      [courseId, activityId, userId]
+    );
+
+    if (existing?.instance_id) {
+      return res.json({
+        instanceId: Number(existing.instance_id),
+        courseId,
+        created: false,
+      });
+    }
+
+    const [instanceResult] = await conn.query(
+      `INSERT INTO activity_instances
+         (course_id, activity_id, status, group_number, total_groups, completed_groups,
+          progress_status, active_student_id, active_rotation_mode)
+       VALUES (?, ?, 'in_progress', 0, 0, 0, 'not_started', ?, 'submit')`,
+      [courseId, activityId, userId]
+    );
+
+    await conn.query(
+      `INSERT INTO group_members (activity_instance_id, student_id, role, connected)
+       VALUES (?, ?, NULL, 0)`,
+      [instanceResult.insertId, userId]
+    );
+
+    return res.status(201).json({
+      instanceId: Number(instanceResult.insertId),
+      courseId,
+      created: true,
+    });
+  } catch (err) {
+    console.error('❌ ensureActivitySandboxInstance:', err);
+    return res.status(500).json({ error: 'Failed to open sandbox.' });
+  } finally {
+    try {
+      await conn.query(`SELECT RELEASE_LOCK(?)`, [lockName]);
+    } catch (_) {
+      // ignore release errors
+    }
+    conn.release();
+  }
+}
+
 async function getActivityInstanceById(req, res) {
   const { id } = req.params;
 
@@ -1285,6 +1399,7 @@ async function getInstancesForActivityInCourse(req, res) {
               points_possible
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
+         AND COALESCE(group_number, 1) <> 0
        ORDER BY group_number`,
       [courseId, activityId]
     );
@@ -2339,6 +2454,7 @@ module.exports = {
   getParsedActivityDoc,
   createActivityInstance,
   ensureDemoInstance,
+  ensureActivitySandboxInstance,
   getActivityInstanceById,
   getEnrolledStudents,
   recordHeartbeat,

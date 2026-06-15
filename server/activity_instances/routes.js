@@ -12,6 +12,7 @@ router.post('/', controller.createActivityInstance);
 // ✅ Create multiple group-based instances
 router.post('/setup-groups', controller.setupMultipleGroupInstances);
 router.post('/by-activity/:courseId/:activityId/demo-instance', controller.ensureDemoInstance);
+router.post('/by-activity/:activityId/sandbox-instance', controller.ensureActivitySandboxInstance);
 
 // ✅ Reopen a timed test window for this instance
 router.post('/:instanceId/reopen', controller.reopenInstance);

@@ -532,54 +532,6 @@ export default function RunActivityPage({
   }, [isTestMode, activity?.test_start_at]);
 
   useEffect(() => {
-
-    // Create exactly once
-    const s = io(API_BASE_URL, {
-      transports: ['websocket'], // optional but avoids long-polling weirdness
-    });
-
-    setSocket(s);
-
-    return () => {
-      s.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!socket) return;
-    if (!instanceId) return;
-
-    socket.emit('instance:join', { instanceId });
-
-    return () => {
-      socket.emit('instance:leave', { instanceId });
-    };
-  }, [socket, instanceId]);
-
-  useEffect(() => {
-    if (!socket) return;
-
-    function onInstanceState(msg) {
-      const msgId = msg?.instanceId;
-      const patch = msg?.patch;
-
-      if (String(msgId) !== String(instanceId)) return;
-      if (!patch || typeof patch !== 'object') return;
-
-      // IMPORTANT: patch your *activity instance* state (whatever variable holds it)
-      setActivity((prev) => (prev ? { ...prev, ...patch } : prev));
-
-      // If some patch fields live elsewhere, update them too:
-      if (Object.prototype.hasOwnProperty.call(patch, 'activeStudentId')) {
-        setActiveStudentId(patch.activeStudentId != null ? Number(patch.activeStudentId) : null);
-      }
-    }
-
-    socket.on('instance:state', onInstanceState);
-    return () => socket.off('instance:state', onInstanceState);
-  }, [socket, instanceId, setActiveStudentId]);
-
-  useEffect(() => {
     console.log('[RUN] isTestMode:', isTestMode);
   }, [isTestMode]);
 

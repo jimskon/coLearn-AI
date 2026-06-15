@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Container, Row, Col, Button, Form, Alert, Modal, Spinner, Tabs, Tab } from 'react-bootstrap';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
 
 export default function ActivityEditor() {
   const { activityId } = useParams();
+  const navigate = useNavigate();
 
   const [activity, setActivity] = useState(null);
   const [rawText, setRawText] = useState('');
@@ -14,6 +15,7 @@ export default function ActivityEditor() {
   const [copySuccess, setCopySuccess] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
+  const [sandboxBusy, setSandboxBusy] = useState(false);
   const [previewKey, setPreviewKey] = useState(Date.now());
   const [autoCompileEnabled, setAutoCompileEnabled] = useState(true);
 
@@ -411,30 +413,35 @@ export default function ActivityEditor() {
     }
   };
 
+  const saveActivitySource = async () => {
+    const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ text: rawText }),
+    });
+
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body?.error || `save failed ${res.status}`);
+    }
+
+    setActivity((prev) => ({
+      ...(prev || {}),
+      source_type: 'local',
+      title: body?.title || prev?.title,
+      content_text: rawText,
+    }));
+    localStorage.setItem(`activity-${activityId}`, rawText);
+    return body;
+  };
+
   const handleSave = async () => {
     setSaveStatus('');
     setSaveBusy(true);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ text: rawText }),
-      });
-
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(body?.error || `save failed ${res.status}`);
-      }
-
-      setActivity((prev) => ({
-        ...(prev || {}),
-        source_type: 'local',
-        title: body?.title || prev?.title,
-        content_text: rawText,
-      }));
-      localStorage.setItem(`activity-${activityId}`, rawText);
+      await saveActivitySource();
       setSaveStatus('Saved locally.');
       setTimeout(() => setSaveStatus(''), 2000);
     } catch (err) {
@@ -442,6 +449,39 @@ export default function ActivityEditor() {
       setSaveStatus(`Save failed: ${err?.message || String(err)}`);
     } finally {
       setSaveBusy(false);
+    }
+  };
+
+  const openSandbox = async () => {
+    if (!activityId || sandboxBusy) return;
+
+    setSaveStatus('');
+    setSandboxBusy(true);
+    try {
+      await saveActivitySource();
+
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${activityId}/sandbox-instance`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.instanceId) {
+        throw new Error(data?.error || `sandbox failed ${res.status}`);
+      }
+
+      navigate(`/run/${data.instanceId}?mode=sandbox`, {
+        state: { courseName: 'Sandbox' },
+      });
+    } catch (err) {
+      console.error('Failed to open sandbox:', err);
+      setSaveStatus(`Sandbox failed: ${err?.message || String(err)}`);
+    } finally {
+      setSandboxBusy(false);
     }
   };
 
@@ -642,6 +682,15 @@ export default function ActivityEditor() {
             disabled={busy}
           >
             Check
+          </Button>
+
+          <Button
+            variant="outline-primary"
+            className="me-2"
+            onClick={openSandbox}
+            disabled={busy || saveBusy || sandboxBusy || !activity}
+          >
+            {sandboxBusy ? 'Opening...' : 'Save & Sandbox'}
           </Button>
 
           <Button

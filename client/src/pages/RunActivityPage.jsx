@@ -784,7 +784,7 @@ export default function RunActivityPage({
     console.debug(`[${PAGE_TAG}] fileContents changed:`, sizes);
   }, [fileContents]);
 
- useEffect(() => {
+  useEffect(() => {
     const loadScript = (src) =>
       new Promise((resolve, reject) => {
         if (document.querySelector(`script[src="${src}"]`)) return resolve();

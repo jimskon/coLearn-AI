@@ -24,6 +24,7 @@ export default function ActivityPreview() {
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxError, setSandboxError] = useState('');
+
   // NEW: local state used by renderBlocks / code blocks
   const [codeViewMode, setCodeViewMode] = useState({}); // { responseKey: 'active'|'local' }
   const [localCode, setLocalCode] = useState({});       // { responseKey: string }

@@ -708,6 +708,15 @@ export default function ActivityEditor() {
           </Button>
 
           <Button
+            variant="outline-primary"
+            className="me-2"
+            onClick={openSandbox}
+            disabled={busy || sandboxBusy || !activity}
+          >
+            {sandboxBusy ? 'Opening…' : 'Sandbox'}
+          </Button>
+
+          <Button
             variant="secondary"
             className="me-2"
             onClick={handleCopy}

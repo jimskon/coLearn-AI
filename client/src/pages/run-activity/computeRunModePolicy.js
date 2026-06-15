@@ -1,49 +1,94 @@
-import { RUN_ACTIVITY_MODES } from './modes.js';
+import {
+  RUN_ACTIVITY_MODES,
+  isElevatedRunViewer,
+  normalizeRunActivityMode,
+} from './modes.js';
 
 export default function computeRunModePolicy({
-  mode = RUN_ACTIVITY_MODES.STUDENT,
+  mode,
   user,
   activeStudentId,
   activity,
   isPlaygroundMode = false,
   isTestMode = false,
 }) {
-  const isInstructor =
-    user?.role === 'instructor' ||
-    user?.role === 'root' ||
-    user?.role === 'creator';
+  const normalizedMode = normalizeRunActivityMode(mode, { user });
 
+  const isInstructor = isElevatedRunViewer(user);
   const isStudent = user?.role === 'student';
 
-  const isSandbox = mode === RUN_ACTIVITY_MODES.SANDBOX;
-  const isInstructorPreview = mode === RUN_ACTIVITY_MODES.INSTRUCTOR_PREVIEW;
+  const isStudentRun = normalizedMode === RUN_ACTIVITY_MODES.STUDENT_RUN;
+  const isInstructorView = normalizedMode === RUN_ACTIVITY_MODES.INSTRUCTOR_VIEW;
+  const isActivityPreview = normalizedMode === RUN_ACTIVITY_MODES.ACTIVITY_PREVIEW;
+  const isCreatorSandbox = normalizedMode === RUN_ACTIVITY_MODES.CREATOR_SANDBOX;
+  const isSandbox = isCreatorSandbox;
+  const isInstructorPreview = isInstructorView;
 
   const isActive =
     !!user &&
     (
-      isSandbox ||
-      isPlaygroundMode ||
-      (isTestMode && isStudent) ||
-      (activeStudentId != null && String(user.id) === String(activeStudentId))
+      isCreatorSandbox ||
+      (
+        isStudentRun &&
+        (
+          isPlaygroundMode ||
+          (isTestMode && isStudent) ||
+          (activeStudentId != null && String(user.id) === String(activeStudentId))
+        )
+      )
     );
 
   const isObserver = !isActive;
-  const activityPaused = Number(activity?.section_timer_paused) === 1;
+  const activityPaused =
+    !isCreatorSandbox &&
+    !isActivityPreview &&
+    Number(activity?.section_timer_paused) === 1;
+
+  const canEditAnswers =
+    isCreatorSandbox ||
+    (
+      isStudentRun &&
+      isActive &&
+      !activityPaused
+    );
+
+  const canSubmitGroup = isCreatorSandbox || (isStudentRun && isActive && !isTestMode);
+  const canSubmitTest = isStudentRun && isTestMode && isStudent;
+  const canRunAI = isCreatorSandbox || (isStudentRun && isActive && !isTestMode);
+  const canPersistDrafts = isStudentRun;
+  const canPersistSubmissions = isStudentRun;
+  const canPersistAIResults = isStudentRun;
+  const loadPersistedResponses = isStudentRun || isInstructorView;
 
   return {
-    mode,
+    mode: normalizedMode,
     isSandbox,
     isInstructorPreview,
+    isStudentRun,
+    isInstructorView,
+    isActivityPreview,
+    isCreatorSandbox,
     isInstructor,
     isStudent,
     isActive,
     isObserver,
     activityPaused,
-    canPollActiveStudent: mode === RUN_ACTIVITY_MODES.STUDENT && !isTestMode,
-    canSendHeartbeat: mode === RUN_ACTIVITY_MODES.STUDENT,
-    canUseLiveSync: mode === RUN_ACTIVITY_MODES.STUDENT,
-    allowFreeNavigation: isSandbox,
-    persistResponses: mode === RUN_ACTIVITY_MODES.STUDENT,
-    usesRealInstanceProgression: mode === RUN_ACTIVITY_MODES.STUDENT,
+    canEditAnswers,
+    canSubmitGroup,
+    canSubmitTest,
+    canRunAI,
+    canPersistDrafts,
+    canPersistSubmissions,
+    canPersistAIResults,
+    canPollActiveStudent: (isStudentRun || isInstructorView) && !isTestMode,
+    canSendHeartbeat: isStudentRun && isStudent,
+    canUseLiveSync: isStudentRun || isInstructorView,
+    canRegradeTests: isInstructorView && isInstructor && isTestMode,
+    canSaveInstructorScores: isInstructorView && isInstructor && isTestMode,
+    canRefreshInstanceMetadata: isStudentRun,
+    allowFreeNavigation: isCreatorSandbox,
+    loadPersistedResponses,
+    persistResponses: canPersistDrafts,
+    usesRealInstanceProgression: isStudentRun,
   };
 }

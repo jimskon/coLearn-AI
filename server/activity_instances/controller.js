@@ -571,6 +571,7 @@ async function getActivityInstanceById(req, res) {
     const [[instance]] = await db.query(
       `SELECT
          ai.id,
+         ai.activity_id,
          ai.course_id,
          ai.submitted_by_user_id,
          ai.group_number,

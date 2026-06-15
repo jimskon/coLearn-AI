@@ -16,6 +16,7 @@ export default function ActivityEditor() {
   const [saveStatus, setSaveStatus] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
+  const [sandboxError, setSandboxError] = useState('');
   const [previewKey, setPreviewKey] = useState(Date.now());
   const [autoCompileEnabled, setAutoCompileEnabled] = useState(true);
 
@@ -432,6 +433,7 @@ export default function ActivityEditor() {
       title: body?.title || prev?.title,
       content_text: rawText,
     }));
+
     localStorage.setItem(`activity-${activityId}`, rawText);
     return body;
   };
@@ -456,7 +458,9 @@ export default function ActivityEditor() {
     if (!activityId || sandboxBusy) return;
 
     setSaveStatus('');
+    setSandboxError('');
     setSandboxBusy(true);
+
     try {
       await saveActivitySource();
 
@@ -469,6 +473,7 @@ export default function ActivityEditor() {
           body: JSON.stringify({}),
         }
       );
+
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.instanceId) {
         throw new Error(data?.error || `sandbox failed ${res.status}`);
@@ -479,7 +484,7 @@ export default function ActivityEditor() {
       });
     } catch (err) {
       console.error('Failed to open sandbox:', err);
-      setSaveStatus(`Sandbox failed: ${err?.message || String(err)}`);
+      setSandboxError(`Sandbox failed: ${err?.message || String(err)}`);
     } finally {
       setSandboxBusy(false);
     }
@@ -735,6 +740,7 @@ export default function ActivityEditor() {
         </div>
       </div>
 
+      {sandboxError && <Alert variant="danger" className="py-1">{sandboxError}</Alert>}
       {copySuccess && <Alert variant="info" className="py-1">{copySuccess}</Alert>}
       {saveStatus && (
         <Alert

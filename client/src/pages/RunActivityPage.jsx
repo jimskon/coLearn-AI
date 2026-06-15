@@ -10,7 +10,7 @@ import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { renderBlocks } from '../utils/parseSheet';
 import { parseUtcDbDatetime } from '../utils/time';
-import { RUN_ACTIVITY_MODES } from './run-activity/modes';
+import { normalizeRunActivityMode } from './run-activity/modes';
 import useRunModePolicy from './run-activity/useRunModePolicy';
 import useRunActivityData from './run-activity/useRunActivityData';
 import useRunActivitySync from './run-activity/useRunActivitySync';
@@ -545,10 +545,7 @@ export default function RunActivityPage({
     return () => clearInterval(interval);
   }, [sectionTimer.visible]);
 
-  const runMode =
-    requestedMode === RUN_ACTIVITY_MODES.SANDBOX
-      ? RUN_ACTIVITY_MODES.SANDBOX
-      : RUN_ACTIVITY_MODES.STUDENT;
+  const runMode = normalizeRunActivityMode(requestedMode, { user });
   const {
     isSandbox,
     isInstructor,
@@ -560,8 +557,17 @@ export default function RunActivityPage({
     canSendHeartbeat,
     canUseLiveSync,
     allowFreeNavigation,
-    persistResponses,
-    usesRealInstanceProgression,
+    canEditAnswers,
+    canSubmitGroup,
+    canSubmitTest,
+    canRunAI,
+    canPersistDrafts,
+    canPersistSubmissions,
+    canPersistAIResults,
+    canRegradeTests,
+    canSaveInstructorScores,
+    canRefreshInstanceMetadata,
+    loadPersistedResponses,
   } = useRunModePolicy({
     mode: runMode,
     user,
@@ -607,7 +613,7 @@ export default function RunActivityPage({
     user,
     isActive,
     setLastEditTs,
-    persistResponses,
+    persistResponses: canPersistDrafts,
     emitLiveUpdates: canUseLiveSync,
   });
 
@@ -622,7 +628,8 @@ export default function RunActivityPage({
   const loadActivity = useRunActivityData({
     instanceId,
     user,
-    loadResponses: persistResponses,
+    loadResponses: loadPersistedResponses,
+    canRefreshInstanceMetadata,
     setActivity,
     setActiveStudentId,
     setGroupMembers,
@@ -777,67 +784,7 @@ export default function RunActivityPage({
     console.debug(`[${PAGE_TAG}] fileContents changed:`, sizes);
   }, [fileContents]);
 
-  const activeStudentIdRef = useRef(null);
-  useEffect(() => { activeStudentIdRef.current = activeStudentId; }, [activeStudentId]);
-
-  useEffect(() => {
-    if (isTestMode) return;
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/active-student`, {
-          credentials: 'include',
-        }); const data = await res.json();
-        if (Object.prototype.hasOwnProperty.call(data || {}, 'activeStudentId')) {
-          const rawId = data.activeStudentId;
-          const nextId =
-            rawId != null && Number.isFinite(Number(rawId)) && Number(rawId) > 0
-              ? Number(rawId)
-              : null;
-
-          if (nextId !== activeStudentIdRef.current) {
-            setActiveStudentId(nextId);
-          }
-        }
-      } catch { }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [instanceId, isTestMode]);
-
-  useEffect(() => {
-    if (String(activity?.progress_status || '').toLowerCase() === 'completed') return;
-    const sendHeartbeat = async () => {
-      if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
-      try {
-        await fetch(
-          `${API_BASE_URL}/api/activity-instances/${instanceId}/heartbeat`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({
-              userId: user.id,
-              sectionTimerKey: currentTimedSection?.key || null,
-              sectionTimerDurationMinutes: currentTimedSection?.minutes || null,
-            }),
-          }
-        );
-      } catch { }
-    };
-    sendHeartbeat();
-    const interval = setInterval(sendHeartbeat, 20000);
-    return () => clearInterval(interval);
-  }, [
-    user?.id,
-    instanceId,
-    groups,
-    activity?.progress_status,
-    currentTimedSection?.key,
-    currentTimedSection?.minutes,
-  ]);
-
-
-  useEffect(() => {
+ useEffect(() => {
     const loadScript = (src) =>
       new Promise((resolve, reject) => {
         if (document.querySelector(`script[src="${src}"]`)) return resolve();
@@ -892,6 +839,7 @@ export default function RunActivityPage({
     groups,
     canPollActiveStudent,
     canSendHeartbeat,
+    progressStatus: activity?.progress_status,
     currentTimedSection,
     setActivity,
     activeStudentId,
@@ -905,7 +853,7 @@ export default function RunActivityPage({
 
 
   useEffect(() => {
-    if (!usesRealInstanceProgression) return;
+    if (!canPersistDrafts) return;
     if (!isActive || !user?.id || !instanceId) return;
 
     const interval = setInterval(() => {
@@ -938,7 +886,7 @@ export default function RunActivityPage({
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [usesRealInstanceProgression, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
+  }, [canPersistDrafts, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
 
   useEffect(() => {
     if (!activeStudentId) return;
@@ -1064,6 +1012,7 @@ export default function RunActivityPage({
 
 
   async function saveResponse(instanceId, key, value) {
+    if (!canPersistDrafts) return;
     await fetch(`${API_BASE_URL}/api/responses/draft-bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1155,6 +1104,7 @@ export default function RunActivityPage({
   ) {
     // ✅ TEST MODE: no AI feedback at all
     if (isTestMode) return { accepted: true, feedback: null };
+    if (!canRunAI) return { accepted: true, feedback: null };
 
     const qid = `${questionBlock.groupId}${questionBlock.id}`;
     const qText = getQuestionText(questionBlock, qid);
@@ -1201,6 +1151,7 @@ export default function RunActivityPage({
       answeredByUserId: Number(answeredByUserId ?? user?.id),
       retriesRequired: Number(retriesRequired) || 1,
       submissionString: String(submissionString || ""),
+      dryRun: !canPersistAIResults,
     };
 
     try {
@@ -1571,6 +1522,7 @@ export default function RunActivityPage({
     const attemptParts = [];
     let retriesRequired = 1;
     let groupNum;
+    let submitGroupIndex = null;
     if (isSubmitting) return;
     // ✅ PLAYGROUND MODE: skip ALL evaluation logic
     if (isSubmitting) return;
@@ -1584,16 +1536,30 @@ export default function RunActivityPage({
 
         const answers = collectVisibleAnswersFromContainer(container);
 
-        await fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            instanceId,
-            userId: user.id,
-            answers,
-          }),
-        });
+        if (canPersistDrafts) {
+          await fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              instanceId,
+              userId: user.id,
+              answers,
+            }),
+          });
+        } else {
+          setExistingAnswers((prev) => {
+            const next = { ...prev };
+            Object.entries(answers).forEach(([key, value]) => {
+              next[key] = {
+                ...(next[key] || {}),
+                response: value,
+                type: 'text',
+              };
+            });
+            return next;
+          });
+        }
 
         // do NOT call setCurrentGroupIndex(...)
         // instead update the activity state that actually drives progression
@@ -1615,6 +1581,7 @@ export default function RunActivityPage({
     let groupSubmissionString = null;
     let container = null;
     let blocks = null;
+    const useTestSubmissionFlow = isTestMode && canSubmitTest;
     function clearCodeFeedbackForQid(qid, codeCells) {
       setCodeFeedbackShown((prev) => {
         const next = { ...prev };
@@ -1646,14 +1613,14 @@ export default function RunActivityPage({
 
 
     // ✅ TEST MODE: collect from the whole page + all question blocks
-    if (isTestMode) {
+    if (useTestSubmissionFlow) {
       container = document;
 
       // Grab ALL blocks from ALL groups so we grade everything.
       blocks = groups.flatMap((g) => [g.intro, ...(g.content || [])]);
     } else {
       // ✅ LEARNING MODE: unchanged behavior (one group at a time)
-      const submitGroupIndex = isSandbox ? Number(targetGroupIndex ?? 0) : currentGroupIndex;
+      submitGroupIndex = isSandbox ? Number(targetGroupIndex ?? 0) : currentGroupIndex;
       container = isSandbox
         ? document.querySelector(`[data-sandbox-group="${submitGroupIndex}"]`)
         : document.querySelector('[data-current-group="true"]');
@@ -1709,7 +1676,7 @@ export default function RunActivityPage({
 
 
     // ---------- TEST MODE PATH ----------
-    if (isTestMode) {
+    if (useTestSubmissionFlow) {
       try {
         const { answers, questions } = buildTestSubmissionPayload(
           blocks,
@@ -1992,6 +1959,7 @@ export default function RunActivityPage({
             answeredByUserId: Number(user?.id),
             retriesRequired,
             submissionString: groupSubmissionString,
+            dryRun: !canPersistAIResults,
 
             // ✅ new
             outputText,
@@ -2302,11 +2270,6 @@ export default function RunActivityPage({
           progressAllowed,
         });*/
 
-        // If backend says retries threshold reached for this group, enable bypass button
-        if (ai?.canContinue === true) {
-          setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
-        }
-
         // ✅ Default accept unless AI explicitly rejects
         accepted = ai.accepted !== false;
         feedback = typeof ai.feedback === 'string' ? ai.feedback : '';
@@ -2419,7 +2382,7 @@ export default function RunActivityPage({
       answers,
     };
 
-    if (isSandbox) {
+    if (!canPersistSubmissions) {
       setExistingAnswers((prev) => {
         const next = { ...prev };
         Object.entries(answers).forEach(([key, value]) => {
@@ -2509,7 +2472,7 @@ export default function RunActivityPage({
 
       setCanBypassGroups((prev) => {
         const next = { ...prev };
-        delete next[currentGroupIndex];
+        delete next[submitGroupIndex];
         return next;
       });
 
@@ -2525,7 +2488,7 @@ export default function RunActivityPage({
         });
       }
 
-      if (currentGroupIndex + 1 === groups.length) {
+      if (submitGroupIndex + 1 === groups.length) {
         await fetch(`${API_BASE_URL}/api/responses/mark-complete`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2551,6 +2514,7 @@ export default function RunActivityPage({
 
   async function handleRegradeTest() {
     if (isSubmitting) return;
+    if (!canRegradeTests) return;
 
     console.log('[REGRD] click', {
       t: Date.now(),
@@ -2654,6 +2618,7 @@ export default function RunActivityPage({
   // Instructor override: save edited per-question scores & feedback
   async function handleSaveQuestionScores(qid, local) {
     if (!activity || !instanceId || !user?.id) return;
+    if (!canSaveInstructorScores) return;
 
     const answers = {};
 
@@ -2889,6 +2854,11 @@ export default function RunActivityPage({
             isObserver={isObserver}
             isSandbox={isSandbox}
             allowFreeNavigation={allowFreeNavigation}
+            canEditAnswers={canEditAnswers}
+            canSubmitGroup={canSubmitGroup}
+            canSubmitTest={canSubmitTest}
+            canRegradeTests={canRegradeTests}
+            canSaveInstructorScores={canSaveInstructorScores}
             sandboxGroupIndex={sandboxGroupIndex}
             setSandboxGroupIndex={setSandboxGroupIndex}
             codeViewMode={codeViewMode}

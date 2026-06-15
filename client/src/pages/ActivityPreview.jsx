@@ -23,7 +23,7 @@ export default function ActivityPreview() {
   const [fileContents, setFileContents] = useState({});
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
-
+  const [sandboxError, setSandboxError] = useState('');
   // NEW: local state used by renderBlocks / code blocks
   const [codeViewMode, setCodeViewMode] = useState({}); // { responseKey: 'active'|'local' }
   const [localCode, setLocalCode] = useState({});       // { responseKey: string }
@@ -199,6 +199,7 @@ export default function ActivityPreview() {
     Prism.highlightAll();
   }, [blocks, fileContents, codeViewMode, localCode]);
 
+
   const previewHeaders = blocks.filter((block) => block?.type === 'header');
   const previewSections = blocks.filter((block) => block?.type === 'section');
   const contentBlocks = blocks.filter((block) => block?.type !== 'header');
@@ -220,7 +221,9 @@ export default function ActivityPreview() {
   const openSandbox = async () => {
     if (!activityId || sandboxBusy) return;
 
+    setSandboxError('');
     setSandboxBusy(true);
+
     try {
       const res = await fetch(
         `${API_BASE_URL}/api/activity-instances/by-activity/${activityId}/sandbox-instance`,
@@ -231,6 +234,7 @@ export default function ActivityPreview() {
           body: JSON.stringify({}),
         }
       );
+
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.instanceId) {
         throw new Error(data?.error || `Sandbox failed ${res.status}`);
@@ -241,7 +245,7 @@ export default function ActivityPreview() {
       });
     } catch (err) {
       console.error('Failed to open sandbox:', err);
-      window.alert(err?.message || 'Unable to open sandbox mode.');
+      setSandboxError(err?.message || 'Unable to open sandbox mode.');
     } finally {
       setSandboxBusy(false);
     }
@@ -270,6 +274,10 @@ export default function ActivityPreview() {
           </Button>
         </div>
       </div>
+
+      {sandboxError && (
+        <div className="alert alert-danger py-2 mb-2">{sandboxError}</div>
+      )}
 
       <Card className="mb-3">
         <Card.Body>

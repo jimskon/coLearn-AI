@@ -260,6 +260,29 @@ async function applyGroupRetryGate({
     conn.release();
   }
 }
+
+function isDryRunAIRequest(req) {
+  const body = req?.body || {};
+  return (
+    body.dryRun === true ||
+    body.persistRetryGate === false ||
+    body.persist === false
+  );
+}
+
+function dryRunRetryGate({ accepted, retriesRequired }) {
+  const max = Number(retriesRequired) || 0;
+
+  if (max <= 0) {
+    return { canContinue: true, retryCount: 0, retriesRequired: 0 };
+  }
+
+  return {
+    canContinue: accepted === true,
+    retryCount: 0,
+    retriesRequired: max,
+  };
+}
 // ---------- Positive feedback toggles ----------
 // Activity-level default: Positive feedback ON.
 // Per-question override: put "No-Positive-feedback" anywhere in \followupprompt{...}
@@ -500,16 +523,19 @@ async function evaluateStudentResponse(req, res) {
       retriesRequired,
       accepted,
       submissionHash: sha256Hex(String(submissionString ?? "")),
+      dryRun: isDryRunAIRequest(req),
     });
 
-    const gate = await applyGroupRetryGate({
-      instanceId: Number(instanceId),
-      groupNum: Number(groupNum),
-      answeredByUserId: Number(answeredByUserId),
-      retriesRequired: Number(retriesRequired),
-      accepted,
-      submissionString: String(submissionString ?? ""),
-    });
+    const gate = isDryRunAIRequest(req)
+      ? dryRunRetryGate({ accepted, retriesRequired: Number(retriesRequired) })
+      : await applyGroupRetryGate({
+          instanceId: Number(instanceId),
+          groupNum: Number(groupNum),
+          answeredByUserId: Number(answeredByUserId),
+          retriesRequired: Number(retriesRequired),
+          accepted,
+          submissionString: String(submissionString ?? ""),
+        });
 
     return sendAI(res, { accepted, feedback, ...gate });
   };
@@ -710,17 +736,23 @@ async function evaluatePythonCode(req, res) {
     retriesRequired,
     acceptedFromEvaluator: result.accepted === true,
     submissionString: String(req.body?.submissionString ?? "").slice(0, 200),
+    dryRun: isDryRunAIRequest(req),
   });
 
   // ---- EXISTING CALL ----
-  const gate = await applyGroupRetryGate({
-    instanceId: Number(instanceId),
-    groupNum: Number(groupNum),
-    answeredByUserId: Number(answeredByUserId),
-    retriesRequired: Number(retriesRequired),
-    accepted: result.accepted === true,
-    submissionString: req.body?.submissionString ?? "",
-  });
+  const gate = isDryRunAIRequest(req)
+    ? dryRunRetryGate({
+        accepted: result.accepted === true,
+        retriesRequired: Number(retriesRequired),
+      })
+    : await applyGroupRetryGate({
+        instanceId: Number(instanceId),
+        groupNum: Number(groupNum),
+        answeredByUserId: Number(answeredByUserId),
+        retriesRequired: Number(retriesRequired),
+        accepted: result.accepted === true,
+        submissionString: req.body?.submissionString ?? "",
+      });
 
   // ✅ ADD THIS → Step 3 OUTPUT LOG (RIGHT AFTER CALL)
   console.log("[RETRY_GATE RESULT]", gate);
@@ -1054,15 +1086,21 @@ async function evaluateCppCode(req, res) {
 
 
   const { instanceId, groupNum, answeredByUserId, retriesRequired } = req.body || {};
-  const groupSubmissionString = req.body?.groupSubmissionString ?? null;
-  const gate = await applyGroupRetryGate({
-    instanceId: Number(instanceId),
-    groupNum: Number(groupNum),
-    answeredByUserId: Number(answeredByUserId),
-    retriesRequired: Number(retriesRequired),
-    accepted: result.accepted === true,
-    submissionString: groupSubmissionString ?? studentCode,
-  });
+  const groupSubmissionString =
+    req.body?.groupSubmissionString ?? req.body?.submissionString ?? null;
+  const gate = isDryRunAIRequest(req)
+    ? dryRunRetryGate({
+        accepted: result.accepted === true,
+        retriesRequired: Number(retriesRequired),
+      })
+    : await applyGroupRetryGate({
+        instanceId: Number(instanceId),
+        groupNum: Number(groupNum),
+        answeredByUserId: Number(answeredByUserId),
+        retriesRequired: Number(retriesRequired),
+        accepted: result.accepted === true,
+        submissionString: groupSubmissionString ?? studentCode,
+      });
 
   return sendAI(res, { ...result, ...gate });
 }

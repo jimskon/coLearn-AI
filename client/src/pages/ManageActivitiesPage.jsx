@@ -26,6 +26,8 @@ const emptyCreateDraft = {
   duration_minutes: '45',
   mode: 'group',
   selected_model: 'gpt-5-mini',
+  use_timed_sections: false,
+  retries_required: '3',
   major_sections: [
     'Learning Objectives',
     'Exploration',
@@ -33,6 +35,13 @@ const emptyCreateDraft = {
     'Application',
     'Reflection',
   ],
+  section_minutes: {
+    'Learning Objectives': '9',
+    Exploration: '9',
+    'Concept Invention': '9',
+    Application: '9',
+    Reflection: '9',
+  },
   description: '',
 };
 
@@ -64,6 +73,24 @@ function slugifyActivityName(value) {
 function extractTitleFromMarkup(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
   return match ? match[1].trim() : null;
+}
+
+function distributeMinutes(totalMinutes, sections) {
+  const names = Array.isArray(sections) ? sections : [];
+  const total = Number(totalMinutes);
+
+  if (!Number.isFinite(total) || total <= 0 || !names.length) {
+    return {};
+  }
+
+  const base = Math.floor(total / names.length);
+  let remainder = total - (base * names.length);
+
+  return names.reduce((acc, name) => {
+    acc[name] = String(base + (remainder > 0 ? 1 : 0));
+    if (remainder > 0) remainder -= 1;
+    return acc;
+  }, {});
 }
 
 function SourceBadge({ sourceType }) {
@@ -162,18 +189,42 @@ export default function ManageActivitiesPage() {
   };
 
   const handleCreateDraftFieldChange = (e) => {
-    const { name, value } = e.target;
+    const { name, value, checked } = e.target;
     setCreateDraft((prev) => {
+      if (name === 'use_timed_sections') {
+        return { ...prev, use_timed_sections: checked };
+      }
+
       if (name === 'mode') {
+        const nextMajorSections = [...majorSectionOptions];
         return {
           ...prev,
           mode: value,
-          major_sections: [...majorSectionOptions],
+          major_sections: nextMajorSections,
+          section_minutes: distributeMinutes(prev.duration_minutes, nextMajorSections),
+        };
+      }
+
+      if (name === 'duration_minutes') {
+        return {
+          ...prev,
+          duration_minutes: value,
+          section_minutes: distributeMinutes(value, prev.major_sections),
         };
       }
 
       return { ...prev, [name]: value };
     });
+  };
+
+  const handleSectionMinutesChange = (sectionName, value) => {
+    setCreateDraft((prev) => ({
+      ...prev,
+      section_minutes: {
+        ...(prev.section_minutes || {}),
+        [sectionName]: value,
+      },
+    }));
   };
 
   const handleMajorSectionToggle = (sectionName) => {
@@ -185,9 +236,12 @@ export default function ManageActivitiesPage() {
         selected.add(sectionName);
       }
 
+      const nextMajorSections = majorSectionOptions.filter((option) => selected.has(option));
+
       return {
         ...prev,
-        major_sections: majorSectionOptions.filter((option) => selected.has(option)),
+        major_sections: nextMajorSections,
+        section_minutes: distributeMinutes(prev.duration_minutes, nextMajorSections),
       };
     });
   };
@@ -449,9 +503,34 @@ export default function ManageActivitiesPage() {
       return;
     }
 
+    const retriesRequired = parseInt(createDraft.retries_required, 10);
+    if (!Number.isFinite(retriesRequired) || retriesRequired < 0) {
+      setCreateNote('Enter a valid nonnegative retry count.');
+      return;
+    }
+
     if (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length) {
       setCreateNote('Select at least one major section for the draft structure.');
       return;
+    }
+
+    let timedSections = [];
+    if (createDraft.use_timed_sections) {
+      timedSections = createDraft.major_sections.map((sectionName) => ({
+        title: sectionName,
+        minutes: parseInt(createDraft.section_minutes?.[sectionName], 10),
+      }));
+
+      if (timedSections.some((section) => !Number.isFinite(section.minutes) || section.minutes <= 0)) {
+        setCreateNote('Each timed section must have a positive whole-number duration.');
+        return;
+      }
+
+      const totalSectionMinutes = timedSections.reduce((sum, section) => sum + section.minutes, 0);
+      if (totalSectionMinutes !== durationMinutes) {
+        setCreateNote(`Timed section minutes must add up to ${durationMinutes}.`);
+        return;
+      }
     }
 
     setCreateBusy(true);
@@ -466,6 +545,9 @@ export default function ManageActivitiesPage() {
           mode: createDraft.mode,
           selected_model: createDraft.selected_model,
           major_sections: createDraft.major_sections,
+          use_timed_sections: createDraft.use_timed_sections,
+          timed_sections: timedSections,
+          retries_required: retriesRequired,
           description: createDraft.description,
           createdBy: user?.id,
         }),
@@ -497,6 +579,11 @@ export default function ManageActivitiesPage() {
       setCreateBusy(false);
     }
   };
+
+  const selectedSectionMinuteTotal = createDraft.major_sections.reduce(
+    (sum, sectionName) => sum + (parseInt(createDraft.section_minutes?.[sectionName], 10) || 0),
+    0
+  );
 
   return (
     <Container>
@@ -602,10 +689,13 @@ export default function ManageActivitiesPage() {
           Google
         </Button>
       </div>
+      <div className="text-muted small mb-4">
+        Create Draft opens the new local draft generator with model, structure, and description controls.
+      </div>
 
       <Modal show={showCreateModal} onHide={() => !createBusy && setShowCreateModal(false)} size="lg">
         <Modal.Header closeButton={!createBusy}>
-          <Modal.Title>Create Activity Draft</Modal.Title>
+          <Modal.Title>Create Draft Activity</Modal.Title>
         </Modal.Header>
         <Modal.Body>
           <Form.Group className="mb-3">
@@ -645,6 +735,31 @@ export default function ManageActivitiesPage() {
                   <option value="test">Test</option>
                 </Form.Select>
               </Form.Group>
+            </div>
+          </div>
+
+          <div className="row g-3 mb-3">
+            <div className="col-md-4">
+              <Form.Group>
+                <Form.Label>Retries</Form.Label>
+                <Form.Control
+                  type="number"
+                  min="0"
+                  name="retries_required"
+                  value={createDraft.retries_required}
+                  onChange={handleCreateDraftFieldChange}
+                />
+              </Form.Group>
+            </div>
+            <div className="col-md-8 d-flex align-items-end">
+              <Form.Check
+                type="checkbox"
+                id="create-draft-timed-sections"
+                name="use_timed_sections"
+                label="Use timed sections"
+                checked={createDraft.use_timed_sections}
+                onChange={handleCreateDraftFieldChange}
+              />
             </div>
           </div>
 
@@ -697,6 +812,28 @@ export default function ManageActivitiesPage() {
               We will use these as the high-level structure for the first draft.
             </div>
           </Form.Group>
+
+          {createDraft.use_timed_sections ? (
+            <Form.Group className="mt-3">
+              <Form.Label>Section Timing</Form.Label>
+              <div className="row g-2">
+                {createDraft.major_sections.map((sectionName) => (
+                  <div className="col-md-6" key={`timing-${sectionName}`}>
+                    <Form.Label className="small text-muted mb-1">{sectionName}</Form.Label>
+                    <Form.Control
+                      type="number"
+                      min="1"
+                      value={createDraft.section_minutes?.[sectionName] || ''}
+                      onChange={(e) => handleSectionMinutesChange(sectionName, e.target.value)}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="text-muted small mt-2">
+                Total selected minutes: {selectedSectionMinuteTotal} / {createDraft.duration_minutes || 0}
+              </div>
+            </Form.Group>
+          ) : null}
 
           <div className="text-muted small mt-3">
             We will create a first local draft using the class metadata and this description, then open it in the creator workbench.

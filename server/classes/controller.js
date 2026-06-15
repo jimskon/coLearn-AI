@@ -332,6 +332,9 @@ exports.createCreatorDraft = async (req, res) => {
     description,
     selected_model = 'gpt-5-mini',
     major_sections = CREATOR_MAJOR_SECTION_OPTIONS,
+    use_timed_sections = false,
+    timed_sections = [],
+    retries_required = 3,
     createdBy,
   } = req.body || {};
 
@@ -342,6 +345,19 @@ exports.createCreatorDraft = async (req, res) => {
   const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
   const normalizedMajorSections = Array.isArray(major_sections)
     ? CREATOR_MAJOR_SECTION_OPTIONS.filter((sectionName) => major_sections.includes(sectionName))
+    : [];
+  const normalizedUseTimedSections = use_timed_sections === true;
+  const normalizedRetriesRequired = Math.max(0, Math.round(Number(retries_required) || 0));
+  const normalizedTimedSections = normalizedUseTimedSections
+    ? normalizedMajorSections.map((sectionName) => {
+        const match = Array.isArray(timed_sections)
+          ? timed_sections.find((section) => String(section?.title || '').trim() === sectionName)
+          : null;
+        return {
+          title: sectionName,
+          minutes: Math.round(Number(match?.minutes)),
+        };
+      })
     : [];
 
   if (!normalizedTitle || !normalizedDescription || !createdBy || !Number.isFinite(durationMinutes) || durationMinutes <= 0) {
@@ -360,6 +376,17 @@ exports.createCreatorDraft = async (req, res) => {
 
   if (!normalizedMajorSections.length) {
     return res.status(400).json({ error: 'major_sections must include at least one supported section.' });
+  }
+
+  if (normalizedUseTimedSections) {
+    if (normalizedTimedSections.some((section) => !Number.isFinite(section.minutes) || section.minutes <= 0)) {
+      return res.status(400).json({ error: 'timed_sections must provide a positive whole-number duration for each selected section.' });
+    }
+
+    const totalTimedMinutes = normalizedTimedSections.reduce((sum, section) => sum + section.minutes, 0);
+    if (totalTimedMinutes !== Math.round(durationMinutes)) {
+      return res.status(400).json({ error: 'timed_sections must add up to duration_minutes.' });
+    }
   }
 
   try {
@@ -381,6 +408,8 @@ exports.createCreatorDraft = async (req, res) => {
       durationMinutes: Math.round(durationMinutes),
       selectedModel: normalizedSelectedModel,
       majorSections: normalizedMajorSections,
+      timedSections: normalizedTimedSections,
+      retriesRequired: normalizedRetriesRequired,
       classLevel: classRow.level,
       classTopicDomain: classRow.topic_domain,
       classDescription: classRow.description,
@@ -429,6 +458,9 @@ exports.createCreatorDraft = async (req, res) => {
       duration_minutes: Math.round(durationMinutes),
       selected_model: normalizedSelectedModel,
       major_sections: normalizedMajorSections,
+      use_timed_sections: normalizedUseTimedSections,
+      timed_sections: normalizedTimedSections,
+      retries_required: normalizedRetriesRequired,
       generation_status: generation.generation_status,
       generation_error: generation.generation_error,
       generation_debug_preview: generation.raw_model_output

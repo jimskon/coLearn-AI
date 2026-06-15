@@ -28,6 +28,6 @@ Rules illustrated above:
 - Put learning-objective bullets in \text plus \begin{itemize} ... \end{itemize}.
 - If you include runnable C++ code, wrap it in \cpp ... \endcpp.
 - If you include runnable Python code, wrap it in \python ... \endpython.
-- If you include runnable turtle code, wrap it in \pythonturtle{WxH,timeout} ... \endpythonturtle.
+- If you include runnable turtle code, prefer omitting the timeout unless a specific non-default limit is required. Use \pythonturtle{WxH} ... \endpythonturtle when only dimensions matter, or \pythonturtle ... \endpythonturtle if defaults are fine.
 - Do not paste raw code directly into question text.
 - Keep all interactive questions inside \questiongroup blocks.

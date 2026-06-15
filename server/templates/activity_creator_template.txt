@@ -2,11 +2,15 @@
 \mode{__MODE__}
 \studentlevel{__CLASS_LEVEL__}
 \activitycontext{__CLASS_TOPIC_DOMAIN__}
+\retries{__RETRIES_REQUIRED__}
 
 \section{Draft Brief}
 Target duration: __DURATION_MINUTES__ minutes.
 Requested generation model: __SELECTED_MODEL__.
 Requested major sections: __MAJOR_SECTIONS_BLOCK__.
+
+Requested timed sections:
+__TIMED_SECTIONS_BLOCK__
 
 Class description:
 __CLASS_DESCRIPTION_BLOCK__
@@ -14,7 +18,7 @@ __CLASS_DESCRIPTION_BLOCK__
 Initial activity brief:
 __ACTIVITY_DESCRIPTION_BLOCK__
 
-\section{Introduction}
+__REQUESTED_SECTION_MARKUP__
 \questiongroup{Question Group 1}
 
 \question{Replace this question with your own prompt.}

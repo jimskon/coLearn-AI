@@ -532,6 +532,54 @@ export default function RunActivityPage({
   }, [isTestMode, activity?.test_start_at]);
 
   useEffect(() => {
+
+    // Create exactly once
+    const s = io(API_BASE_URL, {
+      transports: ['websocket'], // optional but avoids long-polling weirdness
+    });
+
+    setSocket(s);
+
+    return () => {
+      s.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!socket) return;
+    if (!instanceId) return;
+
+    socket.emit('instance:join', { instanceId });
+
+    return () => {
+      socket.emit('instance:leave', { instanceId });
+    };
+  }, [socket, instanceId]);
+
+  useEffect(() => {
+    if (!socket) return;
+
+    function onInstanceState(msg) {
+      const msgId = msg?.instanceId;
+      const patch = msg?.patch;
+
+      if (String(msgId) !== String(instanceId)) return;
+      if (!patch || typeof patch !== 'object') return;
+
+      // IMPORTANT: patch your *activity instance* state (whatever variable holds it)
+      setActivity((prev) => (prev ? { ...prev, ...patch } : prev));
+
+      // If some patch fields live elsewhere, update them too:
+      if (Object.prototype.hasOwnProperty.call(patch, 'activeStudentId')) {
+        setActiveStudentId(patch.activeStudentId != null ? Number(patch.activeStudentId) : null);
+      }
+    }
+
+    socket.on('instance:state', onInstanceState);
+    return () => socket.off('instance:state', onInstanceState);
+  }, [socket, instanceId, setActiveStudentId]);
+
+  useEffect(() => {
     console.log('[RUN] isTestMode:', isTestMode);
   }, [isTestMode]);
 
@@ -776,6 +824,66 @@ export default function RunActivityPage({
     );
     console.debug(`[${PAGE_TAG}] fileContents changed:`, sizes);
   }, [fileContents]);
+
+  const activeStudentIdRef = useRef(null);
+  useEffect(() => { activeStudentIdRef.current = activeStudentId; }, [activeStudentId]);
+
+  useEffect(() => {
+    if (isTestMode) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/active-student`, {
+          credentials: 'include',
+        }); const data = await res.json();
+        if (Object.prototype.hasOwnProperty.call(data || {}, 'activeStudentId')) {
+          const rawId = data.activeStudentId;
+          const nextId =
+            rawId != null && Number.isFinite(Number(rawId)) && Number(rawId) > 0
+              ? Number(rawId)
+              : null;
+
+          if (nextId !== activeStudentIdRef.current) {
+            setActiveStudentId(nextId);
+          }
+        }
+      } catch { }
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [instanceId, isTestMode]);
+
+  useEffect(() => {
+    if (String(activity?.progress_status || '').toLowerCase() === 'completed') return;
+    const sendHeartbeat = async () => {
+      if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
+      try {
+        await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/heartbeat`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              userId: user.id,
+              sectionTimerKey: currentTimedSection?.key || null,
+              sectionTimerDurationMinutes: currentTimedSection?.minutes || null,
+            }),
+          }
+        );
+      } catch { }
+    };
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, 20000);
+    return () => clearInterval(interval);
+  }, [
+    user?.id,
+    instanceId,
+    groups,
+    activity?.progress_status,
+    currentTimedSection?.key,
+    currentTimedSection?.minutes,
+  ]);
+
 
   useEffect(() => {
     const loadScript = (src) =>
@@ -2421,8 +2529,8 @@ export default function RunActivityPage({
           : prev
       ));
 
-      if (result?.activeStudentId != null) {
-        setActiveStudentId(Number(result.activeStudentId));
+      if (Object.prototype.hasOwnProperty.call(result || {}, 'activeStudentId')) {
+        setActiveStudentId(result.activeStudentId != null ? Number(result.activeStudentId) : null);
       }
 
       if (advancedByServer) {

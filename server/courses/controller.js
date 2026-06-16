@@ -181,6 +181,7 @@ async function getCourseActivities(req, res) {
     a.sheet_url AS sheet_url,
     a.source_type AS source_type,
     a.content_text AS content_text,
+    COALESCE(pc.demo_mode, 0) AS class_demo_mode,
 
     -- instance id
     (
@@ -260,6 +261,7 @@ async function getCourseActivities(req, res) {
 
   FROM pogil_activities a
   JOIN courses c ON a.class_id = c.class_id
+  LEFT JOIN pogil_classes pc ON pc.id = c.class_id
   LEFT JOIN activity_instances ai
     ON ai.activity_id = a.id
    AND ai.course_id = c.id
@@ -320,11 +322,16 @@ async function getCourseActivities(req, res) {
         is_ready: !!row.is_ready,
         has_groups: row.group_count > 0,
         hidden: !!row.hidden,
+        class_demo_mode: Boolean(row.class_demo_mode),
       };
     }));
 
     const visibleActivities = role === 'student'
-      ? activities.filter((activity) => !activity.hidden && (activity.activity_type === 'demo' || activity.has_groups))
+      ? activities.filter(
+          (activity) =>
+            !activity.hidden &&
+            (activity.activity_type === 'demo' || activity.has_groups || activity.class_demo_mode)
+        )
       : activities;
 
     res.json(visibleActivities);

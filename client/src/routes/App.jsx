@@ -54,6 +54,8 @@ function AppRoutes() {
 
       <Routes>
         <Route path="/" element={<LoginPage />} />
+        <Route path="/aied2026" element={<DemoLandingPage defaultDemoCode="aied2026" />} />
+        <Route path="/aied2026/:demoPath" element={<DemoPathPage defaultDemoCode="aied2026" />} />
         <Route path="/demo/:demoCode" element={<DemoLandingPage />} />
         <Route path="/demo/:demoCode/:demoPath" element={<DemoPathPage />} />
         <Route path="/register" element={<RegisterPage />} />

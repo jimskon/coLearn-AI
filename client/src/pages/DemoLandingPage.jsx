@@ -30,9 +30,10 @@ const valueProps = [
   'Easy instructor demonstration for modeling an activity before class use.',
 ];
 
-export default function DemoLandingPage() {
+export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const navigate = useNavigate();
-  const { demoCode = '' } = useParams();
+  const { demoCode: routeDemoCode = '' } = useParams();
+  const demoCode = routeDemoCode || defaultDemoCode;
 
   const openDemoPath = (pathKey) => {
     navigate(`/demo/${encodeURIComponent(demoCode)}/${pathKey}`);

@@ -16,8 +16,9 @@ const pageCopy = {
   },
 };
 
-export default function DemoPathPage() {
-  const { demoCode = '', demoPath = '' } = useParams();
+export default function DemoPathPage({ defaultDemoCode = '' }) {
+  const { demoCode: routeDemoCode = '', demoPath = '' } = useParams();
+  const demoCode = routeDemoCode || defaultDemoCode;
   const copy = pageCopy[demoPath] || {
     title: 'Demo Path',
     body: 'This demo route is ready to receive the selected code and continue into the next step.',

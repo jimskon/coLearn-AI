@@ -1,5 +1,5 @@
 import React from 'react';
-import { Button, Card, Col, Container, Row } from 'react-bootstrap';
+import { Button, Card, Col, Container, Form, Row } from 'react-bootstrap';
 import { useNavigate, useParams } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
@@ -40,6 +40,7 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const { setUser } = useUser();
   const [studentBusy, setStudentBusy] = React.useState(false);
   const [studentError, setStudentError] = React.useState('');
+  const [guestName, setGuestName] = React.useState('');
 
   const openDemoPath = (pathKey) => {
     navigate(`/demo/${encodeURIComponent(demoCode)}/${pathKey}`);
@@ -53,7 +54,7 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ demoCode }),
+        body: JSON.stringify({ demoCode, guestName }),
       });
 
       const data = await res.json().catch(() => ({}));
@@ -110,6 +111,22 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                       <span className="fw-semibold me-2">Demo code</span>
                       <code>{demoCode}</code>
                     </div>
+
+                    <Form.Group className="mb-4" controlId="demoGuestName">
+                      <Form.Label className="fw-semibold">Your name</Form.Label>
+                      <Form.Control
+                        type="text"
+                        size="lg"
+                        placeholder="Enter the name you want others to see"
+                        value={guestName}
+                        onChange={(event) => setGuestName(event.target.value)}
+                        maxLength={80}
+                        autoComplete="nickname"
+                      />
+                      <Form.Text className="text-muted">
+                        We&apos;ll show this in the group and activity views.
+                      </Form.Text>
+                    </Form.Group>
 
                     <div className="d-grid gap-3">
                       {demoOptions.map((option) => (

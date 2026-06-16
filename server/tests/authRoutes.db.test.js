@@ -282,6 +282,45 @@ test('demo student login creates a guest session and enrolls the guest in a demo
   assert.equal(enrollments.length, 1);
 });
 
+test('demo student login uses the provided guest name as the display name', async () => {
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
+  `);
+
+  const className = `Named Demo Class ${Date.now()}`;
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
+     VALUES (?, ?, 1, NULL)`,
+    [className, 'Demo-only class']
+  );
+  const classId = rememberId('classes', classResult.insertId);
+
+  const demoCode = `NAME${String(Date.now()).slice(-4)}`;
+  const [courseResult] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    ['Named Demo Instance', demoCode, 'DEMO', 'summer', 2026, classId]
+  );
+  const courseId = rememberId('courses', courseResult.insertId);
+
+  const response = await requestJson('/api/auth/demo/student', {
+    body: { demoCode, guestName: '  Ada   Lovelace  ' },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.user.role, 'student');
+  assert.equal(response.body.user.name, 'Ada Lovelace');
+  assert.equal(response.body.course.id, courseId);
+  rememberId('users', response.body.user.id);
+
+  const [rows] = await db.query(
+    `SELECT name FROM users WHERE id = ?`,
+    [response.body.user.id]
+  );
+  assert.equal(rows[0].name, 'Ada Lovelace');
+});
+
 test('login session can be read by whoami and cleared by logout', async () => {
   const server = await createTestServer();
   const jar = createCookieJar();

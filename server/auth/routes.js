@@ -58,7 +58,16 @@ async function createUserDirect({ name, email, password }) {
   }
 }
 
-async function createGuestDemoUser(conn, demoCode) {
+function normalizeDemoGuestName(rawName) {
+  const cleaned = String(rawName || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+
+  return cleaned || null;
+}
+
+async function createGuestDemoUser(conn, demoCode, requestedName = '') {
   const [result] = await conn.query(
     'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
     [
@@ -70,7 +79,9 @@ async function createGuestDemoUser(conn, demoCode) {
   );
 
   const guestId = Number(result.insertId);
-  const guestName = `AIED Guest ${String(guestId).padStart(3, '0')}`;
+  const guestName =
+    normalizeDemoGuestName(requestedName) ||
+    `AIED Guest ${String(guestId).padStart(3, '0')}`;
 
   await conn.query('UPDATE users SET name = ? WHERE id = ?', [guestName, guestId]);
 
@@ -221,6 +232,7 @@ router.post('/login', async (req, res) => {
 
 router.post('/demo/student', async (req, res) => {
   const demoCode = String(req.body?.demoCode || '').trim();
+  const guestName = String(req.body?.guestName || '');
   if (!demoCode) {
     return res.status(400).json({ error: 'Missing demoCode' });
   }
@@ -248,7 +260,7 @@ router.post('/demo/student', async (req, res) => {
       }
 
       const course = courses[0];
-      const guest = await createGuestDemoUser(conn, demoCode);
+      const guest = await createGuestDemoUser(conn, demoCode, guestName);
 
       await conn.query(
         `INSERT INTO course_enrollments (student_id, course_id) VALUES (?, ?)`,

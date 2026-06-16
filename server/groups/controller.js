@@ -81,9 +81,14 @@ async function pruneInactiveDemoMembers(conn, activityId, courseId) {
         AND ai.course_id = ?
         AND ai.status = 'in_progress'
         AND (
-          gm.last_heartbeat IS NULL
-          OR gm.last_heartbeat < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
-          OR COALESCE(gm.connected, 0) = 0
+          (
+            gm.last_heartbeat IS NULL
+            AND ai.start_time < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+          )
+          OR (
+            gm.last_heartbeat IS NOT NULL
+            AND gm.last_heartbeat < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+          )
         )`,
     [activityId, courseId]
   );

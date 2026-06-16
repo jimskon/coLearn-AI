@@ -20,6 +20,9 @@ export default function ManageCoursesPage() {
   });
   const [classList, setClassList] = useState([]);
 
+  const selectedClass = classList.find((row) => String(row.id) === String(newCourse.class_id)) || null;
+  const isDemoClassSelected = Boolean(selectedClass?.demo_mode);
+
   useEffect(() => {
     console.log("ManageCoursesPage useEffect: user =", user);
     if (!user) return;  // Wait for user context to load
@@ -128,6 +131,7 @@ export default function ManageCoursesPage() {
           <tr>
             <th>Name</th>
             <th>Join Code</th>
+            <th>Mode</th>
             <th>Section</th>
             <th>Semester</th>
             <th>Year</th>
@@ -141,6 +145,13 @@ export default function ManageCoursesPage() {
             <tr key={course.id}>
               <td>{course.name}</td>
               <td>{course.code}</td>
+              <td>
+                {course.class_demo_mode ? (
+                  <span className="badge bg-warning text-dark">Demo</span>
+                ) : (
+                  <span className="text-muted">Standard</span>
+                )}
+              </td>
               <td>{course.section}</td>
               <td>{course.semester}</td>
               <td>{course.year}</td>
@@ -201,12 +212,17 @@ export default function ManageCoursesPage() {
             </Form.Group>
           </Col>
           <Col md={2}>
-            <Form.Group>
-              <Form.Label>Join Code</Form.Label>
+              <Form.Group>
+              <Form.Label>{isDemoClassSelected ? 'Demo Code' : 'Join Code'}</Form.Label>
               <Form.Control
                 value={newCourse.code}
                 onChange={(e) => handleChange("code", e.target.value)}
               />
+              <Form.Text className="text-muted">
+                {isDemoClassSelected
+                  ? 'Visitors will use this code as the public demo code for the instance.'
+                  : 'Students use this code to join the instance.'}
+              </Form.Text>
             </Form.Group>
           </Col>
           <Col md={2}>
@@ -255,13 +271,18 @@ export default function ManageCoursesPage() {
                 <option value="">Select a class</option>
                 {classList.map((c) => (
                   <option key={c.id} value={c.id}>
-                    {c.name}
+                    {c.name}{c.demo_mode ? ' (Demo)' : ''}
                   </option>
                 ))}
               </Form.Select>
             </Form.Group>
           </Col>
         </Row>
+        {isDemoClassSelected ? (
+          <div className="mt-3 text-muted">
+            This instance will be created from a demo class and shown as a demo in the instance list.
+          </div>
+        ) : null}
         <Button className="mt-3" onClick={handleAddCourse}>
           Add Instance
         </Button>

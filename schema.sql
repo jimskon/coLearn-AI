@@ -221,6 +221,7 @@ CREATE TABLE `pogil_classes` (
   `google_folder_status` varchar(32) DEFAULT NULL,
   `level` varchar(255) DEFAULT NULL,
   `topic_domain` varchar(255) DEFAULT NULL,
+  `demo_mode` tinyint(1) NOT NULL DEFAULT 0,
   PRIMARY KEY (`id`),
   UNIQUE KEY `name` (`name`),
   KEY `created_by` (`created_by`),
@@ -296,4 +297,3 @@ CREATE TABLE `users` (
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
-

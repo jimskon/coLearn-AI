@@ -57,8 +57,8 @@ async function createUser(role = 'student') {
 
 async function createClassRecord() {
   const [result] = await db.query(
-    'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
-    [uniqueValue('Course Class'), 'Class for course route tests', null]
+    'INSERT INTO pogil_classes (name, description, demo_mode, created_by) VALUES (?, ?, ?, ?)',
+    [uniqueValue('Course Class'), 'Class for course route tests', 0, null]
   );
   return remember('classes', result.insertId);
 }
@@ -202,6 +202,7 @@ test('root user can list courses with class and instructor names', async () => {
   assert.equal(course.code, code);
   assert.equal(course.instructor_name, instructor.name);
   assert.match(course.class_name, /^Course Class-/);
+  assert.equal(course.class_demo_mode, 0);
 });
 
 test('enroll-by-code enrolls a student, lists enrollment, and rejects duplicates', async () => {

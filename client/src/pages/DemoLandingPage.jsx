@@ -1,5 +1,8 @@
+import React from 'react';
 import { Button, Card, Col, Container, Row } from 'react-bootstrap';
 import { useNavigate, useParams } from 'react-router-dom';
+import { API_BASE_URL } from '../config';
+import { useUser } from '../context/UserContext';
 
 const demoOptions = [
   {
@@ -34,9 +37,40 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const navigate = useNavigate();
   const { demoCode: routeDemoCode = '' } = useParams();
   const demoCode = routeDemoCode || defaultDemoCode;
+  const { setUser } = useUser();
+  const [studentBusy, setStudentBusy] = React.useState(false);
+  const [studentError, setStudentError] = React.useState('');
 
   const openDemoPath = (pathKey) => {
     navigate(`/demo/${encodeURIComponent(demoCode)}/${pathKey}`);
+  };
+
+  const handleStudentDemo = async () => {
+    setStudentBusy(true);
+    setStudentError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/demo/student`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ demoCode }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.user || !data?.course?.id) {
+        throw new Error(data?.error || 'Failed to start student demo');
+      }
+
+      localStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
+      navigate(`/courses/${data.course.id}/activities`, {
+        state: { courseName: data.course.name },
+      });
+    } catch (err) {
+      setStudentError(err?.message || 'Failed to start student demo');
+    } finally {
+      setStudentBusy(false);
+    }
   };
 
   return (
@@ -84,13 +118,21 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                           variant={option.variant}
                           size="lg"
                           className="text-start py-3 px-4"
-                          onClick={() => openDemoPath(option.key)}
+                          onClick={() =>
+                            option.key === 'student'
+                              ? handleStudentDemo()
+                              : openDemoPath(option.key)
+                          }
+                          disabled={studentBusy && option.key === 'student'}
                         >
-                          <div className="fw-semibold">{option.label}</div>
+                          <div className="fw-semibold">
+                            {option.key === 'student' && studentBusy ? 'Starting Student Demo...' : option.label}
+                          </div>
                           <div className="small opacity-75 mt-1">{option.description}</div>
                         </Button>
                       ))}
                     </div>
+                    {studentError ? <div className="text-danger mt-3">{studentError}</div> : null}
                   </Col>
 
                   <Col lg={5}>

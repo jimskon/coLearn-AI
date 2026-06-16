@@ -17,6 +17,9 @@ function uniqueEmail(prefix) {
 
 const created = {
   emails: new Set(),
+  users: new Set(),
+  classes: new Set(),
+  courses: new Set(),
 };
 
 function rememberEmail(email) {
@@ -26,10 +29,30 @@ function rememberEmail(email) {
 
 async function cleanupCreatedRows() {
   const emails = [...created.emails];
+  const userIds = [...created.users];
+  const courseIds = [...created.courses];
+  const classIds = [...created.classes];
+
+  if (courseIds.length) {
+    await db.query(`DELETE FROM course_enrollments WHERE course_id IN (?)`, [courseIds]).catch(() => {});
+    await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]).catch(() => {});
+  }
+  if (classIds.length) {
+    await db.query(`DELETE FROM pogil_classes WHERE id IN (?)`, [classIds]).catch(() => {});
+  }
+  if (userIds.length) {
+    await db.query(`DELETE FROM users WHERE id IN (?)`, [userIds]).catch(() => {});
+  }
   if (!emails.length) return;
 
   await db.query(`DELETE FROM pending_users WHERE email IN (?)`, [emails]).catch(() => {});
   await db.query(`DELETE FROM users WHERE email IN (?)`, [emails]);
+}
+
+function rememberId(kind, id) {
+  const numericId = Number(id);
+  if (Number.isFinite(numericId)) created[kind].add(numericId);
+  return numericId;
 }
 
 function createTestServer() {
@@ -216,6 +239,47 @@ test('whoami rejects requests without a session', async () => {
 
   assert.equal(response.status, 401);
   assert.deepEqual(response.body, { error: 'Not logged in' });
+});
+
+test('demo student login creates a guest session and enrolls the guest in a demo class course', async () => {
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
+  `);
+
+  const className = `Demo Class ${Date.now()}`;
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
+     VALUES (?, ?, 1, NULL)`,
+    [className, 'Demo-only class']
+  );
+  const classId = rememberId('classes', classResult.insertId);
+
+  const demoCode = `AIED${String(Date.now()).slice(-4)}`;
+  const [courseResult] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    ['AIED Demo Instance', demoCode, 'DEMO', 'summer', 2026, classId]
+  );
+  const courseId = rememberId('courses', courseResult.insertId);
+
+  const response = await requestJson('/api/auth/demo/student', {
+    body: { demoCode },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.user.role, 'student');
+  assert.match(response.body.user.name, /^AIED Guest \d+$/);
+  assert.equal(response.body.course.id, courseId);
+  assert.equal(response.body.course.code, demoCode);
+  assert.match(response.headers.get('set-cookie') || '', /connect\.sid=/);
+  rememberId('users', response.body.user.id);
+
+  const [enrollments] = await db.query(
+    `SELECT 1 AS ok FROM course_enrollments WHERE student_id = ? AND course_id = ?`,
+    [response.body.user.id, courseId]
+  );
+  assert.equal(enrollments.length, 1);
 });
 
 test('login session can be read by whoami and cleared by logout', async () => {

@@ -25,6 +25,7 @@ export default function CourseActivitiesPage() {
   const navigate = useNavigate();
 
   const [activities, setActivities] = useState([]);
+  const [courseInfo, setCourseInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const { user } = useUser();
@@ -32,12 +33,22 @@ export default function CourseActivitiesPage() {
   useEffect(() => {
     const fetchActivities = async () => {
       try {
-        const res = await fetch(`${API_BASE_URL}/api/courses/${courseId}/activities`, {
-          credentials: 'include',
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const [activitiesRes, courseInfoRes] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/courses/${courseId}/activities`, {
+            credentials: 'include',
+          }),
+          fetch(`${API_BASE_URL}/api/courses/${courseId}/info`, {
+            credentials: 'include',
+          }),
+        ]);
+
+        if (!activitiesRes.ok) throw new Error(`HTTP ${activitiesRes.status}`);
+        if (!courseInfoRes.ok) throw new Error(`HTTP ${courseInfoRes.status}`);
+
+        const data = await activitiesRes.json();
+        const courseInfoData = await courseInfoRes.json();
         setActivities(Array.isArray(data) ? data : []);
+        setCourseInfo(courseInfoData || null);
       } catch (err) {
         console.error('❌ Failed to fetch activities:', err);
         setError('Unable to load activities.');
@@ -48,6 +59,8 @@ export default function CourseActivitiesPage() {
 
     fetchActivities();
   }, [courseId]);
+
+  const isDemoClass = Boolean(courseInfo?.class_demo_mode);
 
   const ensureDemoInstance = async (activity) => {
     const res = await fetch(
@@ -71,6 +84,7 @@ export default function CourseActivitiesPage() {
     const activityType = activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
     const isTest = activityType === 'test';
     const isDemo = activityType === 'demo';
+    const isDemoClassGroup = isDemoClass && !isTest && !isDemo;
     let instanceId = activity.instance_id;
 
     if (isDemo) {
@@ -90,12 +104,46 @@ export default function CourseActivitiesPage() {
       }
     }
 
+    if (!isInstructor && isDemoClassGroup && !instanceId) {
+      try {
+        const res = await fetch(
+          `${API_BASE_URL}/api/groups/${activityId}/${courseId}/smart-add`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ studentId: user?.id }),
+          }
+        );
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.activityInstanceId) {
+          throw new Error(data?.error || `HTTP ${res.status}`);
+        }
+
+        instanceId = Number(data.activityInstanceId);
+        setActivities((prev) =>
+          prev.map((a) =>
+            a.activity_id === activity.activity_id
+              ? { ...a, instance_id: instanceId, has_groups: true }
+              : a
+          )
+        );
+      } catch (err) {
+        console.error('❌ Failed to auto-place student in demo group:', err);
+        alert(err?.message || 'Unable to join a demo group.');
+        return;
+      }
+    }
+
     const path = isInstructor
       ? (isTest
         ? `/test-setup/${courseId}/${activityId}`   // ✅ tests go here
         : isDemo
           ? `/run/${instanceId}`
-          : `/setup-groups/${courseId}/${activityId}` // ✅ non-tests go here
+          : isDemoClassGroup
+            ? `/view-groups/${courseId}/${activityId}`
+            : `/setup-groups/${courseId}/${activityId}` // ✅ non-tests go here
       )
       : `/run/${instanceId}`;
 
@@ -167,7 +215,8 @@ export default function CourseActivitiesPage() {
                 activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
               const isTest = activityType === 'test';
               const isDemo = activityType === 'demo';
-              const setupLabel = isDemo ? 'Open Demo' : 'Setup Groups';
+              const isDemoClassGroup = isDemoClass && !isTest && !isDemo;
+              const setupLabel = isDemo ? 'Open Demo' : isDemoClassGroup ? 'Live Groups' : 'Setup Groups';
               const viewLabel = isDemo ? 'View Demo' : 'View Groups';
               const typeLabel = TYPE_LABELS[activityType] || 'Group';
               const typeVariant = TYPE_BADGE_VARIANTS[activityType] || 'secondary';
@@ -181,12 +230,12 @@ export default function CourseActivitiesPage() {
                     </div>
                   </td>
                   <td>
-                    {user?.role === 'student' && (activity.instance_id || isDemo) && !activity.hidden ? (
+                    {user?.role === 'student' && (activity.instance_id || isDemo || isDemoClassGroup) && !activity.hidden ? (
 
                       (() => {
                         const status = activity.student_status;
 
-                        let label = isDemo ? 'Open Demo' : 'Start';
+                        let label = isDemo ? 'Open Demo' : isDemoClassGroup ? 'Join Demo Group' : 'Start';
                         let variant = 'success';
 
                         if (isDemo) {

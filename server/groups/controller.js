@@ -60,8 +60,57 @@ async function createNewTestInstance(conn, activityId, courseId) {
   return { id: ins.insertId, groupNumber: next_num };
 }
 
-// helper: which existing instance has space (<4)?
-async function pickGroupWithSpace(conn, activityId, courseId) {
+async function isDemoCourse(conn, courseId) {
+  const [[row]] = await conn.query(
+    `SELECT COALESCE(pc.demo_mode, 0) AS demo_mode
+       FROM courses c
+       LEFT JOIN pogil_classes pc ON pc.id = c.class_id
+      WHERE c.id = ?
+      LIMIT 1`,
+    [courseId]
+  );
+  return Number(row?.demo_mode) === 1;
+}
+
+async function pruneInactiveDemoMembers(conn, activityId, courseId) {
+  await conn.query(
+    `DELETE gm
+       FROM group_members gm
+       JOIN activity_instances ai ON ai.id = gm.activity_instance_id
+      WHERE ai.activity_id = ?
+        AND ai.course_id = ?
+        AND ai.status = 'in_progress'
+        AND (
+          (
+            gm.last_heartbeat IS NULL
+            AND ai.start_time < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+          )
+          OR (
+            gm.last_heartbeat IS NOT NULL
+            AND gm.last_heartbeat < DATE_SUB(NOW(), INTERVAL 2 MINUTE)
+          )
+        )`,
+    [activityId, courseId]
+  );
+
+  await conn.query(
+    `DELETE FROM activity_instances
+      WHERE activity_id = ?
+        AND course_id = ?
+        AND status = 'in_progress'
+        AND id NOT IN (
+          SELECT activity_instance_id
+            FROM (
+              SELECT DISTINCT gm.activity_instance_id
+                FROM group_members gm
+            ) AS active_groups
+        )`,
+    [activityId, courseId]
+  );
+}
+
+// helper: which existing instance has space (<maxSize)?
+async function pickGroupWithSpace(conn, activityId, courseId, maxSize = 4) {
   const [rows] = await conn.query(
     `
     SELECT ai.id AS activity_instance_id, ai.group_number, COUNT(gm.id) AS size
@@ -74,7 +123,7 @@ async function pickGroupWithSpace(conn, activityId, courseId) {
     [activityId, courseId]
   );
 
-  const spot = rows.find((r) => Number(r.size) < 4);
+  const spot = rows.find((r) => Number(r.size) < maxSize);
   return spot
     ? { id: spot.activity_instance_id, groupNumber: spot.group_number }
     : null;
@@ -256,6 +305,7 @@ async function smartAddStudent(req, res) {
     }
 
     const testMode = await isTestActivity(conn, activityId);
+    const demoCourse = !testMode && await isDemoCourse(conn, courseId);
 
     let group;
     let role = null;
@@ -265,8 +315,12 @@ async function smartAddStudent(req, res) {
       // TEST: always create a brand-new instance (group of 1)
       group = await createNewTestInstance(conn, activityId, courseId);
     } else {
+      if (demoCourse) {
+        await pruneInactiveDemoMembers(conn, activityId, courseId);
+      }
+
       // NORMAL ACTIVITY: try to place into a group with space, else create new
-      group = await pickGroupWithSpace(conn, activityId, courseId);
+      group = await pickGroupWithSpace(conn, activityId, courseId, demoCourse ? 2 : 4);
       if (!group) group = await createNewGroup(conn, activityId, courseId);
 
       role = await nextOpenRole(conn, group.id);

@@ -16,6 +16,7 @@ export default function ManageClassesPage() {
     level: '',
     topic_domain: '',
     description: '',
+    demo_mode: false,
   };
   const [classForm, setClassForm] = useState(emptyForm);
   const [isSaving, setIsSaving] = useState(false);
@@ -44,6 +45,7 @@ export default function ManageClassesPage() {
       level: classRow.level || '',
       topic_domain: classRow.topic_domain || '',
       description: classRow.description || '',
+      demo_mode: Boolean(classRow.demo_mode),
     });
     setModalError('');
     setShowClassModal(true);
@@ -55,7 +57,8 @@ export default function ManageClassesPage() {
   };
 
   const handleModalFieldChange = (e) => {
-    setClassForm({ ...classForm, [e.target.name]: e.target.value });
+    const { name, type, checked, value } = e.target;
+    setClassForm({ ...classForm, [name]: type === 'checkbox' ? checked : value });
   };
 
   const handleSaveClass = async (e) => {
@@ -75,6 +78,7 @@ export default function ManageClassesPage() {
       level: classForm.level.trim() || null,
       topic_domain: classForm.topic_domain.trim() || null,
       description: classForm.description.trim() || null,
+      demo_mode: Boolean(classForm.demo_mode),
     };
 
     try {
@@ -129,6 +133,7 @@ export default function ManageClassesPage() {
             <th>Name</th>
             <th>Level</th>
             <th>Topic / Domain</th>
+            <th>Mode</th>
             <th>Description</th>
             <th style={{ width: '30%' }}>Actions</th>
           </tr>
@@ -139,6 +144,9 @@ export default function ManageClassesPage() {
               <td>{c.name}</td>
               <td>{c.level || <span className="text-muted">—</span>}</td>
               <td>{c.topic_domain || <span className="text-muted">—</span>}</td>
+              <td>
+                {c.demo_mode ? <span className="badge bg-warning text-dark">Demo</span> : <span className="text-muted">Standard</span>}
+              </td>
               <td>{c.description || <span className="text-muted">—</span>}</td>
               <td>
                 <Button type="button" variant="success" size="sm" onClick={() => openEditModal(c)} className="me-2">Update</Button>
@@ -197,6 +205,18 @@ export default function ManageClassesPage() {
                 onChange={handleModalFieldChange}
                 placeholder="Describe the class"
               />
+            </Form.Group>
+            <Form.Group className="mt-3" controlId="classDemoMode">
+              <Form.Check
+                type="checkbox"
+                name="demo_mode"
+                checked={Boolean(classForm.demo_mode)}
+                onChange={handleModalFieldChange}
+                label="Demo mode"
+              />
+              <Form.Text className="text-muted">
+                Demo classes use a demo code when you create instances and are labeled as demos in the instance list.
+              </Form.Text>
             </Form.Group>
             {modalError ? <div className="text-danger mt-3">{modalError}</div> : null}
           </Modal.Body>

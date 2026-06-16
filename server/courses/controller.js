@@ -1,6 +1,7 @@
 // /courses/controller.js
 const db = require("../db");
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
+const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
 
 // GET all courses
 async function getAllCourses(req, res) {
@@ -9,8 +10,9 @@ async function getAllCourses(req, res) {
   const role = user?.role;
 
   try {
+    await ensureDemoModeSchema();
     let coursesQuery = `
-      SELECT DISTINCT c.*, pc.name AS class_name, u.name AS instructor_name
+      SELECT DISTINCT c.*, pc.name AS class_name, pc.demo_mode AS class_demo_mode, u.name AS instructor_name
       FROM courses c
       LEFT JOIN pogil_classes pc ON c.class_id = pc.id
       LEFT JOIN users u ON c.instructor_id = u.id
@@ -92,12 +94,15 @@ async function getCourseEnrollments(req, res) {
   const { courseId } = req.params;
   const userId = req.user?.id; // Add this line
   try {
+    await ensureDemoModeSchema();
     const [rows] = await db.query(
       `SELECT 
          c.id, c.name, c.code, c.section, c.semester, c.year,
+         c.class_id, pc.name AS class_name, pc.demo_mode AS class_demo_mode,
          u.name AS instructor_name
        FROM course_enrollments ce
        JOIN courses c ON ce.course_id = c.id
+       LEFT JOIN pogil_classes pc ON c.class_id = pc.id
        LEFT JOIN users u ON c.instructor_id = u.id
        WHERE ce.student_id = ?`,
       [userId]
@@ -176,6 +181,7 @@ async function getCourseActivities(req, res) {
     a.sheet_url AS sheet_url,
     a.source_type AS source_type,
     a.content_text AS content_text,
+    COALESCE(pc.demo_mode, 0) AS class_demo_mode,
 
     -- instance id
     (
@@ -255,6 +261,7 @@ async function getCourseActivities(req, res) {
 
   FROM pogil_activities a
   JOIN courses c ON a.class_id = c.class_id
+  LEFT JOIN pogil_classes pc ON pc.id = c.class_id
   LEFT JOIN activity_instances ai
     ON ai.activity_id = a.id
    AND ai.course_id = c.id
@@ -315,11 +322,16 @@ async function getCourseActivities(req, res) {
         is_ready: !!row.is_ready,
         has_groups: row.group_count > 0,
         hidden: !!row.hidden,
+        class_demo_mode: Boolean(row.class_demo_mode),
       };
     }));
 
     const visibleActivities = role === 'student'
-      ? activities.filter((activity) => !activity.hidden && (activity.activity_type === 'demo' || activity.has_groups))
+      ? activities.filter(
+          (activity) =>
+            !activity.hidden &&
+            (activity.activity_type === 'demo' || activity.has_groups || activity.class_demo_mode)
+        )
       : activities;
 
     res.json(visibleActivities);
@@ -463,10 +475,13 @@ async function getCourseInfo(req, res) {
   const { courseId } = req.params;
 
   try {
+    await ensureDemoModeSchema();
     const [rows] = await db.query(
-      `SELECT id, name, code, section, semester, year, instructor_id
-       FROM courses
-       WHERE id = ?`,
+      `SELECT c.id, c.name, c.code, c.section, c.semester, c.year, c.instructor_id,
+              c.class_id, pc.name AS class_name, pc.demo_mode AS class_demo_mode
+       FROM courses c
+       LEFT JOIN pogil_classes pc ON c.class_id = pc.id
+       WHERE c.id = ?`,
       [courseId]
     );
     console.log("getCourseInfo for courseId:", courseId, "Result:", rows);

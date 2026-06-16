@@ -1,9 +1,11 @@
 // server/auth/routes.js
 const express = require('express');
 const bcrypt = require('bcrypt');
+const crypto = require('node:crypto');
 const pool = require('../db');
 const router = express.Router();
 const nodemailer = require('nodemailer');
+const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
 
 
 // ===== Config =====
@@ -54,6 +56,40 @@ async function createUserDirect({ name, email, password }) {
   } finally {
     conn.release();
   }
+}
+
+function normalizeDemoGuestName(rawName) {
+  const cleaned = String(rawName || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+
+  return cleaned || null;
+}
+
+async function createGuestDemoUser(conn, demoCode, requestedName = '') {
+  const [result] = await conn.query(
+    'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
+    [
+      'Demo Guest',
+      `demo-${String(demoCode || 'guest').toLowerCase()}-${Date.now()}-${crypto.randomUUID()}@colearn-ai.demo`,
+      await bcrypt.hash(crypto.randomUUID(), 10),
+      'student',
+    ]
+  );
+
+  const guestId = Number(result.insertId);
+  const guestName =
+    normalizeDemoGuestName(requestedName) ||
+    `Guest ${guestId}`;
+
+  await conn.query('UPDATE users SET name = ? WHERE id = ?', [guestName, guestId]);
+
+  return {
+    id: guestId,
+    name: guestName,
+    role: 'student',
+  };
 }
 
 // ===================== REGISTER =====================
@@ -191,6 +227,66 @@ router.post('/login', async (req, res) => {
   } catch (err) {
     console.error('Login error:', err);
     return res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+router.post('/demo/student', async (req, res) => {
+  const demoCode = String(req.body?.demoCode || '').trim();
+  const guestName = String(req.body?.guestName || '');
+  if (!demoCode) {
+    return res.status(400).json({ error: 'Missing demoCode' });
+  }
+
+  try {
+    await ensureDemoModeSchema();
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [courses] = await conn.query(
+        `SELECT c.id, c.name, c.code
+           FROM courses c
+           JOIN pogil_classes pc ON pc.id = c.class_id
+          WHERE c.code = ?
+            AND pc.demo_mode = 1
+          ORDER BY c.id ASC
+          LIMIT 1`,
+        [demoCode]
+      );
+
+      if (!courses.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Demo not found for that code' });
+      }
+
+      const course = courses[0];
+      const guest = await createGuestDemoUser(conn, demoCode, guestName);
+
+      await conn.query(
+        `INSERT INTO course_enrollments (student_id, course_id) VALUES (?, ?)`,
+        [guest.id, course.id]
+      );
+
+      await conn.commit();
+
+      req.session.userId = guest.id;
+      return res.status(201).json({
+        user: guest,
+        course: {
+          id: Number(course.id),
+          name: course.name,
+          code: course.code,
+        },
+      });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  } catch (err) {
+    console.error('Demo student login error:', err);
+    return res.status(500).json({ error: 'Failed to start demo student session' });
   }
 });
 

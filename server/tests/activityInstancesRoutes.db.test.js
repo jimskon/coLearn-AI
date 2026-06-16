@@ -74,8 +74,14 @@ async function ensureSchema() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(191) NOT NULL UNIQUE,
       description TEXT DEFAULT NULL,
+      demo_mode TINYINT(1) NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL
     )
+  `);
+
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
   `);
 
   await db.query(`
@@ -212,10 +218,10 @@ async function createUser(role = 'student') {
   };
 }
 
-async function createClassRecord() {
+async function createClassRecord({ demoMode = false } = {}) {
   const [result] = await db.query(
-    'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
-    [uniqueValue('ActivityInstanceClass'), 'Class for activity instance tests', null]
+    'INSERT INTO pogil_classes (name, description, demo_mode, created_by) VALUES (?, ?, ?, ?)',
+    [uniqueValue('ActivityInstanceClass'), 'Class for activity instance tests', demoMode ? 1 : 0, null]
   );
   return remember('classes', result.insertId);
 }
@@ -933,6 +939,78 @@ test('active-student returns null for completed activity instances and clears st
   );
   assert.equal(instance.progress_status, 'completed');
   assert.equal(instance.active_student_id, null);
+});
+
+test('demo-roster reset clears demo activity groups, responses, and drafts', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord({ demoMode: true });
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceOne = await createInstance({ activityId, courseId, groupNumber: 1 });
+  const instanceTwo = await createInstance({ activityId, courseId, groupNumber: 2 });
+
+  await addGroupMember({ instanceId: instanceOne, studentId: studentA.id, role: 'facilitator', connected: true });
+  await addGroupMember({ instanceId: instanceTwo, studentId: studentB.id, role: 'analyst', connected: true });
+
+  await db.query(
+    `INSERT INTO responses
+       (activity_instance_id, question_id, response_type, response, answered_by_user_id)
+     VALUES (?, '1a', 'text', 'hello', ?)`,
+    [instanceOne, studentA.id]
+  );
+  await db.query(
+    `INSERT INTO response_drafts
+       (activity_instance_id, question_id, response_type, response, answered_by_user_id)
+     VALUES (?, '1a', 'text', 'draft', ?)`,
+    [instanceTwo, studentB.id]
+  );
+
+  const response = await requestJson(
+    instructor,
+    `/api/activity-instances/by-activity/${courseId}/${activityId}/demo-roster`,
+    { method: 'DELETE' }
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(Number(response.body.clearedInstances), 2);
+  assert.equal(Number(response.body.clearedMembers), 2);
+  assert.equal(Number(response.body.clearedResponses), 1);
+  assert.equal(Number(response.body.clearedDrafts), 1);
+
+  const [[instanceCount]] = await db.query(
+    `SELECT COUNT(*) AS count
+       FROM activity_instances
+      WHERE course_id = ? AND activity_id = ?`,
+    [courseId, activityId]
+  );
+  assert.equal(Number(instanceCount.count), 0);
+
+  const [[memberCount]] = await db.query(
+    `SELECT COUNT(*) AS count
+       FROM group_members
+      WHERE activity_instance_id IN (?, ?)`,
+    [instanceOne, instanceTwo]
+  );
+  assert.equal(Number(memberCount.count), 0);
+
+  const [[responseCount]] = await db.query(
+    `SELECT COUNT(*) AS count
+       FROM responses
+      WHERE activity_instance_id IN (?, ?)`,
+    [instanceOne, instanceTwo]
+  );
+  assert.equal(Number(responseCount.count), 0);
+
+  const [[draftCount]] = await db.query(
+    `SELECT COUNT(*) AS count
+       FROM response_drafts
+      WHERE activity_instance_id IN (?, ?)`,
+    [instanceOne, instanceTwo]
+  );
+  assert.equal(Number(draftCount.count), 0);
 });
 
 test('clear responses resets progress and timer fields on the instance', async () => {

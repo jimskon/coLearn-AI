@@ -33,6 +33,7 @@ async function ensureSchema() {
       description TEXT DEFAULT NULL,
       level VARCHAR(255) DEFAULT NULL,
       topic_domain VARCHAR(255) DEFAULT NULL,
+      demo_mode TINYINT(1) NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL
     )
   `);
@@ -40,7 +41,8 @@ async function ensureSchema() {
   await db.query(`
     ALTER TABLE pogil_classes
       ADD COLUMN IF NOT EXISTS level VARCHAR(255) DEFAULT NULL,
-      ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL
+      ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
   `);
 }
 
@@ -78,8 +80,8 @@ async function createUser(role = 'student') {
 
 async function createClassRecord() {
   const [result] = await db.query(
-    'INSERT INTO pogil_classes (name, description, level, topic_domain, created_by) VALUES (?, ?, ?, ?, ?)',
-    [uniqueName('Class'), 'Class for route tests', null, null, null]
+    'INSERT INTO pogil_classes (name, description, level, topic_domain, demo_mode, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+    [uniqueName('Class'), 'Class for route tests', null, null, 0, null]
   );
   return remember('classes', result.insertId);
 }
@@ -140,6 +142,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
   const description = 'Collaborative intro course';
   const level = 'First-year college';
   const topicDomain = 'Computer Science';
+  const demoMode = true;
 
   const create = await requestJson('/api/classes', {
     method: 'POST',
@@ -148,6 +151,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
       description,
       level,
       topic_domain: topicDomain,
+      demo_mode: demoMode,
       createdBy: null,
     },
   });
@@ -157,6 +161,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
   assert.equal(create.body.description, description);
   assert.equal(create.body.level, level);
   assert.equal(create.body.topic_domain, topicDomain);
+  assert.equal(create.body.demo_mode, true);
   assert.equal(create.body.created_by, null);
   assert.equal(typeof create.body.id, 'number');
   remember('classes', create.body.id);
@@ -176,6 +181,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
       description: updatedDescription,
       level: updatedLevel,
       topic_domain: updatedTopicDomain,
+      demo_mode: false,
     },
   });
 
@@ -186,6 +192,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
     description: updatedDescription,
     level: updatedLevel,
     topic_domain: updatedTopicDomain,
+    demo_mode: false,
   });
 
   const fetchOne = await requestJson(`/api/classes/${create.body.id}`);
@@ -195,6 +202,7 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
   assert.equal(fetchOne.body.description, updatedDescription);
   assert.equal(fetchOne.body.level, updatedLevel);
   assert.equal(fetchOne.body.topic_domain, updatedTopicDomain);
+  assert.equal(fetchOne.body.demo_mode, 0);
 
   const remove = await requestJson(`/api/classes/${create.body.id}`, {
     method: 'DELETE',

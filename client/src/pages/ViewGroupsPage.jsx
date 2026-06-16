@@ -196,6 +196,8 @@ export default function ViewGroupsPage() {
   const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  const [isDemoClass, setIsDemoClass] = useState(false);
+  const [clearingDemoRoster, setClearingDemoRoster] = useState(false);
 
   const fetchGroups = async ({ quiet = false } = {}) => {
     if (!quiet) {
@@ -261,6 +263,30 @@ export default function ViewGroupsPage() {
     if (courseId && activityId) refreshStudents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, activityId]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function fetchCourseInfo() {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/courses/${courseId}/info`, {
+          credentials: 'include',
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || 'Failed to load course info');
+        if (!cancelled) {
+          setIsDemoClass(Boolean(data?.class_demo_mode));
+        }
+      } catch (err) {
+        console.error('❌ Error fetching course info:', err);
+      }
+    }
+
+    if (courseId) fetchCourseInfo();
+    return () => {
+      cancelled = true;
+    };
+  }, [courseId]);
 
   useEffect(() => {
     const interval = setInterval(() => setTimerNowMs(Date.now()), 30000);
@@ -443,6 +469,36 @@ export default function ViewGroupsPage() {
     }
   };
 
+  const handleClearDemoRoster = async () => {
+    if (!window.confirm('Clear all students, groups, and saved work for this demo activity? This cannot be undone.')) {
+      return;
+    }
+
+    setClearingDemoRoster(true);
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/by-activity/${courseId}/${activityId}/demo-roster`,
+        {
+          method: 'DELETE',
+          credentials: 'include',
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || 'Failed to clear demo roster');
+      }
+
+      setSelectedAdd('');
+      setSelectedRemove('');
+      await Promise.all([refreshStudents(), fetchGroups()]);
+    } catch (err) {
+      console.error('❌ Error clearing demo roster:', err);
+      alert(err?.message || 'Failed to clear demo roster');
+    } finally {
+      setClearingDemoRoster(false);
+    }
+  };
+
   return (
     <Container className="mt-4">
       <div
@@ -470,6 +526,18 @@ export default function ViewGroupsPage() {
             {togglingPause ? 'Updating…' : timerButtonLabel}
           </Button>
         </div>
+
+        {isDemoClass && (
+          <div className="pb-3">
+            <Button
+              variant="outline-danger"
+              onClick={handleClearDemoRoster}
+              disabled={clearingDemoRoster}
+            >
+              {clearingDemoRoster ? 'Clearing Demo…' : 'Clear Demo Students & Groups'}
+            </Button>
+          </div>
+        )}
 
       </div>
 
@@ -521,8 +589,13 @@ export default function ViewGroupsPage() {
                     <ul>
                       {(group.members || []).map((m, i) => (
                         <li key={i}>
-                          {m.name}{' '}
-                          <span className="text-muted">&lt;{m.email}&gt;</span>
+                          {m.name}
+                          {!isDemoClass && m.email ? (
+                            <>
+                              {' '}
+                              <span className="text-muted">&lt;{m.email}&gt;</span>
+                            </>
+                          ) : null}
                           {group.active_student_id === m.student_id && (
                             <FaUserCheck title="Active student" className="text-success ms-1" />
                           )}

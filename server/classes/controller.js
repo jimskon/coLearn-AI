@@ -3,6 +3,7 @@ const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
 const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
 const activityCreator = require('../utils/activityCreator');
+const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
 
 const CREATOR_MODEL_OPTIONS = new Set([
   'gpt-4o-mini',
@@ -23,6 +24,7 @@ const CREATOR_MAJOR_SECTION_OPTIONS = [
 // Get all classes
 exports.getAllClasses = async (req, res) => {
   try {
+    await ensureDemoModeSchema();
     const [rows] = await db.query('SELECT * FROM pogil_classes');
     res.json(toPlain(rows));
   } catch (err) {
@@ -32,11 +34,19 @@ exports.getAllClasses = async (req, res) => {
 };
 
 exports.createClass = async (req, res) => {
-  const { name, description, level = null, topic_domain = null, createdBy } = req.body;
+  const {
+    name,
+    description,
+    level = null,
+    topic_domain = null,
+    demo_mode = false,
+    createdBy,
+  } = req.body;
   try {
+    await ensureDemoModeSchema();
     const [result] = await db.query(
-      'INSERT INTO pogil_classes (name, description, level, topic_domain, created_by) VALUES (?, ?, ?, ?, ?)',
-      [name, description, level, topic_domain, createdBy]
+      'INSERT INTO pogil_classes (name, description, level, topic_domain, demo_mode, created_by) VALUES (?, ?, ?, ?, ?, ?)',
+      [name, description, level, topic_domain, demo_mode ? 1 : 0, createdBy]
     );
     res.status(201).json({
       id: Number(result.insertId),
@@ -44,6 +54,7 @@ exports.createClass = async (req, res) => {
       description,
       level,
       topic_domain,
+      demo_mode: Boolean(demo_mode),
       created_by: createdBy,
     });
   } catch (err) {
@@ -53,13 +64,14 @@ exports.createClass = async (req, res) => {
 };
 
 exports.updateClass = async (req, res) => {
-  const { name, description, level = null, topic_domain = null } = req.body;
+  const { name, description, level = null, topic_domain = null, demo_mode = false } = req.body;
   try {
+    await ensureDemoModeSchema();
     await db.query(
-      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ? WHERE id = ?',
-      [name, description, level, topic_domain, req.params.id]
+      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ?, demo_mode = ? WHERE id = ?',
+      [name, description, level, topic_domain, demo_mode ? 1 : 0, req.params.id]
     );
-    res.json({ id: req.params.id, name, description, level, topic_domain });
+    res.json({ id: req.params.id, name, description, level, topic_domain, demo_mode: Boolean(demo_mode) });
   } catch (err) {
     console.error("Error updating class:", err);
     res.status(500).json({ error: 'Failed to update class' });
@@ -261,6 +273,7 @@ exports.enrollByCode = async (req, res) => {
 exports.getClassById = async (req, res) => {
   const { id } = req.params;
   try {
+    await ensureDemoModeSchema();
     const [rows] = await db.query('SELECT * FROM pogil_classes WHERE id = ?', [id]);
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Class not found' });

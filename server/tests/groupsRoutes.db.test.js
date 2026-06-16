@@ -489,6 +489,12 @@ test('smart-add for demo courses prunes stale members and limits auto-join group
     connected: false,
     lastHeartbeat: null,
   });
+  await db.query(
+    `UPDATE activity_instances
+        SET start_time = DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+      WHERE id = ?`,
+    [staleInstanceId]
+  );
 
   const responseA = await requestJson(
     instructor,

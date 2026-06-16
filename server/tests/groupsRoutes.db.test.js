@@ -73,6 +73,7 @@ async function ensureSchema() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(191) NOT NULL UNIQUE,
       description TEXT DEFAULT NULL,
+      demo_mode TINYINT(1) NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL
     )
   `);
@@ -178,10 +179,10 @@ async function createUser(role = 'student', name = null) {
   };
 }
 
-async function createClassRecord() {
+async function createClassRecord({ demoMode = false } = {}) {
   const [result] = await db.query(
-    'INSERT INTO pogil_classes (name, description, created_by) VALUES (?, ?, ?)',
-    [uniqueValue('GroupsClass'), 'Class for groups route tests', null]
+    'INSERT INTO pogil_classes (name, description, demo_mode, created_by) VALUES (?, ?, ?, ?)',
+    [uniqueValue('GroupsClass'), 'Class for groups route tests', demoMode ? 1 : 0, null]
   );
   return remember('classes', result.insertId);
 }
@@ -463,6 +464,96 @@ test('smart-add creates a new group when all in-progress groups are full', async
     [response.body.activityInstanceId]
   );
   assert.equal(Number(instance.group_number), 3);
+});
+
+test('smart-add for demo courses prunes stale members and limits auto-join groups to pairs', async () => {
+  const instructor = await createUser('instructor');
+  const staleStudent = await createUser('student', 'Stale Demo Student');
+  const addedA = await createUser('student', 'Demo Student A');
+  const addedB = await createUser('student', 'Demo Student B');
+  const addedC = await createUser('student', 'Demo Student C');
+  const classId = await createClassRecord({ demoMode: true });
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const staleInstanceId = await createInstance({ activityId, courseId, groupNumber: 1 });
+
+  await enrollStudent(courseId, staleStudent.id);
+  await enrollStudent(courseId, addedA.id);
+  await enrollStudent(courseId, addedB.id);
+  await enrollStudent(courseId, addedC.id);
+
+  await addGroupMember({
+    instanceId: staleInstanceId,
+    studentId: staleStudent.id,
+    role: 'facilitator',
+    connected: false,
+    lastHeartbeat: null,
+  });
+
+  const responseA = await requestJson(
+    instructor,
+    `/api/groups/${activityId}/${courseId}/smart-add`,
+    {
+      method: 'POST',
+      body: { studentId: addedA.id },
+    }
+  );
+
+  assert.equal(responseA.status, 201);
+  assert.equal(responseA.body.groupNumber, 1);
+  assert.equal(responseA.body.role, 'facilitator');
+
+  const responseB = await requestJson(
+    instructor,
+    `/api/groups/${activityId}/${courseId}/smart-add`,
+    {
+      method: 'POST',
+      body: { studentId: addedB.id },
+    }
+  );
+
+  assert.equal(responseB.status, 201);
+  assert.equal(responseB.body.groupNumber, 1);
+  assert.equal(responseB.body.role, 'analyst');
+
+  const responseC = await requestJson(
+    instructor,
+    `/api/groups/${activityId}/${courseId}/smart-add`,
+    {
+      method: 'POST',
+      body: { studentId: addedC.id },
+    }
+  );
+
+  assert.equal(responseC.status, 201);
+  assert.equal(responseC.body.groupNumber, 2);
+  assert.equal(responseC.body.role, 'facilitator');
+
+  const [groupOneMembers] = await db.query(
+    `SELECT student_id, role
+       FROM group_members
+      WHERE activity_instance_id = ?
+      ORDER BY student_id`,
+    [responseA.body.activityInstanceId]
+  );
+  assert.deepEqual(
+    groupOneMembers.map((member) => ({
+      student_id: Number(member.student_id),
+      role: member.role,
+    })),
+    [
+      { student_id: addedA.id, role: 'facilitator' },
+      { student_id: addedB.id, role: 'analyst' },
+    ]
+  );
+
+  const [[staleRemaining]] = await db.query(
+    `SELECT COUNT(*) AS count
+       FROM group_members
+      WHERE activity_instance_id = ? AND student_id = ?`,
+    [staleInstanceId, staleStudent.id]
+  );
+  assert.equal(Number(staleRemaining.count), 0);
 });
 
 test('add-solo creates a new one-person group and makes that student active', async () => {

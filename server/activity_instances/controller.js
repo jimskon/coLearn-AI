@@ -1498,6 +1498,75 @@ async function getInstancesForActivityInCourse(req, res) {
   }
 }
 
+async function clearDemoActivityRoster(req, res) {
+  const { courseId, activityId } = req.params;
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [[courseRow]] = await conn.query(
+      `SELECT COALESCE(pc.demo_mode, 0) AS demo_mode
+         FROM courses c
+         LEFT JOIN pogil_classes pc ON pc.id = c.class_id
+        WHERE c.id = ?
+        LIMIT 1`,
+      [courseId]
+    );
+
+    if (!courseRow || Number(courseRow.demo_mode) !== 1) {
+      await conn.rollback();
+      return res.status(400).json({ error: 'This reset is only available for demo classes' });
+    }
+
+    const [instances] = await conn.query(
+      `SELECT id
+         FROM activity_instances
+        WHERE course_id = ? AND activity_id = ?`,
+      [courseId, activityId]
+    );
+
+    const instanceIds = instances.map((row) => Number(row.id)).filter(Number.isFinite);
+    if (!instanceIds.length) {
+      await conn.rollback();
+      return res.json({ ok: true, clearedInstances: 0, clearedMembers: 0, clearedResponses: 0, clearedDrafts: 0 });
+    }
+
+    const [draftsDel] = await conn.query(
+      `DELETE FROM response_drafts WHERE activity_instance_id IN (?)`,
+      [instanceIds]
+    );
+    const [responsesDel] = await conn.query(
+      `DELETE FROM responses WHERE activity_instance_id IN (?)`,
+      [instanceIds]
+    );
+    const [membersDel] = await conn.query(
+      `DELETE FROM group_members WHERE activity_instance_id IN (?)`,
+      [instanceIds]
+    );
+    const [instancesDel] = await conn.query(
+      `DELETE FROM activity_instances WHERE id IN (?)`,
+      [instanceIds]
+    );
+
+    await conn.commit();
+
+    return res.json({
+      ok: true,
+      clearedInstances: instancesDel.affectedRows || 0,
+      clearedMembers: membersDel.affectedRows || 0,
+      clearedResponses: responsesDel.affectedRows || 0,
+      clearedDrafts: draftsDel.affectedRows || 0,
+    });
+  } catch (err) {
+    try { await conn.rollback(); } catch {}
+    console.error('❌ clearDemoActivityRoster:', err);
+    return res.status(500).json({ error: 'Failed to clear demo activity roster' });
+  } finally {
+    conn.release();
+  }
+}
+
 async function setTimerPauseForActivity(req, res) {
   const { courseId, activityId } = req.params;
   const paused = !!req.body?.paused;
@@ -2465,6 +2534,7 @@ module.exports = {
   submitGroupResponses,
   getInstanceGroups,
   getInstancesForActivityInCourse,
+  clearDemoActivityRoster,
   setTimerPauseForActivity,
   setActiveRotationModeForActivity,
   getInstanceResponses,

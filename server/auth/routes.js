@@ -81,7 +81,7 @@ async function createGuestDemoUser(conn, demoCode, requestedName = '') {
   const guestId = Number(result.insertId);
   const guestName =
     normalizeDemoGuestName(requestedName) ||
-    `AIED Guest ${String(guestId).padStart(3, '0')}`;
+    `Guest ${guestId}`;
 
   await conn.query('UPDATE users SET name = ? WHERE id = ?', [guestName, guestId]);
 

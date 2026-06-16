@@ -113,7 +113,7 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                     </div>
 
                     <Form.Group className="mb-4" controlId="demoGuestName">
-                      <Form.Label className="fw-semibold">Your name</Form.Label>
+                      <Form.Label className="fw-semibold">Your name (optional)</Form.Label>
                       <Form.Control
                         type="text"
                         size="lg"
@@ -124,7 +124,7 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                         autoComplete="nickname"
                       />
                       <Form.Text className="text-muted">
-                        We&apos;ll show this in the group and activity views.
+                        Leave it blank and we&apos;ll assign a simple guest number.
                       </Form.Text>
                     </Form.Group>
 

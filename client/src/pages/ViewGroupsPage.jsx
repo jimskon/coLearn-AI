@@ -589,8 +589,13 @@ export default function ViewGroupsPage() {
                     <ul>
                       {(group.members || []).map((m, i) => (
                         <li key={i}>
-                          {m.name}{' '}
-                          <span className="text-muted">&lt;{m.email}&gt;</span>
+                          {m.name}
+                          {!isDemoClass && m.email ? (
+                            <>
+                              {' '}
+                              <span className="text-muted">&lt;{m.email}&gt;</span>
+                            </>
+                          ) : null}
                           {group.active_student_id === m.student_id && (
                             <FaUserCheck title="Active student" className="text-success ms-1" />
                           )}

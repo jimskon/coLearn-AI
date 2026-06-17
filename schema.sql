@@ -184,6 +184,38 @@ CREATE TABLE `pending_users` (
   UNIQUE KEY `email` (`email`)
 ) ENGINE=InnoDB AUTO_INCREMENT=43 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `demo_info_requests`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `demo_info_requests` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `demo_code` varchar(64) NOT NULL DEFAULT 'aied2026',
+  `name` varchar(191) DEFAULT NULL,
+  `email` varchar(255) NOT NULL,
+  `institution` varchar(255) DEFAULT NULL,
+  `role` varchar(255) DEFAULT NULL,
+  `interest_beta` tinyint(1) NOT NULL DEFAULT 0,
+  `interest_pilot` tinyint(1) NOT NULL DEFAULT 0,
+  `interest_research` tinyint(1) NOT NULL DEFAULT 0,
+  `interest_instructor_demo` tinyint(1) NOT NULL DEFAULT 0,
+  `interest_technical` tinyint(1) NOT NULL DEFAULT 0,
+  `interest_materials` tinyint(1) NOT NULL DEFAULT 0,
+  `interest_other` tinyint(1) NOT NULL DEFAULT 0,
+  `message` text DEFAULT NULL,
+  `source_path` text DEFAULT NULL,
+  `guest_token` varchar(191) DEFAULT NULL,
+  `user_agent` text DEFAULT NULL,
+  `ip_address` varchar(64) DEFAULT NULL,
+  `status` enum('new','contacted','follow_up','closed') NOT NULL DEFAULT 'new',
+  `notes` text DEFAULT NULL,
+  `created_at` timestamp NULL DEFAULT current_timestamp(),
+  `updated_at` timestamp NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),
+  PRIMARY KEY (`id`),
+  KEY `idx_demo_info_requests_demo_code_created_at` (`demo_code`,`created_at`),
+  KEY `idx_demo_info_requests_status` (`status`),
+  KEY `idx_demo_info_requests_email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `pogil_activities`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;

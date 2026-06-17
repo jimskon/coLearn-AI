@@ -91,7 +91,63 @@ Every `\question` must explicitly end with `\endquestion`.
 
 ---
 
-## 4. Scoring Blocks (Assessment Mode)
+## 4. Info Bubbles
+
+```text
+\info{target,seconds}{message}
+```
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `\info{target,seconds}{message}` | Short contextual help bubble attached to the nearest `\question` or `\questiongroup` | `\info{textresponse,10}{The active student types here.}` |
+
+### Supported Targets
+
+- `questiongroup`
+- `question`
+- `textresponse`
+- `coderesponse`
+- `submitbutton`
+- `aifeedback`
+
+### Behavior
+
+- `seconds` controls how long the bubble remains visible.
+- If `seconds` is missing or invalid, the bubble defaults to 8 seconds.
+- The message supports the same limited safe inline formatting as the rest of the markup parser.
+- Bubbles are dismissible with a close button.
+- `textresponse` and `coderesponse` bubbles dismiss when the student starts typing.
+- Bubbles are local UI state only and can reappear after refresh.
+
+### First-Draft Limitations
+
+- Dismissed state is not saved anywhere.
+- Placement is intentionally simple and may be approximate for some targets.
+- `submitbutton` bubbles are shown near submit controls in run mode; in preview they may appear as a small group/question note.
+- Top-level global infos outside a `\questiongroup` are ignored.
+
+### Examples
+
+```text
+\questiongroup{Exploration}
+\info{questiongroup,8}{This section is collaborative. One student types while others observe and discuss.}
+...
+\endquestiongroup
+```
+
+```text
+\question{What does this program print?}
+\info{question,5}{Read the code carefully before answering.}
+\textresponse{4}
+\info{textresponse,10}{The active student types here. Observers see the answer update live.}
+\feedbackprompt{Check whether the student explained both the variable update and the final printed value.}
+\info{aifeedback,10}{This AI feedback is meant to guide revision before continuing.}
+\endquestion
+```
+
+---
+
+## 5. Scoring Blocks (Assessment Mode)
 
 ```text
 \score{6,response}
@@ -122,7 +178,7 @@ Scoring is controlled only by `\score{}` blocks.
 
 ---
 
-## 5. Lists
+## 6. Lists
 
 ```text
 \begin{itemize}
@@ -140,7 +196,7 @@ Nested lists are discouraged in current sheet rendering.
 
 ---
 
-## 6. Text Formatting
+## 7. Text Formatting
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
@@ -150,7 +206,7 @@ Nested lists are discouraged in current sheet rendering.
 
 ---
 
-## 7. Tables
+## 8. Tables
 
 ```text
 \table{Example Table}
@@ -169,7 +225,7 @@ Nested lists are discouraged in current sheet rendering.
 
 ---
 
-## 8. Code Blocks
+## 9. Code Blocks
 
 ### Python
 
@@ -194,7 +250,7 @@ int main() { }
 
 ---
 
-## 9. Python Turtle
+## 10. Python Turtle
 
 Supports window size + timeout:
 
@@ -211,7 +267,7 @@ Supports window size + timeout:
 
 ---
 
-## 10. Images
+## 11. Images
 
 ```text
 \image{URL}
@@ -227,7 +283,7 @@ Supports window size + timeout:
 
 ---
 
-## 11. Hyperlinks
+## 12. Hyperlinks
 
 ```text
 \link{URL}{Text}

@@ -1,6 +1,29 @@
 import React from 'react';
 import { Alert, Button, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
+import InfoBubble from '../../components/activity/InfoBubble';
+import { collectInfosForTarget } from '../../utils/parseSheet';
+
+function renderInfoStack(infos, keyPrefix) {
+  if (!infos?.length) return null;
+
+  return (
+    <div className="mt-2">
+      {infos.map((info, index) => (
+        <InfoBubble
+          key={`${keyPrefix}-${index}`}
+          message={info.message}
+          seconds={info.seconds}
+          dismissKey={`${keyPrefix}-${index}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function collectGroupInfos(group, target) {
+  return collectInfosForTarget([group?.intro, group?.prelude, group?.content], target);
+}
 
 export default function RunActivityWorkspace({
   activityPaused,
@@ -151,6 +174,11 @@ export default function RunActivityWorkspace({
                 <strong>{index + 1}.</strong> {group.intro.content}
               </p>
 
+              {renderInfoStack(
+                collectGroupInfos(group, 'questiongroup'),
+                `group-${index}-questiongroup`
+              )}
+
               {group.content.map((block, bIndex) => {
                 const renderedBlock = renderBlocks([block], {
                   editable,
@@ -228,6 +256,10 @@ export default function RunActivityWorkspace({
 
               {isSandbox && canSubmitGroup && (
                 <div className="mt-2">
+                  {renderInfoStack(
+                    collectGroupInfos(group, 'submitbutton'),
+                    `group-${index}-submitbutton`
+                  )}
                   <Button onClick={() => handleSubmit(false, index)} disabled={isSubmitting}>
                     {isSubmitting ? 'Checking…' : 'Submit Group'}
                   </Button>

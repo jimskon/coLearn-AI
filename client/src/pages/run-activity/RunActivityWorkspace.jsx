@@ -4,21 +4,18 @@ import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
 import { collectInfosForTarget } from '../../utils/parseSheet';
 
-function renderInfoStack(infos, keyPrefix) {
+function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   if (!infos?.length) return null;
 
-  return (
-    <div className="mt-2">
-      {infos.map((info, index) => (
-        <InfoBubble
-          key={`${keyPrefix}-${index}`}
-          message={info.message}
-          seconds={info.seconds}
-          dismissKey={`${keyPrefix}-${index}`}
-        />
-      ))}
-    </div>
-  );
+  return infos.map((info, index) => (
+    <InfoBubble
+      key={`${keyPrefix}-${index}`}
+      info={info}
+      showKey={`${keyPrefix}-${index}`}
+      anchorRef={anchorRef}
+      placement={options.placement || 'top'}
+    />
+  ));
 }
 
 function collectGroupInfos(group, target) {
@@ -123,6 +120,8 @@ export default function RunActivityWorkspace({
         })}
 
         {groups.map((group, index) => {
+          const questionGroupAnchorRef = React.createRef();
+          const submitAnchorRef = React.createRef();
           const completedCount = Number(activity?.completed_groups ?? 0);
           const isComplete = index < completedCount;
           const isCurrent = index === completedCount;
@@ -170,13 +169,13 @@ export default function RunActivityWorkspace({
                   unansweredShown,
                 })}
 
-              <p>
+              <p ref={questionGroupAnchorRef}>
                 <strong>{index + 1}.</strong> {group.intro.content}
               </p>
-
               {renderInfoStack(
                 collectGroupInfos(group, 'questiongroup'),
-                `group-${index}-questiongroup`
+                `group-${index}-questiongroup`,
+                questionGroupAnchorRef
               )}
 
               {group.content.map((block, bIndex) => {
@@ -255,10 +254,11 @@ export default function RunActivityWorkspace({
               })}
 
               {isSandbox && canSubmitGroup && (
-                <div className="mt-2">
+                <div className="mt-2" ref={submitAnchorRef}>
                   {renderInfoStack(
                     collectGroupInfos(group, 'submitbutton'),
-                    `group-${index}-submitbutton`
+                    `group-${index}-submitbutton`,
+                    submitAnchorRef
                   )}
                   <Button onClick={() => handleSubmit(false, index)} disabled={isSubmitting}>
                     {isSubmitting ? 'Checking…' : 'Submit Group'}

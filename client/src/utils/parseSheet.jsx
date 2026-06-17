@@ -1,5 +1,6 @@
 // parseSheet.jsx
 
+import React, { useState, useEffect, useRef } from 'react';
 import ActivityQuestionBlock from '../components/activity/ActivityQuestionBlock';
 import ActivityHeader from '../components/activity/ActivityHeader';
 import ActivityEnvironment from '../components/activity/ActivityEnvironment';
@@ -8,8 +9,6 @@ import InfoBubble from '../components/activity/InfoBubble';
 import { makeResponseAttrs } from './responseDom';
 
 import { Form } from 'react-bootstrap';
-
-import { useState, useEffect, useRef } from 'react';;
 
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
@@ -1381,22 +1380,23 @@ export function renderBlocks(blocks, options = {}) {
       ? editable
       : (editable && isActive);   // only active student edits in RUN
 
-  const renderInfoBubbles = (block, target, keyPrefix) => {
+  const renderInfoBubbles = (block, target, keyPrefix, anchorRef, options = {}) => {
     const infos = getInfosForTarget(block, target);
     if (!infos.length) return null;
 
-    return (
-      <div className="mt-2">
-        {infos.map((info, infoIndex) => (
-          <InfoBubble
-            key={`${keyPrefix}-${target}-${infoIndex}`}
-            message={info.message}
-            seconds={info.seconds}
-            dismissKey={`${keyPrefix}-${target}-${infoIndex}`}
-          />
-        ))}
-      </div>
-    );
+    const placement = options.placement || 'top';
+    const dismissOnTargetInput = !!options.dismissOnTargetInput;
+
+    return infos.map((info, infoIndex) => (
+      <InfoBubble
+        key={`${keyPrefix}-${target}-${infoIndex}`}
+        info={info}
+        showKey={`${keyPrefix}-${target}-${infoIndex}`}
+        anchorRef={anchorRef}
+        placement={placement}
+        dismissOnTargetInput={dismissOnTargetInput}
+      />
+    ));
   };
 
   return blocks.map((block, index) => {
@@ -1519,11 +1519,17 @@ export function renderBlocks(blocks, options = {}) {
 
 
     if (block.type === 'groupIntro') {
+      const groupIntroAnchorRef = React.createRef();
       return (
-        <div key={`groupIntro-${index}`} className="mb-2">
+        <div key={`groupIntro-${index}`} className="mb-2" ref={groupIntroAnchorRef}>
           <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
-          {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`)}
-          {runMode === 'preview' && renderInfoBubbles(block, 'submitbutton', `groupIntro-submit-${index}`)}
+          {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
+          {runMode === 'preview' && renderInfoBubbles(
+            block,
+            'submitbutton',
+            `groupIntro-submit-${index}`,
+            groupIntroAnchorRef
+          )}
         </div>
 
       );
@@ -1950,6 +1956,7 @@ export function renderBlocks(blocks, options = {}) {
 
 
     if (block.type === 'question') {
+      const questionAnchorRef = React.createRef();
       const codeIndicesByLang = { python: [], cpp: [] };
       (block.codeBlocks || []).forEach(cb => {
         if (cb.lang === 'python') codeIndicesByLang.python.push(cb.index);
@@ -2003,8 +2010,8 @@ export function renderBlocks(blocks, options = {}) {
         <div
           key={`q-${block.groupId}-${block.id}`}  // ✅ unique per question
           className="mb-4"
+          ref={questionAnchorRef}
         >
-          {renderInfoBubbles(block, 'question', `question-${block.groupId}-${block.id}`)}
           <p>
             <strong>{block.label}</strong>{' '}
             <span
@@ -2026,7 +2033,15 @@ export function renderBlocks(blocks, options = {}) {
             )}
           </p>
 
+          {renderInfoBubbles(
+            block,
+            'question',
+            `question-${block.groupId}-${block.id}`,
+            questionAnchorRef
+          )}
+
           {block.pythonBlocks?.map((py, i) => {
+            const codeAnchorRef = React.createRef();
             const cbIndex = codeIndicesByLang.python[i] ?? (i + 1);
             const responseKey = `${block.groupId}${block.id}code${cbIndex}`;
             const savedResponse = prefill?.[responseKey]?.response || py.content;
@@ -2058,8 +2073,14 @@ export function renderBlocks(blocks, options = {}) {
             const tl = py.timeLimit ?? block.timeLimit ?? 50000;
 
             return (
-              <div key={`q-${block.groupId}-${block.id}-py-${i}`}>
-                {renderInfoBubbles(block, 'coderesponse', `question-${block.groupId}-${block.id}-py-${i}`)}
+              <div key={`q-${block.groupId}-${block.id}-py-${i}`} ref={codeAnchorRef}>
+                {renderInfoBubbles(
+                  block,
+                  'coderesponse',
+                  `question-${block.groupId}-${block.id}-py-${i}`,
+                  codeAnchorRef,
+                  { dismissOnTargetInput: true }
+                )}
                 {runMode === 'preview' && (
                   <div className="text-muted small mb-1">
                     ⏱ Time limit: {formatTimeLimit(tl)}
@@ -2109,6 +2130,7 @@ export function renderBlocks(blocks, options = {}) {
           })}
 
           {block.cppBlocks?.map((cpp, i) => {
+            const codeAnchorRef = React.createRef();
             const cbIndex = codeIndicesByLang.cpp[i] ?? (i + 1);
             const responseKey = `${block.groupId}${block.id}code${cbIndex}`;
 
@@ -2128,8 +2150,14 @@ export function renderBlocks(blocks, options = {}) {
                 : (editable && isActive) || (showToggle && codeMode === 'local');
 
             return (
-              <div key={`q-${block.groupId}-${block.id}-cpp-${i}`}>
-                {renderInfoBubbles(block, 'coderesponse', `question-${block.groupId}-${block.id}-cpp-${i}`)}
+              <div key={`q-${block.groupId}-${block.id}-cpp-${i}`} ref={codeAnchorRef}>
+                {renderInfoBubbles(
+                  block,
+                  'coderesponse',
+                  `question-${block.groupId}-${block.id}-cpp-${i}`,
+                  codeAnchorRef,
+                  { dismissOnTargetInput: true }
+                )}
                 {runMode === 'preview' && (
                   <div className="text-muted small mb-1">
                     ⏱ Time limit: {cpp.timeLimit ?? 5000}{' '}
@@ -2232,6 +2260,7 @@ export function renderBlocks(blocks, options = {}) {
 
           {showTextArea ? (
             (() => {
+              const textAnchorRef = React.createRef();
               const meta = {
                 questionText: stripHtml(block.prompt || ''),
                 sampleResponse: stripHtml(block.samples?.[0] || ''),
@@ -2244,8 +2273,14 @@ export function renderBlocks(blocks, options = {}) {
               const guidance = textFeedbackShown?.[responseKey];
 
               return (
-                <>
-                  {renderInfoBubbles(block, 'textresponse', `question-${block.groupId}-${block.id}-text`)}
+                <div ref={textAnchorRef}>
+                  {renderInfoBubbles(
+                    block,
+                    'textresponse',
+                    `question-${block.groupId}-${block.id}-text`,
+                    textAnchorRef,
+                    { dismissOnTargetInput: true }
+                  )}
                   <Form.Control
                     as="textarea"
                     rows={Math.max((block.responseLines || 1), 2)}
@@ -2262,7 +2297,7 @@ export function renderBlocks(blocks, options = {}) {
                       options.onTextChange?.(responseKey, val, meta);
                     }}
                   />
-                </>
+                </div>
               );
             })()
           ) : null}
@@ -2270,15 +2305,48 @@ export function renderBlocks(blocks, options = {}) {
 
 
 
-          {runMode === 'preview' && (
-            <>
-              {block.samples?.length > 0 && <p className="text-muted"><em>Sample: {block.samples.join('; ')}</em></p>}
-              {block.feedback?.length > 0 && <p className="text-muted"><em>Feedback: {block.feedback.join('; ')}</em></p>}
-              {block.followups?.length > 0 && <p className="text-muted"><em>Follow-up: {block.followups.join('; ')}</em></p>}
-            </>
-          )}
+          {(() => {
+            const aiFeedbackVisible =
+              Boolean(textFeedbackShown?.[responseKey]) ||
+              (runMode === 'preview' &&
+                ((block.samples?.length || 0) > 0 ||
+                  (block.feedback?.length || 0) > 0 ||
+                  (block.followups?.length || 0) > 0));
+            if (!aiFeedbackVisible) return null;
 
-          {renderInfoBubbles(block, 'aifeedback', `question-${block.groupId}-${block.id}-ai`)}
+            const aiFeedbackAnchorRef = React.createRef();
+
+            return (
+              <div ref={aiFeedbackAnchorRef}>
+                {runMode === 'preview' && (
+                  <>
+                    {block.samples?.length > 0 && <p className="text-muted"><em>Sample: {block.samples.join('; ')}</em></p>}
+                    {block.feedback?.length > 0 && <p className="text-muted"><em>Feedback: {block.feedback.join('; ')}</em></p>}
+                    {block.followups?.length > 0 && <p className="text-muted"><em>Follow-up: {block.followups.join('; ')}</em></p>}
+                  </>
+                )}
+
+                {textFeedbackShown?.[responseKey] && (
+                  <Alert
+                    variant="warning"
+                    className="mt-2"
+                    style={{ whiteSpace: 'pre-wrap' }}
+                  >
+                    <strong>AI Guidance</strong>
+                    <div>{textFeedbackShown[responseKey]}</div>
+                  </Alert>
+                )}
+
+                {renderInfoBubbles(
+                  block,
+                  'aifeedback',
+                  `question-${block.groupId}-${block.id}-ai`,
+                  aiFeedbackAnchorRef,
+                  { placement: 'top' }
+                )}
+              </div>
+            );
+          })()}
 
           {unansweredMessage && (
             <Alert
@@ -2291,19 +2359,13 @@ export function renderBlocks(blocks, options = {}) {
             </Alert>
           )}
 
-          {runMode === 'preview' && renderInfoBubbles(block, 'submitbutton', `question-${block.groupId}-${block.id}-submit`)}
-
-          {/* 🔶 AI Guidance (ALL question types) */}
-          {textFeedbackShown?.[responseKey] && (
-            <Alert
-              variant="warning"
-              className="mt-2"
-              style={{ whiteSpace: 'pre-wrap' }}
-            >
-              <strong>AI Guidance</strong>
-              <div>{textFeedbackShown[responseKey]}</div>
-            </Alert>
-          )}
+          {runMode === 'preview' &&
+            renderInfoBubbles(
+              block,
+              'submitbutton',
+              `question-${block.groupId}-${block.id}-submit`,
+              questionAnchorRef
+            )}
 
           {/* Show saved followup Q&A in read-only format */}
 

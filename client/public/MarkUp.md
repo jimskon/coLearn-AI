@@ -99,7 +99,7 @@ Every `\question` must explicitly end with `\endquestion`.
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
-| `\info{target,seconds}{message}` | Short contextual help bubble attached to the nearest `\question` or `\questiongroup` | `\info{textresponse,10}{The active student types here.}` |
+| `\info{target,seconds}{message}` | Short contextual help bubble rendered as a transient overlay near the target | `\info{textresponse,10}{The active student types here.}` |
 
 ### Supported Targets
 
@@ -113,6 +113,7 @@ Every `\question` must explicitly end with `\endquestion`.
 ### Behavior
 
 - `seconds` controls how long the bubble remains visible.
+- The bubble fades in after a short delay and overlays the activity rather than taking up inline space.
 - If `seconds` is missing or invalid, the bubble defaults to 8 seconds.
 - The message supports the same limited safe inline formatting as the rest of the markup parser.
 - Bubbles are dismissible with a close button.
@@ -123,7 +124,7 @@ Every `\question` must explicitly end with `\endquestion`.
 
 - Dismissed state is not saved anywhere.
 - Placement is intentionally simple and may be approximate for some targets.
-- `submitbutton` bubbles are shown near submit controls in run mode; in preview they may appear as a small group/question note.
+- `submitbutton` bubbles are shown near submit controls in run mode; in preview they may appear near the related group/question area.
 - Top-level global infos outside a `\questiongroup` are ignored.
 
 ### Examples

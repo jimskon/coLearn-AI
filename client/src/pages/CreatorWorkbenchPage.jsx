@@ -23,6 +23,7 @@ import {
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
+import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 
 const emptyDraft = {
   title: '',
@@ -111,6 +112,7 @@ export default function CreatorWorkbenchPage() {
   const [sandboxUrl, setSandboxUrl] = useState('');
 
   const autoTimerRef = useRef(null);
+  const infoBubbleSessionRef = useRef(createInfoBubbleSession());
   const effectiveClassId = classId || activity?.class_id;
   const activeBlocks = proposal?.blocks || blocks;
   const activeIssues = proposal?.issues || parseIssues;
@@ -128,7 +130,8 @@ export default function CreatorWorkbenchPage() {
     allowLocalToggle: false,
     fileContents,
     setFileContents: updateFileContents,
-  }), [activeBlocks, fileContents, updateFileContents]);
+    infoBubbleSession: infoBubbleSessionRef.current,
+  }), [activeBlocks, fileContents, updateFileContents, infoBubbleSessionRef]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 

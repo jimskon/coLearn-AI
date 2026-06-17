@@ -16,6 +16,7 @@ import useRunActivityData from './run-activity/useRunActivityData';
 import useRunActivitySync from './run-activity/useRunActivitySync';
 import useRunActivityResponses from './run-activity/useRunActivityResponses';
 import RunActivityWorkspace from './run-activity/RunActivityWorkspace';
+import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 
 import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBanner';
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
@@ -330,6 +331,7 @@ export default function RunActivityPage({
   const loadingRef = useRef(false);
   const codeVersionsRef = useRef({});
   const qidsNoFURef = useRef(new Set());
+  const infoBubbleSessionRef = useRef(createInfoBubbleSession());
 
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
@@ -2874,6 +2876,7 @@ export default function RunActivityPage({
             canBypassGroups={canBypassGroups}
             handleRegradeTest={handleRegradeTest}
             overallTestTotals={overallTestTotals}
+            infoBubbleSession={infoBubbleSessionRef.current}
           />
         )}
       </Container>

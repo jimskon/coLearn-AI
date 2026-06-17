@@ -115,9 +115,13 @@ Every `\question` must explicitly end with `\endquestion`.
 - `seconds` controls how long the bubble remains visible.
 - The bubble fades in after a short delay and overlays the activity rather than taking up inline space.
 - If `seconds` is missing or invalid, the bubble defaults to 8 seconds.
+- Keep messages very short when possible, ideally about 5-12 words.
+- The runtime may show only one bubble at a time and will favor action-oriented targets over section headings.
+- Avoid long instructions or rubrics in `\info`; keep it as a short coach mark.
 - The message supports the same limited safe inline formatting as the rest of the markup parser.
 - Bubbles are dismissible with a close button.
 - `textresponse` and `coderesponse` bubbles dismiss when the student starts typing.
+- Repeated target types may only appear once per page session.
 - Bubbles are local UI state only and can reappear after refresh.
 
 ### First-Draft Limitations

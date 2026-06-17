@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Container, Row, Col, Button, Form, Alert, Modal, Spinner, Tabs, Tab } from 'react-bootstrap';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
+import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 
 export default function ActivityEditor() {
   const { activityId } = useParams();
@@ -28,6 +29,7 @@ export default function ActivityEditor() {
   // File contents (for Python blocks)
   const [fileContents, setFileContents] = useState({});
   const fileContentsRef = useRef({});
+  const infoBubbleSessionRef = useRef(createInfoBubbleSession());
 
   // ---- Auto-fix state ----
   const docBeforeAutofixRef = useRef('');
@@ -290,6 +292,7 @@ export default function ActivityEditor() {
         editable: true,
         fileContents: files,
         setFileContents: handleUpdateFileContents,
+        infoBubbleSession: infoBubbleSessionRef.current,
       });
 
       setElements(rendered);
@@ -552,6 +555,7 @@ export default function ActivityEditor() {
         editable: true,
         fileContents: files2,
         setFileContents: handleUpdateFileContents,
+        infoBubbleSession: infoBubbleSessionRef.current,
       });
 
       setAutofixElements(rendered2);

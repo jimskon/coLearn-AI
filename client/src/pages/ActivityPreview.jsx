@@ -1,5 +1,5 @@
 // client/src/pages/ActivityPreview.jsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Container, Button, Card, Row, Col, Badge } from 'react-bootstrap';
 import Prism from 'prismjs';
@@ -7,6 +7,7 @@ import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-python';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
+import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 
 export default function ActivityPreview() {
 
@@ -24,6 +25,7 @@ export default function ActivityPreview() {
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxError, setSandboxError] = useState('');
+  const infoBubbleSessionRef = useRef(createInfoBubbleSession());
 
   // NEW: local state used by renderBlocks / code blocks
   const [codeViewMode, setCodeViewMode] = useState({}); // { responseKey: 'active'|'local' }
@@ -374,6 +376,7 @@ export default function ActivityPreview() {
           localCode,
           onLocalCodeChange: updateLocalCode,
           onCodeChange: handleCodeChange,
+          infoBubbleSession: infoBubbleSessionRef.current,
         })
       )}
     </Container>

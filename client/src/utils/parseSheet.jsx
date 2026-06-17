@@ -6,6 +6,7 @@ import ActivityHeader from '../components/activity/ActivityHeader';
 import ActivityEnvironment from '../components/activity/ActivityEnvironment';
 import ActivityPythonBlock from '../components/activity/ActivityPythonBlock';
 import InfoBubble from '../components/activity/InfoBubble';
+import { hasSeenInfoBubbleTarget, normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { makeResponseAttrs } from './responseDom';
 
 import { Form } from 'react-bootstrap';
@@ -43,9 +44,6 @@ const SUPPORTED_INFO_TARGETS = new Set([
   'submitbutton',
   'aifeedback',
 ]);
-
-const normalizeInfoTarget = (value = '') =>
-  String(value || '').trim().toLowerCase();
 
 const parseInfoSeconds = (value) => {
   const seconds = Number.parseInt(String(value || '').trim(), 10);
@@ -554,7 +552,7 @@ export function parseSheetToBlocks(lines, options = {}) {
       const [rawTarget = '', rawSeconds = ''] = String(targetSpec)
         .split(',')
         .map((part) => part.trim());
-      const target = normalizeInfoTarget(rawTarget);
+      const target = normalizeInfoBubbleTarget(rawTarget);
 
       if (!SUPPORTED_INFO_TARGETS.has(target)) {
         pushIssue(
@@ -1381,22 +1379,28 @@ export function renderBlocks(blocks, options = {}) {
       : (editable && isActive);   // only active student edits in RUN
 
   const renderInfoBubbles = (block, target, keyPrefix, anchorRef, options = {}) => {
+    const infoBubbleSession = options.infoBubbleSession;
+    const bubbleKey = `${keyPrefix}-${target}`;
+    const activeKey = infoBubbleSession?.getActiveKey?.();
+    if (hasSeenInfoBubbleTarget(infoBubbleSession, target) && activeKey !== bubbleKey) return null;
     const infos = getInfosForTarget(block, target);
     if (!infos.length) return null;
 
     const placement = options.placement || 'top';
     const dismissOnTargetInput = !!options.dismissOnTargetInput;
+    const firstInfo = infos[0];
 
-    return infos.map((info, infoIndex) => (
+    return (
       <InfoBubble
-        key={`${keyPrefix}-${target}-${infoIndex}`}
-        info={info}
-        showKey={`${keyPrefix}-${target}-${infoIndex}`}
+        key={bubbleKey}
+        info={firstInfo}
+        showKey={bubbleKey}
         anchorRef={anchorRef}
         placement={placement}
         dismissOnTargetInput={dismissOnTargetInput}
+        infoBubbleSession={infoBubbleSession}
       />
-    ));
+    );
   };
 
   return blocks.map((block, index) => {

@@ -1,6 +1,57 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CloseButton } from 'react-bootstrap';
+import { normalizeInfoBubbleTarget } from '../../utils/infoBubbleSession';
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function computeInfoBubblePosition(anchorRect, bubbleRect) {
+  const margin = 12;
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+  const bubbleW = bubbleRect?.width || 280;
+  const bubbleH = bubbleRect?.height || 120;
+
+  if (anchorRect?.right + margin + bubbleW < viewportW) {
+    return {
+      placement: 'right',
+      top: clamp(
+        anchorRect.top + anchorRect.height / 2 - bubbleH / 2,
+        margin,
+        viewportH - bubbleH - margin
+      ),
+      left: anchorRect.right + margin,
+      width: bubbleW,
+    };
+  }
+
+  if (anchorRect?.bottom + margin + bubbleH < viewportH) {
+    return {
+      placement: 'bottom',
+      top: anchorRect.bottom + margin,
+      left: clamp(anchorRect.left, margin, viewportW - bubbleW - margin),
+      width: bubbleW,
+    };
+  }
+
+  if (anchorRect?.top - margin - bubbleH > margin) {
+    return {
+      placement: 'top',
+      top: anchorRect.top - margin - bubbleH,
+      left: clamp(anchorRect.left, margin, viewportW - bubbleW - margin),
+      width: bubbleW,
+    };
+  }
+
+  return {
+    placement: 'floating',
+    top: viewportH - bubbleH - 24,
+    left: viewportW - bubbleW - 24,
+    width: bubbleW,
+  };
+}
 
 export default function InfoBubble({
   info = null,
@@ -12,6 +63,7 @@ export default function InfoBubble({
   placement = 'top',
   dismissOnTargetInput = false,
   className = '',
+  infoBubbleSession = null,
   onDismiss,
 }) {
   const resolvedMessage = String(info?.message ?? message ?? '').trim();
@@ -20,32 +72,20 @@ export default function InfoBubble({
     const n = Number.parseInt(String(raw ?? '').trim(), 10);
     return Number.isFinite(n) && n > 0 ? n : 8;
   }, [info?.seconds, seconds]);
+  const resolvedTarget = normalizeInfoBubbleTarget(info?.target);
+  const resolvedShowKey = showKey || dismissKey || `${resolvedTarget}:${resolvedMessage}:${resolvedSeconds}`;
 
-  const resolvedShowKey = showKey || dismissKey || `${resolvedMessage}:${resolvedSeconds}`;
-
-  const [mounted, setMounted] = useState(false);
+  const bubbleRef = useRef(null);
+  const timersRef = useRef({ show: null, hide: null, unmount: null });
+  const dragStateRef = useRef(null);
+  const manualPositionRef = useRef(null);
+  const dismissedRef = useRef(false);
+  const unregisterRef = useRef(null);
+  const [isCurrent, setIsCurrent] = useState(false);
+  const [shouldRender, setShouldRender] = useState(false);
   const [visible, setVisible] = useState(false);
   const [position, setPosition] = useState(null);
-  const bubbleRef = useRef(null);
-  const manualPositionRef = useRef(null);
-  const dragStateRef = useRef(null);
-  const timersRef = useRef({ show: null, hide: null, unmount: null });
-  const dismissedRef = useRef(false);
   const [isDragging, setIsDragging] = useState(false);
-
-  const clampToViewport = (nextPosition) => {
-    const bubbleWidth = nextPosition.width ?? bubbleRef.current?.offsetWidth ?? 320;
-    const bubbleHeight = bubbleRef.current?.offsetHeight ?? 120;
-    const maxLeft = Math.max(12, window.innerWidth - bubbleWidth - 12);
-    const maxTop = Math.max(12, window.innerHeight - bubbleHeight - 12);
-
-    return {
-      ...nextPosition,
-      width: bubbleWidth,
-      left: Math.max(12, Math.min(nextPosition.left ?? 12, maxLeft)),
-      top: Math.max(12, Math.min(nextPosition.top ?? 12, maxTop)),
-    };
-  };
 
   const clearTimers = () => {
     const timers = timersRef.current;
@@ -57,13 +97,22 @@ export default function InfoBubble({
     timers.unmount = null;
   };
 
+  const markSeen = () => {
+    infoBubbleSession?.markTargetSeen?.(resolvedTarget);
+  };
+
   const dismiss = () => {
     if (dismissedRef.current) return;
     dismissedRef.current = true;
     clearTimers();
     setVisible(false);
+    setShouldRender(false);
+    setPosition(null);
+    infoBubbleSession?.dismissCandidate?.(resolvedShowKey);
+    unregisterRef.current?.();
+    unregisterRef.current = null;
+    markSeen();
     timersRef.current.unmount = window.setTimeout(() => {
-      setMounted(false);
       onDismiss?.();
     }, 180);
   };
@@ -71,20 +120,60 @@ export default function InfoBubble({
   useEffect(() => {
     dismissedRef.current = false;
     clearTimers();
-    setMounted(false);
+    setShouldRender(false);
     setVisible(false);
     setPosition(null);
-    manualPositionRef.current = null;
     dragStateRef.current = null;
+    manualPositionRef.current = null;
     setIsDragging(false);
+    setIsCurrent(false);
 
-    if (!resolvedMessage) return undefined;
+    if (!resolvedMessage || !resolvedTarget || !infoBubbleSession) return undefined;
+
+    const unregister = infoBubbleSession.registerCandidate?.({
+      key: resolvedShowKey,
+      target: resolvedTarget,
+    });
+    unregisterRef.current = unregister;
+
+    const syncCurrent = () => {
+      const activeKey = infoBubbleSession.getActiveKey?.();
+      setIsCurrent(activeKey === resolvedShowKey);
+    };
+
+    const unsubscribe = infoBubbleSession.subscribe?.(syncCurrent);
+    syncCurrent();
+
+    return () => {
+      clearTimers();
+      unsubscribe?.();
+      unregister?.();
+      unregisterRef.current = null;
+    };
+  }, [infoBubbleSession, resolvedMessage, resolvedShowKey, resolvedTarget]);
+
+  useEffect(() => {
+    if (!isCurrent || dismissedRef.current) {
+      clearTimers();
+      setVisible(false);
+      setShouldRender(false);
+      return undefined;
+    }
+
+    clearTimers();
+    setShouldRender(false);
+    setVisible(false);
+    setPosition(null);
 
     timersRef.current.show = window.setTimeout(() => {
       if (dismissedRef.current) return;
-      setMounted(true);
+      if (infoBubbleSession?.getActiveKey?.() !== resolvedShowKey) return;
+      setShouldRender(true);
       window.requestAnimationFrame(() => {
-        if (!dismissedRef.current) setVisible(true);
+        if (dismissedRef.current) return;
+        if (infoBubbleSession?.getActiveKey?.() !== resolvedShowKey) return;
+        infoBubbleSession?.lockCandidate?.(resolvedShowKey);
+        setVisible(true);
       });
     }, 1000);
 
@@ -95,103 +184,34 @@ export default function InfoBubble({
     return () => {
       clearTimers();
     };
-  }, [resolvedShowKey, resolvedMessage, resolvedSeconds]);
+  }, [infoBubbleSession, isCurrent, resolvedSeconds, resolvedShowKey]);
 
   useEffect(() => {
-    if (!mounted) return undefined;
+    if (!shouldRender || !visible || !bubbleRef.current) return undefined;
 
     const updatePosition = () => {
-      if (manualPositionRef.current) {
-        setPosition(clampToViewport(manualPositionRef.current));
-        return;
-      }
+      if (!bubbleRef.current) return;
 
       const node = anchorRef?.current;
-      const anchor = node?.getBoundingClientRect?.();
+      const anchorRect = node?.getBoundingClientRect?.();
+      const bubbleRect = bubbleRef.current.getBoundingClientRect?.();
       const mobile = window.innerWidth < 640;
-      const bubbleWidth = mobile
-        ? Math.max(0, window.innerWidth - 24)
-        : Math.min(380, Math.max(240, window.innerWidth - 48));
-      const fallbackLeft = 12;
-      const fallbackTop = 12;
-      const bottomBase = anchor ? anchor.bottom : 48;
-      const topBase = anchor ? anchor.top : 48;
-      const rightBase = anchor ? anchor.right : 48;
-      const leftBase = anchor ? anchor.left : 24;
-      const viewportHeight = window.innerHeight;
 
       if (mobile) {
+        const width = Math.max(0, window.innerWidth - 24);
+        const left = 12;
+        const top = Math.max(12, window.innerHeight - (bubbleRect?.height || 120) - 24);
         setPosition({
-          top: null,
-          left: 12,
-          right: 12,
-          bottom: 12,
-          width: bubbleWidth,
-          placement: 'mobile',
+          placement: 'floating',
+          top,
+          left,
+          width,
         });
         return;
       }
 
-      const bubbleHeightGuess = bubbleRef.current?.offsetHeight || 120;
-      const verticalRoomAbove = topBase - 16;
-      const verticalRoomBelow = viewportHeight - bottomBase - 16;
-
-      const placeRight = () => {
-        const left = rightBase + 16;
-        return left + bubbleWidth <= window.innerWidth - 12
-          ? {
-              top: Math.max(12, Math.min(topBase - 8, viewportHeight - bubbleHeightGuess - 12)),
-              left,
-              width: bubbleWidth,
-              placement: 'right',
-            }
-          : null;
-      };
-
-      const placeAbove = () => ({
-        top: Math.max(12, topBase - bubbleHeightGuess - 16),
-        left: Math.max(12, Math.min(leftBase, window.innerWidth - bubbleWidth - 12)),
-        width: bubbleWidth,
-        placement: 'top',
-      });
-
-      const placeBelow = () => ({
-        top: Math.min(viewportHeight - bubbleHeightGuess - 12, bottomBase + 16),
-        left: Math.max(12, Math.min(leftBase, window.innerWidth - bubbleWidth - 12)),
-        width: bubbleWidth,
-        placement: 'bottom',
-      });
-
-      const placeLeft = () => ({
-        top: Math.max(12, Math.min(topBase - 8, viewportHeight - bubbleHeightGuess - 12)),
-        left: Math.max(12, leftBase - bubbleWidth - 16),
-        width: bubbleWidth,
-        placement: 'left',
-      });
-
-      let nextPosition = null;
-      if (placement === 'right') {
-        nextPosition = placeRight();
-      } else if (placement === 'left') {
-        nextPosition = placeLeft();
-      } else if (placement === 'bottom') {
-        nextPosition = placeBelow();
-      } else {
-        nextPosition = placeRight() || (verticalRoomAbove > bubbleHeightGuess + 24 ? placeAbove() : null)
-          || (verticalRoomBelow > bubbleHeightGuess + 24 ? placeBelow() : null)
-          || placeLeft();
-      }
-
-      if (!nextPosition) {
-        nextPosition = {
-          top: fallbackTop,
-          left: fallbackLeft,
-          width: bubbleWidth,
-          placement: 'top',
-        };
-      }
-
-      setPosition(clampToViewport(nextPosition));
+      const computed = computeInfoBubblePosition(anchorRect, bubbleRect);
+      setPosition(computed);
     };
 
     updatePosition();
@@ -203,7 +223,7 @@ export default function InfoBubble({
       window.removeEventListener('resize', handleScrollOrResize);
       window.removeEventListener('scroll', handleScrollOrResize, true);
     };
-  }, [mounted, anchorRef, placement]);
+  }, [anchorRef, shouldRender, visible]);
 
   useEffect(() => {
     if (!dismissOnTargetInput) return undefined;
@@ -230,12 +250,12 @@ export default function InfoBubble({
       if (!state || event.pointerId !== state.pointerId) return;
       const nextLeft = event.clientX - state.offsetX;
       const nextTop = event.clientY - state.offsetY;
-      const nextPosition = clampToViewport({
-        top: nextTop,
-        left: nextLeft,
+      const nextPosition = {
+        placement: manualPositionRef.current?.placement || position?.placement || 'floating',
+        top: clamp(nextTop, 12, Math.max(12, window.innerHeight - state.height - 12)),
+        left: clamp(nextLeft, 12, Math.max(12, window.innerWidth - state.width - 12)),
         width: state.width,
-        placement: manualPositionRef.current?.placement || 'top',
-      });
+      };
       manualPositionRef.current = nextPosition;
       setPosition(nextPosition);
     };
@@ -256,9 +276,9 @@ export default function InfoBubble({
       window.removeEventListener('pointerup', handlePointerUp);
       window.removeEventListener('pointercancel', handlePointerUp);
     };
-  }, [isDragging]);
+  }, [isDragging, position?.placement]);
 
-  if (!mounted || !resolvedMessage || !position) return null;
+  if (!shouldRender || !resolvedMessage || !position) return null;
 
   const outerStyle = {
     position: 'fixed',
@@ -274,11 +294,12 @@ export default function InfoBubble({
   const bubbleStyle = {
     position: 'relative',
     pointerEvents: 'auto',
-    background: '#e9f8ff',
-    border: '1px solid #7ad4ea',
+    background: '#eef9ff',
+    border: '1px solid #79d2ea',
     borderRadius: 14,
-    boxShadow: '0 10px 24px rgba(0, 0, 0, 0.18)',
-    padding: '0.7rem 2rem 0.7rem 0.85rem',
+    boxShadow: '0 10px 24px rgba(0, 0, 0, 0.16)',
+    padding: '0.65rem 1.9rem 0.7rem 0.8rem',
+    maxWidth: 280,
     opacity: visible ? 1 : 0,
     transform: visible ? 'translateY(0) scale(1)' : 'translateY(6px) scale(0.98)',
     transition: 'opacity 180ms ease, transform 180ms ease',
@@ -287,30 +308,31 @@ export default function InfoBubble({
 
   const arrowStyle = {
     position: 'absolute',
-    left: 24,
     width: 0,
     height: 0,
-    borderLeft: '9px solid transparent',
-    borderRight: '9px solid transparent',
+    borderLeft: '8px solid transparent',
+    borderRight: '8px solid transparent',
   };
 
   const arrowPlacementStyle = position.placement === 'bottom'
     ? {
-        top: -9,
-        borderBottom: '9px solid #7ad4ea',
+        top: -8,
+        left: 24,
+        borderBottom: '8px solid #79d2ea',
       }
-    : position.placement === 'left'
+    : position.placement === 'top'
       ? {
-          right: -9,
-          top: 18,
-          borderLeft: '9px solid #7ad4ea',
+          bottom: -8,
+          left: 24,
+          borderTop: '8px solid #79d2ea',
         }
-      : position.placement === 'mobile'
-        ? null
-        : {
-            bottom: -9,
-            borderTop: '9px solid #7ad4ea',
-          };
+      : position.placement === 'right'
+        ? {
+            left: -8,
+            top: 18,
+            borderRight: '8px solid #79d2ea',
+          }
+        : null;
 
   const startDrag = (event) => {
     if (window.innerWidth < 640) return;
@@ -318,17 +340,18 @@ export default function InfoBubble({
     event.preventDefault();
     event.stopPropagation();
     const rect = bubbleRef.current.getBoundingClientRect();
-    manualPositionRef.current = clampToViewport({
+    manualPositionRef.current = {
+      placement: position?.placement || 'floating',
       top: rect.top,
       left: rect.left,
       width: rect.width,
-      placement: position?.placement || 'top',
-    });
+    };
     dragStateRef.current = {
       pointerId: event.pointerId,
       offsetX: event.clientX - rect.left,
       offsetY: event.clientY - rect.top,
       width: rect.width,
+      height: rect.height,
     };
     setIsDragging(true);
     try {
@@ -350,7 +373,7 @@ export default function InfoBubble({
         <div className="d-flex align-items-start gap-2">
           <span
             className="badge text-dark"
-            style={{ background: '#bdefff', border: '1px solid #7ad4ea', ...dragHandleStyle }}
+            style={{ background: '#bdefff', border: '1px solid #79d2ea', ...dragHandleStyle }}
             onPointerDown={startDrag}
           >
             Info
@@ -360,10 +383,7 @@ export default function InfoBubble({
             style={{ lineHeight: 1.35 }}
             dangerouslySetInnerHTML={{ __html: resolvedMessage }}
           />
-          <CloseButton
-            aria-label="Dismiss info bubble"
-            onClick={dismiss}
-          />
+          <CloseButton aria-label="Dismiss info bubble" onClick={dismiss} />
         </div>
         {arrowPlacementStyle && <div style={{ ...arrowStyle, ...arrowPlacementStyle }} />}
       </div>

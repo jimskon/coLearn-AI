@@ -1,6 +1,31 @@
 import React from 'react';
 import { Alert, Button, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
+import InfoBubble from '../../components/activity/InfoBubble';
+import { collectInfosForTarget } from '../../utils/parseSheet';
+
+function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
+  if (!infos?.length) return null;
+  const target = options.target || infos[0]?.target;
+  const infoBubbleSession = options.infoBubbleSession;
+  const bubbleKey = `${keyPrefix}-${target}`;
+  const firstInfo = infos[0];
+
+  return (
+    <InfoBubble
+      key={bubbleKey}
+      info={firstInfo}
+      showKey={bubbleKey}
+      anchorRef={anchorRef}
+      placement={options.placement || 'top'}
+      infoBubbleSession={infoBubbleSession}
+    />
+  );
+}
+
+function collectGroupInfos(group, target) {
+  return collectInfosForTarget([group?.intro, group?.prelude, group?.content], target);
+}
 
 export default function RunActivityWorkspace({
   activityPaused,
@@ -49,6 +74,7 @@ export default function RunActivityWorkspace({
   canBypassGroups,
   handleRegradeTest,
   overallTestTotals,
+  infoBubbleSession,
 }) {
   let globalQuestionCounter = 0;
 
@@ -97,9 +123,12 @@ export default function RunActivityWorkspace({
           fileContents,
           setFileContents: handleUpdateFileContents,
           onFileChange: handleFileChange,
+          infoBubbleSession,
         })}
 
         {groups.map((group, index) => {
+          const questionGroupAnchorRef = React.createRef();
+          const submitAnchorRef = React.createRef();
           const completedCount = Number(activity?.completed_groups ?? 0);
           const isComplete = index < completedCount;
           const isCurrent = index === completedCount;
@@ -145,11 +174,18 @@ export default function RunActivityWorkspace({
                   currentGroupIndex: index,
                   codeFeedbackShown,
                   unansweredShown,
+                  infoBubbleSession,
                 })}
 
-              <p>
+              <p ref={questionGroupAnchorRef}>
                 <strong>{index + 1}.</strong> {group.intro.content}
               </p>
+              {renderInfoStack(
+                collectGroupInfos(group, 'questiongroup'),
+                `group-${index}-questiongroup`,
+                questionGroupAnchorRef,
+                { target: 'questiongroup', infoBubbleSession }
+              )}
 
               {group.content.map((block, bIndex) => {
                 const renderedBlock = renderBlocks([block], {
@@ -185,6 +221,7 @@ export default function RunActivityWorkspace({
                       baseQidFromResponseKey,
                       socket,
                     }),
+                  infoBubbleSession,
                 });
 
                 if (!isTestMode || block.type !== 'question') {
@@ -227,7 +264,13 @@ export default function RunActivityWorkspace({
               })}
 
               {isSandbox && canSubmitGroup && (
-                <div className="mt-2">
+                <div className="mt-2" ref={submitAnchorRef}>
+                  {renderInfoStack(
+                    collectGroupInfos(group, 'submitbutton'),
+                    `group-${index}-submitbutton`,
+                    submitAnchorRef,
+                    { target: 'submitbutton', infoBubbleSession }
+                  )}
                   <Button onClick={() => handleSubmit(false, index)} disabled={isSubmitting}>
                     {isSubmitting ? 'Checking…' : 'Submit Group'}
                   </Button>

@@ -9,6 +9,7 @@
 \section{Exploration}
 \questiongroup{Predict and observe}
 \question{Read the C++ example below. Predict what it prints before you run it.}
+\info{question,6}{Read the code carefully before answering.}
 \cpp
 #include <iostream>
 int main() {
@@ -18,8 +19,10 @@ int main() {
 }
 \endcpp
 \textresponse{2}
+\info{textresponse,8}{The active student types here.}
 \sampleresponses{It prints 10.}
 \feedbackprompt{Look for a prediction tied to the code.}
+\info{aifeedback,8}{Use the AI feedback to revise your answer before continuing.}
 \endquestion
 \endquestiongroup
 

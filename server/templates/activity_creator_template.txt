@@ -23,6 +23,7 @@ __REQUESTED_SECTION_MARKUP__
 
 \question{Replace this question with your own prompt.}
 \textresponse{3}
+\info{textresponse,8}{Add a short hint here when it helps the student find the response area.}
 \sampleresponses{
 Sample answer
 }

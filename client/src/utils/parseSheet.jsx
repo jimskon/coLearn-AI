@@ -1,14 +1,15 @@
 // parseSheet.jsx
 
+import React, { useState, useEffect, useRef } from 'react';
 import ActivityQuestionBlock from '../components/activity/ActivityQuestionBlock';
 import ActivityHeader from '../components/activity/ActivityHeader';
 import ActivityEnvironment from '../components/activity/ActivityEnvironment';
 import ActivityPythonBlock from '../components/activity/ActivityPythonBlock';
+import InfoBubble from '../components/activity/InfoBubble';
+import { normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { makeResponseAttrs } from './responseDom';
 
 import { Form } from 'react-bootstrap';
-
-import { useState, useEffect, useRef } from 'react';;
 
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
@@ -34,6 +35,50 @@ const formatTimeLimit = (ms) => {
   if (ms % 1000 === 0) return `${ms / 1000} s`;
   return `${ms} ms`;
 };
+
+const SUPPORTED_INFO_TARGETS = new Set([
+  'questiongroup',
+  'question',
+  'textresponse',
+  'coderesponse',
+  'submitbutton',
+  'aifeedback',
+]);
+
+const parseInfoSeconds = (value) => {
+  const seconds = Number.parseInt(String(value || '').trim(), 10);
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : 8;
+};
+
+const getInfosForTarget = (block, target) =>
+  (block?.infos || []).filter((info) => info?.target === target);
+
+export function collectInfosForTarget(source, target) {
+  const out = [];
+  const visit = (node) => {
+    if (!node) return;
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+
+    if (Array.isArray(node.infos)) {
+      node.infos.forEach((info) => {
+        if (!target || info?.target === target) {
+          out.push(info);
+        }
+      });
+    }
+
+    visit(node.prelude);
+    visit(node.content);
+    visit(node.blocks);
+    visit(node.questions);
+  };
+
+  visit(source);
+  return out;
+}
 
 function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
   const [errored, setErrored] = useState(false);
@@ -79,7 +124,7 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
 // Keeps everything else as-is. Works for any \SomeTag{ ... } (including section*, link, image, etc.)
 function collapseBracedCommands(rawLines) {
   const startsTag = (s) =>
-    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|table|image|link|file|pythonturtle|cpp|include)\{/.test(s);
+    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|cpp|include)\{/.test(s);
   const out = [];
   let buf = null;
   let depth = 0;
@@ -351,6 +396,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let inScoreBlock = false;
   let currentScore = null;
   let inGroup = false;
+  let currentGroupIntro = null;
   let pendingIncludeFiles = null;
 
   // track some structural state to report missing closures
@@ -492,6 +538,48 @@ export function parseSheetToBlocks(lines, options = {}) {
       } else {
         pendingIncludeFiles = null;
       }
+      continue;
+    }
+
+    if (trimmed.startsWith('\\info{')) {
+      const args = parseCommandArgs(trimmed, 'info');
+      if (!args || args.length < 2) {
+        pushIssue('warn', lineNo, 'Malformed \\info{target,seconds}{message}.', line);
+        continue;
+      }
+
+      const [targetSpec = '', messageRaw = ''] = args;
+      const [rawTarget = '', rawSeconds = ''] = String(targetSpec)
+        .split(',')
+        .map((part) => part.trim());
+      const target = normalizeInfoBubbleTarget(rawTarget);
+
+      if (!SUPPORTED_INFO_TARGETS.has(target)) {
+        pushIssue(
+          'warn',
+          lineNo,
+          `Unsupported \\info target "${rawTarget}". Supported targets are questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback.`,
+          line
+        );
+        continue;
+      }
+
+      const info = {
+        target,
+        seconds: parseInfoSeconds(rawSeconds),
+        message: format(String(messageRaw || '').trim()),
+      };
+
+      if (currentQuestion?.type === 'question') {
+        if (!currentQuestion.infos) currentQuestion.infos = [];
+        currentQuestion.infos.push(info);
+      } else if (currentGroupIntro?.type === 'groupIntro') {
+        if (!currentGroupIntro.infos) currentGroupIntro.infos = [];
+        currentGroupIntro.infos.push(info);
+      } else {
+        pushIssue('warn', lineNo, '\\info found outside a \\questiongroup. Ignoring.', line);
+      }
+
       continue;
     }
 
@@ -923,8 +1011,10 @@ export function parseSheetToBlocks(lines, options = {}) {
         type: 'groupIntro',
         groupId: groupNumber,
         content,
+        infos: [],
         retriesRequired: currentGroupRetriesRequired, // ✅ include it
       });
+      currentGroupIntro = blocks.at(-1);
       meta.groupRetries[groupNumber] = currentGroupRetriesRequired;
       continue;
     }
@@ -939,6 +1029,7 @@ export function parseSheetToBlocks(lines, options = {}) {
       blocks.push({ type: 'endGroup' });
       inGroup = false;
       openGroupLine = null;
+      currentGroupIntro = null;
       continue;
     }
 
@@ -1004,6 +1095,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         samples: [],
         feedback: [],
         followups: [],
+        infos: [],
         codeBlocks: [],
         scores: {},
         retriesRequired: currentGroupRetriesRequired,
@@ -1277,14 +1369,40 @@ export function renderBlocks(blocks, options = {}) {
     textFeedbackShown = {},
     unansweredShown = {},
     onFileChange = null,
+    infoBubbleSession = null,
   } = options;
 
   let standaloneCodeCounter = 1;
+  let infoBubbleSequence = 1;
   const hiddenTypes = ['sampleresponses', 'feedbackprompt', 'followupprompt'];
   const canEditTable =
     runMode === 'preview'
       ? editable
       : (editable && isActive);   // only active student edits in RUN
+
+  const renderInfoBubbles = (block, target, keyPrefix, anchorRef, bubbleOptions = {}) => {
+    const bubbleSession = bubbleOptions.infoBubbleSession || infoBubbleSession;
+    const bubbleKey = `${keyPrefix}-${target}`;
+    const infos = getInfosForTarget(block, target);
+    if (!infos.length) return null;
+
+    const placement = bubbleOptions.placement || 'top';
+    const dismissOnTargetInput = !!bubbleOptions.dismissOnTargetInput;
+    const firstInfo = infos[0];
+
+    return (
+      <InfoBubble
+        key={bubbleKey}
+        info={firstInfo}
+        showKey={bubbleKey}
+        anchorRef={anchorRef}
+        placement={placement}
+        dismissOnTargetInput={dismissOnTargetInput}
+        infoBubbleSession={bubbleSession}
+        sequence={infoBubbleSequence++}
+      />
+    );
+  };
 
   return blocks.map((block, index) => {
     if (hiddenTypes.includes(block.type) && runMode !== 'preview') return null;
@@ -1406,9 +1524,17 @@ export function renderBlocks(blocks, options = {}) {
 
 
     if (block.type === 'groupIntro') {
+      const groupIntroAnchorRef = React.createRef();
       return (
-        <div key={`groupIntro-${index}`} className="mb-2">
+        <div key={`groupIntro-${index}`} className="mb-2" ref={groupIntroAnchorRef}>
           <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
+          {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
+          {runMode === 'preview' && renderInfoBubbles(
+            block,
+            'submitbutton',
+            `groupIntro-submit-${index}`,
+            groupIntroAnchorRef
+          )}
         </div>
 
       );
@@ -1835,6 +1961,7 @@ export function renderBlocks(blocks, options = {}) {
 
 
     if (block.type === 'question') {
+      const questionAnchorRef = React.createRef();
       const codeIndicesByLang = { python: [], cpp: [] };
       (block.codeBlocks || []).forEach(cb => {
         if (cb.lang === 'python') codeIndicesByLang.python.push(cb.index);
@@ -1888,6 +2015,7 @@ export function renderBlocks(blocks, options = {}) {
         <div
           key={`q-${block.groupId}-${block.id}`}  // ✅ unique per question
           className="mb-4"
+          ref={questionAnchorRef}
         >
           <p>
             <strong>{block.label}</strong>{' '}
@@ -1910,7 +2038,15 @@ export function renderBlocks(blocks, options = {}) {
             )}
           </p>
 
+          {renderInfoBubbles(
+            block,
+            'question',
+            `question-${block.groupId}-${block.id}`,
+            questionAnchorRef
+          )}
+
           {block.pythonBlocks?.map((py, i) => {
+            const codeAnchorRef = React.createRef();
             const cbIndex = codeIndicesByLang.python[i] ?? (i + 1);
             const responseKey = `${block.groupId}${block.id}code${cbIndex}`;
             const savedResponse = prefill?.[responseKey]?.response || py.content;
@@ -1942,7 +2078,14 @@ export function renderBlocks(blocks, options = {}) {
             const tl = py.timeLimit ?? block.timeLimit ?? 50000;
 
             return (
-              <div key={`q-${block.groupId}-${block.id}-py-${i}`}>
+              <div key={`q-${block.groupId}-${block.id}-py-${i}`} ref={codeAnchorRef}>
+                {renderInfoBubbles(
+                  block,
+                  'coderesponse',
+                  `question-${block.groupId}-${block.id}-py-${i}`,
+                  codeAnchorRef,
+                  { dismissOnTargetInput: true }
+                )}
                 {runMode === 'preview' && (
                   <div className="text-muted small mb-1">
                     ⏱ Time limit: {formatTimeLimit(tl)}
@@ -1992,6 +2135,7 @@ export function renderBlocks(blocks, options = {}) {
           })}
 
           {block.cppBlocks?.map((cpp, i) => {
+            const codeAnchorRef = React.createRef();
             const cbIndex = codeIndicesByLang.cpp[i] ?? (i + 1);
             const responseKey = `${block.groupId}${block.id}code${cbIndex}`;
 
@@ -2011,7 +2155,14 @@ export function renderBlocks(blocks, options = {}) {
                 : (editable && isActive) || (showToggle && codeMode === 'local');
 
             return (
-              <div key={`q-${block.groupId}-${block.id}-cpp-${i}`}>
+              <div key={`q-${block.groupId}-${block.id}-cpp-${i}`} ref={codeAnchorRef}>
+                {renderInfoBubbles(
+                  block,
+                  'coderesponse',
+                  `question-${block.groupId}-${block.id}-cpp-${i}`,
+                  codeAnchorRef,
+                  { dismissOnTargetInput: true }
+                )}
                 {runMode === 'preview' && (
                   <div className="text-muted small mb-1">
                     ⏱ Time limit: {cpp.timeLimit ?? 5000}{' '}
@@ -2114,6 +2265,7 @@ export function renderBlocks(blocks, options = {}) {
 
           {showTextArea ? (
             (() => {
+              const textAnchorRef = React.createRef();
               const meta = {
                 questionText: stripHtml(block.prompt || ''),
                 sampleResponse: stripHtml(block.samples?.[0] || ''),
@@ -2126,7 +2278,14 @@ export function renderBlocks(blocks, options = {}) {
               const guidance = textFeedbackShown?.[responseKey];
 
               return (
-                <>
+                <div ref={textAnchorRef}>
+                  {renderInfoBubbles(
+                    block,
+                    'textresponse',
+                    `question-${block.groupId}-${block.id}-text`,
+                    textAnchorRef,
+                    { dismissOnTargetInput: true }
+                  )}
                   <Form.Control
                     as="textarea"
                     rows={Math.max((block.responseLines || 1), 2)}
@@ -2143,7 +2302,7 @@ export function renderBlocks(blocks, options = {}) {
                       options.onTextChange?.(responseKey, val, meta);
                     }}
                   />
-                </>
+                </div>
               );
             })()
           ) : null}
@@ -2151,13 +2310,48 @@ export function renderBlocks(blocks, options = {}) {
 
 
 
-          {runMode === 'preview' && (
-            <>
-              {block.samples?.length > 0 && <p className="text-muted"><em>Sample: {block.samples.join('; ')}</em></p>}
-              {block.feedback?.length > 0 && <p className="text-muted"><em>Feedback: {block.feedback.join('; ')}</em></p>}
-              {block.followups?.length > 0 && <p className="text-muted"><em>Follow-up: {block.followups.join('; ')}</em></p>}
-            </>
-          )}
+          {(() => {
+            const aiFeedbackVisible =
+              Boolean(textFeedbackShown?.[responseKey]) ||
+              (runMode === 'preview' &&
+                ((block.samples?.length || 0) > 0 ||
+                  (block.feedback?.length || 0) > 0 ||
+                  (block.followups?.length || 0) > 0));
+            if (!aiFeedbackVisible) return null;
+
+            const aiFeedbackAnchorRef = React.createRef();
+
+            return (
+              <div ref={aiFeedbackAnchorRef}>
+                {runMode === 'preview' && (
+                  <>
+                    {block.samples?.length > 0 && <p className="text-muted"><em>Sample: {block.samples.join('; ')}</em></p>}
+                    {block.feedback?.length > 0 && <p className="text-muted"><em>Feedback: {block.feedback.join('; ')}</em></p>}
+                    {block.followups?.length > 0 && <p className="text-muted"><em>Follow-up: {block.followups.join('; ')}</em></p>}
+                  </>
+                )}
+
+                {textFeedbackShown?.[responseKey] && (
+                  <Alert
+                    variant="warning"
+                    className="mt-2"
+                    style={{ whiteSpace: 'pre-wrap' }}
+                  >
+                    <strong>AI Guidance</strong>
+                    <div>{textFeedbackShown[responseKey]}</div>
+                  </Alert>
+                )}
+
+                {renderInfoBubbles(
+                  block,
+                  'aifeedback',
+                  `question-${block.groupId}-${block.id}-ai`,
+                  aiFeedbackAnchorRef,
+                  { placement: 'top' }
+                )}
+              </div>
+            );
+          })()}
 
           {unansweredMessage && (
             <Alert
@@ -2170,17 +2364,13 @@ export function renderBlocks(blocks, options = {}) {
             </Alert>
           )}
 
-          {/* 🔶 AI Guidance (ALL question types) */}
-          {textFeedbackShown?.[responseKey] && (
-            <Alert
-              variant="warning"
-              className="mt-2"
-              style={{ whiteSpace: 'pre-wrap' }}
-            >
-              <strong>AI Guidance</strong>
-              <div>{textFeedbackShown[responseKey]}</div>
-            </Alert>
-          )}
+          {runMode === 'preview' &&
+            renderInfoBubbles(
+              block,
+              'submitbutton',
+              `question-${block.groupId}-${block.id}-submit`,
+              questionAnchorRef
+            )}
 
           {/* Show saved followup Q&A in read-only format */}
 

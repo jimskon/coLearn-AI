@@ -18,10 +18,10 @@ export function getInfoBubblePriority(target) {
 }
 
 function compareCandidates(a, b) {
-  const priorityDelta = getInfoBubblePriority(a?.target) - getInfoBubblePriority(b?.target);
-  if (priorityDelta !== 0) return priorityDelta;
   const orderDelta = Number(a?.order || 0) - Number(b?.order || 0);
   if (orderDelta !== 0) return orderDelta;
+  const priorityDelta = getInfoBubblePriority(a?.target) - getInfoBubblePriority(b?.target);
+  if (priorityDelta !== 0) return priorityDelta;
   return String(a?.key || '').localeCompare(String(b?.key || ''));
 }
 

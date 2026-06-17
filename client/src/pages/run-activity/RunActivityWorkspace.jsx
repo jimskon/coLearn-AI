@@ -9,8 +9,6 @@ function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   const target = options.target || infos[0]?.target;
   const infoBubbleSession = options.infoBubbleSession;
   const bubbleKey = `${keyPrefix}-${target}`;
-  const activeKey = infoBubbleSession?.getActiveKey?.();
-  if (infoBubbleSession?.isTargetSeen?.(target) && activeKey !== bubbleKey) return null;
   const firstInfo = infos[0];
 
   return (

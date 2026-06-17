@@ -1381,8 +1381,6 @@ export function renderBlocks(blocks, options = {}) {
   const renderInfoBubbles = (block, target, keyPrefix, anchorRef, options = {}) => {
     const infoBubbleSession = options.infoBubbleSession;
     const bubbleKey = `${keyPrefix}-${target}`;
-    const activeKey = infoBubbleSession?.getActiveKey?.();
-    if (infoBubbleSession?.isTargetSeen?.(target) && activeKey !== bubbleKey) return null;
     const infos = getInfosForTarget(block, target);
     if (!infos.length) return null;
 

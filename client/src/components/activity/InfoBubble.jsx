@@ -315,19 +315,21 @@ export default function InfoBubble({
     borderRight: '8px solid transparent',
   };
 
-  const arrowPlacementStyle = position.placement === 'bottom'
+  const placement = position?.placement || 'floating';
+
+  const arrowPlacementStyle = placement === 'bottom'
     ? {
         top: -8,
         left: 24,
         borderBottom: '8px solid #79d2ea',
       }
-    : position.placement === 'top'
+    : placement === 'top'
       ? {
           bottom: -8,
           left: 24,
           borderTop: '8px solid #79d2ea',
         }
-      : position.placement === 'right'
+      : placement === 'right'
         ? {
             left: -8,
             top: 18,

@@ -130,9 +130,12 @@ export default function InfoBubble({
 
     if (!resolvedMessage || !resolvedTarget || !infoBubbleSession) return undefined;
 
+    const anchorRect = anchorRef?.current?.getBoundingClientRect?.();
     const unregister = infoBubbleSession.registerCandidate?.({
       key: resolvedShowKey,
       target: resolvedTarget,
+      anchorTop: anchorRect?.top,
+      anchorLeft: anchorRect?.left,
     });
     unregisterRef.current = unregister;
 

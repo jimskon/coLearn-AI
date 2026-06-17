@@ -18,6 +18,14 @@ export function getInfoBubblePriority(target) {
 }
 
 function compareCandidates(a, b) {
+  const aTop = Number.isFinite(a?.anchorTop) ? Number(a.anchorTop) : Number.POSITIVE_INFINITY;
+  const bTop = Number.isFinite(b?.anchorTop) ? Number(b.anchorTop) : Number.POSITIVE_INFINITY;
+  if (aTop !== bTop) return aTop - bTop;
+
+  const aLeft = Number.isFinite(a?.anchorLeft) ? Number(a.anchorLeft) : Number.POSITIVE_INFINITY;
+  const bLeft = Number.isFinite(b?.anchorLeft) ? Number(b.anchorLeft) : Number.POSITIVE_INFINITY;
+  if (aLeft !== bLeft) return aLeft - bLeft;
+
   const orderDelta = Number(a?.order || 0) - Number(b?.order || 0);
   if (orderDelta !== 0) return orderDelta;
   const priorityDelta = getInfoBubblePriority(a?.target) - getInfoBubblePriority(b?.target);
@@ -98,7 +106,7 @@ export function createInfoBubbleSession() {
     return true;
   };
 
-  state.registerCandidate = ({ key, target }) => {
+  state.registerCandidate = ({ key, target, anchorTop = null, anchorLeft = null }) => {
     const normalizedTarget = normalizeInfoBubbleTarget(target);
     if (!key || !normalizedTarget) return () => {};
 
@@ -106,6 +114,8 @@ export function createInfoBubbleSession() {
       key,
       target: normalizedTarget,
       order: state.nextOrder++,
+      anchorTop: Number.isFinite(anchorTop) ? Number(anchorTop) : Number.POSITIVE_INFINITY,
+      anchorLeft: Number.isFinite(anchorLeft) ? Number(anchorLeft) : Number.POSITIVE_INFINITY,
     });
     recomputeActive();
 

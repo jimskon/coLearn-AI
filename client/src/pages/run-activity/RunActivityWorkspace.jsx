@@ -8,6 +8,7 @@ function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   if (!infos?.length) return null;
   const target = options.target || infos[0]?.target;
   const infoBubbleSession = options.infoBubbleSession;
+  const sequence = options.sequence;
   const bubbleKey = `${keyPrefix}-${target}`;
   const firstInfo = infos[0];
 
@@ -19,6 +20,7 @@ function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
       anchorRef={anchorRef}
       placement={options.placement || 'top'}
       infoBubbleSession={infoBubbleSession}
+      sequence={sequence}
     />
   );
 }
@@ -75,8 +77,16 @@ export default function RunActivityWorkspace({
   handleRegradeTest,
   overallTestTotals,
   infoBubbleSession,
+  infoBubbleSequenceRef,
 }) {
   let globalQuestionCounter = 0;
+
+  const nextInfoSequence = () => {
+    if (!infoBubbleSequenceRef?.current) return null;
+    const sequence = infoBubbleSequenceRef.current;
+    infoBubbleSequenceRef.current += 1;
+    return sequence;
+  };
 
   return (
     <div style={{ position: 'relative' }}>
@@ -124,6 +134,7 @@ export default function RunActivityWorkspace({
           setFileContents: handleUpdateFileContents,
           onFileChange: handleFileChange,
           infoBubbleSession,
+          infoBubbleSequenceRef,
         })}
 
         {groups.map((group, index) => {
@@ -175,6 +186,7 @@ export default function RunActivityWorkspace({
                   codeFeedbackShown,
                   unansweredShown,
                   infoBubbleSession,
+                  infoBubbleSequenceRef,
                 })}
 
               <p ref={questionGroupAnchorRef}>
@@ -184,7 +196,7 @@ export default function RunActivityWorkspace({
                 collectGroupInfos(group, 'questiongroup'),
                 `group-${index}-questiongroup`,
                 questionGroupAnchorRef,
-                { target: 'questiongroup', infoBubbleSession }
+                { target: 'questiongroup', infoBubbleSession, sequence: nextInfoSequence() }
               )}
 
               {group.content.map((block, bIndex) => {
@@ -222,6 +234,7 @@ export default function RunActivityWorkspace({
                       socket,
                     }),
                   infoBubbleSession,
+                  infoBubbleSequenceRef,
                 });
 
                 if (!isTestMode || block.type !== 'question') {
@@ -269,7 +282,7 @@ export default function RunActivityWorkspace({
                     collectGroupInfos(group, 'submitbutton'),
                     `group-${index}-submitbutton`,
                     submitAnchorRef,
-                    { target: 'submitbutton', infoBubbleSession }
+                    { target: 'submitbutton', infoBubbleSession, sequence: nextInfoSequence() }
                   )}
                   <Button onClick={() => handleSubmit(false, index)} disabled={isSubmitting}>
                     {isSubmitting ? 'Checking…' : 'Submit Group'}

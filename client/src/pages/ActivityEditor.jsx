@@ -30,6 +30,7 @@ export default function ActivityEditor() {
   const [fileContents, setFileContents] = useState({});
   const fileContentsRef = useRef({});
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
+  const infoBubbleSequenceRef = useRef(1);
 
   // ---- Auto-fix state ----
   const docBeforeAutofixRef = useRef('');
@@ -293,6 +294,7 @@ export default function ActivityEditor() {
         fileContents: files,
         setFileContents: handleUpdateFileContents,
         infoBubbleSession: infoBubbleSessionRef.current,
+        infoBubbleSequenceRef,
       });
 
       setElements(rendered);
@@ -556,6 +558,7 @@ export default function ActivityEditor() {
         fileContents: files2,
         setFileContents: handleUpdateFileContents,
         infoBubbleSession: infoBubbleSessionRef.current,
+        infoBubbleSequenceRef,
       });
 
       setAutofixElements(rendered2);

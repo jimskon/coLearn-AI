@@ -113,6 +113,7 @@ export default function CreatorWorkbenchPage() {
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
+  const infoBubbleSequenceRef = useRef(1);
   const effectiveClassId = classId || activity?.class_id;
   const activeBlocks = proposal?.blocks || blocks;
   const activeIssues = proposal?.issues || parseIssues;
@@ -131,7 +132,8 @@ export default function CreatorWorkbenchPage() {
     fileContents,
     setFileContents: updateFileContents,
     infoBubbleSession: infoBubbleSessionRef.current,
-  }), [activeBlocks, fileContents, updateFileContents, infoBubbleSessionRef]);
+    infoBubbleSequenceRef,
+  }), [activeBlocks, fileContents, updateFileContents, infoBubbleSessionRef, infoBubbleSequenceRef]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 

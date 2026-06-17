@@ -1373,7 +1373,6 @@ export function renderBlocks(blocks, options = {}) {
   } = options;
 
   let standaloneCodeCounter = 1;
-  let infoBubbleSequence = 1;
   const hiddenTypes = ['sampleresponses', 'feedbackprompt', 'followupprompt'];
   const canEditTable =
     runMode === 'preview'
@@ -1382,6 +1381,8 @@ export function renderBlocks(blocks, options = {}) {
 
   const renderInfoBubbles = (block, target, keyPrefix, anchorRef, bubbleOptions = {}) => {
     const bubbleSession = bubbleOptions.infoBubbleSession || infoBubbleSession;
+    const sequenceRef = bubbleOptions.infoBubbleSequenceRef || options.infoBubbleSequenceRef || null;
+    const sequence = sequenceRef ? sequenceRef.current++ : null;
     const bubbleKey = `${keyPrefix}-${target}`;
     const infos = getInfosForTarget(block, target);
     if (!infos.length) return null;
@@ -1399,7 +1400,7 @@ export function renderBlocks(blocks, options = {}) {
         placement={placement}
         dismissOnTargetInput={dismissOnTargetInput}
         infoBubbleSession={bubbleSession}
-        sequence={infoBubbleSequence++}
+        sequence={sequence}
       />
     );
   };

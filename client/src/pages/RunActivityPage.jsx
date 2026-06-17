@@ -332,6 +332,7 @@ export default function RunActivityPage({
   const codeVersionsRef = useRef({});
   const qidsNoFURef = useRef(new Set());
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
+  const infoBubbleSequenceRef = useRef(1);
 
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
@@ -2877,6 +2878,7 @@ export default function RunActivityPage({
             handleRegradeTest={handleRegradeTest}
             overallTestTotals={overallTestTotals}
             infoBubbleSession={infoBubbleSessionRef.current}
+            infoBubbleSequenceRef={infoBubbleSequenceRef}
           />
         )}
       </Container>

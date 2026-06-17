@@ -1369,6 +1369,7 @@ export function renderBlocks(blocks, options = {}) {
     textFeedbackShown = {},
     unansweredShown = {},
     onFileChange = null,
+    infoBubbleSession = null,
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -1378,14 +1379,14 @@ export function renderBlocks(blocks, options = {}) {
       ? editable
       : (editable && isActive);   // only active student edits in RUN
 
-  const renderInfoBubbles = (block, target, keyPrefix, anchorRef, options = {}) => {
-    const infoBubbleSession = options.infoBubbleSession;
+  const renderInfoBubbles = (block, target, keyPrefix, anchorRef, bubbleOptions = {}) => {
+    const bubbleSession = bubbleOptions.infoBubbleSession || infoBubbleSession;
     const bubbleKey = `${keyPrefix}-${target}`;
     const infos = getInfosForTarget(block, target);
     if (!infos.length) return null;
 
-    const placement = options.placement || 'top';
-    const dismissOnTargetInput = !!options.dismissOnTargetInput;
+    const placement = bubbleOptions.placement || 'top';
+    const dismissOnTargetInput = !!bubbleOptions.dismissOnTargetInput;
     const firstInfo = infos[0];
 
     return (
@@ -1396,7 +1397,7 @@ export function renderBlocks(blocks, options = {}) {
         anchorRef={anchorRef}
         placement={placement}
         dismissOnTargetInput={dismissOnTargetInput}
-        infoBubbleSession={infoBubbleSession}
+        infoBubbleSession={bubbleSession}
       />
     );
   };

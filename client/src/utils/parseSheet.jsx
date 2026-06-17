@@ -6,7 +6,7 @@ import ActivityHeader from '../components/activity/ActivityHeader';
 import ActivityEnvironment from '../components/activity/ActivityEnvironment';
 import ActivityPythonBlock from '../components/activity/ActivityPythonBlock';
 import InfoBubble from '../components/activity/InfoBubble';
-import { hasSeenInfoBubbleTarget, normalizeInfoBubbleTarget } from './infoBubbleSession';
+import { normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { makeResponseAttrs } from './responseDom';
 
 import { Form } from 'react-bootstrap';
@@ -1382,7 +1382,7 @@ export function renderBlocks(blocks, options = {}) {
     const infoBubbleSession = options.infoBubbleSession;
     const bubbleKey = `${keyPrefix}-${target}`;
     const activeKey = infoBubbleSession?.getActiveKey?.();
-    if (hasSeenInfoBubbleTarget(infoBubbleSession, target) && activeKey !== bubbleKey) return null;
+    if (infoBubbleSession?.isTargetSeen?.(target) && activeKey !== bubbleKey) return null;
     const infos = getInfosForTarget(block, target);
     if (!infos.length) return null;
 

@@ -3,9 +3,6 @@ import { Alert, Button, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
 import { collectInfosForTarget } from '../../utils/parseSheet';
-import {
-  hasSeenInfoBubbleTarget,
-} from '../../utils/infoBubbleSession';
 
 function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   if (!infos?.length) return null;
@@ -13,7 +10,7 @@ function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   const infoBubbleSession = options.infoBubbleSession;
   const bubbleKey = `${keyPrefix}-${target}`;
   const activeKey = infoBubbleSession?.getActiveKey?.();
-  if (hasSeenInfoBubbleTarget(infoBubbleSession, target) && activeKey !== bubbleKey) return null;
+  if (infoBubbleSession?.isTargetSeen?.(target) && activeKey !== bubbleKey) return null;
   const firstInfo = infos[0];
 
   return (

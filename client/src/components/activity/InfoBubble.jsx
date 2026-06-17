@@ -278,17 +278,18 @@ export default function InfoBubble({
     };
   }, [isDragging, position?.placement]);
 
-  if (!shouldRender || !resolvedMessage || !position) return null;
+  if (!shouldRender || !resolvedMessage) return null;
 
   const outerStyle = {
     position: 'fixed',
-    top: position.top != null ? `${position.top}px` : undefined,
-    left: position.left != null ? `${position.left}px` : undefined,
-    right: position.right != null ? `${position.right}px` : undefined,
-    bottom: position.bottom != null ? `${position.bottom}px` : undefined,
-    width: position.width != null ? `${position.width}px` : undefined,
+    top: position?.top != null ? `${position.top}px` : '12px',
+    left: position?.left != null ? `${position.left}px` : '12px',
+    right: position?.right != null ? `${position.right}px` : undefined,
+    bottom: position?.bottom != null ? `${position.bottom}px` : undefined,
+    width: position?.width != null ? `${position.width}px` : '280px',
     zIndex: 2000,
     pointerEvents: 'none',
+    visibility: position ? 'visible' : 'hidden',
   };
 
   const bubbleStyle = {

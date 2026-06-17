@@ -18,6 +18,10 @@ export function getInfoBubblePriority(target) {
 }
 
 function compareCandidates(a, b) {
+  const aSequence = Number.isFinite(a?.sequence) ? Number(a.sequence) : Number.POSITIVE_INFINITY;
+  const bSequence = Number.isFinite(b?.sequence) ? Number(b.sequence) : Number.POSITIVE_INFINITY;
+  if (aSequence !== bSequence) return aSequence - bSequence;
+
   const aTop = Number.isFinite(a?.anchorTop) ? Number(a.anchorTop) : Number.POSITIVE_INFINITY;
   const bTop = Number.isFinite(b?.anchorTop) ? Number(b.anchorTop) : Number.POSITIVE_INFINITY;
   if (aTop !== bTop) return aTop - bTop;
@@ -106,7 +110,7 @@ export function createInfoBubbleSession() {
     return true;
   };
 
-  state.registerCandidate = ({ key, target, anchorTop = null, anchorLeft = null }) => {
+  state.registerCandidate = ({ key, target, sequence = null, anchorTop = null, anchorLeft = null }) => {
     const normalizedTarget = normalizeInfoBubbleTarget(target);
     if (!key || !normalizedTarget) return () => {};
 
@@ -114,6 +118,7 @@ export function createInfoBubbleSession() {
       key,
       target: normalizedTarget,
       order: state.nextOrder++,
+      sequence: Number.isFinite(sequence) ? Number(sequence) : Number.POSITIVE_INFINITY,
       anchorTop: Number.isFinite(anchorTop) ? Number(anchorTop) : Number.POSITIVE_INFINITY,
       anchorLeft: Number.isFinite(anchorLeft) ? Number(anchorLeft) : Number.POSITIVE_INFINITY,
     });

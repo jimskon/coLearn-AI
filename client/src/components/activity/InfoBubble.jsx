@@ -64,6 +64,7 @@ export default function InfoBubble({
   dismissOnTargetInput = false,
   className = '',
   infoBubbleSession = null,
+  sequence = null,
   onDismiss,
 }) {
   const resolvedMessage = String(info?.message ?? message ?? '').trim();
@@ -134,6 +135,7 @@ export default function InfoBubble({
     const unregister = infoBubbleSession.registerCandidate?.({
       key: resolvedShowKey,
       target: resolvedTarget,
+      sequence,
       anchorTop: anchorRect?.top,
       anchorLeft: anchorRect?.left,
     });

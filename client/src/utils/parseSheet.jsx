@@ -1373,6 +1373,7 @@ export function renderBlocks(blocks, options = {}) {
   } = options;
 
   let standaloneCodeCounter = 1;
+  let infoBubbleSequence = 1;
   const hiddenTypes = ['sampleresponses', 'feedbackprompt', 'followupprompt'];
   const canEditTable =
     runMode === 'preview'
@@ -1398,6 +1399,7 @@ export function renderBlocks(blocks, options = {}) {
         placement={placement}
         dismissOnTargetInput={dismissOnTargetInput}
         infoBubbleSession={bubbleSession}
+        sequence={infoBubbleSequence++}
       />
     );
   };

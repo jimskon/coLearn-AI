@@ -1,4 +1,5 @@
 # CI/CD Plan
+# James Skon
 
 This repository now has a first-pass GitHub Actions CI workflow in `.github/workflows/ci.yml`.
 

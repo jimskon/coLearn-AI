@@ -67,28 +67,32 @@ function normalizeDemoGuestName(rawName) {
   return cleaned || null;
 }
 
-async function createGuestDemoUser(conn, demoCode, requestedName = '') {
+async function createGuestDemoUser(conn, demoCode, {
+  requestedName = '',
+  role = 'student',
+  fallbackNamePrefix = 'Guest',
+} = {}) {
   const [result] = await conn.query(
     'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
     [
       'Demo Guest',
       `demo-${String(demoCode || 'guest').toLowerCase()}-${Date.now()}-${crypto.randomUUID()}@colearn-ai.demo`,
       await bcrypt.hash(crypto.randomUUID(), 10),
-      'student',
+      role,
     ]
   );
 
   const guestId = Number(result.insertId);
   const guestName =
     normalizeDemoGuestName(requestedName) ||
-    `Guest ${guestId}`;
+    `${fallbackNamePrefix} ${guestId}`;
 
   await conn.query('UPDATE users SET name = ? WHERE id = ?', [guestName, guestId]);
 
   return {
     id: guestId,
     name: guestName,
-    role: 'student',
+    role,
   };
 }
 
@@ -260,7 +264,11 @@ router.post('/demo/student', async (req, res) => {
       }
 
       const course = courses[0];
-      const guest = await createGuestDemoUser(conn, demoCode, guestName);
+      const guest = await createGuestDemoUser(conn, demoCode, {
+        requestedName: guestName,
+        role: 'student',
+        fallbackNamePrefix: 'Guest',
+      });
 
       await conn.query(
         `INSERT INTO course_enrollments (student_id, course_id) VALUES (?, ?)`,
@@ -287,6 +295,92 @@ router.post('/demo/student', async (req, res) => {
   } catch (err) {
     console.error('Demo student login error:', err);
     return res.status(500).json({ error: 'Failed to start demo student session' });
+  }
+});
+
+router.post('/demo/creator', async (req, res) => {
+  const demoCode = String(req.body?.demoCode || '').trim();
+  const guestName = String(req.body?.guestName || '');
+  if (!demoCode) {
+    return res.status(400).json({ error: 'Missing demoCode' });
+  }
+
+  try {
+    await ensureDemoModeSchema();
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [courses] = await conn.query(
+        `SELECT c.id, c.name, c.code, c.class_id
+           FROM courses c
+           JOIN pogil_classes pc ON pc.id = c.class_id
+          WHERE c.code = ?
+            AND pc.demo_mode = 1
+          ORDER BY c.id ASC
+          LIMIT 1`,
+        [demoCode]
+      );
+
+      if (!courses.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Demo not found for that code' });
+      }
+
+      const course = courses[0];
+      const [activities] = await conn.query(
+        `SELECT id, title
+           FROM pogil_activities
+          WHERE class_id = ?
+          ORDER BY order_index ASC, id ASC
+          LIMIT 1`,
+        [course.class_id]
+      );
+
+      if (!activities.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'No demo activity is configured for that code' });
+      }
+
+      const activity = activities[0];
+      const guest = await createGuestDemoUser(conn, demoCode, {
+        requestedName: guestName,
+        role: 'creator',
+        fallbackNamePrefix: 'Demo Creator',
+      });
+
+      await conn.query(
+        `INSERT INTO course_enrollments (student_id, course_id) VALUES (?, ?)`,
+        [guest.id, course.id]
+      );
+
+      await conn.commit();
+
+      req.session.userId = guest.id;
+      return res.status(201).json({
+        user: guest,
+        course: {
+          id: Number(course.id),
+          name: course.name,
+          code: course.code,
+        },
+        class: {
+          id: Number(course.class_id),
+        },
+        activity: {
+          id: Number(activity.id),
+          title: activity.title,
+        },
+      });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  } catch (err) {
+    console.error('Demo creator login error:', err);
+    return res.status(500).json({ error: 'Failed to start demo creator session' });
   }
 });
 

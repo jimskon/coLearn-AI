@@ -464,9 +464,7 @@ async function ensureActivitySandboxInstance(req, res) {
     return res.status(401).json({ error: 'Login required.' });
   }
 
-  if (!['instructor', 'creator', 'root'].includes(userRole)) {
-    return res.status(403).json({ error: 'Sandbox preview is available to instructors and creators.' });
-  }
+  const canUseSandboxByRole = ['instructor', 'creator', 'root'].includes(userRole);
 
   const conn = await db.getConnection();
   const lockName = `ensureActivitySandboxInstance:${activityId}:${userId}`;
@@ -478,14 +476,33 @@ async function ensureActivitySandboxInstance(req, res) {
     }
 
     const [[activityRow]] = await conn.query(
-      `SELECT id, class_id
-         FROM pogil_activities
-        WHERE id = ?`,
+      `SELECT a.id, a.class_id, COALESCE(pc.demo_mode, 0) AS demo_mode
+         FROM pogil_activities a
+         LEFT JOIN pogil_classes pc ON pc.id = a.class_id
+        WHERE a.id = ?`,
       [activityId]
     );
 
     if (!activityRow) {
       return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    let hasDemoSandboxAccess = false;
+    if (!canUseSandboxByRole && Number(activityRow.demo_mode) === 1) {
+      const [[demoEnrollment]] = await conn.query(
+        `SELECT 1 AS ok
+           FROM course_enrollments ce
+           JOIN courses c ON c.id = ce.course_id
+          WHERE c.class_id = ?
+            AND ce.student_id = ?
+          LIMIT 1`,
+        [activityRow.class_id, userId]
+      );
+      hasDemoSandboxAccess = !!demoEnrollment;
+    }
+
+    if (!canUseSandboxByRole && !hasDemoSandboxAccess) {
+      return res.status(403).json({ error: 'Sandbox preview is available to instructors, creators, and public demo participants.' });
     }
 
     const courseParams = requestedCourseId

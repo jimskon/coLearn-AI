@@ -20,6 +20,7 @@ const created = {
   users: new Set(),
   classes: new Set(),
   courses: new Set(),
+  activities: new Set(),
 };
 
 function rememberEmail(email) {
@@ -32,7 +33,12 @@ async function cleanupCreatedRows() {
   const userIds = [...created.users];
   const courseIds = [...created.courses];
   const classIds = [...created.classes];
+  const activityIds = [...created.activities];
 
+  if (activityIds.length) {
+    await db.query(`DELETE FROM activity_instances WHERE activity_id IN (?)`, [activityIds]).catch(() => {});
+    await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]).catch(() => {});
+  }
   if (courseIds.length) {
     await db.query(`DELETE FROM course_enrollments WHERE course_id IN (?)`, [courseIds]).catch(() => {});
     await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]).catch(() => {});
@@ -319,6 +325,64 @@ test('demo student login uses the provided guest name as the display name', asyn
     [response.body.user.id]
   );
   assert.equal(rows[0].name, 'Ada Lovelace');
+});
+
+test('demo creator login creates a creator session and returns the first demo activity', async () => {
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
+  `);
+
+  const className = `Creator Demo Class ${Date.now()}`;
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
+     VALUES (?, ?, 1, NULL)`,
+    [className, 'Demo-only class']
+  );
+  const classId = rememberId('classes', classResult.insertId);
+
+  const demoCode = `CR${String(Date.now()).slice(-4)}`;
+  const [courseResult] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    ['Creator Demo Instance', demoCode, 'DEMO', 'summer', 2026, classId]
+  );
+  const courseId = rememberId('courses', courseResult.insertId);
+
+  const [firstActivityResult] = await db.query(
+    `INSERT INTO pogil_activities (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
+     VALUES (?, ?, NULL, 'local', ?, ?, ?, NULL)`,
+    ['creator_demo_1', 'First Demo Activity', '\\title{First Demo Activity}\n\\section{Intro}', 1, classId]
+  );
+  rememberId('activities', firstActivityResult.insertId);
+
+  const [secondActivityResult] = await db.query(
+    `INSERT INTO pogil_activities (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
+     VALUES (?, ?, NULL, 'local', ?, ?, ?, NULL)`,
+    ['creator_demo_2', 'Second Demo Activity', '\\title{Second Demo Activity}\n\\section{Intro}', 2, classId]
+  );
+  rememberId('activities', secondActivityResult.insertId);
+
+  const response = await requestJson('/api/auth/demo/creator', {
+    body: { demoCode },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.user.role, 'creator');
+  assert.match(response.body.user.name, /^Demo Creator \d+$/);
+  assert.equal(response.body.course.id, courseId);
+  assert.equal(response.body.activity.id, Number(firstActivityResult.insertId));
+  assert.equal(response.body.class.id, classId);
+  assert.equal(response.body.activity.title, 'First Demo Activity');
+  assert.notEqual(response.body.activity.id, Number(secondActivityResult.insertId));
+  assert.match(response.headers.get('set-cookie') || '', /connect\.sid=/);
+  rememberId('users', response.body.user.id);
+
+  const [enrollments] = await db.query(
+    `SELECT 1 AS ok FROM course_enrollments WHERE student_id = ? AND course_id = ?`,
+    [response.body.user.id, courseId]
+  );
+  assert.equal(enrollments.length, 1);
 });
 
 test('login session can be read by whoami and cleared by logout', async () => {

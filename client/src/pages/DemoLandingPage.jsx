@@ -33,17 +33,25 @@ const valueProps = [
   'Easy instructor demonstration for modeling an activity before class use.',
 ];
 
+function buildDemoBasePath(routeDemoCode, defaultDemoCode) {
+  if (routeDemoCode) {
+    return `/demo/${encodeURIComponent(routeDemoCode)}`;
+  }
+  return `/${encodeURIComponent(defaultDemoCode)}`;
+}
+
 export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const navigate = useNavigate();
   const { demoCode: routeDemoCode = '' } = useParams();
   const demoCode = routeDemoCode || defaultDemoCode;
+  const demoBasePath = buildDemoBasePath(routeDemoCode, defaultDemoCode);
   const { setUser } = useUser();
   const [studentBusy, setStudentBusy] = React.useState(false);
   const [studentError, setStudentError] = React.useState('');
   const [guestName, setGuestName] = React.useState('');
 
   const openDemoPath = (pathKey) => {
-    navigate(`/demo/${encodeURIComponent(demoCode)}/${pathKey}`);
+    navigate(`${demoBasePath}/${pathKey}`);
   };
 
   const handleStudentDemo = async () => {

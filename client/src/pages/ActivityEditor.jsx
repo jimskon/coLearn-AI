@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Container, Row, Col, Button, Form, Alert, Modal, Spinner, Tabs, Tab } from 'react-bootstrap';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
@@ -7,6 +7,8 @@ import { API_BASE_URL } from '../config';
 export default function ActivityEditor() {
   const { activityId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const shouldBypassCachedSource = location.state?.demoMode === 'creator';
 
   const [activity, setActivity] = useState(null);
   const [rawText, setRawText] = useState('');
@@ -332,13 +334,13 @@ export default function ActivityEditor() {
         const sourceLines = Array.isArray(sourceBody?.lines) ? sourceBody.lines : [];
         await syncActivityIsTest(activityData, sourceLines);
 
-        const cached = localStorage.getItem(`activity-${activityId}`);
+        const text = (sourceLines || []).join('\n');
+        const cached = shouldBypassCachedSource ? null : localStorage.getItem('activity-' + activityId);
         if (cached) {
           setRawText(cached); // auto compile will handle it
         } else {
-          const text = (sourceLines || []).join('\n');
           setRawText(text);
-          localStorage.setItem(`activity-${activityId}`, text);
+          localStorage.setItem('activity-' + activityId, text);
           setTimeout(() => handleCompile(text), 0);
         }
       } catch (err) {
@@ -348,7 +350,7 @@ export default function ActivityEditor() {
 
     if (skulptLoaded) fetchActivity();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activityId, skulptLoaded]);
+  }, [activityId, shouldBypassCachedSource, skulptLoaded]);
 
   // Auto-compile on change
   useEffect(() => {

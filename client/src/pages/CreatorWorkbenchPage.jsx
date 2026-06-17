@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Badge,
@@ -86,7 +86,9 @@ function parseActivityText(text) {
 export default function CreatorWorkbenchPage() {
   const { classId, activityId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useUser();
+  const isDemoCreatorLaunch = location.state?.demoMode === 'creator';
 
   const [classInfo, setClassInfo] = useState(null);
   const [activity, setActivity] = useState(null);
@@ -407,7 +409,10 @@ export default function CreatorWorkbenchPage() {
     setError('');
     try {
       await saveSource(rawText);
-      const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/sandbox-instance`, {
+      const sandboxEndpoint = isDemoCreatorLaunch
+        ? API_BASE_URL + '/api/activity-instances/by-activity/' + activity.id + '/sandbox-instance'
+        : API_BASE_URL + '/api/activities/' + activity.id + '/sandbox-instance';
+      const res = await fetch(sandboxEndpoint, {
         method: 'POST',
         credentials: 'include',
       });

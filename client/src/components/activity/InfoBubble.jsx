@@ -27,8 +27,25 @@ export default function InfoBubble({
   const [visible, setVisible] = useState(false);
   const [position, setPosition] = useState(null);
   const bubbleRef = useRef(null);
+  const manualPositionRef = useRef(null);
+  const dragStateRef = useRef(null);
   const timersRef = useRef({ show: null, hide: null, unmount: null });
   const dismissedRef = useRef(false);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const clampToViewport = (nextPosition) => {
+    const bubbleWidth = nextPosition.width ?? bubbleRef.current?.offsetWidth ?? 320;
+    const bubbleHeight = bubbleRef.current?.offsetHeight ?? 120;
+    const maxLeft = Math.max(12, window.innerWidth - bubbleWidth - 12);
+    const maxTop = Math.max(12, window.innerHeight - bubbleHeight - 12);
+
+    return {
+      ...nextPosition,
+      width: bubbleWidth,
+      left: Math.max(12, Math.min(nextPosition.left ?? 12, maxLeft)),
+      top: Math.max(12, Math.min(nextPosition.top ?? 12, maxTop)),
+    };
+  };
 
   const clearTimers = () => {
     const timers = timersRef.current;
@@ -57,6 +74,9 @@ export default function InfoBubble({
     setMounted(false);
     setVisible(false);
     setPosition(null);
+    manualPositionRef.current = null;
+    dragStateRef.current = null;
+    setIsDragging(false);
 
     if (!resolvedMessage) return undefined;
 
@@ -81,6 +101,11 @@ export default function InfoBubble({
     if (!mounted) return undefined;
 
     const updatePosition = () => {
+      if (manualPositionRef.current) {
+        setPosition(clampToViewport(manualPositionRef.current));
+        return;
+      }
+
       const node = anchorRef?.current;
       const anchor = node?.getBoundingClientRect?.();
       const mobile = window.innerWidth < 640;
@@ -166,7 +191,7 @@ export default function InfoBubble({
         };
       }
 
-      setPosition(nextPosition);
+      setPosition(clampToViewport(nextPosition));
     };
 
     updatePosition();
@@ -196,6 +221,42 @@ export default function InfoBubble({
       node.removeEventListener('paste', handleInput);
     };
   }, [dismissOnTargetInput, anchorRef]);
+
+  useEffect(() => {
+    if (!isDragging) return undefined;
+
+    const handlePointerMove = (event) => {
+      const state = dragStateRef.current;
+      if (!state || event.pointerId !== state.pointerId) return;
+      const nextLeft = event.clientX - state.offsetX;
+      const nextTop = event.clientY - state.offsetY;
+      const nextPosition = clampToViewport({
+        top: nextTop,
+        left: nextLeft,
+        width: state.width,
+        placement: manualPositionRef.current?.placement || 'top',
+      });
+      manualPositionRef.current = nextPosition;
+      setPosition(nextPosition);
+    };
+
+    const handlePointerUp = (event) => {
+      const state = dragStateRef.current;
+      if (!state || event.pointerId !== state.pointerId) return;
+      dragStateRef.current = null;
+      setIsDragging(false);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [isDragging]);
 
   if (!mounted || !resolvedMessage || !position) return null;
 
@@ -251,13 +312,46 @@ export default function InfoBubble({
             borderTop: '9px solid #7ad4ea',
           };
 
+  const startDrag = (event) => {
+    if (window.innerWidth < 640) return;
+    if (!bubbleRef.current) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = bubbleRef.current.getBoundingClientRect();
+    manualPositionRef.current = clampToViewport({
+      top: rect.top,
+      left: rect.left,
+      width: rect.width,
+      placement: position?.placement || 'top',
+    });
+    dragStateRef.current = {
+      pointerId: event.pointerId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+    };
+    setIsDragging(true);
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      // ignore
+    }
+  };
+
+  const dragHandleStyle = {
+    cursor: isDragging ? 'grabbing' : 'grab',
+    userSelect: 'none',
+    touchAction: 'none',
+  };
+
   return createPortal(
     <div style={outerStyle} className={className}>
       <div ref={bubbleRef} style={bubbleStyle} role="status" aria-live="polite">
         <div className="d-flex align-items-start gap-2">
           <span
             className="badge text-dark"
-            style={{ background: '#bdefff', border: '1px solid #7ad4ea' }}
+            style={{ background: '#bdefff', border: '1px solid #7ad4ea', ...dragHandleStyle }}
+            onPointerDown={startDrag}
           >
             Info
           </span>

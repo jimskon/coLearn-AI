@@ -26,6 +26,7 @@ export default function InfoBubble({
   const [mounted, setMounted] = useState(false);
   const [visible, setVisible] = useState(false);
   const [position, setPosition] = useState(null);
+  const bubbleRef = useRef(null);
   const timersRef = useRef({ show: null, hide: null, unmount: null });
   const dismissedRef = useRef(false);
 
@@ -82,27 +83,90 @@ export default function InfoBubble({
     const updatePosition = () => {
       const node = anchorRef?.current;
       const anchor = node?.getBoundingClientRect?.();
-      const bubbleWidth = Math.min(360, Math.max(240, window.innerWidth - 24));
-      const leftBase = anchor ? anchor.left : 24;
-      const topBase = anchor ? anchor.top : 24;
+      const mobile = window.innerWidth < 640;
+      const bubbleWidth = mobile
+        ? Math.max(0, window.innerWidth - 24)
+        : Math.min(380, Math.max(240, window.innerWidth - 48));
+      const fallbackLeft = 12;
+      const fallbackTop = 12;
       const bottomBase = anchor ? anchor.bottom : 48;
-      let nextPlacement = placement === 'bottom' ? 'bottom' : 'top';
-      let top = nextPlacement === 'bottom' ? bottomBase + 12 : topBase - 12;
+      const topBase = anchor ? anchor.top : 48;
+      const rightBase = anchor ? anchor.right : 48;
+      const leftBase = anchor ? anchor.left : 24;
+      const viewportHeight = window.innerHeight;
 
-      if (nextPlacement === 'top' && top < 12) {
-        nextPlacement = 'bottom';
-        top = bottomBase + 12;
+      if (mobile) {
+        setPosition({
+          top: null,
+          left: 12,
+          right: 12,
+          bottom: 12,
+          width: bubbleWidth,
+          placement: 'mobile',
+        });
+        return;
       }
 
-      const maxLeft = Math.max(12, window.innerWidth - bubbleWidth - 12);
-      const left = Math.max(12, Math.min(leftBase, maxLeft));
+      const bubbleHeightGuess = bubbleRef.current?.offsetHeight || 120;
+      const verticalRoomAbove = topBase - 16;
+      const verticalRoomBelow = viewportHeight - bottomBase - 16;
 
-      setPosition({
-        top,
-        left,
+      const placeRight = () => {
+        const left = rightBase + 16;
+        return left + bubbleWidth <= window.innerWidth - 12
+          ? {
+              top: Math.max(12, Math.min(topBase - 8, viewportHeight - bubbleHeightGuess - 12)),
+              left,
+              width: bubbleWidth,
+              placement: 'right',
+            }
+          : null;
+      };
+
+      const placeAbove = () => ({
+        top: Math.max(12, topBase - bubbleHeightGuess - 16),
+        left: Math.max(12, Math.min(leftBase, window.innerWidth - bubbleWidth - 12)),
         width: bubbleWidth,
-        placement: nextPlacement,
+        placement: 'top',
       });
+
+      const placeBelow = () => ({
+        top: Math.min(viewportHeight - bubbleHeightGuess - 12, bottomBase + 16),
+        left: Math.max(12, Math.min(leftBase, window.innerWidth - bubbleWidth - 12)),
+        width: bubbleWidth,
+        placement: 'bottom',
+      });
+
+      const placeLeft = () => ({
+        top: Math.max(12, Math.min(topBase - 8, viewportHeight - bubbleHeightGuess - 12)),
+        left: Math.max(12, leftBase - bubbleWidth - 16),
+        width: bubbleWidth,
+        placement: 'left',
+      });
+
+      let nextPosition = null;
+      if (placement === 'right') {
+        nextPosition = placeRight();
+      } else if (placement === 'left') {
+        nextPosition = placeLeft();
+      } else if (placement === 'bottom') {
+        nextPosition = placeBelow();
+      } else {
+        nextPosition = placeRight() || (verticalRoomAbove > bubbleHeightGuess + 24 ? placeAbove() : null)
+          || (verticalRoomBelow > bubbleHeightGuess + 24 ? placeBelow() : null)
+          || placeLeft();
+      }
+
+      if (!nextPosition) {
+        nextPosition = {
+          top: fallbackTop,
+          left: fallbackLeft,
+          width: bubbleWidth,
+          placement: 'top',
+        };
+      }
+
+      setPosition(nextPosition);
     };
 
     updatePosition();
@@ -137,9 +201,11 @@ export default function InfoBubble({
 
   const outerStyle = {
     position: 'fixed',
-    top: `${position.top}px`,
-    left: `${position.left}px`,
-    width: `${position.width}px`,
+    top: position.top != null ? `${position.top}px` : undefined,
+    left: position.left != null ? `${position.left}px` : undefined,
+    right: position.right != null ? `${position.right}px` : undefined,
+    bottom: position.bottom != null ? `${position.bottom}px` : undefined,
+    width: position.width != null ? `${position.width}px` : undefined,
     zIndex: 2000,
     pointerEvents: 'none',
   };
@@ -167,20 +233,27 @@ export default function InfoBubble({
     borderRight: '9px solid transparent',
   };
 
-  const isTopPlacement = position.placement !== 'bottom';
-  const arrowPlacementStyle = isTopPlacement
+  const arrowPlacementStyle = position.placement === 'bottom'
     ? {
-        bottom: -9,
-        borderTop: '9px solid #7ad4ea',
-      }
-    : {
         top: -9,
         borderBottom: '9px solid #7ad4ea',
-      };
+      }
+    : position.placement === 'left'
+      ? {
+          right: -9,
+          top: 18,
+          borderLeft: '9px solid #7ad4ea',
+        }
+      : position.placement === 'mobile'
+        ? null
+        : {
+            bottom: -9,
+            borderTop: '9px solid #7ad4ea',
+          };
 
   return createPortal(
     <div style={outerStyle} className={className}>
-      <div style={bubbleStyle} role="status" aria-live="polite">
+      <div ref={bubbleRef} style={bubbleStyle} role="status" aria-live="polite">
         <div className="d-flex align-items-start gap-2">
           <span
             className="badge text-dark"
@@ -198,7 +271,7 @@ export default function InfoBubble({
             onClick={dismiss}
           />
         </div>
-        <div style={{ ...arrowStyle, ...arrowPlacementStyle }} />
+        {arrowPlacementStyle && <div style={{ ...arrowStyle, ...arrowPlacementStyle }} />}
       </div>
     </div>,
     document.body

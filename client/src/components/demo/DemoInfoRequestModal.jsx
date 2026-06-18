@@ -1,3 +1,4 @@
+// src/components/demo/DemoInfoRequestModal.jsx
 import React from 'react';
 import { Alert, Button, Form, Modal } from 'react-bootstrap';
 import { API_BASE_URL } from '../../config';

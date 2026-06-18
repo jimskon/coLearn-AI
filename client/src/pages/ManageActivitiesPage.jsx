@@ -11,6 +11,7 @@ import {
   Modal,
   Table,
 } from 'react-bootstrap';
+import { creatorLanguageOptions } from '../utils/creatorLanguageOptions';
 
 const SERVICE_ACCOUNT_EMAIL = import.meta.env.VITE_SERVICE_ACCOUNT_EMAIL;
 
@@ -26,6 +27,7 @@ const emptyCreateDraft = {
   duration_minutes: '45',
   mode: 'group',
   selected_model: 'gpt-5-mini',
+  selected_language: 'English',
   use_timed_sections: false,
   retries_required: '3',
   major_sections: [
@@ -544,6 +546,7 @@ export default function ManageActivitiesPage() {
           duration_minutes: durationMinutes,
           mode: createDraft.mode,
           selected_model: createDraft.selected_model,
+          selected_language: createDraft.selected_language,
           major_sections: createDraft.major_sections,
           use_timed_sections: createDraft.use_timed_sections,
           timed_sections: timedSections,
@@ -778,6 +781,24 @@ export default function ManageActivitiesPage() {
             </Form.Select>
             <div className="text-muted small mt-2">
               Higher-quality models usually cost more per generation.
+            </div>
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Language</Form.Label>
+            <Form.Select
+              name="selected_language"
+              value={createDraft.selected_language}
+              onChange={handleCreateDraftFieldChange}
+            >
+              {creatorLanguageOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </Form.Select>
+            <div className="text-muted small mt-2">
+              English is the default. Choose the language you want the first draft written in.
             </div>
           </Form.Group>
 

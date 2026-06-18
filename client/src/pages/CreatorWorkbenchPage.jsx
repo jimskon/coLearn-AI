@@ -24,12 +24,14 @@ import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
+import { creatorLanguageOptions } from '../utils/creatorLanguageOptions';
 
 const emptyDraft = {
   title: '',
   duration_minutes: '45',
   mode: 'group',
   selected_model: 'gpt-5-mini',
+  selected_language: 'English',
   major_sections: [
     'Learning Objectives',
     'Exploration',
@@ -282,6 +284,7 @@ export default function CreatorWorkbenchPage() {
           duration_minutes: durationMinutes,
           mode: draft.mode,
           selected_model: draft.selected_model,
+          selected_language: draft.selected_language,
           major_sections: draft.major_sections,
           description: draft.description,
           createdBy: user?.id,
@@ -352,6 +355,7 @@ export default function CreatorWorkbenchPage() {
           request: requestText,
           doc_text: rawText,
           selected_model: draft.selected_model,
+          selected_language: draft.selected_language,
           parse_issues: parsedNow.issues,
         }),
       });
@@ -578,6 +582,18 @@ export default function CreatorWorkbenchPage() {
                       <option key={option.value} value={option.value}>{option.label} · {option.note}</option>
                     ))}
                   </Form.Select>
+                </Form.Group>
+
+                <Form.Group className="mb-3">
+                  <Form.Label>Language</Form.Label>
+                  <Form.Select value={draft.selected_language} onChange={(event) => handleDraftChange('selected_language', event.target.value)}>
+                    {creatorLanguageOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </Form.Select>
+                  <Form.Text className="text-muted">
+                    English is the default. The first draft will be written in the selected language.
+                  </Form.Text>
                 </Form.Group>
 
                 <Form.Group className="mb-3">

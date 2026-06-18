@@ -7,6 +7,7 @@
 \section{Draft Brief}
 Target duration: __DURATION_MINUTES__ minutes.
 Requested generation model: __SELECTED_MODEL__.
+Requested language: __SELECTED_LANGUAGE__.
 Requested major sections: __MAJOR_SECTIONS_BLOCK__.
 
 Requested timed sections:

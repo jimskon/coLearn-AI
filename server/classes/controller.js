@@ -344,6 +344,7 @@ exports.createCreatorDraft = async (req, res) => {
     mode = 'group',
     description,
     selected_model = 'gpt-5-mini',
+    selected_language = 'English',
     major_sections = CREATOR_MAJOR_SECTION_OPTIONS,
     use_timed_sections = false,
     timed_sections = [],
@@ -420,6 +421,7 @@ exports.createCreatorDraft = async (req, res) => {
       mode: normalizedMode,
       durationMinutes: Math.round(durationMinutes),
       selectedModel: normalizedSelectedModel,
+      selectedLanguage: String(selected_language || 'English').trim() || 'English',
       majorSections: normalizedMajorSections,
       timedSections: normalizedTimedSections,
       retriesRequired: normalizedRetriesRequired,
@@ -493,6 +495,7 @@ exports.reviseCreatorDraft = async (req, res) => {
     request,
     doc_text,
     selected_model = 'gpt-5-mini',
+    selected_language = 'English',
     parse_issues = [],
   } = req.body || {};
 
@@ -538,6 +541,7 @@ exports.reviseCreatorDraft = async (req, res) => {
       currentText,
       revisionRequest,
       selectedModel: normalizedSelectedModel,
+      selectedLanguage: String(selected_language || 'English').trim() || 'English',
       title: activity.title,
       classLevel: classRow.level,
       classTopicDomain: classRow.topic_domain,

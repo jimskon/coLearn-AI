@@ -588,7 +588,8 @@ async function evaluateStudentResponse(req, res) {
     "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
     "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
-    "Write feedback in the same language as the student's answer.",
+    "Write feedback in the same language as the student's answer, even if the question is in a different language.",
+    "Do not translate the feedback to English unless the student's answer is already in English.",
     "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
     "Do NOT mention grading, points, rubrics, or scoring.",
   ].join("\n");
@@ -610,6 +611,7 @@ async function evaluateStudentResponse(req, res) {
       ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
       : "",
     `Student submission:\n${stripHtml(studentAnswer)}`,
+    "Feedback language rule: respond in the same language used by the student's submission; do not switch to English unless the student used English.",
     "",
     schema,
     forceFollowup || obviouslyBad
@@ -931,6 +933,7 @@ async function evaluateCode({
     policy.forbidFStrings && "- Do NOT suggest or use f-strings (environment may not support them).",
     policy.noExtras && "- Do NOT ask for additional features beyond the prompt.",
     policy.failOpen && "- If minor issues but functionally OK, treat as acceptable.",
+    "- Write feedback in the same language as the student's answer or code comments, and do not translate it to English unless the student used English.",
     "feedbackprompt is meta guidance; do NOT quote it.",
     "Before suggesting to add a line, verify it is not already present (or equivalent) in the code.",
   ].filter(Boolean).join("\n");

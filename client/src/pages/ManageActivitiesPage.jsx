@@ -21,6 +21,14 @@ const emptyUploadActivity = {
   order_index: '',
 };
 
+const emptyCloneActivity = {
+  name: '',
+  title: '',
+  sheet_url: '',
+  order_index: '',
+  source_type: 'remote',
+};
+
 const emptyCreateDraft = {
   title: '',
   duration_minutes: '45',
@@ -104,6 +112,19 @@ function SourceBadge({ sourceType }) {
   );
 }
 
+function cloneActivityDefaults(activity) {
+  const sourceType = String(activity?.source_type || 'remote').toLowerCase();
+  return {
+    name: `${slugifyActivityName(activity?.name || activity?.title || 'activity')}_copy`,
+    title: `${String(activity?.title || activity?.name || 'Activity').trim()} Copy`,
+    sheet_url: sourceType === 'local' ? '' : String(activity?.sheet_url || ''),
+    order_index: activity?.order_index == null || activity?.order_index === ''
+      ? ''
+      : String(Number(activity.order_index) + 1),
+    source_type: sourceType === 'local' ? 'local' : 'remote',
+  };
+}
+
 export default function ManageActivitiesPage() {
   const { id: classId } = useParams();
   const { user } = useUser();
@@ -118,6 +139,7 @@ export default function ManageActivitiesPage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showCloneModal, setShowCloneModal] = useState(false);
 
   const [downloadSelection, setDownloadSelection] = useState({});
   const [selectedUploadFile, setSelectedUploadFile] = useState(null);
@@ -128,6 +150,10 @@ export default function ManageActivitiesPage() {
   const [createDraft, setCreateDraft] = useState(emptyCreateDraft);
   const [createNote, setCreateNote] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
+  const [cloneSourceActivity, setCloneSourceActivity] = useState(null);
+  const [cloneDraft, setCloneDraft] = useState(emptyCloneActivity);
+  const [cloneNote, setCloneNote] = useState('');
+  const [cloneBusy, setCloneBusy] = useState(false);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 
@@ -425,6 +451,18 @@ export default function ManageActivitiesPage() {
     setShowDownloadModal(true);
   };
 
+  const openCloneModal = (activity) => {
+    setCloneSourceActivity(activity);
+    setCloneDraft(cloneActivityDefaults(activity));
+    setCloneNote('');
+    setShowCloneModal(true);
+  };
+
+  const handleCloneFieldChange = (e) => {
+    const { name, value } = e.target;
+    setCloneDraft((prev) => ({ ...prev, [name]: value }));
+  };
+
   const triggerBrowserDownload = (filename, text, mimeType = 'text/plain;charset=utf-8') => {
     const blob = new Blob([text], { type: mimeType });
     const url = URL.createObjectURL(blob);
@@ -486,6 +524,75 @@ export default function ManageActivitiesPage() {
     } catch (err) {
       console.error('Download failed:', err);
       alert(err?.message || 'Failed to download selected activities.');
+    }
+  };
+
+  const handleCloneActivity = async () => {
+    setCloneNote('');
+
+    if (!cloneSourceActivity?.id) {
+      setCloneNote('Choose an activity to clone.');
+      return;
+    }
+
+    if (!cloneDraft.name.trim() || !cloneDraft.title.trim()) {
+      setCloneNote('Enter both a new activity ID and a new title.');
+      return;
+    }
+
+    const parsedOrderIndex = cloneDraft.order_index === ''
+      ? ''
+      : parseInt(cloneDraft.order_index, 10);
+    if (cloneDraft.order_index !== '' && (!Number.isFinite(parsedOrderIndex) || parsedOrderIndex < 0)) {
+      setCloneNote('Enter a valid order number.');
+      return;
+    }
+
+    setCloneBusy(true);
+    try {
+      const sourceType = String(cloneDraft.source_type || cloneSourceActivity.source_type || 'remote').toLowerCase();
+      let contentText = '';
+
+      if (sourceType === 'local') {
+        const res = await fetch(`${API_BASE_URL}/api/activities/${cloneSourceActivity.id}/source`, {
+          credentials: 'include',
+        });
+        const body = await res.json();
+        if (!res.ok) {
+          throw new Error(body?.error || 'Failed to load the source to clone.');
+        }
+        contentText = String(body?.text || '');
+      }
+
+      const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: slugifyActivityName(cloneDraft.name.trim()) || cloneDraft.name.trim(),
+          title: cloneDraft.title.trim(),
+          sheet_url: sourceType === 'local' ? '' : cloneDraft.sheet_url.trim(),
+          source_type: sourceType,
+          content_text: contentText,
+          order_index: Number.isFinite(parsedOrderIndex) ? parsedOrderIndex : cloneSourceActivity.order_index,
+          createdBy: user?.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to clone activity.');
+      }
+
+      setShowCloneModal(false);
+      setCloneSourceActivity(null);
+      setCloneDraft(emptyCloneActivity);
+      await refreshActivities();
+    } catch (err) {
+      console.error('Clone failed:', err);
+      setCloneNote(err?.message || 'Failed to clone activity.');
+    } finally {
+      setCloneBusy(false);
     }
   };
 
@@ -660,6 +767,13 @@ export default function ManageActivitiesPage() {
                     onClick={() => navigate(`/creator/${activity.id}`)}
                   >
                     Edit
+                  </Button>
+                  <Button
+                    variant="outline-primary"
+                    size="sm"
+                    onClick={() => openCloneModal(activity)}
+                  >
+                    Clone
                   </Button>
                   <Button
                     variant="danger"
@@ -900,6 +1014,100 @@ export default function ManageActivitiesPage() {
           </Button>
           <Button variant="primary" onClick={handleUpload}>
             Upload File
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={showCloneModal} onHide={() => !cloneBusy && setShowCloneModal(false)} size="lg">
+        <Modal.Header closeButton={!cloneBusy}>
+          <Modal.Title>Clone Activity</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Alert variant="info" className="mb-3">
+            Create a copy of <strong>{cloneSourceActivity?.title || cloneSourceActivity?.name || 'this activity'}</strong> with new metadata.
+          </Alert>
+
+          <Form.Group className="mb-3">
+            <Form.Label>New Activity ID</Form.Label>
+            <Form.Control
+              name="name"
+              value={cloneDraft.name}
+              onChange={handleCloneFieldChange}
+              placeholder="sorting_warmup_copy"
+              autoFocus
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>New Title</Form.Label>
+            <Form.Control
+              name="title"
+              value={cloneDraft.title}
+              onChange={handleCloneFieldChange}
+              placeholder="Sorting Warmup Copy"
+            />
+          </Form.Group>
+
+          <div className="row g-3 mb-3">
+            <div className="col-md-6">
+              <Form.Group>
+                <Form.Label>Order</Form.Label>
+                <Form.Control
+                  type="number"
+                  min="0"
+                  name="order_index"
+                  value={cloneDraft.order_index}
+                  onChange={handleCloneFieldChange}
+                />
+              </Form.Group>
+            </div>
+            <div className="col-md-6">
+              <Form.Group>
+                <Form.Label>Source Type</Form.Label>
+                <Form.Select
+                  name="source_type"
+                  value={cloneDraft.source_type}
+                  onChange={handleCloneFieldChange}
+                >
+                  <option value="remote">Remote</option>
+                  <option value="local">Local</option>
+                </Form.Select>
+              </Form.Group>
+            </div>
+          </div>
+
+          {cloneDraft.source_type !== 'local' ? (
+            <Form.Group className="mb-3">
+              <Form.Label>Sheet URL</Form.Label>
+              <Form.Control
+                name="sheet_url"
+                value={cloneDraft.sheet_url}
+                onChange={handleCloneFieldChange}
+                placeholder="https://docs.google.com/..."
+              />
+            </Form.Group>
+          ) : (
+            <Alert variant="secondary" className="mb-3">
+              Local clones copy the current activity text into the new activity.
+            </Alert>
+          )}
+
+          <div className="text-muted small">
+            You can change the ID, title, order, and source details before creating the clone.
+          </div>
+
+          {cloneNote ? (
+            <Alert variant="warning" className="mt-3 mb-0">
+              {cloneNote}
+            </Alert>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowCloneModal(false)} disabled={cloneBusy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleCloneActivity} disabled={cloneBusy}>
+            {cloneBusy ? 'Cloning...' : 'Clone Activity'}
           </Button>
         </Modal.Footer>
       </Modal>

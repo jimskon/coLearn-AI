@@ -588,8 +588,8 @@ async function evaluateStudentResponse(req, res) {
     "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
     "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
-    "Use the student's answer language only. Ignore the activity language and the question language when writing feedback.",
-    "If the student's answer is not English, do NOT translate the feedback to English.",
+    "Write feedback in the same language as the activity/question text.",
+    "Do not mirror the student's answer language if it differs from the activity language.",
     "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
     "Do NOT mention grading, points, rubrics, or scoring.",
   ].join("\n");
@@ -611,8 +611,7 @@ async function evaluateStudentResponse(req, res) {
       ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
       : "",
     `Student submission:\n${stripHtml(studentAnswer)}`,
-    "Feedback language rule: the student's submission determines the language of the feedback. Do not use the question's language or the activity's language as a cue.",
-    "If the student's submission is in a non-English language, write the feedback in that same language.",
+    "Feedback language rule: use the activity/question language for the feedback, not the student's answer language if they differ.",
     "",
     schema,
     forceFollowup || obviouslyBad
@@ -934,7 +933,7 @@ async function evaluateCode({
     policy.forbidFStrings && "- Do NOT suggest or use f-strings (environment may not support them).",
     policy.noExtras && "- Do NOT ask for additional features beyond the prompt.",
     policy.failOpen && "- If minor issues but functionally OK, treat as acceptable.",
-    "- Use the language of the student's answer or code comments only. Ignore the activity/question language. Do not translate to English unless the student used English.",
+    "- Write feedback in the same language as the activity/question language. Do not switch to the student's answer language if it differs.",
     "feedbackprompt is meta guidance; do NOT quote it.",
     "Before suggesting to add a line, verify it is not already present (or equivalent) in the code.",
   ].filter(Boolean).join("\n");

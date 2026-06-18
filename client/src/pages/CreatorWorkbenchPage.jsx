@@ -7,6 +7,7 @@ import {
   ButtonGroup,
   Container,
   Form,
+  Modal,
   Spinner,
 } from 'react-bootstrap';
 import {
@@ -48,6 +49,14 @@ const creatorModelOptions = [
   { value: 'gpt-5.2', label: 'gpt-5.2', note: 'highest quality' },
 ];
 
+const emptyAdvancedDraft = {
+  language: 'English',
+  include_timing: false,
+  submit_retries: '3',
+  include_info: false,
+  difficulty: 'medium',
+};
+
 const majorSectionOptions = [
   'Learning Objectives',
   'Exploration',
@@ -62,6 +71,51 @@ function cloneEmptyDraft(overrides = {}) {
     major_sections: [...emptyDraft.major_sections],
     ...overrides,
   };
+}
+
+function cloneEmptyAdvancedDraft() {
+  return { ...emptyAdvancedDraft };
+}
+
+function buildAdvancedPromptText(advanced) {
+  const lines = [];
+  const language = String(advanced?.language || '').trim();
+  if (language && language.toLowerCase() !== 'english') {
+    lines.push(`Make the activity in ${language}.`);
+  }
+  if (advanced?.include_timing) {
+    lines.push('Include timing on sections.');
+  }
+  const retries = parseInt(advanced?.submit_retries, 10);
+  if (Number.isFinite(retries) && retries !== 3) {
+    lines.push(`Use ${retries} submit retries.`);
+  }
+  if (advanced?.include_info) {
+    lines.push('Include info boxes when helpful.');
+  }
+  if (advanced?.difficulty === 'easy') {
+    lines.push('Aim for easy difficulty and simpler student answers.');
+  } else if (advanced?.difficulty === 'challenging') {
+    lines.push('Aim for challenging difficulty and deeper, more precise student answers.');
+  }
+  return lines.join(' ');
+}
+
+function appendAdvancedPrompt(baseText, advancedText) {
+  return [String(baseText || '').trim(), String(advancedText || '').trim()].filter(Boolean).join('\n\n');
+}
+
+async function readJsonResponse(res) {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const head = raw.trim().slice(0, 120).replace(/\s+/g, ' ');
+    throw new Error(head.startsWith('<html') || head.startsWith('<!doctype')
+      ? 'Server returned HTML instead of JSON.'
+      : `Unexpected server response: ${head || 'non-JSON body'}`);
+  }
 }
 
 function collectFileContents(blocks) {
@@ -98,6 +152,7 @@ export default function CreatorWorkbenchPage() {
     duration_minutes: isDemoCreator ? '10' : emptyDraft.duration_minutes,
     selected_model: isDemoCreator ? 'gpt-5-mini' : emptyDraft.selected_model,
   }));
+  const [advancedDraft, setAdvancedDraft] = useState(() => cloneEmptyAdvancedDraft());
   const [rawText, setRawText] = useState('');
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
@@ -109,6 +164,7 @@ export default function CreatorWorkbenchPage() {
   const [saveBusy, setSaveBusy] = useState(false);
   const [revisionBusy, setRevisionBusy] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
@@ -124,6 +180,7 @@ export default function CreatorWorkbenchPage() {
   const activeIssues = proposal?.issues || parseIssues;
   const activeText = proposal?.text || rawText;
   const hasProposalErrors = !!proposal?.issues?.some((issue) => issue.severity === 'error');
+  const advancedPromptText = useMemo(() => buildAdvancedPromptText(advancedDraft), [advancedDraft]);
 
   const updateFileContents = useCallback((updaterFn) => {
     setFileContents((prev) => updaterFn(prev));
@@ -304,7 +361,7 @@ export default function CreatorWorkbenchPage() {
           mode: draft.mode,
           selected_model: draft.selected_model,
           major_sections: draft.major_sections,
-          description: draft.description,
+          description: appendAdvancedPrompt(draft.description, advancedPromptText),
           createdBy: user?.id,
         }),
       });
@@ -370,13 +427,13 @@ export default function CreatorWorkbenchPage() {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          request: requestText,
+          request: appendAdvancedPrompt(requestText, advancedPromptText),
           doc_text: rawText,
           selected_model: draft.selected_model,
           parse_issues: parsedNow.issues,
         }),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Revision request failed.');
 
       const proposedText = data.proposedDocText || data.proposed_doc_text || '';
@@ -552,7 +609,12 @@ export default function CreatorWorkbenchPage() {
       <div className="creator-shell">
         <section className="creator-left">
           <div className="creator-panel-header d-flex align-items-center justify-content-between">
-            <div className="fw-semibold"><ChatDots className="me-2" />AI Builder</div>
+            <div className="d-flex align-items-center gap-2">
+              <div className="fw-semibold"><ChatDots className="me-2" />AI Builder</div>
+              <Button size="sm" variant="outline-secondary" onClick={() => setShowAdvanced(true)}>
+                Advanced
+              </Button>
+            </div>
             {activity?.id ? <Badge bg="success">Draft #{activity.id}</Badge> : <Badge bg="secondary">Setup</Badge>}
           </div>
           <div className="creator-panel-body">
@@ -781,6 +843,69 @@ export default function CreatorWorkbenchPage() {
           ) : null}
         </section>
       </div>
+
+      <Modal show={showAdvanced} onHide={() => setShowAdvanced(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Advanced</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="text-muted small mb-3">
+            These settings only add extra instructions to the prompt. Nothing is saved.
+          </p>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Language</Form.Label>
+            <Form.Control
+              value={advancedDraft.language}
+              onChange={(event) => setAdvancedDraft((prev) => ({ ...prev, language: event.target.value }))}
+              placeholder="English"
+            />
+          </Form.Group>
+
+          <Form.Check
+            className="mb-3"
+            type="checkbox"
+            id="advanced-include-timing"
+            label="Include timing on sections"
+            checked={advancedDraft.include_timing}
+            onChange={(event) => setAdvancedDraft((prev) => ({ ...prev, include_timing: event.target.checked }))}
+          />
+
+          <Form.Group className="mb-3">
+            <Form.Label>Submit Retries</Form.Label>
+            <Form.Control
+              type="number"
+              min="0"
+              value={advancedDraft.submit_retries}
+              onChange={(event) => setAdvancedDraft((prev) => ({ ...prev, submit_retries: event.target.value }))}
+            />
+          </Form.Group>
+
+          <Form.Check
+            className="mb-3"
+            type="checkbox"
+            id="advanced-include-info"
+            label="Include info boxes"
+            checked={advancedDraft.include_info}
+            onChange={(event) => setAdvancedDraft((prev) => ({ ...prev, include_info: event.target.checked }))}
+          />
+
+          <Form.Group>
+            <Form.Label>Difficulty</Form.Label>
+            <Form.Select
+              value={advancedDraft.difficulty}
+              onChange={(event) => setAdvancedDraft((prev) => ({ ...prev, difficulty: event.target.value }))}
+            >
+              <option value="easy">Easy</option>
+              <option value="medium">Medium</option>
+              <option value="challenging">Challenging</option>
+            </Form.Select>
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowAdvanced(false)}>Close</Button>
+        </Modal.Footer>
+      </Modal>
     </Container>
   );
 }

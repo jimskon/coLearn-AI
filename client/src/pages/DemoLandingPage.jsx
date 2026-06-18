@@ -72,34 +72,6 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
     }
   };
 
-  const handleCreatorDemo = async () => {
-    setStudentBusy(true);
-    setStudentError('');
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/auth/demo/creator`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ demoCode, guestName }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.user || !data?.class?.id) {
-        throw new Error(data?.error || 'Failed to start creator demo');
-      }
-
-      localStorage.setItem('user', JSON.stringify(data.user));
-      setUser(data.user);
-      navigate(`/class/${data.class.id}/create?demo=1`, {
-        state: { className: data.class.name, demoCode },
-      });
-    } catch (err) {
-      setStudentError(err?.message || 'Failed to start creator demo');
-    } finally {
-      setStudentBusy(false);
-    }
-  };
-
   return (
     <div
       style={{
@@ -165,7 +137,9 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                             option.key === 'student'
                               ? handleStudentDemo()
                               : option.key === 'creator'
-                                ? handleCreatorDemo()
+                                ? navigate(`/demo/${encodeURIComponent(demoCode)}/creator`, {
+                                    state: { guestName },
+                                  })
                                 : setShowInfoRequestModal(true)
                           }
                           disabled={studentBusy}

@@ -1,5 +1,8 @@
-import { Button, Card, Col, Container, Row } from 'react-bootstrap';
-import { Link, useParams } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Button, Card, Col, Container, Row, Spinner } from 'react-bootstrap';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { API_BASE_URL } from '../config';
+import { useUser } from '../context/UserContext';
 
 const pageCopy = {
   student: {
@@ -8,7 +11,7 @@ const pageCopy = {
   },
   creator: {
     title: 'Creator Demo',
-    body: 'This path will guide an instructor or designer into a creator-facing demo flow tied to the same event code.',
+    body: 'Preparing the creator workbench for this demo code.',
   },
   'beta-access': {
     title: 'Request More Information',
@@ -23,6 +26,59 @@ export default function DemoPathPage({ defaultDemoCode = '' }) {
     title: 'Demo Path',
     body: 'This demo route is ready to receive the selected code and continue into the next step.',
   };
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { setUser } = useUser();
+  const [busy, setBusy] = useState(demoPath === 'creator');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (demoPath !== 'creator') {
+      setBusy(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const startCreatorDemo = async () => {
+      setBusy(true);
+      setError('');
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/auth/demo/creator`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            demoCode,
+            guestName: String(location.state?.guestName || ''),
+          }),
+        });
+
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data?.user || !data?.class?.id) {
+          throw new Error(data?.error || 'Failed to start creator demo');
+        }
+
+        if (cancelled) return;
+        localStorage.setItem('user', JSON.stringify(data.user));
+        setUser(data.user);
+        navigate(`/class/${data.class.id}/create?demo=1`, {
+          replace: true,
+          state: { className: data.class.name, demoCode },
+        });
+      } catch (err) {
+        if (!cancelled) {
+          setError(err?.message || 'Failed to start creator demo');
+          setBusy(false);
+        }
+      }
+    };
+
+    startCreatorDemo();
+    return () => {
+      cancelled = true;
+    };
+  }, [demoCode, demoPath, location.state, navigate, setUser]);
 
   return (
     <Container className="py-5" style={{ marginTop: '4.5rem' }}>
@@ -38,6 +94,18 @@ export default function DemoPathPage({ defaultDemoCode = '' }) {
               <p className="mb-4">
                 The selected demo code is <code>{demoCode}</code>.
               </p>
+
+              {demoPath === 'creator' ? (
+                <div className="d-flex align-items-center gap-2 mb-4">
+                  <Spinner animation="border" size="sm" />
+                  <span>{busy ? 'Starting the creator workbench...' : 'Ready.'}</span>
+                </div>
+              ) : null}
+
+              {error ? (
+                <div className="alert alert-danger mb-4">{error}</div>
+              ) : null}
+
               <div className="d-flex flex-wrap gap-3">
                 <Button as={Link} to={`/demo/${encodeURIComponent(demoCode)}`} variant="primary">
                   Back to Demo Landing

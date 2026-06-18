@@ -104,6 +104,19 @@ function appendAdvancedPrompt(baseText, advancedText) {
   return [String(baseText || '').trim(), String(advancedText || '').trim()].filter(Boolean).join('\n\n');
 }
 
+async function readJsonResponse(res) {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const head = raw.trim().slice(0, 120).replace(/\s+/g, ' ');
+    throw new Error(head.startsWith('<html') || head.startsWith('<!doctype')
+      ? 'Server returned HTML instead of JSON.'
+      : `Unexpected server response: ${head || 'non-JSON body'}`);
+  }
+}
+
 function collectFileContents(blocks) {
   const files = {};
   for (const block of blocks || []) {
@@ -399,7 +412,7 @@ export default function CreatorWorkbenchPage() {
           parse_issues: parsedNow.issues,
         }),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Revision request failed.');
 
       const proposedText = data.proposedDocText || data.proposed_doc_text || '';

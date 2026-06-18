@@ -60,7 +60,7 @@ function renderFallbackTemplate({
   mode,
   durationMinutes,
   selectedModel,
-  selectedLanguage,
+  language,
   majorSections,
   timedSections,
   retriesRequired,
@@ -78,7 +78,7 @@ function renderFallbackTemplate({
     .replace('__CLASS_TOPIC_DOMAIN__', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
     .replace('__DURATION_MINUTES__', String(durationMinutes))
     .replace('__SELECTED_MODEL__', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
-    .replace('__SELECTED_LANGUAGE__', sanitizeHeaderValue(selectedLanguage, 'English'))
+    .replace('__SELECTED_LANGUAGE__', sanitizeHeaderValue(language, 'English'))
     .replace('__RETRIES_REQUIRED__', String(Math.max(0, Math.round(Number(retriesRequired) || 0))))
     .replace('__MAJOR_SECTIONS_BLOCK__', normalizeTextBlock((majorSections || []).join(', '), 'Not specified.'))
     .replace('__TIMED_SECTIONS_BLOCK__', normalizeTextBlock(
@@ -259,6 +259,7 @@ async function generateWithOpenAI({
   mode,
   durationMinutes,
   selectedModel,
+  language,
   majorSections,
   timedSections,
   retriesRequired,
@@ -289,7 +290,7 @@ async function generateWithOpenAI({
     'For mode=group, use collaborative prompts and progression.',
     'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
     'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
-    `Make the activity in ${sanitizeHeaderValue(selectedLanguage, 'English')}.`,
+    `Make the activity in ${sanitizeHeaderValue(language, 'English')}.`,
     'Make the activity reflect the creator brief, not generic filler.',
     '',
     'House-style example:',
@@ -334,7 +335,7 @@ async function reviseWithOpenAI({
   currentText,
   revisionRequest,
   selectedModel,
-  selectedLanguage,
+  language,
   title,
   classLevel,
   classTopicDomain,
@@ -351,7 +352,7 @@ async function reviseWithOpenAI({
     'summary and warnings must be arrays of short strings.',
     'Preserve valid activity syntax and existing structure unless the creator request requires a change.',
     'For targeted requests such as "change 3a" or "add after 4b", make the smallest coherent edit that satisfies the request.',
-    `Make the revised activity in ${sanitizeHeaderValue(selectedLanguage, 'English')}.`,
+    `Make the revised activity in ${sanitizeHeaderValue(language, 'English')}.`,
     'Do not put activity commands such as \\pythonturtle, \\python, \\question, or \\section inside \\sampleresponses{...}, \\feedbackprompt{...}, or \\followupprompt{...}.',
     'Keep sample responses and feedback prompts plain text.',
     'Never omit required closing tags such as \\endquestion and \\endquestiongroup.',
@@ -401,7 +402,7 @@ async function generateActivityDraft(input) {
     mode: input.mode,
     durationMinutes: input.durationMinutes,
     selectedModel: input.selectedModel,
-    selectedLanguage: input.selectedLanguage,
+    language: input.language,
     majorSections: input.majorSections,
     timedSections: input.timedSections,
     retriesRequired: input.retriesRequired,
@@ -476,7 +477,7 @@ async function reviseActivityDraft(input) {
       currentText,
       revisionRequest,
       selectedModel: input.selectedModel || 'gpt-5-mini',
-      selectedLanguage: input.selectedLanguage || 'English',
+      language: input.language || 'English',
       title: input.title,
       classLevel: input.classLevel,
       classTopicDomain: input.classTopicDomain,

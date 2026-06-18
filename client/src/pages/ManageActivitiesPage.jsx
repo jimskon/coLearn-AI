@@ -26,7 +26,7 @@ const emptyCreateDraft = {
   duration_minutes: '45',
   mode: 'group',
   selected_model: 'gpt-5-mini',
-  selected_language: 'English',
+  language: 'English',
   use_timed_sections: false,
   retries_required: '3',
   major_sections: [
@@ -664,12 +664,12 @@ export default function ManageActivitiesPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
+          body: JSON.stringify({
           title: createDraft.title.trim(),
           duration_minutes: durationMinutes,
           mode: createDraft.mode,
           selected_model: createDraft.selected_model,
-          selected_language: createDraft.selected_language,
+          language: createDraft.language,
           major_sections: createDraft.major_sections,
           use_timed_sections: createDraft.use_timed_sections,
           timed_sections: timedSections,
@@ -917,8 +917,8 @@ export default function ManageActivitiesPage() {
           <Form.Group className="mb-3">
             <Form.Label>Language</Form.Label>
             <Form.Control
-              name="selected_language"
-              value={createDraft.selected_language}
+              name="language"
+              value={createDraft.language}
               onChange={handleCreateDraftFieldChange}
               placeholder="English"
             />

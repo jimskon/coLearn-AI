@@ -30,7 +30,7 @@ const emptyDraft = {
   duration_minutes: '45',
   mode: 'group',
   selected_model: 'gpt-5-mini',
-  selected_language: 'English',
+  language: 'English',
   major_sections: [
     'Learning Objectives',
     'Exploration',
@@ -283,7 +283,7 @@ export default function CreatorWorkbenchPage() {
           duration_minutes: durationMinutes,
           mode: draft.mode,
           selected_model: draft.selected_model,
-          selected_language: draft.selected_language,
+          language: draft.language,
           major_sections: draft.major_sections,
           description: draft.description,
           createdBy: user?.id,
@@ -354,7 +354,7 @@ export default function CreatorWorkbenchPage() {
           request: requestText,
           doc_text: rawText,
           selected_model: draft.selected_model,
-          selected_language: draft.selected_language,
+          language: draft.language,
           parse_issues: parsedNow.issues,
         }),
       });
@@ -596,8 +596,8 @@ export default function CreatorWorkbenchPage() {
                 <Form.Group className="mb-3">
                   <Form.Label>Language</Form.Label>
                   <Form.Control
-                    value={draft.selected_language}
-                    onChange={(event) => handleDraftChange('selected_language', event.target.value)}
+                    value={draft.language}
+                    onChange={(event) => handleDraftChange('language', event.target.value)}
                     placeholder="English"
                   />
                   <Form.Text className="text-muted">

@@ -44,10 +44,6 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const [guestName, setGuestName] = React.useState('');
   const [showInfoRequestModal, setShowInfoRequestModal] = React.useState(false);
 
-  const openDemoPath = (pathKey) => {
-    navigate(`/demo/${encodeURIComponent(demoCode)}/${pathKey}`);
-  };
-
   const handleStudentDemo = async () => {
     setStudentBusy(true);
     setStudentError('');
@@ -71,6 +67,34 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
       });
     } catch (err) {
       setStudentError(err?.message || 'Failed to start student demo');
+    } finally {
+      setStudentBusy(false);
+    }
+  };
+
+  const handleCreatorDemo = async () => {
+    setStudentBusy(true);
+    setStudentError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/auth/demo/creator`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ demoCode, guestName }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.user || !data?.class?.id) {
+        throw new Error(data?.error || 'Failed to start creator demo');
+      }
+
+      localStorage.setItem('user', JSON.stringify(data.user));
+      setUser(data.user);
+      navigate(`/class/${data.class.id}/create?demo=1`, {
+        state: { className: data.class.name, demoCode },
+      });
+    } catch (err) {
+      setStudentError(err?.message || 'Failed to start creator demo');
     } finally {
       setStudentBusy(false);
     }
@@ -141,13 +165,17 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                             option.key === 'student'
                               ? handleStudentDemo()
                               : option.key === 'creator'
-                                ? openDemoPath(option.key)
+                                ? handleCreatorDemo()
                                 : setShowInfoRequestModal(true)
                           }
-                          disabled={studentBusy && option.key === 'student'}
+                          disabled={studentBusy}
                         >
                           <div className="fw-semibold">
-                            {option.key === 'student' && studentBusy ? 'Starting Student Demo...' : option.label}
+                            {studentBusy && option.key === 'student'
+                              ? 'Starting Student Demo...'
+                              : studentBusy && option.key === 'creator'
+                                ? 'Starting Creator Demo...'
+                                : option.label}
                           </div>
                           <div className="small opacity-75 mt-1">{option.description}</div>
                         </Button>

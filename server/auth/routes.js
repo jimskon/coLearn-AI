@@ -67,14 +67,14 @@ function normalizeDemoGuestName(rawName) {
   return cleaned || null;
 }
 
-async function createGuestDemoUser(conn, demoCode, requestedName = '') {
+async function createGuestDemoUser(conn, demoCode, requestedName = '', role = 'student') {
   const [result] = await conn.query(
     'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
     [
       'Demo Guest',
       `demo-${String(demoCode || 'guest').toLowerCase()}-${Date.now()}-${crypto.randomUUID()}@colearn-ai.demo`,
       await bcrypt.hash(crypto.randomUUID(), 10),
-      'student',
+      role,
     ]
   );
 
@@ -88,7 +88,7 @@ async function createGuestDemoUser(conn, demoCode, requestedName = '') {
   return {
     id: guestId,
     name: guestName,
-    role: 'student',
+    role,
   };
 }
 
@@ -260,7 +260,7 @@ router.post('/demo/student', async (req, res) => {
       }
 
       const course = courses[0];
-      const guest = await createGuestDemoUser(conn, demoCode, guestName);
+      const guest = await createGuestDemoUser(conn, demoCode, guestName, 'student');
 
       await conn.query(
         `INSERT INTO course_enrollments (student_id, course_id) VALUES (?, ?)`,
@@ -287,6 +287,65 @@ router.post('/demo/student', async (req, res) => {
   } catch (err) {
     console.error('Demo student login error:', err);
     return res.status(500).json({ error: 'Failed to start demo student session' });
+  }
+});
+
+router.post('/demo/creator', async (req, res) => {
+  const demoCode = String(req.body?.demoCode || '').trim();
+  const guestName = String(req.body?.guestName || '');
+  if (!demoCode) {
+    return res.status(400).json({ error: 'Missing demoCode' });
+  }
+
+  try {
+    await ensureDemoModeSchema();
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const [courses] = await conn.query(
+        `SELECT c.id, c.name, c.code, pc.id AS class_id, pc.name AS class_name
+           FROM courses c
+           JOIN pogil_classes pc ON pc.id = c.class_id
+          WHERE c.code = ?
+            AND pc.demo_mode = 1
+          ORDER BY c.id ASC
+          LIMIT 1`,
+        [demoCode]
+      );
+
+      if (!courses.length) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Demo not found for that code' });
+      }
+
+      const course = courses[0];
+      const guest = await createGuestDemoUser(conn, demoCode, guestName, 'creator');
+
+      await conn.commit();
+
+      req.session.userId = guest.id;
+      return res.status(201).json({
+        user: guest,
+        class: {
+          id: Number(course.class_id),
+          name: course.class_name,
+        },
+        course: {
+          id: Number(course.id),
+          name: course.name,
+          code: course.code,
+        },
+      });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  } catch (err) {
+    console.error('Demo creator login error:', err);
+    return res.status(500).json({ error: 'Failed to start creator demo session' });
   }
 });
 

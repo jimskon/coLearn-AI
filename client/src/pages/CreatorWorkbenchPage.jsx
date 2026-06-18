@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Badge,
@@ -56,10 +56,11 @@ const majorSectionOptions = [
   'Reflection',
 ];
 
-function cloneEmptyDraft() {
+function cloneEmptyDraft(overrides = {}) {
   return {
     ...emptyDraft,
     major_sections: [...emptyDraft.major_sections],
+    ...overrides,
   };
 }
 
@@ -87,11 +88,16 @@ function parseActivityText(text) {
 export default function CreatorWorkbenchPage() {
   const { classId, activityId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useUser();
+  const isDemoCreator = new URLSearchParams(location.search).get('demo') === '1';
 
   const [classInfo, setClassInfo] = useState(null);
   const [activity, setActivity] = useState(null);
-  const [draft, setDraft] = useState(() => cloneEmptyDraft());
+  const [draft, setDraft] = useState(() => cloneEmptyDraft({
+    duration_minutes: isDemoCreator ? '10' : emptyDraft.duration_minutes,
+    selected_model: isDemoCreator ? 'gpt-5-mini' : emptyDraft.selected_model,
+  }));
   const [rawText, setRawText] = useState('');
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
@@ -123,6 +129,12 @@ export default function CreatorWorkbenchPage() {
     setFileContents((prev) => updaterFn(prev));
   }, []);
 
+  const creatorModelChoices = useMemo(() => (
+    isDemoCreator
+      ? creatorModelOptions.filter((option) => ['gpt-5-mini', 'gpt-4o-mini'].includes(option.value))
+      : creatorModelOptions
+  ), [isDemoCreator]);
+
   const renderedActivity = useMemo(() => renderBlocks(activeBlocks, {
     mode: 'preview',
     editable: true,
@@ -134,6 +146,15 @@ export default function CreatorWorkbenchPage() {
   }), [activeBlocks, fileContents, updateFileContents, infoBubbleSessionRef]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
+
+  useEffect(() => {
+    if (isDemoCreator && !['gpt-5-mini', 'gpt-4o-mini'].includes(draft.selected_model)) {
+      setDraft((prev) => ({
+        ...prev,
+        selected_model: 'gpt-5-mini',
+      }));
+    }
+  }, [draft.selected_model, isDemoCreator]);
 
   const compileText = useCallback((sourceText) => {
     const parsed = parseActivityText(sourceText);
@@ -574,7 +595,7 @@ export default function CreatorWorkbenchPage() {
                 <Form.Group className="mb-3">
                   <Form.Label>Model</Form.Label>
                   <Form.Select value={draft.selected_model} onChange={(event) => handleDraftChange('selected_model', event.target.value)}>
-                    {creatorModelOptions.map((option) => (
+                    {creatorModelChoices.map((option) => (
                       <option key={option.value} value={option.value}>{option.label} · {option.note}</option>
                     ))}
                   </Form.Select>
@@ -656,7 +677,7 @@ export default function CreatorWorkbenchPage() {
                     onChange={(event) => handleDraftChange('selected_model', event.target.value)}
                     disabled={revisionBusy || !!proposal}
                   >
-                    {creatorModelOptions.map((option) => (
+                  {creatorModelChoices.map((option) => (
                       <option key={option.value} value={option.value}>{option.label} · {option.note}</option>
                     ))}
                   </Form.Select>
@@ -699,11 +720,16 @@ export default function CreatorWorkbenchPage() {
               {proposal ? <Badge bg="warning" text="dark">Proposal</Badge> : null}
               {activeIssues.length ? <Badge bg={activeIssues.some((issue) => issue.severity === 'error') ? 'danger' : 'warning'}>{activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</Badge> : <Badge bg="success">Clean</Badge>}
             </div>
-            <Button size="sm" variant="success" onClick={() => saveSource(rawText)} disabled={!activity?.id || saveBusy || !!proposal}>
+            <Button size="sm" variant="success" onClick={() => saveSource(rawText)} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal}>
               {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
               Save
             </Button>
           </div>
+          {isDemoCreator ? (
+            <div className="px-3 py-2 border-top bg-light text-muted small">
+              Creator demo mode: Save is disabled. Model choices are limited to the demo set.
+            </div>
+          ) : null}
 
           <div className="creator-panel-body p-0">
             {rightMode === 'preview' ? (

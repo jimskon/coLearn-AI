@@ -24,7 +24,6 @@ import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
-import { creatorLanguageOptions } from '../utils/creatorLanguageOptions';
 
 const emptyDraft = {
   title: '',
@@ -359,7 +358,17 @@ export default function CreatorWorkbenchPage() {
           parse_issues: parsedNow.issues,
         }),
       });
-      const data = await res.json();
+      const rawResponse = await res.text();
+      let data = {};
+      if (rawResponse) {
+        try {
+          data = JSON.parse(rawResponse);
+        } catch (parseErr) {
+          throw new Error(
+            `Revision endpoint returned non-JSON (${res.status}). ${rawResponse.slice(0, 200)}`
+          );
+        }
+      }
       if (!res.ok) throw new Error(data?.error || 'Revision request failed.');
 
       const proposedText = data.proposedDocText || data.proposed_doc_text || '';
@@ -586,13 +595,13 @@ export default function CreatorWorkbenchPage() {
 
                 <Form.Group className="mb-3">
                   <Form.Label>Language</Form.Label>
-                  <Form.Select value={draft.selected_language} onChange={(event) => handleDraftChange('selected_language', event.target.value)}>
-                    {creatorLanguageOptions.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </Form.Select>
+                  <Form.Control
+                    value={draft.selected_language}
+                    onChange={(event) => handleDraftChange('selected_language', event.target.value)}
+                    placeholder="English"
+                  />
                   <Form.Text className="text-muted">
-                    English is the default. The first draft will be written in the selected language.
+                    English is the default. Type the language you want the first draft written in.
                   </Form.Text>
                 </Form.Group>
 

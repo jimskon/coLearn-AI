@@ -11,7 +11,6 @@ import {
   Modal,
   Table,
 } from 'react-bootstrap';
-import { creatorLanguageOptions } from '../utils/creatorLanguageOptions';
 
 const SERVICE_ACCOUNT_EMAIL = import.meta.env.VITE_SERVICE_ACCOUNT_EMAIL;
 
@@ -917,19 +916,14 @@ export default function ManageActivitiesPage() {
 
           <Form.Group className="mb-3">
             <Form.Label>Language</Form.Label>
-            <Form.Select
+            <Form.Control
               name="selected_language"
               value={createDraft.selected_language}
               onChange={handleCreateDraftFieldChange}
-            >
-              {creatorLanguageOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Form.Select>
+              placeholder="English"
+            />
             <div className="text-muted small mt-2">
-              English is the default. Choose the language you want the first draft written in.
+              English is the default. Type the language you want the first draft written in.
             </div>
           </Form.Group>
 

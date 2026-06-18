@@ -29,10 +29,12 @@ int main() {
 Rules illustrated above:
 - Learning Objectives is usually structural, not interactive.
 - Put learning-objective bullets in \text plus \begin{itemize} ... \end{itemize}.
+- Only include \info blocks if the creator explicitly asks for them.
 - If you use \info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback.
 - Do not invent new \info targets such as instructor.
 - If you include runnable C++ code, wrap it in \cpp ... \endcpp.
 - If you include runnable Python code, wrap it in \python ... \endpython.
+- If you include turtle code, always wrap it in \pythonturtle ... \endpythonturtle.
 - If you include runnable turtle code, prefer omitting the timeout unless a specific non-default limit is required. Use \pythonturtle{WxH} ... \endpythonturtle when only dimensions matter, or \pythonturtle ... \endpythonturtle if defaults are fine.
 - Do not paste raw code directly into question text.
 - Keep all interactive questions inside \questiongroup blocks.

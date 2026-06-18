@@ -588,6 +588,7 @@ async function evaluateStudentResponse(req, res) {
     "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
     "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
+    "Write feedback in the same language as the student's answer.",
     "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
     "Do NOT mention grading, points, rubrics, or scoring.",
   ].join("\n");

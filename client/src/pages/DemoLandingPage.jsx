@@ -44,10 +44,6 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const [guestName, setGuestName] = React.useState('');
   const [showInfoRequestModal, setShowInfoRequestModal] = React.useState(false);
 
-  const openDemoPath = (pathKey) => {
-    navigate(`/demo/${encodeURIComponent(demoCode)}/${pathKey}`);
-  };
-
   const handleStudentDemo = async () => {
     setStudentBusy(true);
     setStudentError('');
@@ -141,13 +137,19 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                             option.key === 'student'
                               ? handleStudentDemo()
                               : option.key === 'creator'
-                                ? openDemoPath(option.key)
+                                ? navigate(`/demo/${encodeURIComponent(demoCode)}/creator`, {
+                                    state: { guestName },
+                                  })
                                 : setShowInfoRequestModal(true)
                           }
-                          disabled={studentBusy && option.key === 'student'}
+                          disabled={studentBusy}
                         >
                           <div className="fw-semibold">
-                            {option.key === 'student' && studentBusy ? 'Starting Student Demo...' : option.label}
+                            {studentBusy && option.key === 'student'
+                              ? 'Starting Student Demo...'
+                              : studentBusy && option.key === 'creator'
+                                ? 'Starting Creator Demo...'
+                                : option.label}
                           </div>
                           <div className="small opacity-75 mt-1">{option.description}</div>
                         </Button>

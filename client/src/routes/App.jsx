@@ -15,7 +15,6 @@ import CourseActivitiesPage from '../pages/CourseActivitiesPage';
 import RunActivityPage from '../pages/RunActivityPage';
 import GroupSetupPage from '../pages/GroupSetupPage';
 import ViewGroupsPage from '../pages/ViewGroupsPage';
-import ActivityEditor from '../pages/ActivityEditor';
 import CreatorWorkbenchPage from '../pages/CreatorWorkbenchPage';
 import VerifyPage from '../pages/VerifyPage';
 import ForgotPasswordPage from '../pages/ForgotPasswordPage';
@@ -87,7 +86,7 @@ function AppRoutes() {
         <Route path="/view-tests/:courseId/:activityId" element={<ViewTestsPage />} />
         <Route path="/test-setup/:courseId/:activityId" element={<TestSetupPage />} />
 
-        <Route path="/editor/:activityId" element={<ActivityEditor />} />
+        <Route path="/editor/:activityId" element={<CreatorWorkbenchPage />} />
         <Route path="/class/:classId/create" element={<CreatorWorkbenchPage />} />
         <Route path="/creator/:activityId" element={<CreatorWorkbenchPage />} />
         <Route path="/verify" element={<VerifyPage />} />

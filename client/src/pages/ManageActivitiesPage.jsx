@@ -657,7 +657,7 @@ export default function ManageActivitiesPage() {
                   <Button
                     variant="warning"
                     size="sm"
-                    onClick={() => navigate(`/editor/${activity.id}`)}
+                    onClick={() => navigate(`/creator/${activity.id}`)}
                   >
                     Edit
                   </Button>

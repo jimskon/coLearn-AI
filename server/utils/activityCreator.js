@@ -273,6 +273,7 @@ async function generateWithOpenAI({
     'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
     'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
     'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\endquestion, \\endquestiongroup.',
+    'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
     'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
     'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
     'Keep each question concise. Keep sample responses and feedback prompts short.',

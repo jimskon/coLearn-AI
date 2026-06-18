@@ -24,6 +24,7 @@ import ManageCourseProgressPage from '../pages/ManageCourseProgressPage';
 import ManageCourseTestsPage from '../pages/ManageCourseTestsPage'; // 👈 NEW
 import DemoLandingPage from '../pages/DemoLandingPage';
 import DemoPathPage from '../pages/DemoPathPage';
+import DemoInfoRequestsAdminPage from '../pages/DemoInfoRequestsAdminPage';
 import { useLocation } from 'react-router-dom';
 import ViewTestsPage from '../pages/ViewTestsPage';
 import TestSetupPage from '../pages/TestSetupPage';
@@ -55,8 +56,10 @@ function AppRoutes() {
         <Route path="/" element={<LoginPage />} />
         <Route path="/aied2026" element={<DemoLandingPage defaultDemoCode="aied2026" />} />
         <Route path="/aied2026/:demoPath" element={<DemoPathPage defaultDemoCode="aied2026" />} />
+        <Route path="/aied2026/admin/info-requests" element={<DemoInfoRequestsAdminPage defaultDemoCode="aied2026" />} />
         <Route path="/demo/:demoCode" element={<DemoLandingPage />} />
         <Route path="/demo/:demoCode/:demoPath" element={<DemoPathPage />} />
+        <Route path="/demo/:demoCode/admin/info-requests" element={<DemoInfoRequestsAdminPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/dashboard" element={<DashboardPage user={user} />} />
         <Route path="/manage-classes" element={<ManageClassesPage />} />

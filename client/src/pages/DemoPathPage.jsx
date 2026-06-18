@@ -11,8 +11,8 @@ const pageCopy = {
     body: 'This path will guide an instructor or designer into a creator-facing demo flow tied to the same event code.',
   },
   'beta-access': {
-    title: 'Beta Access',
-    body: 'This path will collect interest from conference visitors who want deeper access after the demo.',
+    title: 'Request More Information',
+    body: 'This path will collect follow-up interest from conference visitors after the demo.',
   },
 };
 

@@ -3,6 +3,7 @@ import { Button, Card, Col, Container, Form, Row } from 'react-bootstrap';
 import { useNavigate, useParams } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
+import DemoInfoRequestModal from '../components/demo/DemoInfoRequestModal';
 
 const demoOptions = [
   {
@@ -23,6 +24,12 @@ const demoOptions = [
     variant: 'outline-dark',
     description: 'Preview how instructors see the activity list and student-management screens.',
   },
+  {
+    key: 'info-request',
+    label: 'Request More Information',
+    variant: 'outline-secondary',
+    description: 'Get updates, request beta access, discuss a pilot, or ask about research collaboration.',
+  },
 ];
 
 const valueProps = [
@@ -41,6 +48,7 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const [studentBusy, setStudentBusy] = React.useState(false);
   const [studentError, setStudentError] = React.useState('');
   const [guestName, setGuestName] = React.useState('');
+  const [showInfoRequestModal, setShowInfoRequestModal] = React.useState(false);
 
   const handleStudentDemo = async () => {
     setStudentBusy(true);
@@ -157,7 +165,9 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                                 ? handleStudentDemo()
                                 : option.key === 'creator'
                                   ? handleCreatorDemo()
-                                  : handleInstructorDemo()
+                                  : option.key === 'instructor'
+                                    ? handleInstructorDemo()
+                                    : setShowInfoRequestModal(true)
                             )}
                             disabled={studentBusy}
                           >
@@ -203,6 +213,11 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
           </Col>
         </Row>
       </Container>
+      <DemoInfoRequestModal
+        show={showInfoRequestModal}
+        demoCode={demoCode}
+        onHide={() => setShowInfoRequestModal(false)}
+      />
     </div>
   );
 }

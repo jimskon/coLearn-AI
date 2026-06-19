@@ -15,7 +15,7 @@ const pageCopy = {
   },
   instructor: {
     title: 'Instructor Demo',
-    body: 'Preparing the instructor-style instance list for this demo code.',
+    body: 'Preparing the instructor activity list for this demo code.',
   },
   'beta-access': {
     title: 'Request More Information',
@@ -69,7 +69,7 @@ export default function DemoPathPage({ defaultDemoCode = '' }) {
         navigate(
           demoPath === 'creator'
             ? `/class/${data.class.id}/create?demo=1`
-            : '/manage-courses',
+            : `/courses/${data.course.id}/activities`,
           {
             replace: true,
             state: { className: data.class.name, demoCode },

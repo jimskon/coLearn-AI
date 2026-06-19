@@ -36,7 +36,7 @@ function computeBubblePosition(rect) {
   };
 }
 
-export function useCreatorTutorial() {
+export function useCreatorTutorial({ demoMode = false } = {}) {
   const [phase, setPhase] = useState(() => {
     const pending = sessionStorage.getItem(`${STORAGE_KEY}:pending`);
     if (pending === 'after-generate') {
@@ -44,15 +44,21 @@ export function useCreatorTutorial() {
       return 'after-generate';
     }
 
+    if (demoMode) {
+      return 'setup';
+    }
+
     const completed = localStorage.getItem(STORAGE_KEY) === 'done';
     return completed ? 'off' : 'setup';
   });
 
   const quit = useCallback(() => {
-    localStorage.setItem(STORAGE_KEY, 'done');
+    if (!demoMode) {
+      localStorage.setItem(STORAGE_KEY, 'done');
+    }
     sessionStorage.removeItem(`${STORAGE_KEY}:pending`);
     setPhase('off');
-  }, []);
+  }, [demoMode]);
 
   const finishSetup = useCallback(() => {
     setPhase('setup-done');

@@ -176,7 +176,7 @@ export default function CreatorWorkbenchPage() {
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
-  const creatorTutorial = useCreatorTutorial();
+  const creatorTutorial = useCreatorTutorial({ demoMode: isDemoCreator });
 
   const tutorialRefs = {
     classLink: useRef(null),

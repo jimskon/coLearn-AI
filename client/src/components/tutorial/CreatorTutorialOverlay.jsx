@@ -87,6 +87,7 @@ export function useCreatorTutorial({ demoMode = false } = {}) {
 export default function CreatorTutorialOverlay({
   phase,
   refs,
+  demoMode = false,
   onQuit,
   onFinishSetup,
 }) {

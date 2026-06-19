@@ -345,6 +345,7 @@ router.post('/demo/creator', async (req, res) => {
       await conn.commit();
 
       req.session.userId = guest.id;
+      req.session.demoMode = 'creator';
       void recordAuditEvent('account_created', {
         req,
         userId: guest.id,

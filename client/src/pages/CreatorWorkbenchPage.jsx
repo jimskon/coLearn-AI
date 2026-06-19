@@ -179,6 +179,7 @@ export default function CreatorWorkbenchPage() {
   const creatorTutorial = useCreatorTutorial();
 
   const tutorialRefs = {
+    classLink: useRef(null),
     title: useRef(null),
     minutes: useRef(null),
     brief: useRef(null),
@@ -609,7 +610,12 @@ export default function CreatorWorkbenchPage() {
             {activity?.title ? ` · ${activity.title}` : ''}
           </div>
         </div>
-        <Button variant="outline-secondary" size="sm" onClick={() => navigate(effectiveClassId ? `/class/${effectiveClassId}` : '/manage-classes')}>
+        <Button
+          ref={tutorialRefs.classLink}
+          variant="outline-secondary"
+          size="sm"
+          onClick={() => navigate(effectiveClassId ? `/class/${effectiveClassId}` : '/manage-classes')}
+        >
           <ArrowLeft className="me-1" /> Class
         </Button>
       </div>
@@ -924,6 +930,7 @@ export default function CreatorWorkbenchPage() {
       <CreatorTutorialOverlay
         phase={creatorTutorial.phase}
         refs={tutorialRefs}
+        demoMode={isDemoCreator}
         onQuit={creatorTutorial.quit}
         onFinishSetup={creatorTutorial.finishSetup}
       />

@@ -81,6 +81,7 @@ export function useCreatorTutorial() {
 export default function CreatorTutorialOverlay({
   phase,
   refs,
+  demoMode = false,
   onQuit,
   onFinishSetup,
 }) {
@@ -109,7 +110,13 @@ export default function CreatorTutorialOverlay({
     }
 
     if (phase === 'after-generate') {
-      return [
+      const afterGenerateSteps = [
+        ...(demoMode ? [{
+          key: 'class-link',
+          targetRef: refs.classLink,
+          title: 'Open the class page',
+          body: 'From the class page, click View Groups to see the active class for this demo.',
+        }] : []),
         {
           key: 'sandbox',
           targetRef: refs.sandbox,
@@ -123,10 +130,12 @@ export default function CreatorTutorialOverlay({
           body: 'Use the revision box to request changes to the activity.',
         },
       ];
+
+      return afterGenerateSteps;
     }
 
     return [];
-  }, [phase, refs]);
+  }, [phase, refs, demoMode]);
 
   const [stepIndex, setStepIndex] = useState(0);
   const [position, setPosition] = useState(() => computeBubblePosition(null));

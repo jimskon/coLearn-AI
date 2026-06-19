@@ -61,6 +61,7 @@ export default function CourseActivitiesPage() {
   }, [courseId]);
 
   const isDemoClass = Boolean(courseInfo?.class_demo_mode);
+  const isDemoInstructor = user?.demo_mode === 'instructor';
 
   const ensureDemoInstance = async (activity) => {
     const res = await fetch(
@@ -193,6 +194,12 @@ export default function CourseActivitiesPage() {
   return (
     <Container className="mt-4">
       <h2>{courseName ? `Instance: ${courseName}` : 'Available Activities'}</h2>
+
+      {isDemoInstructor ? (
+        <Alert variant="info" className="mt-3">
+          Demo instructor mode: use <strong>View Groups</strong> to open the live class for an activity.
+        </Alert>
+      ) : null}
 
       {loading ? (
         <Spinner animation="border" />

@@ -555,7 +555,7 @@ export default function ViewGroupsPage() {
         <>
           {isDemoInstructor ? (
             <Alert variant="info" className="mb-3">
-              Demo instructor mode: roster and rotation controls are visible but disabled.
+              Demo instructor mode: roster and rotation controls are visible but disabled. Use <strong>View Activity</strong> to open the group activity.
             </Alert>
           ) : null}
           <Row>
@@ -576,14 +576,16 @@ export default function ViewGroupsPage() {
                       <Badge bg={timerState.bg} text={timerState.text}>
                         {timerState.label}
                       </Badge>
-                      <Button
-                        variant="outline-danger"
-                        size="sm"
-                        disabled={clearing.has(group.instance_id) || timerPaused}
-                        onClick={() => clearGroupAnswers(group.instance_id)}
-                      >
-                        {clearing.has(group.instance_id) ? 'Clearing…' : 'Clear Answers'}
-                      </Button>
+                      {!isDemoInstructor ? (
+                        <Button
+                          variant="outline-danger"
+                          size="sm"
+                          disabled={clearing.has(group.instance_id) || timerPaused}
+                          onClick={() => clearGroupAnswers(group.instance_id)}
+                        >
+                          {clearing.has(group.instance_id) ? 'Clearing…' : 'Clear Answers'}
+                        </Button>
+                      ) : null}
 
                       <Button
                         variant="primary"

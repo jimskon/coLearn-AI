@@ -7,7 +7,7 @@ export default function BootstrapLayout({ children }) {
   const { user } = useUser();
 
   const isRootOrCreator = ['root', 'creator'].includes(user?.role);
-  const canManageCourses = ['root', 'creator', 'instructor'].includes(user?.role);
+  const canManageCourses = ['root', 'creator', 'instructor'].includes(user?.role) && !user?.demo_mode;
 
   return (
     <>

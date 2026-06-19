@@ -20,6 +20,7 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
 
 
   const { user, setUser, loading } = useUser();
+  const isDemoSession = Boolean(user?.demo_mode);
 
   const navigate = useNavigate();
 
@@ -79,7 +80,7 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
                   <Nav.Link as={Link} to="/dashboard" className="px-2">
                     Dashboard
                   </Nav.Link>
-                  {["root", "creator", "instructor"].includes(user.role) && (
+                  {["root", "creator", "instructor"].includes(user.role) && !isDemoSession && (
                     <Nav.Link as={Link} to="/manage-courses" className="px-2">
                       Manage Instances
                     </Nav.Link>

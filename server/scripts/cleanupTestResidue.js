@@ -326,7 +326,7 @@ async function cleanup(conn, targets) {
   }
 
   await deleteOptionalInstanceTable(conn, summary, 'activity_heartbeats', 'activity_instance_id', instanceIds);
-  await deleteOptionalInstanceTable(conn, summary, 'event_log', 'activity_instance_id', instanceIds);
+  await deleteOptionalInstanceTable(conn, summary, 'audit_log', 'activity_instance_id', instanceIds);
   await deleteOptionalInstanceTable(conn, summary, 'followups', 'activity_instance_id', instanceIds);
   await deleteOptionalInstanceTable(conn, summary, 'feedback', 'activity_instance_id', instanceIds);
 

@@ -98,11 +98,22 @@ erDiagram
     TIMESTAMP generated_at
   }
 
-  event_log {
+  audit_log {
     INT id PK
-    INT user_id FK
-    INT activity_instance_id FK
     TEXT event_type
+    INT user_id FK
+    VARCHAR guest_token
+    VARCHAR role
+    INT class_id FK
+    INT course_id FK
+    INT activity_id FK
+    INT activity_instance_id FK
+    VARCHAR request_path
+    VARCHAR ip_address
+    VARCHAR ip_country
+    VARCHAR ip_region
+    VARCHAR ip_city
+    TEXT user_agent
     TEXT details
     TIMESTAMP created_at
   }
@@ -123,7 +134,7 @@ erDiagram
   users ||--o{ pogil_activities : created_by
   users ||--o{ group_members : student_id
   users ||--o{ responses : answered_by_user_id
-  users ||--o{ event_log : user_id
+  users ||--o{ audit_log : user_id
   users ||--o{ activity_heartbeats : user_id
 
   pogil_classes ||--o{ courses : class_id
@@ -136,7 +147,7 @@ erDiagram
 
   activity_instances ||--o{ activity_groups : activity_instance_id
   activity_instances ||--o{ responses : activity_instance_id
-  activity_instances ||--o{ event_log : activity_instance_id
+  activity_instances ||--o{ audit_log : activity_instance_id
   activity_instances ||--o{ activity_heartbeats : activity_instance_id
 
   activity_groups ||--o{ group_members : activity_group_id

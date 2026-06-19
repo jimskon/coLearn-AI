@@ -108,6 +108,7 @@ app.use('/api/events', require('./events/routes'));
 app.use('/api/classes', require('./classes/routes'));
 app.use('/api/activity-instances', require('./activity_instances/routes'));
 app.use('/api/demo', require('./demo/routes'));
+app.use('/api/audit', require('./audit/routes'));
 
 
 // Log and handle unmatched API routes first

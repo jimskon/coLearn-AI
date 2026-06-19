@@ -2,6 +2,7 @@
 const db = require('../db');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const { loadActivitySourceById } = require('../utils/activityContent');
+const { recordAuditEvent } = require('../utils/auditLogger');
 
 function extractTitleFromText(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
@@ -18,12 +19,25 @@ exports.createActivity = async (req, res) => {
   }
 
   try {
-    await db.query(
+    const [result] = await db.query(
       `INSERT INTO pogil_activities 
         (name, title, sheet_url, created_by, class_id, order_index) 
        VALUES (?, ?, ?, ?, ?, ?)`,
       [name, title, sheet_url, createdBy, class_id, order_index]
     );
+    void recordAuditEvent('activity_created', {
+      req,
+      userId: createdBy,
+      classId: class_id,
+      activityId: Number(result.insertId),
+      details: {
+        name,
+        title,
+        sheet_url,
+        order_index,
+        source: 'activities_controller',
+      },
+    });
 
     res.status(201).json({
       name,

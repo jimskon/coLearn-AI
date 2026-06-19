@@ -90,9 +90,14 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
                     </Nav.Link>
                   )}
                   {user.role === "root" && (
-                    <Nav.Link as={Link} to="/admin/users" className="px-2">
-                      Manage Users
-                    </Nav.Link>
+                    <>
+                      <Nav.Link as={Link} to="/admin/logs" className="px-2">
+                        Log
+                      </Nav.Link>
+                      <Nav.Link as={Link} to="/admin/users" className="px-2">
+                        Manage Users
+                      </Nav.Link>
+                    </>
                   )}
                 </>
               )}

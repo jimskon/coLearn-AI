@@ -4,6 +4,7 @@ const { extractGoogleFileId } = require('../utils/googleIds');
 const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
 const activityCreator = require('../utils/activityCreator');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
+const { recordAuditEvent } = require('../utils/auditLogger');
 
 const CREATOR_MODEL_OPTIONS = new Set([
   'gpt-4o-mini',
@@ -56,6 +57,12 @@ exports.createClass = async (req, res) => {
       topic_domain,
       demo_mode: Boolean(demo_mode),
       created_by: createdBy,
+    });
+    void recordAuditEvent('class_created', {
+      req,
+      userId: createdBy,
+      classId: Number(result.insertId),
+      details: { name, demo_mode: Boolean(demo_mode), level, topic_domain },
     });
   } catch (err) {
     console.error("Error creating class:", err);
@@ -160,6 +167,18 @@ exports.createActivityForClass = async (req, res) => {
       order_index,
       class_id: Number(classId),
       created_by: createdBy
+    });
+    void recordAuditEvent('activity_created', {
+      req,
+      userId: createdBy,
+      classId: Number(classId),
+      activityId: Number(result.insertId),
+      details: {
+        name,
+        title,
+        source_type: normalizedSourceType,
+        order_index,
+      },
     });
   } catch (err) {
     console.error('Error creating activity:', err);

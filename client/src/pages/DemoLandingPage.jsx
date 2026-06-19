@@ -13,16 +13,16 @@ const demoOptions = [
     description: 'Step into a collaborative learner experience with guided prompts and shared sensemaking.',
   },
   {
+    key: 'instructor',
+    label: 'Try Instructor Demo',
+    variant: 'custom-instructor',
+    description: 'Preview how instructors see the activity list and student-management screens.',
+  },
+  {
     key: 'creator',
     label: 'Try Creator Demo',
     variant: 'success',
     description: 'Preview how instructors can set up, test, and demonstrate activities with low friction.',
-  },
-  {
-    key: 'instructor',
-    label: 'Try Instructor Demo',
-    variant: 'outline-dark',
-    description: 'Preview how instructors see the activity list and student-management screens.',
   },
   {
     key: 'info-request',
@@ -157,9 +157,12 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                         {demoOptions.map((option) => (
                           <Button
                             key={option.key}
-                            variant={option.variant}
+                            variant={option.variant === 'custom-instructor' ? 'primary' : option.variant}
                             size="lg"
-                            className="text-start py-3 px-4"
+                            className={`text-start py-3 px-4 ${option.variant === 'custom-instructor' ? 'text-white border-0' : ''}`}
+                            style={option.variant === 'custom-instructor'
+                              ? { background: 'linear-gradient(135deg, #1f6f78 0%, #2f8f9b 100%)' }
+                              : undefined}
                             onClick={() => (
                               option.key === 'student'
                                 ? handleStudentDemo()

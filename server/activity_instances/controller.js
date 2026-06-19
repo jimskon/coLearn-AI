@@ -7,6 +7,7 @@ const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
+const { recordAuditEvent } = require('../utils/auditLogger');
 
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -345,6 +346,13 @@ async function createActivityInstance(req, res) {
       `INSERT INTO activity_instances (activity_id, course_id, active_rotation_mode) VALUES (?, ?, 'submit')`,
       [activityId, courseId]
     );
+    void recordAuditEvent('activity_instance_created', {
+      req,
+      activityId: Number(activityId),
+      courseId: Number(courseId),
+      activityInstanceId: Number(result.insertId),
+      details: { kind: 'manual_create', active_rotation_mode: 'submit' },
+    });
     res.status(201).json({ instanceId: result.insertId });
   } catch (err) {
     console.error("❌ Failed to create activity instance:", err);
@@ -545,6 +553,16 @@ async function ensureActivitySandboxInstance(req, res) {
        VALUES (?, ?, NULL, 0)`,
       [instanceResult.insertId, userId]
     );
+
+    void recordAuditEvent('activity_instance_created', {
+      req,
+      userId,
+      role: userRole,
+      activityId,
+      courseId,
+      activityInstanceId: Number(instanceResult.insertId),
+      details: { kind: 'sandbox_instance', created: true },
+    });
 
     return res.status(201).json({
       instanceId: Number(instanceResult.insertId),
@@ -1082,6 +1100,16 @@ async function setupMultipleGroupInstances(req, res) {
     }
 
     await conn.commit();
+    void recordAuditEvent('groups_formed', {
+      req,
+      courseId: Number(courseId),
+      activityId: Number(activityId),
+      details: {
+        is_test: isTest,
+        total_groups: computedTotalGroups,
+        instance_count: isTest ? selectedStudentIds.length : groups.length,
+      },
+    });
     return res.json({
       success: true,
       isTest,
@@ -1315,6 +1343,19 @@ async function submitGroupResponses(req, res) {
     );
 
     if (emitPatch) global.emitInstanceState?.(instanceId, emitPatch);
+
+    void recordAuditEvent('group_submitted', {
+      req,
+      userId: studentId,
+      activityInstanceId: instanceId,
+      details: {
+        group_num: groupNum,
+        should_advance: shouldAdvance,
+        retries_required: retriesRequired,
+        blocked,
+        can_advance: canAdvance,
+      },
+    });
 
     return res.json({
       success: true, completed_groups: completedGroups, progress_status: progressStatus,

@@ -6,6 +6,7 @@ const pool = require('../db');
 const router = express.Router();
 const nodemailer = require('nodemailer');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
+const { recordAuditEvent } = require('../utils/auditLogger');
 
 
 // ===== Config =====
@@ -116,6 +117,12 @@ router.post('/register', async (req, res) => {
         if (duplicate) {
           return res.status(409).json({ error: 'Email already registered' });
         }
+        void recordAuditEvent('account_created', {
+          req,
+          userId: user.id,
+          role: user.role,
+          details: { auth_mode: 'dev_auto_verify', email },
+        });
         // Return the created user (what your seeder expects)
         return res.status(201).json(user);
       }
@@ -182,6 +189,12 @@ router.post('/verify', async (req, res) => {
 
       // Return the created user for consistency
       const [created] = await conn.query('SELECT id, name, email, role FROM users WHERE id = ?', [result.insertId]);
+      void recordAuditEvent('account_created', {
+        req,
+        userId: created[0].id,
+        role: created[0].role,
+        details: { auth_mode: 'pending_verify', email: created[0].email },
+      });
       return res.status(201).json(created[0]);
     } finally {
       conn.release();
@@ -220,6 +233,12 @@ router.post('/login', async (req, res) => {
       }
 
       req.session.userId = user.id;
+      void recordAuditEvent('user_login', {
+        req,
+        userId: user.id,
+        role: user.role,
+        details: { auth_mode: DEV_PASSWORDLESS_LOGIN ? 'passwordless' : 'password', email: user.email },
+      });
       return res.status(200).json({ id: user.id, name: user.name, role: user.role });
     } finally {
       conn.release();
@@ -270,6 +289,12 @@ router.post('/demo/student', async (req, res) => {
       await conn.commit();
 
       req.session.userId = guest.id;
+      void recordAuditEvent('account_created', {
+        req,
+        userId: guest.id,
+        role: guest.role,
+        details: { auth_mode: 'demo_student', demo_code: demoCode },
+      });
       return res.status(201).json({
         user: guest,
         course: {
@@ -325,6 +350,12 @@ router.post('/demo/creator', async (req, res) => {
       await conn.commit();
 
       req.session.userId = guest.id;
+      void recordAuditEvent('account_created', {
+        req,
+        userId: guest.id,
+        role: guest.role,
+        details: { auth_mode: 'demo_creator', demo_code: demoCode },
+      });
       return res.status(201).json({
         user: guest,
         class: {

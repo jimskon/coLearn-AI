@@ -80,10 +80,10 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
         paddingTop: '6rem',
         paddingBottom: '3rem',
       }}
-    >
+      >
       <Container>
         <Row className="justify-content-center">
-          <Col lg={10} xl={9}>
+          <Col lg={11} xl={11}>
             <Card
               className="shadow-lg border-0"
               style={{
@@ -93,76 +93,85 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
               }}
             >
               <Card.Body className="p-4 p-md-5">
-                <Row className="g-4 align-items-start">
-                  <Col lg={7}>
-                    <div className="text-uppercase fw-semibold text-secondary mb-2" style={{ letterSpacing: '0.08em' }}>
-                      AIED2026 Demo
-                    </div>
-                    <h1 className="display-5 fw-bold mb-3" style={{ lineHeight: 1.08 }}>
-                      Explore collaborative learning with coLearn-AI
-                    </h1>
-                    <p className="lead text-secondary mb-3">
-                      This public demo introduces a platform built for live collaboration, AI scaffolding,
-                      visible reasoning, and smooth instructor-led demonstration.
-                    </p>
-                    <div className="d-inline-flex align-items-center px-3 py-2 rounded-pill bg-light border mb-4">
-                      <span className="fw-semibold me-2">Demo code</span>
-                      <code>{demoCode}</code>
-                    </div>
+                <Row className="g-4 align-items-stretch">
+                  <Col lg={4} xl={4}>
+                    <div className="h-100 p-4 border rounded-4 bg-white">
+                      <div className="text-uppercase fw-semibold text-secondary mb-2" style={{ letterSpacing: '0.08em' }}>
+                        AIED2026 Demo
+                      </div>
+                      <h1 className="h2 fw-bold mb-3" style={{ lineHeight: 1.08 }}>
+                        Explore collaborative learning with coLearn-AI
+                      </h1>
+                      <p className="text-secondary mb-3">
+                        This public demo introduces a platform built for live collaboration, AI scaffolding,
+                        visible reasoning, and smooth instructor-led demonstration.
+                      </p>
+                      <div className="d-inline-flex align-items-center px-3 py-2 rounded-pill bg-light border mb-4">
+                        <span className="fw-semibold me-2">Demo code</span>
+                        <code>{demoCode}</code>
+                      </div>
 
-                    <Form.Group className="mb-4" controlId="demoGuestName">
-                      <Form.Label className="fw-semibold">Your name (optional)</Form.Label>
-                      <Form.Control
-                        type="text"
-                        size="lg"
-                        placeholder="Enter the name you want others to see"
-                        value={guestName}
-                        onChange={(event) => setGuestName(event.target.value)}
-                        maxLength={80}
-                        autoComplete="nickname"
-                      />
-                      <Form.Text className="text-muted">
-                        Leave it blank and we&apos;ll assign a simple guest number.
-                      </Form.Text>
-                    </Form.Group>
-
-                    <div className="d-grid gap-3">
-                      {demoOptions.map((option) => (
-                        <Button
-                          key={option.key}
-                          variant={option.variant}
+                      <Form.Group controlId="demoGuestName">
+                        <Form.Label className="fw-semibold">Your name (optional)</Form.Label>
+                        <Form.Control
+                          type="text"
                           size="lg"
-                          className="text-start py-3 px-4"
-                          onClick={() =>
-                            option.key === 'student'
-                              ? handleStudentDemo()
-                              : option.key === 'creator'
-                                ? navigate(`/demo/${encodeURIComponent(demoCode)}/creator`, {
-                                    state: { guestName },
-                                  })
-                                : setShowInfoRequestModal(true)
-                          }
-                          disabled={studentBusy}
-                        >
-                          <div className="fw-semibold">
-                            {studentBusy && option.key === 'student'
-                              ? 'Starting Student Demo...'
-                              : studentBusy && option.key === 'creator'
-                                ? 'Starting Creator Demo...'
-                                : option.label}
-                          </div>
-                          <div className="small opacity-75 mt-1">{option.description}</div>
-                        </Button>
-                      ))}
+                          placeholder="Enter the name you want others to see"
+                          value={guestName}
+                          onChange={(event) => setGuestName(event.target.value)}
+                          maxLength={80}
+                          autoComplete="nickname"
+                        />
+                        <Form.Text className="text-muted">
+                          Leave it blank and we&apos;ll assign a simple guest number.
+                        </Form.Text>
+                      </Form.Group>
                     </div>
-                    {studentError ? <div className="text-danger mt-3">{studentError}</div> : null}
                   </Col>
 
-                  <Col lg={5}>
+                  <Col lg={4} xl={4}>
+                    <div className="h-100 p-4 border rounded-4 bg-white">
+                      <div className="text-uppercase fw-semibold text-secondary mb-2" style={{ letterSpacing: '0.08em' }}>
+                        Activities
+                      </div>
+                      <h2 className="h4 fw-bold mb-3">Choose a demo path</h2>
+                      <div className="d-grid gap-3">
+                        {demoOptions.map((option) => (
+                          <Button
+                            key={option.key}
+                            variant={option.variant}
+                            size="lg"
+                            className="text-start py-3 px-4"
+                            onClick={() =>
+                              option.key === 'student'
+                                ? handleStudentDemo()
+                                : option.key === 'creator'
+                                  ? navigate(`/demo/${encodeURIComponent(demoCode)}/creator`, {
+                                      state: { guestName },
+                                    })
+                                  : setShowInfoRequestModal(true)
+                            }
+                            disabled={studentBusy}
+                          >
+                            <div className="fw-semibold">
+                              {studentBusy && option.key === 'student'
+                                ? 'Starting Student Demo...'
+                                : studentBusy && option.key === 'creator'
+                                  ? 'Starting Creator Demo...'
+                                  : option.label}
+                            </div>
+                            <div className="small opacity-75 mt-1">{option.description}</div>
+                          </Button>
+                        ))}
+                      </div>
+                      {studentError ? <div className="text-danger mt-3">{studentError}</div> : null}
+                    </div>
+                  </Col>
+
+                  <Col lg={4} xl={4}>
                     <div
-                      className="h-100 p-4"
+                      className="h-100 p-4 border rounded-4"
                       style={{
-                        borderRadius: '16px',
                         background: 'linear-gradient(160deg, #123524 0%, #1f5b3b 55%, #d89a38 100%)',
                         color: '#fff',
                       }}

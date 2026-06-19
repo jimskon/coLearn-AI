@@ -13,6 +13,7 @@ export default function DemoInfoRequestModal({ show, demoCode, onHide }) {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState('');
   const [saved, setSaved] = React.useState(false);
+  const [showOptional, setShowOptional] = React.useState(false);
 
   React.useEffect(() => {
     if (show) {
@@ -20,6 +21,7 @@ export default function DemoInfoRequestModal({ show, demoCode, onHide }) {
       setBusy(false);
       setError('');
       setSaved(false);
+      setShowOptional(false);
     }
   }, [show]);
 
@@ -77,6 +79,7 @@ export default function DemoInfoRequestModal({ show, demoCode, onHide }) {
       onHide={busy ? undefined : onHide}
       centered
       size="xl"
+      fullscreen="sm-down"
       dialogClassName="demo-info-request-modal"
       contentClassName="border-0 shadow"
     >
@@ -84,20 +87,59 @@ export default function DemoInfoRequestModal({ show, demoCode, onHide }) {
         .demo-info-request-modal .modal-content {
           max-height: calc(100vh - 2rem);
         }
+        .demo-info-request-modal .modal-body {
+          overflow: auto;
+        }
+        .demo-info-request-modal .modal-header,
+        .demo-info-request-modal .modal-footer {
+          padding-top: 0.75rem;
+          padding-bottom: 0.75rem;
+        }
+        .demo-info-request-form {
+          margin-bottom: 0;
+        }
         .demo-info-request-form .form-label {
           font-weight: 600;
+        }
+        .demo-info-request-form .form-text {
+          font-size: 0.82rem;
+        }
+        .demo-info-request-optional-toggle {
+          display: none;
+        }
+        .demo-info-request-optional {
+          display: block;
         }
         .demo-info-request-interests {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 0.25rem 0.75rem;
+          gap: 0.2rem 0.5rem;
         }
         .demo-info-request-interests .form-check {
           margin-bottom: 0;
+          font-size: 0.95rem;
         }
         @media (max-width: 767px) {
+          .demo-info-request-modal .modal-header,
+          .demo-info-request-modal .modal-footer {
+            padding-top: 0.5rem;
+            padding-bottom: 0.5rem;
+          }
+          .demo-info-request-modal .modal-body {
+            padding-top: 0.75rem;
+            padding-bottom: 0.75rem;
+          }
+          .demo-info-request-optional-toggle {
+            display: inline-flex;
+          }
+          .demo-info-request-optional {
+            display: none;
+          }
+          .demo-info-request-optional.demo-info-request-optional-open {
+            display: block;
+          }
           .demo-info-request-interests {
-            grid-template-columns: 1fr;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
           }
         }
       `}</style>
@@ -113,7 +155,7 @@ export default function DemoInfoRequestModal({ show, demoCode, onHide }) {
           <Form onSubmit={handleSubmit} className="demo-info-request-form">
             {error ? <Alert variant="danger">{error}</Alert> : null}
 
-            <Row className="g-3">
+            <Row className="g-2 g-md-3">
               <Col md={6}>
                 <Form.Group controlId="demoInfoName" className="mb-3">
                   <Form.Label className="mb-1">Name</Form.Label>
@@ -146,7 +188,23 @@ export default function DemoInfoRequestModal({ show, demoCode, onHide }) {
                 </Form.Group>
               </Col>
 
-              <Col md={6}>
+              <Col md={12}>
+                <div className="d-flex justify-content-between align-items-center mb-2">
+                  <div className="small text-muted">Optional details help us route your request.</div>
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="demo-info-request-optional-toggle p-0 text-decoration-none"
+                    onClick={() => setShowOptional((prev) => !prev)}
+                    aria-expanded={showOptional}
+                  >
+                    {showOptional ? 'Hide optional details' : 'Show optional details'}
+                  </Button>
+                </div>
+              </Col>
+
+              <Col md={6} className={`demo-info-request-optional ${showOptional ? 'demo-info-request-optional-open' : ''}`}>
                 <Form.Group controlId="demoInfoInstitution" className="mb-3">
                   <Form.Label className="mb-1">Institution / organization</Form.Label>
                   <Form.Control
@@ -160,7 +218,7 @@ export default function DemoInfoRequestModal({ show, demoCode, onHide }) {
                 </Form.Group>
               </Col>
 
-              <Col md={6}>
+              <Col md={6} className={`demo-info-request-optional ${showOptional ? 'demo-info-request-optional-open' : ''}`}>
                 <Form.Group controlId="demoInfoRole" className="mb-3">
                   <Form.Label className="mb-1">Role</Form.Label>
                   <Form.Control
@@ -201,7 +259,7 @@ export default function DemoInfoRequestModal({ show, demoCode, onHide }) {
                   <Form.Label className="mb-1">Message</Form.Label>
                   <Form.Control
                     as="textarea"
-                    rows={2}
+                    rows={3}
                     value={form.message}
                     onChange={(event) => updateField('message', event.target.value)}
                     maxLength={5000}

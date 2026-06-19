@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import CreatorTutorialOverlay, { useCreatorTutorial } from '../components/tutorial/CreatorTutorialOverlay';
 import {
   Alert,
   Badge,
@@ -175,6 +176,15 @@ export default function CreatorWorkbenchPage() {
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
+  const creatorTutorial = useCreatorTutorial();
+
+  const tutorialRefs = {
+    title: useRef(null),
+    minutes: useRef(null),
+    brief: useRef(null),
+    sandbox: useRef(null),
+    revision: useRef(null),
+  };
   const effectiveClassId = classId || activity?.class_id;
   const activeBlocks = proposal?.blocks || blocks;
   const activeIssues = proposal?.issues || parseIssues;
@@ -372,6 +382,7 @@ export default function CreatorWorkbenchPage() {
       setRawText(data.content_text || '');
       compileText(data.content_text || '');
       setMessages([{ role: 'assistant', text: 'Draft created.' }]);
+      creatorTutorial.startAfterGenerate();
       if (data.generation_status === 'fallback') {
         setNotice(data.generation_error || 'A fallback draft was created.');
       }
@@ -620,7 +631,7 @@ export default function CreatorWorkbenchPage() {
           <div className="creator-panel-body">
             {!activity?.id ? (
               <div>
-                <Form.Group className="mb-3">
+                <Form.Group className="mb-3" ref={tutorialRefs.title}>
                   <Form.Label>Title</Form.Label>
                   <Form.Control
                     value={draft.title}
@@ -632,7 +643,7 @@ export default function CreatorWorkbenchPage() {
 
                 <div className="row g-2 mb-3">
                   <div className="col-5">
-                    <Form.Group>
+                    <Form.Group ref={tutorialRefs.minutes}>
                       <Form.Label>Minutes</Form.Label>
                       <Form.Control
                         type="number"
@@ -679,8 +690,8 @@ export default function CreatorWorkbenchPage() {
                   </div>
                 </Form.Group>
 
-                <Form.Group className="mb-3">
-                  <Form.Label>Creator Brief</Form.Label>
+                <Form.Group className="mb-3" ref={tutorialRefs.brief}>
+                  <Form.Label>Activity Description</Form.Label>
                   <Form.Control
                     as="textarea"
                     rows={8}
@@ -739,13 +750,13 @@ export default function CreatorWorkbenchPage() {
                     onChange={(event) => handleDraftChange('selected_model', event.target.value)}
                     disabled={revisionBusy || !!proposal}
                   >
-                  {creatorModelChoices.map((option) => (
+                    {creatorModelChoices.map((option) => (
                       <option key={option.value} value={option.value}>{option.label} · {option.note}</option>
                     ))}
                   </Form.Select>
                 </Form.Group>
 
-                <Form.Group>
+                <Form.Group ref={tutorialRefs.revision}>
                   <Form.Label>Revision Request</Form.Label>
                   <Form.Control
                     as="textarea"
@@ -774,8 +785,12 @@ export default function CreatorWorkbenchPage() {
                 <Button variant={rightMode === 'edit' ? 'primary' : 'outline-primary'} onClick={() => selectRightMode('edit')}>
                   <PencilSquare className="me-1" /> Edit
                 </Button>
-                <Button variant={rightMode === 'sandbox' ? 'primary' : 'outline-primary'} onClick={() => selectRightMode('sandbox')} disabled={!activity?.id || !!proposal || sandboxBusy}>
-                  {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
+                <Button
+                  ref={tutorialRefs.sandbox}
+                  variant={rightMode === 'sandbox' ? 'primary' : 'outline-primary'}
+                  onClick={() => selectRightMode('sandbox')}
+                  disabled={!activity?.id || !!proposal || sandboxBusy}
+                >                  {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
                   Sandbox
                 </Button>
               </ButtonGroup>
@@ -906,6 +921,12 @@ export default function CreatorWorkbenchPage() {
           <Button variant="secondary" onClick={() => setShowAdvanced(false)}>Close</Button>
         </Modal.Footer>
       </Modal>
+      <CreatorTutorialOverlay
+        phase={creatorTutorial.phase}
+        refs={tutorialRefs}
+        onQuit={creatorTutorial.quit}
+        onFinishSetup={creatorTutorial.finishSetup}
+      />
     </Container>
   );
 }

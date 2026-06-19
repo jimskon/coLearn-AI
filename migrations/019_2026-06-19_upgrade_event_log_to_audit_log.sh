@@ -6,12 +6,66 @@ source "$SCRIPT_DIR/db.sh"
 
 echo "Upgrading event_log to audit_log..."
 
-db_exec <<'SQL'
-RENAME TABLE `event_log` TO `audit_log`;
+db_query() {
+  MYSQL_PWD="$DB_PASSWORD" \
+  "$DB_CLI" \
+    --protocol=tcp \
+    --batch \
+    --skip-column-names \
+    -h "$DB_HOST" \
+    -P "$DB_PORT" \
+    -u "$DB_USER" \
+    "$DB_NAME" \
+    -e "$1"
+}
 
+table_exists() {
+  local table_name="$1"
+  local count
+  count="$(db_query "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '$table_name';" | tr -d '[:space:]')"
+  [[ "${count:-0}" != "0" ]]
+}
+
+drop_fk_for_column() {
+  local column_name="$1"
+  local fk_names
+  fk_names="$(db_query "
+    SELECT constraint_name
+    FROM information_schema.KEY_COLUMN_USAGE
+    WHERE table_schema = DATABASE()
+      AND table_name = 'audit_log'
+      AND column_name = '$column_name'
+      AND referenced_table_name IS NOT NULL;
+  " || true)"
+
+  if [[ -z "${fk_names//[[:space:]]/}" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r fk_name; do
+    [[ -z "$fk_name" ]] && continue
+    db_exec <<SQL
+ALTER TABLE \`audit_log\` DROP FOREIGN KEY \`$fk_name\`;
+SQL
+  done <<< "$fk_names"
+}
+
+if table_exists "event_log" && ! table_exists "audit_log"; then
+  db_exec <<'SQL'
+RENAME TABLE `event_log` TO `audit_log`;
+SQL
+fi
+
+if ! table_exists "audit_log"; then
+  echo "ERROR: neither event_log nor audit_log exists." >&2
+  exit 1
+fi
+
+drop_fk_for_column "user_id"
+drop_fk_for_column "activity_instance_id"
+
+db_exec <<'SQL'
 ALTER TABLE `audit_log`
-  DROP FOREIGN KEY `event_log_ibfk_1`,
-  DROP FOREIGN KEY `event_log_ibfk_2`,
   ADD COLUMN `guest_token` VARCHAR(191) DEFAULT NULL AFTER `user_id`,
   ADD COLUMN `role` VARCHAR(32) DEFAULT NULL AFTER `guest_token`,
   ADD COLUMN `class_id` INT(11) DEFAULT NULL AFTER `role`,

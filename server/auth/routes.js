@@ -93,6 +93,21 @@ async function createGuestDemoUser(conn, demoCode, requestedName = '', role = 's
   };
 }
 
+async function findDemoCourseForCode(conn, demoCode) {
+  const [courses] = await conn.query(
+    `SELECT c.id, c.name, c.code, pc.id AS class_id, pc.name AS class_name
+       FROM courses c
+       JOIN pogil_classes pc ON pc.id = c.class_id
+      WHERE c.code = ?
+        AND pc.demo_mode = 1
+      ORDER BY c.id ASC
+      LIMIT 1`,
+    [demoCode]
+  );
+
+  return courses[0] || null;
+}
+
 // ===================== REGISTER =====================
 // POST /auth/register
 // Dev mode: create directly; Prod: pending + email
@@ -262,23 +277,13 @@ router.post('/demo/student', async (req, res) => {
     try {
       await conn.beginTransaction();
 
-      const [courses] = await conn.query(
-        `SELECT c.id, c.name, c.code
-           FROM courses c
-           JOIN pogil_classes pc ON pc.id = c.class_id
-          WHERE c.code = ?
-            AND pc.demo_mode = 1
-          ORDER BY c.id ASC
-          LIMIT 1`,
-        [demoCode]
-      );
+      const course = await findDemoCourseForCode(conn, demoCode);
 
-      if (!courses.length) {
+      if (!course) {
         await conn.rollback();
         return res.status(404).json({ error: 'Demo not found for that code' });
       }
 
-      const course = courses[0];
       const guest = await createGuestDemoUser(conn, demoCode, guestName, 'student');
 
       await conn.query(
@@ -328,23 +333,13 @@ router.post('/demo/creator', async (req, res) => {
     try {
       await conn.beginTransaction();
 
-      const [courses] = await conn.query(
-        `SELECT c.id, c.name, c.code, pc.id AS class_id, pc.name AS class_name
-           FROM courses c
-           JOIN pogil_classes pc ON pc.id = c.class_id
-          WHERE c.code = ?
-            AND pc.demo_mode = 1
-          ORDER BY c.id ASC
-          LIMIT 1`,
-        [demoCode]
-      );
+      const course = await findDemoCourseForCode(conn, demoCode);
 
-      if (!courses.length) {
+      if (!course) {
         await conn.rollback();
         return res.status(404).json({ error: 'Demo not found for that code' });
       }
 
-      const course = courses[0];
       const guest = await createGuestDemoUser(conn, demoCode, guestName, 'creator');
 
       await conn.commit();
@@ -377,6 +372,67 @@ router.post('/demo/creator', async (req, res) => {
   } catch (err) {
     console.error('Demo creator login error:', err);
     return res.status(500).json({ error: 'Failed to start creator demo session' });
+  }
+});
+
+router.post('/demo/instructor', async (req, res) => {
+  const demoCode = String(req.body?.demoCode || '').trim();
+  const guestName = String(req.body?.guestName || '');
+  if (!demoCode) {
+    return res.status(400).json({ error: 'Missing demoCode' });
+  }
+
+  try {
+    await ensureDemoModeSchema();
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      const course = await findDemoCourseForCode(conn, demoCode);
+      if (!course) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Demo not found for that code' });
+      }
+
+      const guest = await createGuestDemoUser(conn, demoCode, guestName, 'instructor');
+
+      await conn.query(
+        `INSERT INTO course_enrollments (student_id, course_id) VALUES (?, ?)`,
+        [guest.id, course.id]
+      );
+
+      await conn.commit();
+
+      req.session.userId = guest.id;
+      req.session.demoMode = 'instructor';
+      void recordAuditEvent('account_created', {
+        req,
+        userId: guest.id,
+        role: guest.role,
+        details: { auth_mode: 'demo_instructor', demo_code: demoCode },
+      });
+
+      return res.status(201).json({
+        user: { ...guest, demo_mode: 'instructor' },
+        class: {
+          id: Number(course.class_id),
+          name: course.class_name,
+        },
+        course: {
+          id: Number(course.id),
+          name: course.name,
+          code: course.code,
+        },
+      });
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+  } catch (err) {
+    console.error('Demo instructor login error:', err);
+    return res.status(500).json({ error: 'Failed to start instructor demo session' });
   }
 });
 
@@ -456,7 +512,7 @@ router.get('/whoami', async (req, res) => {
     try {
       const [rows] = await conn.query('SELECT id, name, email, role FROM users WHERE id = ?', [userId]);
       if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
-      return res.json(rows[0]);
+      return res.json({ ...rows[0], demo_mode: req.session.demoMode || null });
     } finally {
       conn.release();
     }

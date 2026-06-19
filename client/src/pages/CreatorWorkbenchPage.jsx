@@ -609,7 +609,12 @@ export default function CreatorWorkbenchPage() {
             {activity?.title ? ` · ${activity.title}` : ''}
           </div>
         </div>
-        <Button variant="outline-secondary" size="sm" onClick={() => navigate(effectiveClassId ? `/class/${effectiveClassId}` : '/manage-classes')}>
+        <Button
+          ref={tutorialRefs.classLink}
+          variant="outline-secondary"
+          size="sm"
+          onClick={() => navigate(effectiveClassId ? `/class/${effectiveClassId}` : '/manage-classes')}
+        >
           <ArrowLeft className="me-1" /> Class
         </Button>
       </div>

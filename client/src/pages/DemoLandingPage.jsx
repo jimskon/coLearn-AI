@@ -19,9 +19,15 @@ const demoOptions = [
     description: 'Preview how instructors can set up, test, and demonstrate activities with low friction.',
   },
   {
+    key: 'instructor',
+    label: 'Try Instructor Demo',
+    variant: 'outline-dark',
+    description: 'Preview how instructors see the activity list and student-management screens.',
+  },
+  {
     key: 'info-request',
     label: 'Request More Information',
-    variant: 'outline-dark',
+    variant: 'outline-secondary',
     description: 'Get updates, request beta access, discuss a pilot, or ask about research collaboration.',
   },
 ];
@@ -70,6 +76,18 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
     } finally {
       setStudentBusy(false);
     }
+  };
+
+  const handleCreatorDemo = () => {
+    navigate(`/demo/${encodeURIComponent(demoCode)}/creator`, {
+      state: { guestName },
+    });
+  };
+
+  const handleInstructorDemo = () => {
+    navigate(`/demo/${encodeURIComponent(demoCode)}/instructor`, {
+      state: { guestName },
+    });
   };
 
   return (
@@ -142,15 +160,15 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                             variant={option.variant}
                             size="lg"
                             className="text-start py-3 px-4"
-                            onClick={() =>
+                            onClick={() => (
                               option.key === 'student'
                                 ? handleStudentDemo()
                                 : option.key === 'creator'
-                                  ? navigate(`/demo/${encodeURIComponent(demoCode)}/creator`, {
-                                      state: { guestName },
-                                    })
-                                  : setShowInfoRequestModal(true)
-                            }
+                                  ? handleCreatorDemo()
+                                  : option.key === 'instructor'
+                                    ? handleInstructorDemo()
+                                    : setShowInfoRequestModal(true)
+                            )}
                             disabled={studentBusy}
                           >
                             <div className="fw-semibold">

@@ -13,6 +13,10 @@ const pageCopy = {
     title: 'Creator Demo',
     body: 'Preparing the creator workbench for this demo code.',
   },
+  instructor: {
+    title: 'Instructor Demo',
+    body: 'Preparing the instructor activity list for this demo code.',
+  },
   'beta-access': {
     title: 'Request More Information',
     body: 'This path will collect follow-up interest from conference visitors after the demo.',
@@ -29,22 +33,22 @@ export default function DemoPathPage({ defaultDemoCode = '' }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { setUser } = useUser();
-  const [busy, setBusy] = useState(demoPath === 'creator');
+  const [busy, setBusy] = useState(demoPath === 'creator' || demoPath === 'instructor');
   const [error, setError] = useState('');
 
   useEffect(() => {
-    if (demoPath !== 'creator') {
+    if (!['creator', 'instructor'].includes(demoPath)) {
       setBusy(false);
       return undefined;
     }
 
     let cancelled = false;
 
-    const startCreatorDemo = async () => {
+    const startDemo = async () => {
       setBusy(true);
       setError('');
       try {
-        const res = await fetch(`${API_BASE_URL}/api/auth/demo/creator`, {
+        const res = await fetch(`${API_BASE_URL}/api/auth/demo/${demoPath}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -56,25 +60,30 @@ export default function DemoPathPage({ defaultDemoCode = '' }) {
 
         const data = await res.json().catch(() => ({}));
         if (!res.ok || !data?.user || !data?.class?.id) {
-          throw new Error(data?.error || 'Failed to start creator demo');
+          throw new Error(data?.error || `Failed to start ${demoPath} demo`);
         }
 
         if (cancelled) return;
         localStorage.setItem('user', JSON.stringify(data.user));
         setUser(data.user);
-        navigate(`/class/${data.class.id}/create?demo=1`, {
-          replace: true,
-          state: { className: data.class.name, demoCode },
-        });
+        navigate(
+          demoPath === 'creator'
+            ? `/class/${data.class.id}/create?demo=1`
+            : `/courses/${data.course.id}/activities`,
+          {
+            replace: true,
+            state: { className: data.class.name, demoCode },
+          }
+        );
       } catch (err) {
         if (!cancelled) {
-          setError(err?.message || 'Failed to start creator demo');
+          setError(err?.message || `Failed to start ${demoPath} demo`);
           setBusy(false);
         }
       }
     };
 
-    startCreatorDemo();
+    startDemo();
     return () => {
       cancelled = true;
     };
@@ -95,10 +104,16 @@ export default function DemoPathPage({ defaultDemoCode = '' }) {
                 The selected demo code is <code>{demoCode}</code>.
               </p>
 
-              {demoPath === 'creator' ? (
+              {['creator', 'instructor'].includes(demoPath) ? (
                 <div className="d-flex align-items-center gap-2 mb-4">
                   <Spinner animation="border" size="sm" />
-                  <span>{busy ? 'Starting the creator workbench...' : 'Ready.'}</span>
+                  <span>
+                    {busy
+                      ? (demoPath === 'creator'
+                        ? 'Starting the creator workbench...'
+                        : 'Starting the instructor demo...')
+                      : 'Ready.'}
+                  </span>
                 </div>
               ) : null}
 

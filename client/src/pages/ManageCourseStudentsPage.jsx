@@ -1,7 +1,7 @@
 // src/pages/ManageCourseStudentsPage.jsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Table, Button, Container } from 'react-bootstrap';
+import { Alert, Table, Button, Container } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
 
@@ -12,6 +12,7 @@ export default function ManageCourseStudentsPage() {
     const [students, setStudents] = useState([]);
     const navigate = useNavigate();
     const [courseInfo, setCourseInfo] = useState(null);
+    const isDemoInstructor = user?.demo_mode === 'instructor';
 
 
 
@@ -42,7 +43,7 @@ export default function ManageCourseStudentsPage() {
         });
         setStudents(students.filter(s => s.id !== studentId));
     };
-    console.log("user ID", user.id);
+    console.log("user ID", user?.id);
     console.log("instructor ID", courseInfo?.instructor_id);
     if (!user || !courseInfo) return <Container className="mt-4">Loading...</Container>;
 
@@ -50,6 +51,11 @@ export default function ManageCourseStudentsPage() {
     return (
         <Container className="mt-4">
             <h3>Joined Students for {courseInfo?.name || "..."}</h3>
+            {isDemoInstructor ? (
+              <Alert variant="info" className="mb-3">
+                Demo instructor mode: roster edit controls are visible but disabled.
+              </Alert>
+            ) : null}
             <Table striped bordered hover>
                 <thead>
                     <tr>
@@ -65,7 +71,15 @@ export default function ManageCourseStudentsPage() {
                             <td>{s.role}</td>
                             {(user.role === 'root' || user.role === 'creator' || user.id === courseInfo.instructor_id) && (
                                 <td>
-                                    <Button variant="danger" size="sm" onClick={() => handleRemove(s.id)}>Remove</Button>
+                                    <Button
+                                      variant="danger"
+                                      size="sm"
+                                      onClick={() => handleRemove(s.id)}
+                                      disabled={isDemoInstructor}
+                                      title={isDemoInstructor ? 'Disabled in instructor demo mode' : undefined}
+                                    >
+                                      Remove
+                                    </Button>
                                 </td>
                             )}
 

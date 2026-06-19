@@ -5,7 +5,7 @@ const db = require('../db');
 async function clearDatabase() {
   const tableOrder = [
     'activity_heartbeats',
-    'event_log',
+    'audit_log',
     'followups',
     'feedback',
     'responses',

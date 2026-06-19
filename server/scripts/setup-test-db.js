@@ -152,6 +152,43 @@ async function main() {
         CONSTRAINT activity_instances_student_fk
           FOREIGN KEY (active_student_id) REFERENCES users(id)
       );
+
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_type VARCHAR(191) NOT NULL,
+        user_id INT DEFAULT NULL,
+        guest_token VARCHAR(191) DEFAULT NULL,
+        role VARCHAR(32) DEFAULT NULL,
+        class_id INT DEFAULT NULL,
+        course_id INT DEFAULT NULL,
+        activity_id INT DEFAULT NULL,
+        activity_instance_id INT DEFAULT NULL,
+        request_path VARCHAR(255) DEFAULT NULL,
+        ip_address VARCHAR(64) DEFAULT NULL,
+        ip_country VARCHAR(64) DEFAULT NULL,
+        ip_region VARCHAR(191) DEFAULT NULL,
+        ip_city VARCHAR(191) DEFAULT NULL,
+        user_agent TEXT DEFAULT NULL,
+        details TEXT DEFAULT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        KEY idx_audit_log_event_created_at (event_type, created_at),
+        KEY idx_audit_log_user_created_at (user_id, created_at),
+        KEY idx_audit_log_guest_created_at (guest_token, created_at),
+        KEY idx_audit_log_class_created_at (class_id, created_at),
+        KEY idx_audit_log_course_created_at (course_id, created_at),
+        KEY idx_audit_log_activity_created_at (activity_id, created_at),
+        KEY idx_audit_log_instance_created_at (activity_instance_id, created_at),
+        CONSTRAINT audit_log_user_fk
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL,
+        CONSTRAINT audit_log_class_fk
+          FOREIGN KEY (class_id) REFERENCES pogil_classes(id) ON DELETE SET NULL,
+        CONSTRAINT audit_log_course_fk
+          FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE SET NULL,
+        CONSTRAINT audit_log_activity_fk
+          FOREIGN KEY (activity_id) REFERENCES pogil_activities(id) ON DELETE SET NULL,
+        CONSTRAINT audit_log_instance_fk
+          FOREIGN KEY (activity_instance_id) REFERENCES activity_instances(id) ON DELETE SET NULL
+      );
     `);
 
     console.log(`Prepared test database ${DB_NAME}.`);

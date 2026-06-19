@@ -108,21 +108,40 @@ CREATE TABLE `courses` (
   CONSTRAINT `courses_ibfk_2` FOREIGN KEY (`class_id`) REFERENCES `pogil_classes` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=276 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
-DROP TABLE IF EXISTS `event_log`;
+DROP TABLE IF EXISTS `audit_log`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;
-CREATE TABLE `event_log` (
+CREATE TABLE `audit_log` (
   `id` int(11) NOT NULL AUTO_INCREMENT,
-  `user_id` int(11) DEFAULT NULL,
-  `activity_instance_id` int(11) DEFAULT NULL,
   `event_type` varchar(191) NOT NULL,
+  `user_id` int(11) DEFAULT NULL,
+  `guest_token` varchar(191) DEFAULT NULL,
+  `role` varchar(32) DEFAULT NULL,
+  `class_id` int(11) DEFAULT NULL,
+  `course_id` int(11) DEFAULT NULL,
+  `activity_id` int(11) DEFAULT NULL,
+  `activity_instance_id` int(11) DEFAULT NULL,
+  `request_path` varchar(255) DEFAULT NULL,
+  `ip_address` varchar(64) DEFAULT NULL,
+  `ip_country` varchar(64) DEFAULT NULL,
+  `ip_region` varchar(191) DEFAULT NULL,
+  `ip_city` varchar(191) DEFAULT NULL,
+  `user_agent` text DEFAULT NULL,
   `details` text DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT current_timestamp(),
   PRIMARY KEY (`id`),
-  KEY `user_id` (`user_id`),
-  KEY `activity_instance_id` (`activity_instance_id`),
-  CONSTRAINT `event_log_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE,
-  CONSTRAINT `event_log_ibfk_2` FOREIGN KEY (`activity_instance_id`) REFERENCES `activity_instances` (`id`) ON DELETE CASCADE
+  KEY `idx_audit_log_event_created_at` (`event_type`, `created_at`),
+  KEY `idx_audit_log_user_created_at` (`user_id`, `created_at`),
+  KEY `idx_audit_log_guest_created_at` (`guest_token`, `created_at`),
+  KEY `idx_audit_log_class_created_at` (`class_id`, `created_at`),
+  KEY `idx_audit_log_course_created_at` (`course_id`, `created_at`),
+  KEY `idx_audit_log_activity_created_at` (`activity_id`, `created_at`),
+  KEY `idx_audit_log_instance_created_at` (`activity_instance_id`, `created_at`),
+  CONSTRAINT `audit_log_user_fk` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `audit_log_class_fk` FOREIGN KEY (`class_id`) REFERENCES `pogil_classes` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `audit_log_course_fk` FOREIGN KEY (`course_id`) REFERENCES `courses` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `audit_log_activity_fk` FOREIGN KEY (`activity_id`) REFERENCES `pogil_activities` (`id`) ON DELETE SET NULL,
+  CONSTRAINT `audit_log_instance_fk` FOREIGN KEY (`activity_instance_id`) REFERENCES `activity_instances` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `feedback`;

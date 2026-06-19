@@ -151,7 +151,7 @@ async function cleanupFixture(ids) {
       await db.query('DELETE FROM response_drafts WHERE activity_instance_id IN (?)', [ids.instances]);
       await db.query('DELETE FROM responses WHERE activity_instance_id IN (?)', [ids.instances]);
       await db.query('DELETE FROM activity_heartbeats WHERE activity_instance_id IN (?)', [ids.instances]).catch(() => {});
-      await db.query('DELETE FROM event_log WHERE activity_instance_id IN (?)', [ids.instances]).catch(() => {});
+      await db.query('DELETE FROM audit_log WHERE activity_instance_id IN (?)', [ids.instances]).catch(() => {});
       await db.query('DELETE FROM group_members WHERE activity_instance_id IN (?)', [ids.instances]);
       await db.query('DELETE FROM activity_instances WHERE id IN (?)', [ids.instances]);
     }

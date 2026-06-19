@@ -36,7 +36,7 @@ function computeBubblePosition(rect) {
   };
 }
 
-export function useCreatorTutorial({ demoMode = false } = {}) {
+export function useCreatorTutorial() {
   const [phase, setPhase] = useState(() => {
     const pending = sessionStorage.getItem(`${STORAGE_KEY}:pending`);
     if (pending === 'after-generate') {
@@ -44,21 +44,15 @@ export function useCreatorTutorial({ demoMode = false } = {}) {
       return 'after-generate';
     }
 
-    if (demoMode) {
-      return 'setup';
-    }
-
     const completed = localStorage.getItem(STORAGE_KEY) === 'done';
     return completed ? 'off' : 'setup';
   });
 
   const quit = useCallback(() => {
-    if (!demoMode) {
-      localStorage.setItem(STORAGE_KEY, 'done');
-    }
+    localStorage.setItem(STORAGE_KEY, 'done');
     sessionStorage.removeItem(`${STORAGE_KEY}:pending`);
     setPhase('off');
-  }, [demoMode]);
+  }, []);
 
   const finishSetup = useCallback(() => {
     setPhase('setup-done');
@@ -87,7 +81,6 @@ export function useCreatorTutorial({ demoMode = false } = {}) {
 export default function CreatorTutorialOverlay({
   phase,
   refs,
-  demoMode = false,
   onQuit,
   onFinishSetup,
 }) {
@@ -116,13 +109,7 @@ export default function CreatorTutorialOverlay({
     }
 
     if (phase === 'after-generate') {
-      const afterGenerateSteps = [
-        ...(demoMode ? [{
-          key: 'class-link',
-          targetRef: refs.classLink,
-          title: 'Open the class page',
-          body: 'From the class page, click View Groups to see the active class for this demo.',
-        }] : []),
+      return [
         {
           key: 'sandbox',
           targetRef: refs.sandbox,
@@ -136,12 +123,10 @@ export default function CreatorTutorialOverlay({
           body: 'Use the revision box to request changes to the activity.',
         },
       ];
-
-      return afterGenerateSteps;
     }
 
     return [];
-  }, [phase, refs, demoMode]);
+  }, [phase, refs]);
 
   const [stepIndex, setStepIndex] = useState(0);
   const [position, setPosition] = useState(() => computeBubblePosition(null));

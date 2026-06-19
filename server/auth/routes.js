@@ -248,7 +248,6 @@ router.post('/login', async (req, res) => {
       }
 
       req.session.userId = user.id;
-      req.session.demoMode = null;
       void recordAuditEvent('user_login', {
         req,
         userId: user.id,
@@ -295,7 +294,6 @@ router.post('/demo/student', async (req, res) => {
       await conn.commit();
 
       req.session.userId = guest.id;
-      req.session.demoMode = 'student';
       void recordAuditEvent('account_created', {
         req,
         userId: guest.id,
@@ -347,7 +345,6 @@ router.post('/demo/creator', async (req, res) => {
       await conn.commit();
 
       req.session.userId = guest.id;
-      req.session.demoMode = 'creator';
       void recordAuditEvent('account_created', {
         req,
         userId: guest.id,

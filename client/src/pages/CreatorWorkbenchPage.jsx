@@ -176,10 +176,9 @@ export default function CreatorWorkbenchPage() {
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
-  const creatorTutorial = useCreatorTutorial({ demoMode: isDemoCreator });
+  const creatorTutorial = useCreatorTutorial();
 
   const tutorialRefs = {
-    classLink: useRef(null),
     title: useRef(null),
     minutes: useRef(null),
     brief: useRef(null),
@@ -930,7 +929,6 @@ export default function CreatorWorkbenchPage() {
       <CreatorTutorialOverlay
         phase={creatorTutorial.phase}
         refs={tutorialRefs}
-        demoMode={isDemoCreator}
         onQuit={creatorTutorial.quit}
         onFinishSetup={creatorTutorial.finishSetup}
       />

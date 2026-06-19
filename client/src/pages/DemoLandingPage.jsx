@@ -3,7 +3,6 @@ import { Button, Card, Col, Container, Form, Row } from 'react-bootstrap';
 import { useNavigate, useParams } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
-import DemoInfoRequestModal from '../components/demo/DemoInfoRequestModal';
 
 const demoOptions = [
   {
@@ -19,10 +18,10 @@ const demoOptions = [
     description: 'Preview how instructors can set up, test, and demonstrate activities with low friction.',
   },
   {
-    key: 'info-request',
-    label: 'Request More Information',
+    key: 'instructor',
+    label: 'Try Instructor Demo',
     variant: 'outline-dark',
-    description: 'Get updates, request beta access, discuss a pilot, or ask about research collaboration.',
+    description: 'Preview how instructors see the activity list and student-management screens.',
   },
 ];
 
@@ -42,7 +41,6 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const [studentBusy, setStudentBusy] = React.useState(false);
   const [studentError, setStudentError] = React.useState('');
   const [guestName, setGuestName] = React.useState('');
-  const [showInfoRequestModal, setShowInfoRequestModal] = React.useState(false);
 
   const handleStudentDemo = async () => {
     setStudentBusy(true);
@@ -70,6 +68,18 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
     } finally {
       setStudentBusy(false);
     }
+  };
+
+  const handleCreatorDemo = () => {
+    navigate(`/demo/${encodeURIComponent(demoCode)}/creator`, {
+      state: { guestName },
+    });
+  };
+
+  const handleInstructorDemo = () => {
+    navigate(`/demo/${encodeURIComponent(demoCode)}/instructor`, {
+      state: { guestName },
+    });
   };
 
   return (
@@ -142,15 +152,13 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                             variant={option.variant}
                             size="lg"
                             className="text-start py-3 px-4"
-                            onClick={() =>
+                            onClick={() => (
                               option.key === 'student'
                                 ? handleStudentDemo()
                                 : option.key === 'creator'
-                                  ? navigate(`/demo/${encodeURIComponent(demoCode)}/creator`, {
-                                      state: { guestName },
-                                    })
-                                  : setShowInfoRequestModal(true)
-                            }
+                                  ? handleCreatorDemo()
+                                  : handleInstructorDemo()
+                            )}
                             disabled={studentBusy}
                           >
                             <div className="fw-semibold">
@@ -195,11 +203,6 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
           </Col>
         </Row>
       </Container>
-      <DemoInfoRequestModal
-        show={showInfoRequestModal}
-        demoCode={demoCode}
-        onHide={() => setShowInfoRequestModal(false)}
-      />
     </div>
   );
 }

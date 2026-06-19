@@ -14,6 +14,7 @@ import {
   Form,
 } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
+import { useUser } from '../context/UserContext';
 import { FaUserCheck, FaLaptop } from 'react-icons/fa';
 import { parseUtcDbDatetime } from '../utils/time';
 
@@ -178,6 +179,7 @@ export default function ViewGroupsPage() {
   const location = useLocation();
   const incomingCourseName = location.state && location.state.courseName;
   const navigate = useNavigate();
+  const { user } = useUser();
 
   const [activityTitle, setActivityTitle] = useState('');
   const [courseName, setCourseName] = useState(incomingCourseName || '');
@@ -198,6 +200,7 @@ export default function ViewGroupsPage() {
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isDemoClass, setIsDemoClass] = useState(false);
   const [clearingDemoRoster, setClearingDemoRoster] = useState(false);
+  const isDemoInstructor = user?.demo_mode === 'instructor';
 
   const fetchGroups = async ({ quiet = false } = {}) => {
     if (!quiet) {
@@ -532,7 +535,8 @@ export default function ViewGroupsPage() {
             <Button
               variant="outline-danger"
               onClick={handleClearDemoRoster}
-              disabled={clearingDemoRoster}
+              disabled={clearingDemoRoster || isDemoInstructor}
+              title={isDemoInstructor ? 'Disabled in instructor demo mode' : undefined}
             >
               {clearingDemoRoster ? 'Clearing Demo…' : 'Clear Demo Students & Groups'}
             </Button>
@@ -548,7 +552,13 @@ export default function ViewGroupsPage() {
       ) : groups.length === 0 ? (
         <Alert variant="info">No groups available.</Alert>
       ) : (
-        <Row>
+        <>
+          {isDemoInstructor ? (
+            <Alert variant="info" className="mb-3">
+              Demo instructor mode: roster and rotation controls are visible but disabled.
+            </Alert>
+          ) : null}
+          <Row>
           {groups.map((group) => {
             const isComplete = isCompleteFromInstanceRow(group);
             const timerState = getGroupTimerState(group, timerNowMs);
@@ -610,7 +620,8 @@ export default function ViewGroupsPage() {
               </Col>
             );
           })}
-        </Row>
+          </Row>
+        </>
       )}
 
       <Card className="my-4">
@@ -622,17 +633,20 @@ export default function ViewGroupsPage() {
                 Choose whether the active student changes on every submit or only when the group advances to the next question group.
               </div>
             </div>
+            {isDemoInstructor ? (
+              <div className="small text-muted">Instructor demo mode: controls are shown but disabled.</div>
+            ) : null}
             <ButtonGroup>
               <Button
                 variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
-                disabled={updatingRotationMode}
+                disabled={updatingRotationMode || isDemoInstructor}
                 onClick={() => handleSetRotationMode('submit')}
               >
                 Submit
               </Button>
               <Button
                 variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
-                disabled={updatingRotationMode}
+                disabled={updatingRotationMode || isDemoInstructor}
                 onClick={() => handleSetRotationMode('group')}
               >
                 Q Group
@@ -645,7 +659,7 @@ export default function ViewGroupsPage() {
               value={selectedAdd}
               onChange={(e) => setSelectedAdd(e.target.value)}
               style={{ maxWidth: 320 }}
-              disabled={timerPaused}
+              disabled={timerPaused || isDemoInstructor}
             >
               <option value="">Add student...</option>
               {available.map((s) => (
@@ -656,10 +670,18 @@ export default function ViewGroupsPage() {
             </Form.Select>
 
             <div className="d-flex gap-2">
-              <Button variant="primary" onClick={handleAddToGroup} disabled={!selectedAdd || timerPaused}>
+              <Button
+                variant="primary"
+                onClick={handleAddToGroup}
+                disabled={!selectedAdd || timerPaused || isDemoInstructor}
+              >
                 Add to group
               </Button>
-              <Button variant="outline-secondary" onClick={handleAddAsSoloGroup} disabled={!selectedAdd || timerPaused}>
+              <Button
+                variant="outline-secondary"
+                onClick={handleAddAsSoloGroup}
+                disabled={!selectedAdd || timerPaused || isDemoInstructor}
+              >
                 Group of one
               </Button>
             </div>
@@ -668,7 +690,7 @@ export default function ViewGroupsPage() {
               value={selectedRemove}
               onChange={(e) => setSelectedRemove(e.target.value)}
               style={{ maxWidth: 380 }}
-              disabled={timerPaused}
+              disabled={timerPaused || isDemoInstructor}
             >
               <option value="">Remove student...</option>
               {active.map((s) => (
@@ -682,7 +704,11 @@ export default function ViewGroupsPage() {
               ))}
             </Form.Select>
 
-            <Button variant="danger" onClick={handleRemove} disabled={!selectedRemove || timerPaused}>
+            <Button
+              variant="danger"
+              onClick={handleRemove}
+              disabled={!selectedRemove || timerPaused || isDemoInstructor}
+            >
               Remove
             </Button>
           </div>

@@ -13,16 +13,16 @@ const demoOptions = [
     description: 'Step into a collaborative learner experience with guided prompts and shared sensemaking.',
   },
   {
-    key: 'creator',
-    label: 'Try Creator Demo',
-    variant: 'success',
-    description: 'Preview how instructors can set up, test, and demonstrate activities with low friction.',
-  },
-  {
     key: 'instructor',
     label: 'Try Instructor Demo',
     variant: 'outline-dark',
     description: 'Preview how instructors see the activity list and student-management screens.',
+  },
+  {
+    key: 'creator',
+    label: 'Try Creator Demo',
+    variant: 'success',
+    description: 'Preview how instructors can set up, test, and demonstrate activities with low friction.',
   },
   {
     key: 'info-request',

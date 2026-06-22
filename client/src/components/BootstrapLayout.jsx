@@ -6,7 +6,7 @@ import { useUser } from '../context/UserContext';
 export default function BootstrapLayout({ children }) {
   const { user } = useUser();
 
-  const isRootOrCreator = ['root', 'creator'].includes(user?.role);
+  const isRootOrCreator = ['root', 'creator'].includes(user?.role) && !user?.demo_mode;
   const canManageCourses = ['root', 'creator', 'instructor'].includes(user?.role) && !user?.demo_mode;
 
   return (

@@ -25,7 +25,39 @@ function getClientIp(req) {
   return cleanText(req?.ip || req?.connection?.remoteAddress || req?.socket?.remoteAddress, 64);
 }
 
+function getGeoContext(req = {}) {
+  const headers = req?.headers || {};
+  const country = cleanText(
+    headers['x-vercel-ip-country']
+      || headers['cf-ipcountry']
+      || headers['x-country-code']
+      || headers['x-country'],
+    64
+  );
+  const region = cleanText(
+    headers['x-vercel-ip-country-region']
+      || headers['cf-region-code']
+      || headers['cf-region']
+      || headers['x-region']
+      || headers['x-state'],
+    191
+  );
+  const city = cleanText(
+    headers['x-vercel-ip-city']
+      || headers['cf-ipcity']
+      || headers['x-city'],
+    191
+  );
+
+  return {
+    ipCountry: country,
+    ipRegion: region,
+    ipCity: city,
+  };
+}
+
 function getAuditContext(req = {}) {
+  const geo = getGeoContext(req);
   return {
     userId: req.user?.id ?? req.session?.userId ?? null,
     role: cleanText(req.user?.role, 32),
@@ -33,6 +65,7 @@ function getAuditContext(req = {}) {
     requestPath: cleanText(req.originalUrl || req.path, 255),
     ipAddress: getClientIp(req),
     userAgent: cleanText(req.headers?.['user-agent'], 1000),
+    ...geo,
   };
 }
 

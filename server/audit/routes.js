@@ -31,6 +31,11 @@ function toNumber(value) {
   return Number.isFinite(num) ? num : 0;
 }
 
+function cleanBucketLabel(value) {
+  const text = String(value || '').trim();
+  return text ? text : 'Unknown';
+}
+
 router.get('/logs', async (req, res) => {
   if (!requireRoot(req, res)) return;
 
@@ -74,6 +79,17 @@ router.get('/logs', async (req, res) => {
       GROUP BY al.activity_id, a.title, a.name, c.name, co.name
       ORDER BY submit_count DESC, last_submit_at DESC
       LIMIT 15
+    `);
+
+    const [geoRows] = await db.query(`
+      SELECT
+        COALESCE(NULLIF(ip_country, ''), 'Unknown') AS ip_country,
+        COALESCE(NULLIF(ip_region, ''), 'Unknown') AS ip_region,
+        COUNT(*) AS event_count
+      FROM audit_log
+      GROUP BY COALESCE(NULLIF(ip_country, ''), 'Unknown'), COALESCE(NULLIF(ip_region, ''), 'Unknown')
+      ORDER BY event_count DESC, ip_country ASC, ip_region ASC
+      LIMIT 100
     `);
 
     const [recentRows] = await db.query(
@@ -134,6 +150,11 @@ router.get('/logs', async (req, res) => {
         instanceCount: toNumber(row.instance_count),
         lastSubmitAt: row.last_submit_at,
       })),
+      geoBreakdown: geoRows.map((row) => ({
+        country: cleanBucketLabel(row.ip_country),
+        region: cleanBucketLabel(row.ip_region),
+        count: toNumber(row.event_count),
+      })),
       recent: recentRows.map((row) => ({
         id: Number(row.id),
         eventType: row.event_type,
@@ -149,6 +170,8 @@ router.get('/logs', async (req, res) => {
         activityInstanceId: row.activity_instance_id ? Number(row.activity_instance_id) : null,
         requestPath: row.request_path || null,
         ipAddress: row.ip_address || null,
+        ipCountry: row.ip_country || null,
+        ipRegion: row.ip_region || null,
         userAgent: row.user_agent || null,
         details: parseDetails(row.details),
         activityTitle: row.activity_title || row.activity_name || null,

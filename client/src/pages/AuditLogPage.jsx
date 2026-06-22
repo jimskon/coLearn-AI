@@ -47,6 +47,23 @@ function detailsSummary(details) {
   }
 }
 
+function csvCell(value) {
+  const text = String(value ?? '');
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function downloadTextFile(filename, text) {
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export default function AuditLogPage() {
   const { user, loading } = useUser();
   const navigate = useNavigate();
@@ -56,8 +73,18 @@ export default function AuditLogPage() {
     summary: {},
     byEventType: [],
     submitsByActivity: [],
+    geoBreakdown: [],
     recent: [],
   });
+
+  const exportOriginCsv = React.useCallback(() => {
+    const rows = [['country', 'region', 'count']];
+    data.geoBreakdown.forEach((row) => {
+      rows.push([row.country, row.region, row.count]);
+    });
+    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\n');
+    downloadTextFile('audit-origin-breakdown.csv', csv);
+  }, [data.geoBreakdown]);
 
   React.useEffect(() => {
     if (loading) return;
@@ -83,6 +110,7 @@ export default function AuditLogPage() {
             summary: json.summary || {},
             byEventType: Array.isArray(json.byEventType) ? json.byEventType : [],
             submitsByActivity: Array.isArray(json.submitsByActivity) ? json.submitsByActivity : [],
+            geoBreakdown: Array.isArray(json.geoBreakdown) ? json.geoBreakdown : [],
             recent: Array.isArray(json.recent) ? json.recent : [],
           });
         }
@@ -207,6 +235,44 @@ export default function AuditLogPage() {
         </Col>
       </Row>
 
+      <Card className="mb-4">
+        <Card.Header className="fw-semibold d-flex align-items-center justify-content-between gap-2 flex-wrap">
+          <span>Origin Breakdown</span>
+          <Button
+            size="sm"
+            variant="outline-secondary"
+            onClick={exportOriginCsv}
+            disabled={!data.geoBreakdown.length}
+          >
+            Export CSV
+          </Button>
+        </Card.Header>
+        <Card.Body className="p-0">
+          <Table striped hover responsive className="mb-0">
+            <thead>
+              <tr>
+                <th>Country</th>
+                <th>State / Region</th>
+                <th className="text-end">Events</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.geoBreakdown.length ? data.geoBreakdown.map((row) => (
+                <tr key={`${row.country}-${row.region}`}>
+                  <td>{row.country}</td>
+                  <td>{row.region}</td>
+                  <td className="text-end">{row.count}</td>
+                </tr>
+              )) : (
+                <tr>
+                  <td colSpan={3} className="text-center text-muted py-4">No origin data yet.</td>
+                </tr>
+              )}
+            </tbody>
+          </Table>
+        </Card.Body>
+      </Card>
+
       <Card>
         <Card.Header className="fw-semibold">Recent Events</Card.Header>
         <Card.Body className="p-0">
@@ -219,6 +285,7 @@ export default function AuditLogPage() {
                 <th>Scope</th>
                 <th>Path</th>
                 <th>IP</th>
+                <th>Origin</th>
                 <th>Details</th>
               </tr>
             </thead>
@@ -236,11 +303,12 @@ export default function AuditLogPage() {
                   <td>{formatScope(row)}</td>
                   <td style={{ maxWidth: 180, wordBreak: 'break-word' }}>{row.requestPath || '—'}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>{row.ipAddress || '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{row.ipCountry || row.ipRegion ? `${row.ipCountry || 'Unknown'} / ${row.ipRegion || 'Unknown'}` : '—'}</td>
                   <td style={{ maxWidth: 280, wordBreak: 'break-word' }}>{detailsSummary(row.details)}</td>
                 </tr>
               )) : (
                 <tr>
-                  <td colSpan={7} className="text-center text-muted py-4">No recent audit events yet.</td>
+                  <td colSpan={8} className="text-center text-muted py-4">No recent audit events yet.</td>
                 </tr>
               )}
             </tbody>

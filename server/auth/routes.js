@@ -68,6 +68,10 @@ function normalizeDemoGuestName(rawName) {
   return cleaned || null;
 }
 
+function normalizeDemoCode(rawCode) {
+  return String(rawCode || '').trim().toLowerCase();
+}
+
 async function createGuestDemoUser(conn, demoCode, requestedName = '', role = 'student') {
   const [result] = await conn.query(
     'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
@@ -94,15 +98,16 @@ async function createGuestDemoUser(conn, demoCode, requestedName = '', role = 's
 }
 
 async function findDemoCourseForCode(conn, demoCode) {
+  const normalizedDemoCode = normalizeDemoCode(demoCode);
   const [courses] = await conn.query(
     `SELECT c.id, c.name, c.code, pc.id AS class_id, pc.name AS class_name
        FROM courses c
        JOIN pogil_classes pc ON pc.id = c.class_id
-      WHERE c.code = ?
+      WHERE LOWER(TRIM(c.code)) = ?
         AND pc.demo_mode = 1
-      ORDER BY c.id ASC
+      ORDER BY COALESCE(c.year, 0) DESC, c.id DESC
       LIMIT 1`,
-    [demoCode]
+    [normalizedDemoCode]
   );
 
   return courses[0] || null;
@@ -265,7 +270,7 @@ router.post('/login', async (req, res) => {
 });
 
 router.post('/demo/student', async (req, res) => {
-  const demoCode = String(req.body?.demoCode || '').trim();
+  const demoCode = normalizeDemoCode(req.body?.demoCode);
   const guestName = String(req.body?.guestName || '');
   if (!demoCode) {
     return res.status(400).json({ error: 'Missing demoCode' });
@@ -321,7 +326,7 @@ router.post('/demo/student', async (req, res) => {
 });
 
 router.post('/demo/creator', async (req, res) => {
-  const demoCode = String(req.body?.demoCode || '').trim();
+  const demoCode = normalizeDemoCode(req.body?.demoCode);
   const guestName = String(req.body?.guestName || '');
   if (!demoCode) {
     return res.status(400).json({ error: 'Missing demoCode' });
@@ -377,7 +382,7 @@ router.post('/demo/creator', async (req, res) => {
 });
 
 router.post('/demo/instructor', async (req, res) => {
-  const demoCode = String(req.body?.demoCode || '').trim();
+  const demoCode = normalizeDemoCode(req.body?.demoCode);
   const guestName = String(req.body?.guestName || '');
   if (!demoCode) {
     return res.status(400).json({ error: 'Missing demoCode' });

@@ -1,6 +1,6 @@
 // src/routes/App.jsx
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useParams } from 'react-router-dom';
 import LoginPage from '../pages/LoginPage';
 import RegisterPage from '../pages/RegisterPage';
 import DashboardPage from '../pages/DashboardPage';
@@ -26,11 +26,14 @@ import ManageCourseTestsPage from '../pages/ManageCourseTestsPage'; // 👈 NEW
 import DemoLandingPage from '../pages/DemoLandingPage';
 import DemoPathPage from '../pages/DemoPathPage';
 import DemoInfoRequestsAdminPage from '../pages/DemoInfoRequestsAdminPage';
-import { useLocation } from 'react-router-dom';
 import ViewTestsPage from '../pages/ViewTestsPage';
 import TestSetupPage from '../pages/TestSetupPage';
 
-
+function DemoShortcutRedirect({ to }) {
+  const { demoPath = '' } = useParams();
+  const target = to || `/demo/aied2026/${encodeURIComponent(demoPath)}`;
+  return <Navigate to={target} replace />;
+}
 
 function AppRoutes() {
   const { user } = useUser();
@@ -55,12 +58,12 @@ function AppRoutes() {
 
       <Routes>
         <Route path="/" element={<LoginPage />} />
-        <Route path="/aied2026" element={<DemoLandingPage defaultDemoCode="aied2026" />} />
-        <Route path="/aied2026/:demoPath" element={<DemoPathPage defaultDemoCode="aied2026" />} />
-        <Route path="/aied2026/admin/info-requests" element={<DemoInfoRequestsAdminPage defaultDemoCode="aied2026" />} />
+        <Route path="/aied2026" element={<DemoShortcutRedirect to="/demo/aied2026" />} />
+        <Route path="/aied2026/admin/info-requests" element={<DemoShortcutRedirect to="/demo/aied2026/admin/info-requests" />} />
+        <Route path="/aied2026/:demoPath" element={<DemoShortcutRedirect />} />
         <Route path="/demo/:demoCode" element={<DemoLandingPage />} />
-        <Route path="/demo/:demoCode/:demoPath" element={<DemoPathPage />} />
         <Route path="/demo/:demoCode/admin/info-requests" element={<DemoInfoRequestsAdminPage />} />
+        <Route path="/demo/:demoCode/:demoPath" element={<DemoPathPage />} />
         <Route path="/register" element={<RegisterPage />} />
         <Route path="/dashboard" element={<DashboardPage user={user} />} />
         <Route path="/manage-classes" element={<ManageClassesPage />} />

@@ -282,6 +282,51 @@ test('demo student login creates a guest session and enrolls the guest in a demo
   assert.equal(enrollments.length, 1);
 });
 
+test('demo student login prefers the newest matching demo course for reused join codes', async () => {
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
+  `);
+
+  const demoCode = `REUSE${String(Date.now()).slice(-4)}${Math.random().toString(16).slice(2, 6)}`;
+  const [oldClassResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
+     VALUES (?, ?, 1, NULL)`,
+    [`Old Demo Class ${Date.now()}`, 'Old demo-only class']
+  );
+  const oldClassId = rememberId('classes', oldClassResult.insertId);
+
+  const [oldCourseResult] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    ['AIED 2025 Demo Instance', demoCode.toUpperCase(), 'OLD', 'summer', 2025, oldClassId]
+  );
+  rememberId('courses', oldCourseResult.insertId);
+
+  const [newClassResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
+     VALUES (?, ?, 1, NULL)`,
+    [`New Demo Class ${Date.now()}`, 'New demo-only class']
+  );
+  const newClassId = rememberId('classes', newClassResult.insertId);
+
+  const [newCourseResult] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    ['AIED 2026 Demo Instance', demoCode.toUpperCase(), 'NEW', 'summer', 2026, newClassId]
+  );
+  const newCourseId = rememberId('courses', newCourseResult.insertId);
+
+  const response = await requestJson('/api/auth/demo/student', {
+    body: { demoCode: ` ${demoCode.toLowerCase()} ` },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.course.id, newCourseId);
+  assert.equal(response.body.course.name, 'AIED 2026 Demo Instance');
+  rememberId('users', response.body.user.id);
+});
+
 test('demo student login uses the provided guest name as the display name', async () => {
   await db.query(`
     ALTER TABLE pogil_classes

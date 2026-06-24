@@ -20,6 +20,8 @@ const created = {
   users: new Set(),
   classes: new Set(),
   courses: new Set(),
+  activities: new Set(),
+  instances: new Set(),
 };
 
 function rememberEmail(email) {
@@ -32,7 +34,16 @@ async function cleanupCreatedRows() {
   const userIds = [...created.users];
   const courseIds = [...created.courses];
   const classIds = [...created.classes];
+  const activityIds = [...created.activities];
+  const instanceIds = [...created.instances];
 
+  if (instanceIds.length) {
+    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]).catch(() => {});
+    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]).catch(() => {});
+  }
+  if (activityIds.length) {
+    await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]).catch(() => {});
+  }
   if (courseIds.length) {
     await db.query(`DELETE FROM course_enrollments WHERE course_id IN (?)`, [courseIds]).catch(() => {});
     await db.query(`DELETE FROM courses WHERE id IN (?)`, [courseIds]).catch(() => {});
@@ -53,6 +64,40 @@ function rememberId(kind, id) {
   const numericId = Number(id);
   if (Number.isFinite(numericId)) created[kind].add(numericId);
   return numericId;
+}
+
+async function createActivity({ classId, createdBy = null, isTest = 0 } = {}) {
+  const [result] = await db.query(
+    `INSERT INTO pogil_activities (name, title, sheet_url, class_id, order_index, created_by, is_test)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      `auth-demo-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      `Auth Demo Activity ${Date.now()}`,
+      'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit',
+      classId,
+      1,
+      createdBy,
+      isTest ? 1 : 0,
+    ]
+  );
+  return rememberId('activities', result.insertId);
+}
+
+async function createInstance({ activityId, courseId, groupNumber = 1 }) {
+  const [result] = await db.query(
+    `INSERT INTO activity_instances (activity_id, course_id, status, group_number, active_student_id)
+     VALUES (?, ?, 'in_progress', ?, NULL)`,
+    [activityId, courseId, groupNumber]
+  );
+  return rememberId('instances', result.insertId);
+}
+
+async function addGroupMember({ instanceId, studentId, lastHeartbeat }) {
+  await db.query(
+    `INSERT INTO group_members (activity_instance_id, student_id, role, connected, last_heartbeat)
+     VALUES (?, ?, ?, ?, ?)`,
+    [instanceId, studentId, null, 1, lastHeartbeat]
+  );
 }
 
 function createTestServer() {
@@ -272,6 +317,7 @@ test('demo student login creates a guest session and enrolls the guest in a demo
   assert.match(response.body.user.name, /^Guest \d+$/);
   assert.equal(response.body.course.id, courseId);
   assert.equal(response.body.course.code, demoCode);
+  assert.equal(response.body.joinableSession, null);
   assert.match(response.headers.get('set-cookie') || '', /connect\.sid=/);
   rememberId('users', response.body.user.id);
 
@@ -282,7 +328,7 @@ test('demo student login creates a guest session and enrolls the guest in a demo
   assert.equal(enrollments.length, 1);
 });
 
-test('demo student login prefers the newest matching demo course for reused join codes', async () => {
+test('demo student login prefers the newest matching demo course when codes overlap', async () => {
   await db.query(`
     ALTER TABLE pogil_classes
       ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
@@ -301,7 +347,7 @@ test('demo student login prefers the newest matching demo course for reused join
      VALUES (?, ?, ?, ?, ?, NULL, ?)`,
     ['AIED 2025 Demo Instance', demoCode.toUpperCase(), 'OLD', 'summer', 2025, oldClassId]
   );
-  rememberId('courses', oldCourseResult.insertId);
+  const oldCourseId = rememberId('courses', oldCourseResult.insertId);
 
   const [newClassResult] = await db.query(
     `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
@@ -324,6 +370,8 @@ test('demo student login prefers the newest matching demo course for reused join
   assert.equal(response.status, 201);
   assert.equal(response.body.course.id, newCourseId);
   assert.equal(response.body.course.name, 'AIED 2026 Demo Instance');
+  assert.equal(response.body.course.code, demoCode.toUpperCase());
+  assert.notEqual(response.body.course.id, oldCourseId);
   rememberId('users', response.body.user.id);
 });
 
@@ -364,6 +412,57 @@ test('demo student login uses the provided guest name as the display name', asyn
     [response.body.user.id]
   );
   assert.equal(rows[0].name, 'Ada Lovelace');
+});
+
+test('demo student context reports a joinable live session when an active group exists', async () => {
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
+  `);
+
+  const className = `Context Demo Class ${Date.now()}`;
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
+     VALUES (?, ?, 1, NULL)`,
+    [className, 'Demo-only class']
+  );
+  const classId = rememberId('classes', classResult.insertId);
+
+  const demoCode = `CTX${String(Date.now()).slice(-4)}`;
+  const [courseResult] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    ['Context Demo Instance', demoCode, 'DEMO', 'summer', 2026, classId]
+  );
+  const courseId = rememberId('courses', courseResult.insertId);
+
+  const activityId = await createActivity({ classId });
+  const instanceId = await createInstance({ activityId, courseId });
+
+  const [studentResult] = await db.query(
+    `INSERT INTO users (name, email, password_hash, role)
+     VALUES (?, ?, ?, ?)`,
+    ['Context Student', uniqueEmail('context-student'), 'not-used', 'student']
+  );
+  const studentId = rememberId('users', studentResult.insertId);
+
+  await addGroupMember({
+    instanceId,
+    studentId,
+    lastHeartbeat: new Date().toISOString().slice(0, 19).replace('T', ' '),
+  });
+
+  const response = await requestJson(`/api/auth/demo/student/context/${demoCode}`, {
+    method: 'GET',
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.course.id, courseId);
+  assert.equal(response.body.course.code, demoCode);
+  assert.equal(response.body.joinableSession.activityId, activityId);
+  assert.equal(response.body.joinableSession.courseId, courseId);
+  assert.equal(response.body.joinableSession.groupNumber, 1);
+  assert.equal(response.body.joinableSession.activeMembers, 1);
 });
 
 test('login session can be read by whoami and cleared by logout', async () => {

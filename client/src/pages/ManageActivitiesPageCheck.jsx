@@ -154,7 +154,7 @@ export default function ManageActivitiesPage() {
 
   return (
     <Container>
-      <h2 className="mb-4">Manage POGIL Activities for Class {classId}</h2>
+      <h2 className="mb-4">Manage Activities for Class {classId}</h2>
 
       <Form className="mb-4">
         <h4>Add New Activity</h4>

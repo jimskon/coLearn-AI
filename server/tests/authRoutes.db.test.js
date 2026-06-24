@@ -334,37 +334,45 @@ test('demo student login prefers the newest matching demo course when codes over
       ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
   `);
 
-  const className = `Newest Demo Class ${Date.now()}`;
-  const [classResult] = await db.query(
+  const demoCode = `REUSE${String(Date.now()).slice(-4)}${Math.random().toString(16).slice(2, 6)}`;
+  const [oldClassResult] = await db.query(
     `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
      VALUES (?, ?, 1, NULL)`,
-    [className, 'Demo-only class']
+    [`Old Demo Class ${Date.now()}`, 'Old demo-only class']
   );
-  const classId = rememberId('classes', classResult.insertId);
+  const oldClassId = rememberId('classes', oldClassResult.insertId);
 
-  const demoCode = `NEW${String(Date.now()).slice(-4)}`;
-  const [olderCourseResult] = await db.query(
+  const [oldCourseResult] = await db.query(
     `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
      VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    ['Older Demo Instance', demoCode, 'A', 'summer', 2025, classId]
+    ['AIED 2025 Demo Instance', demoCode.toUpperCase(), 'OLD', 'summer', 2025, oldClassId]
   );
-  const olderCourseId = rememberId('courses', olderCourseResult.insertId);
+  rememberId('courses', oldCourseResult.insertId);
 
-  const [newerCourseResult] = await db.query(
+  const [newClassResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
+     VALUES (?, ?, 1, NULL)`,
+    [`New Demo Class ${Date.now()}`, 'New demo-only class']
+  );
+  const newClassId = rememberId('classes', newClassResult.insertId);
+
+  const [newCourseResult] = await db.query(
     `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
      VALUES (?, ?, ?, ?, ?, NULL, ?)`,
-    ['Newer Demo Instance', demoCode, 'B', 'summer', 2026, classId]
+    ['AIED 2026 Demo Instance', demoCode.toUpperCase(), 'NEW', 'summer', 2026, newClassId]
   );
-  const newerCourseId = rememberId('courses', newerCourseResult.insertId);
+  const newCourseId = rememberId('courses', newCourseResult.insertId);
 
   const response = await requestJson('/api/auth/demo/student', {
-    body: { demoCode },
+    body: { demoCode: ` ${demoCode.toLowerCase()} ` },
   });
 
   assert.equal(response.status, 201);
-  assert.equal(response.body.course.code, demoCode);
-  assert.equal(response.body.course.id, newerCourseId);
-  assert.notEqual(response.body.course.id, olderCourseId);
+  assert.equal(response.body.course.id, newCourseId);
+  assert.equal(response.body.course.name, 'AIED 2026 Demo Instance');
+  assert.equal(response.body.course.code, demoCode.toUpperCase());
+  assert.notEqual(response.body.course.id, oldCourseId);
+  rememberId('users', response.body.user.id);
 });
 
 test('demo student login uses the provided guest name as the display name', async () => {

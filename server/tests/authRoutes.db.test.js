@@ -317,6 +317,7 @@ test('demo student login creates a guest session and enrolls the guest in a demo
   assert.match(response.body.user.name, /^Guest \d+$/);
   assert.equal(response.body.course.id, courseId);
   assert.equal(response.body.course.code, demoCode);
+  assert.equal(response.body.joinableSession, null);
   assert.match(response.headers.get('set-cookie') || '', /connect\.sid=/);
   rememberId('users', response.body.user.id);
 

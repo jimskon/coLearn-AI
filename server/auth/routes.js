@@ -374,6 +374,8 @@ router.post('/demo/student', async (req, res) => {
 
       const guest = await createGuestDemoUser(conn, demoCode, guestName, 'student');
 
+      const joinableSession = await findJoinableDemoSession(conn, course.id);
+
       await conn.query(
         `INSERT INTO course_enrollments (student_id, course_id) VALUES (?, ?)`,
         [guest.id, course.id]
@@ -395,6 +397,7 @@ router.post('/demo/student', async (req, res) => {
           name: course.name,
           code: course.code,
         },
+        joinableSession,
       });
     } catch (err) {
       await conn.rollback();

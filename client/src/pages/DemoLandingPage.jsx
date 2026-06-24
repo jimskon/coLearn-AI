@@ -52,7 +52,6 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const { demoCode: routeDemoCode = '' } = useParams();
   const demoCode = routeDemoCode || defaultDemoCode;
   const { setUser } = useUser();
-  const [entryProbeBusy, setEntryProbeBusy] = React.useState(false);
   const [studentBusy, setStudentBusy] = React.useState(false);
   const [studentError, setStudentError] = React.useState('');
   const [guestName, setGuestName] = React.useState('');
@@ -60,28 +59,14 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const [joinPrompt, setJoinPrompt] = React.useState({
     show: false,
     session: null,
+    course: null,
+    studentId: null,
   });
   const [joinChoiceBusy, setJoinChoiceBusy] = React.useState(false);
 
   const entryMode = normalizeEntryMode(new URLSearchParams(location.search).get('entry'));
 
-  const fetchStudentEntryContext = async () => {
-    const res = await fetch(
-      `${API_BASE_URL}/api/auth/demo/student/context/${encodeURIComponent(demoCode)}`,
-      {
-        credentials: 'include',
-      }
-    );
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data?.error || 'Unable to check the live demo session');
-    }
-
-    return data;
-  };
-
-  const startStudentDemo = async ({ joinSession = null, mode = 'solo' } = {}) => {
+  const startStudentDemo = async () => {
     setStudentBusy(true);
     setStudentError('');
 
@@ -100,95 +85,110 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
 
       localStorage.setItem('user', JSON.stringify(data.user));
       setUser(data.user);
-
-      if (mode === 'group' && joinSession?.activityId && joinSession?.courseId) {
-        const joinRes = await fetch(
-          `${API_BASE_URL}/api/groups/${joinSession.activityId}/${joinSession.courseId}/smart-add`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'include',
-            body: JSON.stringify({ studentId: data.user.id }),
-          }
-        );
-
-        const joinData = await joinRes.json().catch(() => ({}));
-        if (joinRes.ok && joinData?.activityInstanceId) {
-          navigate(`/run/${joinData.activityInstanceId}`, {
-            state: { courseName: data.course.name },
-          });
-          return;
-        }
-
-        console.warn('Could not join the active demo group, falling back to the solo path.', joinData);
-      }
-
-      navigate(`/courses/${data.course.id}/activities`, {
-        state: { courseName: data.course.name },
-      });
+      return data;
     } catch (err) {
       setStudentError(err?.message || 'Failed to start student demo');
+      return null;
     } finally {
       setStudentBusy(false);
       setJoinChoiceBusy(false);
     }
   };
 
+  const joinActiveGroup = async ({ studentId, joinSession, courseName }) => {
+    if (!studentId || !joinSession?.activityId || !joinSession?.courseId) return false;
+
+    const joinRes = await fetch(
+      `${API_BASE_URL}/api/groups/${joinSession.activityId}/${joinSession.courseId}/smart-add`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ studentId }),
+      }
+    );
+
+    const joinData = await joinRes.json().catch(() => ({}));
+    if (!joinRes.ok || !joinData?.activityInstanceId) {
+      console.warn('Could not join the active demo group, falling back to the solo path.', joinData);
+      return false;
+    }
+
+    navigate(`/run/${joinData.activityInstanceId}`, {
+      state: { courseName },
+    });
+    return true;
+  };
+
+  const navigateToCourseActivities = (course) => {
+    if (!course?.id) return;
+    navigate(`/courses/${course.id}/activities`, {
+      state: { courseName: course.name },
+    });
+  };
+
   const handleStudentDemo = async () => {
+    const data = await startStudentDemo();
+    if (!data) return;
+
     if (entryMode === 'solo') {
-      await startStudentDemo({ mode: 'solo' });
+      navigateToCourseActivities(data.course);
       return;
     }
 
-    if (entryMode === 'group') {
-      setEntryProbeBusy(true);
-      try {
-        const context = await fetchStudentEntryContext();
-        if (context?.joinableSession) {
-          await startStudentDemo({ mode: 'group', joinSession: context.joinableSession });
-          return;
-        }
-      } catch (err) {
-        console.warn('Live demo context check failed; opening the solo demo.', err);
-      } finally {
-        setEntryProbeBusy(false);
+    if (entryMode === 'group' && data.joinableSession) {
+      const joined = await joinActiveGroup({
+        studentId: data.user.id,
+        joinSession: data.joinableSession,
+        courseName: data.course.name,
+      });
+      if (!joined) {
+        navigateToCourseActivities(data.course);
       }
-
-      await startStudentDemo({ mode: 'solo' });
       return;
     }
 
-    setEntryProbeBusy(true);
-    setStudentError('');
-    try {
-      const context = await fetchStudentEntryContext();
-      if (context?.joinableSession) {
-        setJoinPrompt({
-          show: true,
-          session: context.joinableSession,
-        });
-        return;
-      }
-
-      await startStudentDemo({ mode: 'solo' });
-    } catch (err) {
-      console.warn('Live demo context check failed; opening the solo demo.', err);
-      await startStudentDemo({ mode: 'solo' });
-    } finally {
-      setEntryProbeBusy(false);
+    if (data.joinableSession) {
+      setJoinPrompt({
+        show: true,
+        session: data.joinableSession,
+        course: data.course,
+        studentId: data.user.id,
+      });
+      return;
     }
+
+    navigateToCourseActivities(data.course);
   };
 
   const handleJoinSolo = async () => {
-    setJoinPrompt({ show: false, session: null });
-    await startStudentDemo({ mode: 'solo' });
+    const course = joinPrompt.course;
+    setJoinPrompt({ show: false, session: null, course: null, studentId: null });
+    navigateToCourseActivities(course);
   };
 
   const handleJoinGroup = async () => {
-    if (!joinPrompt.session) return;
+    if (!joinPrompt.session || !joinPrompt.studentId) return;
+    const session = joinPrompt.session;
+    const course = joinPrompt.course;
+    const studentId = joinPrompt.studentId;
     setJoinChoiceBusy(true);
-    await startStudentDemo({ mode: 'group', joinSession: joinPrompt.session });
-    setJoinPrompt({ show: false, session: null });
+    setJoinPrompt({ show: false, session: null, course: null, studentId: null });
+    try {
+      const joined = await joinActiveGroup({
+        studentId,
+        joinSession: session,
+        courseName: course?.name,
+      });
+      if (!joined) {
+        navigateToCourseActivities(course);
+      }
+    } catch (err) {
+      console.warn('Joining the live demo session failed; continuing to the solo path.', err);
+      navigateToCourseActivities(course);
+    } finally {
+      setJoinChoiceBusy(false);
+    }
   };
 
   const handleCreatorDemo = () => {
@@ -285,12 +285,10 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                                     ? handleInstructorDemo()
                                     : setShowInfoRequestModal(true)
                             )}
-                            disabled={studentBusy || (option.key === 'student' && entryProbeBusy)}
+                            disabled={studentBusy}
                           >
                             <div className="fw-semibold">
-                              {entryProbeBusy && option.key === 'student'
-                                ? 'Checking demo session...'
-                                : studentBusy && option.key === 'student'
+                              {studentBusy && option.key === 'student'
                                   ? 'Starting Student Demo...'
                                   : option.label}
                             </div>
@@ -339,7 +337,7 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
         centered
         backdrop="static"
         keyboard={false}
-        onHide={() => setJoinPrompt({ show: false, session: null })}
+        onHide={() => setJoinPrompt({ show: false, session: null, course: null, studentId: null })}
       >
         <Modal.Header>
           <Modal.Title>How are you joining?</Modal.Title>

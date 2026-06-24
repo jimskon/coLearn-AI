@@ -20,6 +20,9 @@ const DEV_PASSWORDLESS_LOGIN =
 console.log('[auth] DEV_AUTO_VERIFY =', DEV_AUTO_VERIFY);
 console.log('[auth] DEV_PASSWORDLESS_LOGIN =', DEV_PASSWORDLESS_LOGIN, 'raw =', process.env.AUTH_DEV_PASSWORDLESS_LOGIN);
 
+const DEMO_ACTIVE_WINDOW_MINUTES = 2;
+const DEMO_GROUP_MAX_SIZE = 2;
+
 
 const HAVE_MAIL_CREDS = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
 
@@ -107,6 +110,91 @@ async function findDemoCourseForCode(conn, demoCode) {
 
   return courses[0] || null;
 }
+
+async function findJoinableDemoSession(conn, courseId) {
+  const [rows] = await conn.query(
+    `
+    SELECT
+      ai.id AS instance_id,
+      ai.activity_id,
+      ai.group_number,
+      c.id AS course_id,
+      c.name AS course_name,
+      a.title AS activity_title,
+      COUNT(gm.id) AS group_size,
+      SUM(
+        CASE
+          WHEN gm.last_heartbeat IS NOT NULL
+           AND gm.last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+          THEN 1 ELSE 0
+        END
+      ) AS active_members,
+      MAX(gm.last_heartbeat) AS last_heartbeat
+    FROM activity_instances ai
+    JOIN group_members gm ON gm.activity_instance_id = ai.id
+    JOIN courses c ON c.id = ai.course_id
+    LEFT JOIN pogil_activities a ON a.id = ai.activity_id
+    WHERE ai.course_id = ?
+      AND ai.status = 'in_progress'
+    GROUP BY ai.id, ai.activity_id, ai.group_number, c.id, c.name, a.title
+    HAVING active_members > 0
+       AND active_members < ?
+    ORDER BY active_members ASC, ai.group_number ASC, last_heartbeat DESC, ai.id ASC
+    LIMIT 1
+    `,
+    [DEMO_ACTIVE_WINDOW_MINUTES, courseId, DEMO_GROUP_MAX_SIZE]
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+
+  return {
+    instanceId: Number(row.instance_id),
+    activityId: Number(row.activity_id),
+    activityTitle: row.activity_title || '',
+    courseId: Number(row.course_id),
+    courseName: row.course_name || '',
+    groupNumber: Number(row.group_number) || null,
+    groupSize: Number(row.group_size) || 0,
+    activeMembers: Number(row.active_members) || 0,
+    lastHeartbeat: row.last_heartbeat || null,
+  };
+}
+
+router.get('/demo/student/context/:demoCode', async (req, res) => {
+  const demoCode = normalizeDemoCode(req.params.demoCode);
+  if (!demoCode) {
+    return res.status(400).json({ error: 'Missing demoCode' });
+  }
+
+  try {
+    await ensureDemoModeSchema();
+    const conn = await pool.getConnection();
+    try {
+      const course = await findDemoCourseForCode(conn, demoCode);
+      if (!course) {
+        return res.status(404).json({ error: 'Demo not found for that code' });
+      }
+
+      const joinableSession = await findJoinableDemoSession(conn, course.id);
+
+      return res.json({
+        demoCode,
+        course: {
+          id: Number(course.id),
+          name: course.name,
+          code: course.code,
+        },
+        joinableSession,
+      });
+    } finally {
+      conn.release();
+    }
+  } catch (err) {
+    console.error('Demo student context error:', err);
+    return res.status(500).json({ error: 'Failed to inspect demo session' });
+  }
+});
 
 // ===================== REGISTER =====================
 // POST /auth/register

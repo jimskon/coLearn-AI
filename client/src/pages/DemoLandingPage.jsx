@@ -1,6 +1,6 @@
 import React from 'react';
-import { Button, Card, Col, Container, Form, Row } from 'react-bootstrap';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Button, Card, Col, Container, Form, Modal, Row } from 'react-bootstrap';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
 import DemoInfoRequestModal from '../components/demo/DemoInfoRequestModal';
@@ -40,19 +40,51 @@ const valueProps = [
   'Easy instructor demonstration for modeling an activity before class use.',
 ];
 
+function normalizeEntryMode(rawValue) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  if (value === 'solo' || value === 'group') return value;
+  return '';
+}
+
 export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { demoCode: routeDemoCode = '' } = useParams();
   const demoCode = routeDemoCode || defaultDemoCode;
   const { setUser } = useUser();
+  const [entryProbeBusy, setEntryProbeBusy] = React.useState(false);
   const [studentBusy, setStudentBusy] = React.useState(false);
   const [studentError, setStudentError] = React.useState('');
   const [guestName, setGuestName] = React.useState('');
   const [showInfoRequestModal, setShowInfoRequestModal] = React.useState(false);
+  const [joinPrompt, setJoinPrompt] = React.useState({
+    show: false,
+    session: null,
+  });
+  const [joinChoiceBusy, setJoinChoiceBusy] = React.useState(false);
 
-  const handleStudentDemo = async () => {
+  const entryMode = normalizeEntryMode(new URLSearchParams(location.search).get('entry'));
+
+  const fetchStudentEntryContext = async () => {
+    const res = await fetch(
+      `${API_BASE_URL}/api/auth/demo/student/context/${encodeURIComponent(demoCode)}`,
+      {
+        credentials: 'include',
+      }
+    );
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error || 'Unable to check the live demo session');
+    }
+
+    return data;
+  };
+
+  const startStudentDemo = async ({ joinSession = null, mode = 'solo' } = {}) => {
     setStudentBusy(true);
     setStudentError('');
+
     try {
       const res = await fetch(`${API_BASE_URL}/api/auth/demo/student`, {
         method: 'POST',
@@ -68,6 +100,29 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
 
       localStorage.setItem('user', JSON.stringify(data.user));
       setUser(data.user);
+
+      if (mode === 'group' && joinSession?.activityId && joinSession?.courseId) {
+        const joinRes = await fetch(
+          `${API_BASE_URL}/api/groups/${joinSession.activityId}/${joinSession.courseId}/smart-add`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ studentId: data.user.id }),
+          }
+        );
+
+        const joinData = await joinRes.json().catch(() => ({}));
+        if (joinRes.ok && joinData?.activityInstanceId) {
+          navigate(`/run/${joinData.activityInstanceId}`, {
+            state: { courseName: data.course.name },
+          });
+          return;
+        }
+
+        console.warn('Could not join the active demo group, falling back to the solo path.', joinData);
+      }
+
       navigate(`/courses/${data.course.id}/activities`, {
         state: { courseName: data.course.name },
       });
@@ -75,7 +130,65 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
       setStudentError(err?.message || 'Failed to start student demo');
     } finally {
       setStudentBusy(false);
+      setJoinChoiceBusy(false);
     }
+  };
+
+  const handleStudentDemo = async () => {
+    if (entryMode === 'solo') {
+      await startStudentDemo({ mode: 'solo' });
+      return;
+    }
+
+    if (entryMode === 'group') {
+      setEntryProbeBusy(true);
+      try {
+        const context = await fetchStudentEntryContext();
+        if (context?.joinableSession) {
+          await startStudentDemo({ mode: 'group', joinSession: context.joinableSession });
+          return;
+        }
+      } catch (err) {
+        console.warn('Live demo context check failed; opening the solo demo.', err);
+      } finally {
+        setEntryProbeBusy(false);
+      }
+
+      await startStudentDemo({ mode: 'solo' });
+      return;
+    }
+
+    setEntryProbeBusy(true);
+    setStudentError('');
+    try {
+      const context = await fetchStudentEntryContext();
+      if (context?.joinableSession) {
+        setJoinPrompt({
+          show: true,
+          session: context.joinableSession,
+        });
+        return;
+      }
+
+      await startStudentDemo({ mode: 'solo' });
+    } catch (err) {
+      console.warn('Live demo context check failed; opening the solo demo.', err);
+      await startStudentDemo({ mode: 'solo' });
+    } finally {
+      setEntryProbeBusy(false);
+    }
+  };
+
+  const handleJoinSolo = async () => {
+    setJoinPrompt({ show: false, session: null });
+    await startStudentDemo({ mode: 'solo' });
+  };
+
+  const handleJoinGroup = async () => {
+    if (!joinPrompt.session) return;
+    setJoinChoiceBusy(true);
+    await startStudentDemo({ mode: 'group', joinSession: joinPrompt.session });
+    setJoinPrompt({ show: false, session: null });
   };
 
   const handleCreatorDemo = () => {
@@ -172,13 +285,13 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                                     ? handleInstructorDemo()
                                     : setShowInfoRequestModal(true)
                             )}
-                            disabled={studentBusy}
+                            disabled={studentBusy || (option.key === 'student' && entryProbeBusy)}
                           >
                             <div className="fw-semibold">
-                              {studentBusy && option.key === 'student'
-                                ? 'Starting Student Demo...'
-                                : studentBusy && option.key === 'creator'
-                                  ? 'Starting Creator Demo...'
+                              {entryProbeBusy && option.key === 'student'
+                                ? 'Checking demo session...'
+                                : studentBusy && option.key === 'student'
+                                  ? 'Starting Student Demo...'
                                   : option.label}
                             </div>
                             <div className="small opacity-75 mt-1">{option.description}</div>
@@ -221,6 +334,50 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
         demoCode={demoCode}
         onHide={() => setShowInfoRequestModal(false)}
       />
+      <Modal
+        show={joinPrompt.show}
+        centered
+        backdrop="static"
+        keyboard={false}
+        onHide={() => setJoinPrompt({ show: false, session: null })}
+      >
+        <Modal.Header>
+          <Modal.Title>How are you joining?</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="mb-3">
+            There is already a live demo session running.
+            {' '}
+            Group mode is recommended only if you are joining the people already in the room.
+          </p>
+          <div className="p-3 rounded-3 border bg-light">
+            <div className="fw-semibold mb-1">
+              {joinPrompt.session?.activityTitle || 'Live demo session'}
+            </div>
+            <div className="text-secondary small">
+              {joinPrompt.session?.activeMembers
+                ? `${joinPrompt.session.activeMembers} active participant${joinPrompt.session.activeMembers === 1 ? '' : 's'} ${joinPrompt.session.activeMembers === 1 ? 'is' : 'are'} already connected.`
+                : 'Someone is already active in this demo.'}
+            </div>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="outline-secondary"
+            onClick={handleJoinSolo}
+            disabled={joinChoiceBusy || studentBusy}
+          >
+            Work solo
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleJoinGroup}
+            disabled={joinChoiceBusy || studentBusy}
+          >
+            Join group
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </div>
   );
 }

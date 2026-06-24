@@ -103,7 +103,7 @@ async function findDemoCourseForCode(conn, demoCode) {
        JOIN pogil_classes pc ON pc.id = c.class_id
       WHERE c.code = ?
         AND pc.demo_mode = 1
-      ORDER BY c.id ASC
+      ORDER BY c.year DESC, c.created_at DESC, c.id DESC
       LIMIT 1`,
     [demoCode]
   );

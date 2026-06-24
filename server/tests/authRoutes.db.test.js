@@ -328,6 +328,45 @@ test('demo student login creates a guest session and enrolls the guest in a demo
   assert.equal(enrollments.length, 1);
 });
 
+test('demo student login prefers the newest matching demo course when codes overlap', async () => {
+  await db.query(`
+    ALTER TABLE pogil_classes
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
+  `);
+
+  const className = `Newest Demo Class ${Date.now()}`;
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, demo_mode, created_by)
+     VALUES (?, ?, 1, NULL)`,
+    [className, 'Demo-only class']
+  );
+  const classId = rememberId('classes', classResult.insertId);
+
+  const demoCode = `NEW${String(Date.now()).slice(-4)}`;
+  const [olderCourseResult] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    ['Older Demo Instance', demoCode, 'A', 'summer', 2025, classId]
+  );
+  const olderCourseId = rememberId('courses', olderCourseResult.insertId);
+
+  const [newerCourseResult] = await db.query(
+    `INSERT INTO courses (name, code, section, semester, year, instructor_id, class_id)
+     VALUES (?, ?, ?, ?, ?, NULL, ?)`,
+    ['Newer Demo Instance', demoCode, 'B', 'summer', 2026, classId]
+  );
+  const newerCourseId = rememberId('courses', newerCourseResult.insertId);
+
+  const response = await requestJson('/api/auth/demo/student', {
+    body: { demoCode },
+  });
+
+  assert.equal(response.status, 201);
+  assert.equal(response.body.course.code, demoCode);
+  assert.equal(response.body.course.id, newerCourseId);
+  assert.notEqual(response.body.course.id, olderCourseId);
+});
+
 test('demo student login uses the provided guest name as the display name', async () => {
   await db.query(`
     ALTER TABLE pogil_classes

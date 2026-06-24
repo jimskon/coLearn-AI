@@ -85,7 +85,7 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
                       Manage Instances
                     </Nav.Link>
                   )}
-                  {(user.role === "root" || user.role === "creator") && (
+                  {(user.role === "root" || user.role === "creator") && !isDemoSession && (
                     <Nav.Link as={Link} to="/manage-classes" className="px-2">
                       Manage Classes
                     </Nav.Link>

@@ -347,7 +347,7 @@ test('demo student login prefers the newest matching demo course when codes over
      VALUES (?, ?, ?, ?, ?, NULL, ?)`,
     ['AIED 2025 Demo Instance', demoCode.toUpperCase(), 'OLD', 'summer', 2025, oldClassId]
   );
-  rememberId('courses', oldCourseResult.insertId);
+  const oldCourseId = rememberId('courses', oldCourseResult.insertId);
 
   const [newClassResult] = await db.query(
     `INSERT INTO pogil_classes (name, description, demo_mode, created_by)

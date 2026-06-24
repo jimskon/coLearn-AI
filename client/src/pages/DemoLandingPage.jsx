@@ -1,6 +1,6 @@
 import React from 'react';
-import { Button, Card, Col, Container, Form, Row } from 'react-bootstrap';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Button, Card, Col, Container, Form, Modal, Row } from 'react-bootstrap';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
 import DemoInfoRequestModal from '../components/demo/DemoInfoRequestModal';
@@ -15,7 +15,7 @@ const demoOptions = [
   {
     key: 'instructor',
     label: 'Try Instructor Demo',
-    variant: 'outline-dark',
+    variant: 'custom-instructor',
     description: 'Preview how instructors see the activity list and student-management screens.',
   },
   {
@@ -40,8 +40,15 @@ const valueProps = [
   'Easy instructor demonstration for modeling an activity before class use.',
 ];
 
+function normalizeEntryMode(rawValue) {
+  const value = String(rawValue || '').trim().toLowerCase();
+  if (value === 'solo' || value === 'group') return value;
+  return '';
+}
+
 export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const { demoCode: routeDemoCode = '' } = useParams();
   const demoCode = routeDemoCode || defaultDemoCode;
   const { setUser } = useUser();
@@ -49,10 +56,20 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
   const [studentError, setStudentError] = React.useState('');
   const [guestName, setGuestName] = React.useState('');
   const [showInfoRequestModal, setShowInfoRequestModal] = React.useState(false);
+  const [joinPrompt, setJoinPrompt] = React.useState({
+    show: false,
+    session: null,
+    course: null,
+    studentId: null,
+  });
+  const [joinChoiceBusy, setJoinChoiceBusy] = React.useState(false);
 
-  const handleStudentDemo = async () => {
+  const entryMode = normalizeEntryMode(new URLSearchParams(location.search).get('entry'));
+
+  const startStudentDemo = async () => {
     setStudentBusy(true);
     setStudentError('');
+
     try {
       const res = await fetch(`${API_BASE_URL}/api/auth/demo/student`, {
         method: 'POST',
@@ -68,13 +85,109 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
 
       localStorage.setItem('user', JSON.stringify(data.user));
       setUser(data.user);
-      navigate(`/courses/${data.course.id}/activities`, {
-        state: { courseName: data.course.name },
-      });
+      return data;
     } catch (err) {
       setStudentError(err?.message || 'Failed to start student demo');
+      return null;
     } finally {
       setStudentBusy(false);
+      setJoinChoiceBusy(false);
+    }
+  };
+
+  const joinActiveGroup = async ({ studentId, joinSession, courseName }) => {
+    if (!studentId || !joinSession?.activityId || !joinSession?.courseId) return false;
+
+    const joinRes = await fetch(
+      `${API_BASE_URL}/api/groups/${joinSession.activityId}/${joinSession.courseId}/smart-add`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ studentId }),
+      }
+    );
+
+    const joinData = await joinRes.json().catch(() => ({}));
+    if (!joinRes.ok || !joinData?.activityInstanceId) {
+      console.warn('Could not join the active demo group, falling back to the solo path.', joinData);
+      return false;
+    }
+
+    navigate(`/run/${joinData.activityInstanceId}`, {
+      state: { courseName },
+    });
+    return true;
+  };
+
+  const navigateToCourseActivities = (course) => {
+    if (!course?.id) return;
+    navigate(`/courses/${course.id}/activities`, {
+      state: { courseName: course.name },
+    });
+  };
+
+  const handleStudentDemo = async () => {
+    const data = await startStudentDemo();
+    if (!data) return;
+
+    if (entryMode === 'solo') {
+      navigateToCourseActivities(data.course);
+      return;
+    }
+
+    if (entryMode === 'group' && data.joinableSession) {
+      const joined = await joinActiveGroup({
+        studentId: data.user.id,
+        joinSession: data.joinableSession,
+        courseName: data.course.name,
+      });
+      if (!joined) {
+        navigateToCourseActivities(data.course);
+      }
+      return;
+    }
+
+    if (data.joinableSession) {
+      setJoinPrompt({
+        show: true,
+        session: data.joinableSession,
+        course: data.course,
+        studentId: data.user.id,
+      });
+      return;
+    }
+
+    navigateToCourseActivities(data.course);
+  };
+
+  const handleJoinSolo = async () => {
+    const course = joinPrompt.course;
+    setJoinPrompt({ show: false, session: null, course: null, studentId: null });
+    navigateToCourseActivities(course);
+  };
+
+  const handleJoinGroup = async () => {
+    if (!joinPrompt.session || !joinPrompt.studentId) return;
+    const session = joinPrompt.session;
+    const course = joinPrompt.course;
+    const studentId = joinPrompt.studentId;
+    setJoinChoiceBusy(true);
+    setJoinPrompt({ show: false, session: null, course: null, studentId: null });
+    try {
+      const joined = await joinActiveGroup({
+        studentId,
+        joinSession: session,
+        courseName: course?.name,
+      });
+      if (!joined) {
+        navigateToCourseActivities(course);
+      }
+    } catch (err) {
+      console.warn('Joining the live demo session failed; continuing to the solo path.', err);
+      navigateToCourseActivities(course);
+    } finally {
+      setJoinChoiceBusy(false);
     }
   };
 
@@ -157,9 +270,12 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                         {demoOptions.map((option) => (
                           <Button
                             key={option.key}
-                            variant={option.variant}
+                            variant={option.variant === 'custom-instructor' ? 'primary' : option.variant}
                             size="lg"
-                            className="text-start py-3 px-4"
+                            className={`text-start py-3 px-4 ${option.variant === 'custom-instructor' ? 'text-white border-0' : ''}`}
+                            style={option.variant === 'custom-instructor'
+                              ? { background: 'linear-gradient(135deg, #1f6f78 0%, #2f8f9b 100%)' }
+                              : undefined}
                             onClick={() => (
                               option.key === 'student'
                                 ? handleStudentDemo()
@@ -173,9 +289,7 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
                           >
                             <div className="fw-semibold">
                               {studentBusy && option.key === 'student'
-                                ? 'Starting Student Demo...'
-                                : studentBusy && option.key === 'creator'
-                                  ? 'Starting Creator Demo...'
+                                  ? 'Starting Student Demo...'
                                   : option.label}
                             </div>
                             <div className="small opacity-75 mt-1">{option.description}</div>
@@ -218,6 +332,50 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
         demoCode={demoCode}
         onHide={() => setShowInfoRequestModal(false)}
       />
+      <Modal
+        show={joinPrompt.show}
+        centered
+        backdrop="static"
+        keyboard={false}
+        onHide={() => setJoinPrompt({ show: false, session: null, course: null, studentId: null })}
+      >
+        <Modal.Header>
+          <Modal.Title>How are you joining?</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="mb-3">
+            There is already a live demo session running.
+            {' '}
+            Group mode is recommended only if you are joining the people already in the room.
+          </p>
+          <div className="p-3 rounded-3 border bg-light">
+            <div className="fw-semibold mb-1">
+              {joinPrompt.session?.activityTitle || 'Live demo session'}
+            </div>
+            <div className="text-secondary small">
+              {joinPrompt.session?.activeMembers
+                ? `${joinPrompt.session.activeMembers} active participant${joinPrompt.session.activeMembers === 1 ? '' : 's'} ${joinPrompt.session.activeMembers === 1 ? 'is' : 'are'} already connected.`
+                : 'Someone is already active in this demo.'}
+            </div>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button
+            variant="outline-secondary"
+            onClick={handleJoinSolo}
+            disabled={joinChoiceBusy || studentBusy}
+          >
+            Work solo
+          </Button>
+          <Button
+            variant="primary"
+            onClick={handleJoinGroup}
+            disabled={joinChoiceBusy || studentBusy}
+          >
+            Join group
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </div>
   );
 }

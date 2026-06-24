@@ -36,7 +36,7 @@ function computeBubblePosition(rect) {
   };
 }
 
-export function useCreatorTutorial() {
+export function useCreatorTutorial({ demoMode = false } = {}) {
   const [phase, setPhase] = useState(() => {
     const pending = sessionStorage.getItem(`${STORAGE_KEY}:pending`);
     if (pending === 'after-generate') {
@@ -44,15 +44,21 @@ export function useCreatorTutorial() {
       return 'after-generate';
     }
 
+    if (demoMode) {
+      return 'setup';
+    }
+
     const completed = localStorage.getItem(STORAGE_KEY) === 'done';
     return completed ? 'off' : 'setup';
   });
 
   const quit = useCallback(() => {
-    localStorage.setItem(STORAGE_KEY, 'done');
+    if (!demoMode) {
+      localStorage.setItem(STORAGE_KEY, 'done');
+    }
     sessionStorage.removeItem(`${STORAGE_KEY}:pending`);
     setPhase('off');
-  }, []);
+  }, [demoMode]);
 
   const finishSetup = useCallback(() => {
     setPhase('setup-done');
@@ -81,6 +87,7 @@ export function useCreatorTutorial() {
 export default function CreatorTutorialOverlay({
   phase,
   refs,
+  demoMode = false,
   onQuit,
   onFinishSetup,
 }) {
@@ -110,6 +117,12 @@ export default function CreatorTutorialOverlay({
 
     if (phase === 'after-generate') {
       return [
+        ...(demoMode ? [{
+          key: 'class-link',
+          targetRef: refs.classLink,
+          title: 'Open the class page',
+          body: 'From the class page, click View Groups to see the active class for this demo.',
+        }] : []),
         {
           key: 'sandbox',
           targetRef: refs.sandbox,
@@ -126,7 +139,7 @@ export default function CreatorTutorialOverlay({
     }
 
     return [];
-  }, [phase, refs]);
+  }, [phase, refs, demoMode]);
 
   const [stepIndex, setStepIndex] = useState(0);
   const [position, setPosition] = useState(() => computeBubblePosition(null));

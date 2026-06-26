@@ -17,6 +17,7 @@ It is designed to be rerunnable and safer than the earlier versions.
 - configures nginx to serve the built client and proxy `/api/`
 - optionally requests a Let’s Encrypt certificate with certbot
 - optionally clones, builds, and starts the C++ runner from git
+- optionally clones, builds, and starts the remote Python runner from the repo copy bundled with the app
 
 ## What it does not do
 

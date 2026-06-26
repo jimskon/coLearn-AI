@@ -24,6 +24,8 @@ ENABLE_CERTBOT="${ENABLE_CERTBOT:-ask}"
 ENABLE_DOCKER="${ENABLE_DOCKER:-1}"
 ENABLE_CXX_RUNNER_PROXY="${ENABLE_CXX_RUNNER_PROXY:-ask}"
 CXX_RUNNER_PORT="${CXX_RUNNER_PORT:-5055}"
+ENABLE_PY_RUNNER_PROXY="${ENABLE_PY_RUNNER_PROXY:-ask}"
+PY_RUNNER_PORT="${PY_RUNNER_PORT:-5056}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 
 MYSQL_AUTH_FILE=""
@@ -35,6 +37,7 @@ SITE_LINK=""
 CERT_FULLCHAIN=""
 CERT_PRIVKEY=""
 ENABLE_CXX_RUNNER_PROXY_FINAL=0
+ENABLE_PY_RUNNER_PROXY_FINAL=0
 
 info() { echo "${LOG_PREFIX} $*"; }
 warn() { echo "${LOG_PREFIX} WARNING: $*" >&2; }
@@ -371,6 +374,17 @@ EOFHTTP
     }
 EOFCXX
   fi
+  if [[ "$ENABLE_PY_RUNNER_PROXY_FINAL" == "1" ]]; then
+    cat >> "$SITE_CONF" <<EOFPY
+    location /py-run/ {
+        proxy_pass http://127.0.0.1:${PY_RUNNER_PORT}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+EOFPY
+  fi
   cat >> "$SITE_CONF" <<EOFFOOT
     location / { try_files \$uri \$uri/ /index.html; }
     client_max_body_size 25m;
@@ -452,6 +466,17 @@ EOFHTTPS
         proxy_set_header Host \$host;
     }
 EOFCXX2
+  fi
+  if [[ "$ENABLE_PY_RUNNER_PROXY_FINAL" == "1" ]]; then
+    cat >> "$SITE_CONF" <<EOFPY2
+    location /py-run/ {
+        proxy_pass http://127.0.0.1:${PY_RUNNER_PORT}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+EOFPY2
   fi
   cat >> "$SITE_CONF" <<EOFFOOT2
     location / { try_files \$uri \$uri/ /index.html; }
@@ -539,6 +564,20 @@ resolve_cxx_proxy_setting() {
   esac
 }
 
+resolve_py_proxy_setting() {
+  case "$ENABLE_PY_RUNNER_PROXY" in
+    1) ENABLE_PY_RUNNER_PROXY_FINAL=1 ;;
+    0) ENABLE_PY_RUNNER_PROXY_FINAL=0 ;;
+    ask)
+      if prompt_yes_no "Configure nginx proxy location for /py-run/?" "y"; then
+        ENABLE_PY_RUNNER_PROXY_FINAL=1
+      else
+        ENABLE_PY_RUNNER_PROXY_FINAL=0
+      fi ;;
+    *) die "ENABLE_PY_RUNNER_PROXY must be ask, 1, or 0" ;;
+  esac
+}
+
 write_stage2_template() {
   local template_file="${APP_DIR}/deploy.conf.template"
   info "Writing stage-2 config template to $template_file"
@@ -568,6 +607,10 @@ CXX_RUNNER_REPO_URL=
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=${CXX_RUNNER_PORT}
+ENABLE_PY_RUNNER=ask
+PY_RUNNER_DIR=/opt/py-runner
+ENABLE_PY_RUNNER_PROXY=${ENABLE_PY_RUNNER_PROXY_FINAL}
+PY_RUNNER_PORT=${PY_RUNNER_PORT}
 EOFCONF
   chown "$APP_USER:$APP_USER" "$template_file"
   chmod 600 "$template_file"
@@ -609,6 +652,16 @@ print_summary() {
   echo "App DB name/user:          ${DB_NAME} / ${DB_USER}"
   echo "App DB password:           ${DB_PASSWORD}"
   echo "MariaDB root auth mode:    ${DB_ROOT_AUTH_MODE}"
+  if [[ "$ENABLE_CXX_RUNNER_PROXY_FINAL" == "1" ]]; then
+    echo "C++ runner proxy:          enabled (${CXX_RUNNER_PORT})"
+  else
+    echo "C++ runner proxy:          disabled"
+  fi
+  if [[ "$ENABLE_PY_RUNNER_PROXY_FINAL" == "1" ]]; then
+    echo "Python runner proxy:       enabled (${PY_RUNNER_PORT})"
+  else
+    echo "Python runner proxy:       disabled"
+  fi
   echo "nginx site config:         ${SITE_CONF}"
   echo "Stage-2 template:          ${APP_DIR}/deploy.conf.template"
   echo "Summary file:              ${APP_DIR}/bootstrap-summary.txt"
@@ -626,6 +679,7 @@ main() {
   maybe_set_mariadb_root_password
   setup_database
   resolve_cxx_proxy_setting
+  resolve_py_proxy_setting
   maybe_install_docker
   install_or_refresh_nginx_config
   maybe_install_cert

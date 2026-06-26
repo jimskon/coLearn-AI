@@ -227,6 +227,9 @@ CXX_RUNNER_REPO_URL=
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+ENABLE_PY_RUNNER=ask
+PY_RUNNER_DIR=/opt/py-runner
+PY_RUNNER_PORT=5056
 ```
 
 ## Example `deploy.conf` for a local firewalled lab server
@@ -260,6 +263,9 @@ CXX_RUNNER_REPO_URL=https://github.com/your-org/cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+ENABLE_PY_RUNNER=1
+PY_RUNNER_DIR=/opt/py-runner
+PY_RUNNER_PORT=5056
 ```
 
 If students browse by IP address, keep the same exact IP in all three places:
@@ -365,6 +371,13 @@ bash /path/to/02_app_deploy.sh /opt/coLearn-AI/deploy.conf
 ```
 
 That updates the repo, reinstalls dependencies if needed, rebuilds the client, refreshes env files, and restarts PM2.
+If `ENABLE_PY_RUNNER=1` is present in `deploy.conf` or you answer yes to the prompt, it also syncs and starts the remote Python runner and adds the `/py-run/` nginx route.
+
+If you just want to turn on the remote Python path on an existing install, use:
+
+```bash
+bash ops/04-enable-remote-python.sh /opt/coLearn-AI/deploy.conf
+```
 
 ---
 

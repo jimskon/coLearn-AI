@@ -34,3 +34,6 @@ CXX_RUNNER_REPO_URL=https://github.com/jimskon/coLearn-AI-cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+ENABLE_PY_RUNNER=ask
+PY_RUNNER_DIR=/opt/py-runner
+PY_RUNNER_PORT=5056

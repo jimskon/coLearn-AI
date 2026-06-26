@@ -63,6 +63,9 @@ CXX_RUNNER_REPO_URL="${CXX_RUNNER_REPO_URL:-}"
 CXX_RUNNER_DIR="${CXX_RUNNER_DIR:-/opt/cxx-runner}"
 CXX_RUNNER_BRANCH="${CXX_RUNNER_BRANCH:-main}"
 CXX_RUNNER_PORT="${CXX_RUNNER_PORT:-5055}"
+ENABLE_PY_RUNNER="${ENABLE_PY_RUNNER:-ask}"           # ask | 1 | 0
+PY_RUNNER_DIR="${PY_RUNNER_DIR:-/opt/py-runner}"
+PY_RUNNER_PORT="${PY_RUNNER_PORT:-5056}"
 
 NONINTERACTIVE="${NONINTERACTIVE:-0}"
 
@@ -667,6 +670,51 @@ setup_cxx_runner() {
   [[ "$started" -eq 1 ]] || die "cxx-runner did not start on port ${CXX_RUNNER_PORT}"
 }
 
+setup_py_runner() {
+  local enable=0
+  case "$ENABLE_PY_RUNNER" in
+    1) enable=1 ;;
+    0) enable=0 ;;
+    ask)
+      if prompt_yes_no "Build and install the py-runner from this repo?" "y"; then
+        enable=1
+      fi
+      ;;
+    *) die "ENABLE_PY_RUNNER must be ask, 1, or 0" ;;
+  esac
+
+  [[ "$enable" -eq 1 ]] || { ENABLE_PY_RUNNER=0; info "Skipping py-runner"; return; }
+  ENABLE_PY_RUNNER=1
+
+  ensure_docker
+  mkdir -p "$(dirname "$PY_RUNNER_DIR")"
+
+  info "Syncing py-runner sources"
+  rm -rf "$PY_RUNNER_DIR"
+  mkdir -p "$PY_RUNNER_DIR"
+  rsync -a --delete "${APP_DIR}/ops/py-runner/" "$PY_RUNNER_DIR/"
+
+  [[ -f "$PY_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $PY_RUNNER_DIR"
+  chown -R "$APP_USER:$APP_USER" "$PY_RUNNER_DIR"
+
+  info "Building and starting py-runner"
+  if docker compose version >/dev/null 2>&1; then
+    (cd "$PY_RUNNER_DIR" && docker compose up -d --build)
+  else
+    (cd "$PY_RUNNER_DIR" && docker-compose up -d --build)
+  fi
+
+  local started=0
+  for _ in {1..30}; do
+    if ss -ltn | awk '{print $4}' | grep -q ":${PY_RUNNER_PORT}$"; then
+      started=1
+      break
+    fi
+    sleep 1
+  done
+  [[ "$started" -eq 1 ]] || die "py-runner did not start on port ${PY_RUNNER_PORT}"
+}
+
 write_nginx_http_config() {
   mkdir -p /var/www/html
   cat > "$SITE_CONF" <<EOFHTTP
@@ -738,6 +786,23 @@ EOFHTTP
         proxy_read_timeout 600s;
     }
 EOFCXX
+  fi
+
+  if [[ "$ENABLE_PY_RUNNER" == "1" ]]; then
+    cat >> "$SITE_CONF" <<EOFPY
+
+    location /py-run/ {
+        proxy_pass http://127.0.0.1:${PY_RUNNER_PORT}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 600s;
+    }
+EOFPY
   fi
 
   cat >> "$SITE_CONF" <<EOFFOOT
@@ -852,6 +917,23 @@ EOFHTTPS
         proxy_read_timeout 600s;
     }
 EOFCXX2
+  fi
+
+  if [[ "$ENABLE_PY_RUNNER" == "1" ]]; then
+    cat >> "$SITE_CONF" <<EOFPY2
+
+    location /py-run/ {
+        proxy_pass http://127.0.0.1:${PY_RUNNER_PORT}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 600s;
+    }
+EOFPY2
   fi
 
   cat >> "$SITE_CONF" <<EOFFOOT2
@@ -975,6 +1057,11 @@ print_summary() {
   else
     echo "C++ runner:                disabled"
   fi
+  if [[ "$ENABLE_PY_RUNNER" == "1" ]]; then
+    echo "Python runner dir/port:    ${PY_RUNNER_DIR} / ${PY_RUNNER_PORT}"
+  else
+    echo "Python runner:             disabled"
+  fi
   echo "nginx site config:         ${SITE_CONF}"
   echo "PM2 process:               colearn-ai"
   echo "===================================================="
@@ -998,6 +1085,7 @@ main() {
   bootstrap_app_root
   setup_firewall
   setup_cxx_runner
+  setup_py_runner
   install_or_refresh_nginx_config
   maybe_install_cert
   start_app_pm2

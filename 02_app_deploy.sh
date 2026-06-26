@@ -34,6 +34,9 @@ CXX_RUNNER_REPO_URL="${CXX_RUNNER_REPO_URL:-https://github.com/jimskon/coLearn-A
 CXX_RUNNER_DIR="${CXX_RUNNER_DIR:-/opt/cxx-runner}"
 CXX_RUNNER_BRANCH="${CXX_RUNNER_BRANCH:-main}"
 CXX_RUNNER_PORT="${CXX_RUNNER_PORT:-5055}"
+ENABLE_PY_RUNNER="${ENABLE_PY_RUNNER:-ask}"
+PY_RUNNER_DIR="${PY_RUNNER_DIR:-/opt/py-runner}"
+PY_RUNNER_PORT="${PY_RUNNER_PORT:-5056}"
 ENV_FILE="${ENV_FILE:-}"
 SCHEMA_FILE="${SCHEMA_FILE:-}"
 
@@ -155,6 +158,21 @@ resolve_settings() {
     prompt_default CXX_RUNNER_DIR "C++ runner directory" "$CXX_RUNNER_DIR"
     prompt_default CXX_RUNNER_BRANCH "C++ runner git branch" "$CXX_RUNNER_BRANCH"
     prompt_default CXX_RUNNER_PORT "C++ runner port" "$CXX_RUNNER_PORT"
+  fi
+  case "$ENABLE_PY_RUNNER" in
+    1|0|ask) ;;
+    *) die "ENABLE_PY_RUNNER must be ask, 1, or 0" ;;
+  esac
+  if [[ "$ENABLE_PY_RUNNER" == "ask" ]]; then
+    if prompt_yes_no "Install the remote Python runner for numpy/pandas support?" "y"; then
+      ENABLE_PY_RUNNER=1
+    else
+      ENABLE_PY_RUNNER=0
+    fi
+  fi
+  if [[ "$ENABLE_PY_RUNNER" == "1" ]]; then
+    prompt_default PY_RUNNER_DIR "Python runner directory" "$PY_RUNNER_DIR"
+    prompt_default PY_RUNNER_PORT "Python runner port" "$PY_RUNNER_PORT"
   fi
   if [[ -z "$ENV_FILE" ]]; then ENV_FILE="${APP_DIR}/server/.env"; fi
 }
@@ -292,7 +310,7 @@ SQL
 }
 
 ensure_docker_access() {
-  [[ "$ENABLE_CXX_RUNNER" == "1" ]] || return 0
+  [[ "$ENABLE_CXX_RUNNER" == "1" || "$ENABLE_PY_RUNNER" == "1" ]] || return 0
   command -v docker >/dev/null 2>&1 || die "Docker is not installed. Run stage 1 bootstrap as root first."
   groups | grep -qw docker || die "User ${USER} is not in the docker group. Log out and back in, or add the user to docker."
 }
@@ -320,6 +338,23 @@ setup_cxx_runner() {
     (cd "$CXX_RUNNER_DIR" && docker compose up -d --build)
   else
     (cd "$CXX_RUNNER_DIR" && docker-compose up -d --build)
+  fi
+}
+
+setup_py_runner() {
+  [[ "$ENABLE_PY_RUNNER" == "1" ]] || return 0
+  ensure_docker_access
+  mkdir -p "$(dirname "$PY_RUNNER_DIR")"
+  info "Syncing py-runner sources"
+  rm -rf "$PY_RUNNER_DIR"
+  mkdir -p "$PY_RUNNER_DIR"
+  rsync -a --delete "$APP_DIR/ops/py-runner/" "$PY_RUNNER_DIR/"
+  [[ -f "$PY_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $PY_RUNNER_DIR"
+  info "Building and starting py-runner"
+  if docker compose version >/dev/null 2>&1; then
+    (cd "$PY_RUNNER_DIR" && docker compose up -d --build)
+  else
+    (cd "$PY_RUNNER_DIR" && docker-compose up -d --build)
   fi
 }
 
@@ -357,6 +392,11 @@ print_summary() {
   else
     echo "C++ runner:                disabled"
   fi
+  if [[ "$ENABLE_PY_RUNNER" == "1" ]]; then
+    echo "Python runner dir/port:     ${PY_RUNNER_DIR} / ${PY_RUNNER_PORT}"
+  else
+    echo "Python runner:             disabled"
+  fi
   echo "PM2 process:               colearn-ai"
   echo "===================================================="
 }
@@ -372,6 +412,7 @@ main() {
   run_repo_migrations
   bootstrap_app_root
   setup_cxx_runner
+  setup_py_runner
   start_app_pm2
   print_summary
 }

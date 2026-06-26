@@ -19,7 +19,9 @@ SESSION_TTL_SEC = 600
 WALL_LIMIT_SEC = 60
 IDLE_LIMIT_SEC = 15
 
-r = redis.Redis(host="redis", port=6379, decode_responses=True)
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
 
 
 def _session_key(sid: str) -> str:

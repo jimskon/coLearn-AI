@@ -14,6 +14,7 @@ The system supports:
 - Test / quiz mode (graded)
 - Demo mode (all groups visible, per-student sandbox)
 - Runnable Python blocks (with optional timeout)
+- Runnable Python Remote blocks (with optional timeout)
 - Runnable C++ blocks (with optional timeout)
 - Runnable Python Turtle blocks (with window size + timeout)
 - Editable and readonly file blocks
@@ -240,6 +241,18 @@ Supports optional timeout: `\python{50000}`
 \python
 # code here
 \endpython
+```
+
+### Python Remote
+
+Runs on the server with the same file-handling pattern as C++.
+
+Supports optional timeout: `\pythonremote{50000}`
+
+```text
+\pythonremote
+import pandas as pd
+\endpythonremote
 ```
 
 ### C++

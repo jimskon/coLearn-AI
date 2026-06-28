@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Alert, Card } from 'react-bootstrap';
+import { Alert } from 'react-bootstrap';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -169,9 +169,50 @@ function uniqueOriginalCode(block) {
 
   return out;
 }
-function buildRowsByQuestion(historyRows = []) {
-  const map = new Map();
+
+function speakerName(row, userNameById = {}) {
+  const id = row?.answered_by_user_id;
+  if (row?.transcriptType === 'ai_feedback') return 'AI';
+  if (id != null && userNameById[id]) return userNameById[id];
+  return row?.transcriptLabel || 'Student';
+}
+
+function isAnswerRow(row) {
+  return row?.transcriptType === 'student_text' || row?.transcriptType === 'student_code';
+}
+
+function isFeedbackRow(row) {
+  return row?.transcriptType === 'ai_feedback' || row?.transcriptType === 'code_feedback';
+}
+
+function isOutputRow(row) {
+  return row?.transcriptType === 'code_output';
+}
+
+function normalizeTranscriptValue(row) {
+  if (!row) return '';
+  if (row.transcriptType === 'student_code') return normalizeCode(row.value);
+  if (row.transcriptType === 'code_output') return normalizeCode(row.value);
+  return stripHtml(asString(row.value)).trim();
+}
+
+function formatSubmitWhen(rows = []) {
+  const first = rows.find((row) => row?.submitted_at || row?.updated_at);
+  return first?.submitted_at || first?.updated_at || '';
+}
+
+function formatSubmitter(rows = [], userNameById = {}) {
+  const humanRow =
+    rows.find((row) => row?.answered_by_user_id != null) ||
+    rows[0] ||
+    null;
+  return speakerName(humanRow, userNameById);
+}
+
+function buildSubmitGroups(historyRows = []) {
   const sorted = [...historyRows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  const groups = new Map();
+  const order = [];
 
   for (const row of sorted) {
     const baseQid = getBaseQid(row.question_id);
@@ -183,99 +224,186 @@ function buildRowsByQuestion(historyRows = []) {
     const value = asString(row.response).trim();
     if (!value) continue;
 
-    if (!map.has(baseQid)) map.set(baseQid, []);
-    map.get(baseQid).push({
+    const submitId = row?.submit_id || `row-${row.id}`;
+    if (!groups.has(submitId)) {
+      groups.set(submitId, {
+        submitId,
+        firstRowId: Number(row.id) || 0,
+        rows: [],
+      });
+      order.push(submitId);
+    }
+
+    const normalizedRow = {
       ...row,
       transcriptType: c.type,
       transcriptLabel: c.label,
       value,
-    });
+      baseQid,
+    };
+
+    groups.get(submitId).rows.push(normalizedRow);
   }
 
-  return map;
+  return order.map((submitId) => groups.get(submitId));
 }
 
-function dedupeTranscriptRows(rows = [], originalCode = []) {
-  const out = [];
+function buildQuestionThread(qid, rows, previousSnapshot = null) {
+  const sorted = [...rows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  const steps = [];
+  let lastAnswer = previousSnapshot?.answer ?? null;
+  let lastFeedback = previousSnapshot?.feedback ?? null;
+  let lastOutput = previousSnapshot?.output ?? null;
+  let sawMeaningfulChange = false;
+  let currentAnswer = previousSnapshot?.answer ?? null;
 
-  let lastCodeState =
-    originalCode.length > 0
-      ? normalizeCode(originalCode[originalCode.length - 1].content)
-      : null;
+  for (const row of sorted) {
+    if (isAnswerRow(row)) {
+      const normalized = normalizeTranscriptValue(row);
+      if (!normalized || normalized === lastAnswer) continue;
 
-  for (const row of rows) {
-    if (row.transcriptType === 'student_code') {
-      const now = normalizeCode(row.value);
-
-      // Only show code if it changed from the previous code state
-      if (now === lastCodeState) continue;
-
-      out.push(row);
-      lastCodeState = now;
+      steps.push({ ...row, stepType: 'answer' });
+      lastAnswer = normalized;
+      currentAnswer = normalized;
+      sawMeaningfulChange = true;
       continue;
     }
 
-    out.push(row);
+    if (isFeedbackRow(row)) {
+      const normalized = normalizeTranscriptValue(row);
+      if (!normalized || normalized === lastFeedback) continue;
+
+      steps.push({ ...row, stepType: 'feedback' });
+      lastFeedback = normalized;
+      sawMeaningfulChange = true;
+      continue;
+    }
+
+    if (isOutputRow(row)) {
+      const normalized = normalizeTranscriptValue(row);
+      if (!normalized || normalized === lastOutput) continue;
+
+      steps.push({ ...row, stepType: 'output' });
+      lastOutput = normalized;
+      sawMeaningfulChange = true;
+    }
   }
 
-  return out;
+  if (!sawMeaningfulChange || steps.length === 0) {
+    return null;
+  }
+
+  return {
+    qid,
+    rows: sorted,
+    steps,
+    currentAnswer,
+    latestFeedback: lastFeedback,
+    latestOutput: lastOutput,
+  };
 }
 
-function speakerName(row, userNameById = {}) {
-  const id = row?.answered_by_user_id;
-  if (row?.transcriptType === 'ai_feedback') return 'AI';
-  if (id != null && userNameById[id]) return userNameById[id];
-  return row?.transcriptLabel || 'Student';
-}
-
-function TranscriptEntry({ row, userNameById = {} }) {
+function TimelineStep({ row, userNameById = {} }) {
   const who = speakerName(row, userNameById);
 
-  if (row.transcriptType === 'student_code') {
+  if (row.stepType === 'answer' && row.transcriptType === 'student_code') {
     return (
-      <div className="mb-3">
-        <div className="fw-semibold">{who}:</div>
-        <div className="small text-muted mb-1">{row.submitted_at || row.updated_at || ''}</div>
-        <div className="mb-1">Modified code</div>
-        <pre className="border rounded p-2 bg-light mb-0" style={{ whiteSpace: 'pre-wrap' }}>
+      <div>
+        <div className="fw-semibold">{who} answer</div>
+        <pre className="border rounded p-2 bg-white mb-0" style={{ whiteSpace: 'pre-wrap' }}>
           <code>{row.value}</code>
         </pre>
       </div>
     );
   }
 
-  if (row.transcriptType === 'code_output') {
+  if (row.stepType === 'answer') {
     return (
-      <div className="mb-3">
-        <div className="fw-semibold">Code output</div>
-        <div className="small text-muted mb-1">{row.submitted_at || row.updated_at || ''}</div>
-        <pre className="border rounded p-2 bg-light mb-0" style={{ whiteSpace: 'pre-wrap' }}>
-          <code>{row.value}</code>
-        </pre>
-      </div>
-    );
-  }
-
-  if (row.transcriptType === 'code_feedback') {
-    return (
-      <div className="mb-3">
-        <div className="fw-semibold">AI (code feedback):</div>
-        <div className="small text-muted mb-1">
-          {row.submitted_at || row.updated_at || ''}
-        </div>
+      <div>
+        <div className="fw-semibold">{who} answer</div>
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {row.value}
         </ReactMarkdown>
       </div>
     );
   }
+
+  if (row.stepType === 'feedback') {
+    return (
+      <div>
+        <div className="fw-semibold">AI feedback</div>
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+          {row.value}
+        </ReactMarkdown>
+      </div>
+    );
+  }
+
+  if (row.stepType === 'output') {
+    return (
+      <div>
+        <div className="fw-semibold">Program output</div>
+        <pre className="border rounded p-2 bg-white mb-0" style={{ whiteSpace: 'pre-wrap' }}>
+          <code>{row.value}</code>
+        </pre>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+function QuestionThread({ thread, block, userNameById = {} }) {
+  const prompt = getQuestionPrompt(block, thread.qid);
+  const stepCount = thread.steps.length;
+  const answerCount = thread.steps.filter((step) => step.stepType === 'answer').length;
+
   return (
-    <div className="mb-3">
-      <div className="fw-semibold">{who}:</div>
-      <div className="small text-muted mb-1">{row.submitted_at || row.updated_at || ''}</div>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {row.value}
-      </ReactMarkdown>
+    <div className="border rounded-3 bg-light p-3 mb-3">
+      <div className="d-flex justify-content-between gap-3 align-items-start flex-wrap">
+        <div>
+          <div className="fw-semibold">
+            {thread.qid}. {prompt}
+          </div>
+          <div className="small text-muted">
+            {answerCount > 0 ? `${answerCount} answer${answerCount === 1 ? '' : 's'}` : 'No new answer'}
+          </div>
+        </div>
+        <div className="small text-muted text-nowrap">
+          {stepCount} step{stepCount === 1 ? '' : 's'}
+        </div>
+      </div>
+
+      <div className="mt-3 d-grid gap-3">
+        {thread.steps.map((step) => (
+          <div key={step.id} className="d-flex gap-3 align-items-start">
+            <div
+              style={{
+                width: 12,
+                paddingTop: 8,
+                flex: '0 0 12px',
+              }}
+            >
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: 999,
+                  background:
+                    step.stepType === 'feedback'
+                      ? '#198754'
+                      : step.stepType === 'output'
+                      ? '#6c757d'
+                      : '#0d6efd',
+                }}
+              />
+            </div>
+            <div className="flex-grow-1">
+              <TimelineStep row={step} userNameById={userNameById} />
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -287,7 +415,47 @@ export default function RunActivityHistoryView({
   userNameById = {},
 }) {
   const questionList = useMemo(() => buildQuestionList(groups), [groups]);
-  const rowsByQuestion = useMemo(() => buildRowsByQuestion(historyRows), [historyRows]);
+  const questionMap = useMemo(() => new Map(questionList.map((entry) => [entry.qid, entry.block])), [questionList]);
+  const submitGroups = useMemo(() => buildSubmitGroups(historyRows), [historyRows]);
+  const timeline = useMemo(() => {
+    const snapshots = new Map();
+
+    return submitGroups.map((submit, index) => {
+      const rowsByQid = new Map();
+      for (const row of submit.rows) {
+        if (!rowsByQid.has(row.baseQid)) rowsByQid.set(row.baseQid, []);
+        rowsByQid.get(row.baseQid).push(row);
+      }
+
+      const threads = [];
+      const qids = Array.from(rowsByQid.keys()).sort((a, b) => {
+        const firstA = rowsByQid.get(a)?.[0]?.id || 0;
+        const firstB = rowsByQid.get(b)?.[0]?.id || 0;
+        return firstA - firstB;
+      });
+
+      for (const qid of qids) {
+        const thread = buildQuestionThread(qid, rowsByQid.get(qid), snapshots.get(qid));
+        if (!thread) continue;
+        threads.push(thread);
+        snapshots.set(qid, {
+          answer: thread.currentAnswer,
+          feedback: thread.latestFeedback,
+          output: thread.latestOutput,
+        });
+      }
+
+      return {
+        submitId: submit.submitId,
+        firstRowId: submit.firstRowId,
+        index,
+        when: formatSubmitWhen(submit.rows),
+        submitter: formatSubmitter(submit.rows, userNameById),
+        rows: submit.rows,
+        threads,
+      };
+    });
+  }, [submitGroups, userNameById]);
 
   if (!historyRows.length) {
     return (
@@ -300,63 +468,78 @@ export default function RunActivityHistoryView({
   return (
     <div className="mt-3">
       <h4 className="mb-3">{title}</h4>
+      <style>{`
+        .history-submit-details {
+          border: 1px solid #dee2e6;
+          border-radius: 0.75rem;
+          background: #fff;
+          overflow: hidden;
+          margin-bottom: 1rem;
+        }
 
-      {questionList.map(({ qid, block }) => {
-        const prompt = getQuestionPrompt(block, qid);
-        const originalCode = uniqueOriginalCode(block);
-        const transcriptRows = dedupeTranscriptRows(
-          rowsByQuestion.get(qid) || [],
-          originalCode
-        );
-        const transcriptAttempts = groupTranscriptRowsBySubmit(transcriptRows);
+        .history-submit-details > summary {
+          list-style: none;
+          cursor: pointer;
+          padding: 1rem 1.1rem;
+        }
+
+        .history-submit-details > summary::-webkit-details-marker {
+          display: none;
+        }
+
+        .history-submit-body {
+          border-top: 1px solid #dee2e6;
+          padding: 1rem 1.1rem 0.9rem;
+          background: #f8f9fa;
+        }
+      `}</style>
+
+      {timeline.map((submit, index) => {
+        const changedQids = submit.threads.map((thread) => thread.qid);
+        const changedSummary = changedQids.length
+          ? changedQids.slice(0, 4).join(', ') + (changedQids.length > 4 ? '…' : '')
+          : 'No changed answers';
 
         return (
-          <Card key={qid} className="mb-4">
-            <Card.Body>
-              <h5 className="mb-3">
-                {qid}. {prompt}
-              </h5>
-
-              {originalCode.length > 0 && (
-                <div className="mb-4">
-                  <div className="fw-semibold mb-2">Original code</div>
-                  {originalCode.map((code, i) => (
-                    <pre
-                      key={`${qid}-orig-${i}`}
-                      className="border rounded p-2 bg-light"
-                      style={{ whiteSpace: 'pre-wrap' }}
-                    >
-                      <code>{code.content}</code>
-                    </pre>
-                  ))}
-                </div>
-              )}
-
-              {transcriptRows.length > 0 ? (
+          <details key={submit.submitId} className="history-submit-details" open={index === 0}>
+            <summary>
+              <div className="d-flex justify-content-between align-items-start gap-3 flex-wrap">
                 <div>
-                  {transcriptAttempts.map((attempt, index) => (
-                    <div key={attempt.submitId} className="mb-4">
-                      <div className="fw-semibold mb-2">
-                        Attempt {index + 1}
-                      </div>
-
-                      {attempt.rows.map((row) => (
-                        <TranscriptEntry
-                          key={row.id}
-                          row={row}
-                          userNameById={userNameById}
-                        />
-                      ))}
-                    </div>
-                  ))}
+                  <div className="fw-semibold">
+                    Submit {index + 1}
+                  </div>
+                  <div className="small text-muted">
+                    {submit.when || 'Timestamp unavailable'} · {submit.submitter}
+                  </div>
                 </div>
+                <div className="text-end">
+                  <div className="small fw-semibold">
+                    {changedQids.length} changed question{changedQids.length === 1 ? '' : 's'}
+                  </div>
+                  <div className="small text-muted">
+                    {changedSummary}
+                  </div>
+                </div>
+              </div>
+            </summary>
+
+            <div className="history-submit-body">
+              {submit.threads.length > 0 ? (
+                submit.threads.map((thread) => (
+                  <QuestionThread
+                    key={`${submit.submitId}:${thread.qid}`}
+                    thread={thread}
+                    block={questionMap.get(thread.qid)}
+                    userNameById={userNameById}
+                  />
+                ))
               ) : (
                 <Alert variant="light" className="mb-0">
-                  No transcript activity was recorded for this question.
+                  No changed answers were recorded in this submit.
                 </Alert>
               )}
-            </Card.Body>
-          </Card>
+            </div>
+          </details>
         );
       })}
     </div>

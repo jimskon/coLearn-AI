@@ -474,6 +474,49 @@ test('heartbeat marks membership connected, starts a timer anchor, and assigns a
   assert.ok(member.last_heartbeat);
 });
 
+test('heartbeat keeps a recently active student active until the two-minute window expires', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId, totalGroups: 4, activeStudentId: studentA.id });
+  await addGroupMember({ instanceId, studentId: studentA.id, connected: true });
+  await addGroupMember({ instanceId, studentId: studentB.id, connected: true });
+
+  await db.query(
+    `UPDATE group_members
+        SET last_heartbeat = DATE_SUB(NOW(), INTERVAL 90 SECOND)
+      WHERE activity_instance_id = ? AND student_id = ?`,
+    [instanceId, studentA.id]
+  );
+  await db.query(
+    `UPDATE group_members
+        SET last_heartbeat = DATE_SUB(NOW(), INTERVAL 5 SECOND)
+      WHERE activity_instance_id = ? AND student_id = ?`,
+    [instanceId, studentB.id]
+  );
+
+  const response = await requestJson(studentB, `/api/activity-instances/${instanceId}/heartbeat`, {
+    method: 'POST',
+    body: { userId: studentB.id, timerInfo: {} },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.becameActive, false);
+  assert.equal(Number(response.body.activeStudentId), studentA.id);
+
+  const [[instance]] = await db.query(
+    `SELECT active_student_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(Number(instance.active_student_id), studentA.id);
+});
+
 test('timer-pause pauses and resumes all instances for an activity without clearing the timer anchor', async () => {
   const instructor = await createUser('instructor');
   const classId = await createClassRecord();
@@ -1028,6 +1071,50 @@ test('active-student returns null for completed activity instances and clears st
   assert.equal(instance.active_student_id, null);
 });
 
+test('active-student reassigns a stale active user to the most recent present member', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    totalGroups: 2,
+    activeStudentId: studentA.id,
+  });
+
+  await addGroupMember({ instanceId, studentId: studentA.id, connected: true });
+  await addGroupMember({ instanceId, studentId: studentB.id, connected: true });
+
+  await db.query(
+    `UPDATE group_members
+        SET last_heartbeat = DATE_SUB(NOW(), INTERVAL 3 MINUTE)
+      WHERE activity_instance_id = ? AND student_id = ?`,
+    [instanceId, studentA.id]
+  );
+  await db.query(
+    `UPDATE group_members
+        SET last_heartbeat = DATE_SUB(NOW(), INTERVAL 30 SECOND)
+      WHERE activity_instance_id = ? AND student_id = ?`,
+    [instanceId, studentB.id]
+  );
+
+  const response = await requestJson(studentB, `/api/activity-instances/${instanceId}/active-student`);
+
+  assert.equal(response.status, 200);
+  assert.equal(Number(response.body.activeStudentId), studentB.id);
+
+  const [[instance]] = await db.query(
+    `SELECT active_student_id
+       FROM activity_instances
+      WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(Number(instance.active_student_id), studentB.id);
+});
+
 test('demo-roster reset clears demo activity groups, responses, and drafts', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');
@@ -1238,7 +1325,7 @@ test('submit-test regrade fails cleanly when legacy ownership is ambiguous', asy
   assert.equal(instance.submitted_by_user_id, null);
 });
 
-test('rotate-active-student returns 404 when no group members are connected', async () => {
+test('rotate-active-student returns 404 when no recent group members are present', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');
   const studentB = await createUser('student');
@@ -1260,7 +1347,7 @@ test('rotate-active-student returns 404 when no group members are connected', as
   });
 
   assert.equal(response.status, 404);
-  assert.equal(response.body.error, 'No connected group members');
+  assert.equal(response.body.error, 'No active group members');
 
   const [[instance]] = await db.query(
     `SELECT active_student_id

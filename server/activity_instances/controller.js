@@ -156,6 +156,55 @@ async function appendResponse(conn, instanceId, submitId, qid, value, {
   );
 }
 
+function getHistoryBaseQid(qidRaw) {
+  const qid = String(qidRaw || '').trim();
+  if (!qid) return null;
+
+  if (/^attempt:\d+$/i.test(qid)) return null;
+  if (/^\d+state$/i.test(qid)) return null;
+  if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return null;
+  if (/^test(?:Total|Max|Summary)Score$/i.test(qid)) return null;
+
+  if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
+
+  const suffixPatterns = [
+    /^(?<base>\d+[A-Za-z]+)F\d+$/i,
+    /^(?<base>\d+[A-Za-z]+)FA\d+$/i,
+    /^(?<base>\d+[A-Za-z]+)FM$/i,
+    /^(?<base>\d+[A-Za-z]+)AF$/i,
+    /^(?<base>\d+[A-Za-z]+)S$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)RunFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)ResponseFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeScore$/i,
+    /^(?<base>\d+[A-Za-z]+)RunScore$/i,
+    /^(?<base>\d+[A-Za-z]+)ResponseScore$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeAccepted$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeCanContinue$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeRetryCount$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeRetriesRequired$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeSubmissionString$/i,
+    /^(?<base>\d+[A-Za-z]+)(?:Output|output\d*|code\d+|table\d+cell\d+_\d+)$/i,
+  ];
+
+  for (const pattern of suffixPatterns) {
+    const match = qid.match(pattern);
+    if (match?.groups?.base) return match.groups.base;
+  }
+
+  return null;
+}
+
+function isAcceptedQuestionState(latestByQid, baseQid) {
+  const fm = String(latestByQid.get(`${baseQid}FM`) ?? '').trim().toLowerCase();
+  if (fm === 'accepted') return true;
+
+  const codeAccepted = String(latestByQid.get(`${baseQid}CodeAccepted`) ?? '').trim().toLowerCase();
+  if (codeAccepted === 'true') return true;
+
+  return false;
+}
+
 // ========== DOC PARSING ==========
 function parseGoogleDocHTML(html) {
   const dom = new JSDOM(html);
@@ -1172,13 +1221,32 @@ async function submitGroupResponses(req, res) {
       return s || 'inprogress';
     };
 
+    const [latestRows] = await conn.query(
+      `SELECT r.question_id, r.response
+       FROM responses r
+       JOIN (
+         SELECT question_id, MAX(id) AS max_id
+         FROM responses
+         WHERE activity_instance_id = ?
+         GROUP BY question_id
+       ) latest
+         ON r.question_id = latest.question_id AND r.id = latest.max_id
+       WHERE r.activity_instance_id = ?`,
+      [instanceId, instanceId]
+    );
+    const latestByQid = new Map(
+      latestRows.map((row) => [String(row.question_id || '').trim(), String(row.response ?? '')])
+    );
+
     const submittedStatusEntries = Object.entries(answers).filter(([qidRaw]) => {
       const qid = String(qidRaw || '').trim();
       return new RegExp(`^${groupNum}[A-Za-z][A-Za-z0-9_]*S$`).test(qid);
     });
 
-    // ---- 1) insert all submitted answer fields as-is ----
-    // (These include: 2a, 2aF1, 2aFA1, etc.)
+    const payloadEntries = [];
+    const groupEntriesByBase = new Map();
+    const passthroughEntries = [];
+
     for (const [qidRaw, valueRaw] of Object.entries(answers)) {
       const qid = String(qidRaw || '').trim();
       if (!qid) continue;
@@ -1186,6 +1254,50 @@ async function submitGroupResponses(req, res) {
       // Group state is derived on the server from submitted question status rows.
       // Do not persist a client-computed `${groupNum}state` row.
       if (/^[0-9]+state$/i.test(qid)) continue;
+
+      if (/^attempt:\d+$/i.test(qid)) {
+        passthroughEntries.push([qid, valueRaw]);
+        continue;
+      }
+
+      const baseQid = getHistoryBaseQid(qid);
+      if (!baseQid) {
+        passthroughEntries.push([qid, valueRaw]);
+        continue;
+      }
+
+      if (!groupEntriesByBase.has(baseQid)) {
+        groupEntriesByBase.set(baseQid, {
+          baseValue: null,
+          entries: [],
+        });
+      }
+
+      const group = groupEntriesByBase.get(baseQid);
+      group.entries.push([qid, valueRaw]);
+      if (qid === baseQid) {
+        group.baseValue = valueRaw;
+      }
+    }
+
+    for (const [baseQid, group] of groupEntriesByBase.entries()) {
+      if (isAcceptedQuestionState(latestByQid, baseQid)) {
+        continue;
+      }
+
+      const currentBaseValue = String(group.baseValue ?? '');
+      const previousBaseValue = String(latestByQid.get(baseQid) ?? '');
+      if (currentBaseValue === previousBaseValue) {
+        continue;
+      }
+
+      payloadEntries.push(...group.entries);
+    }
+
+    // ---- 1) insert only the questions that actually changed ----
+    for (const [qidRaw, valueRaw] of payloadEntries) {
+      const qid = String(qidRaw || '').trim();
+      if (!qid) continue;
 
       const value = valueRaw == null ? '' : String(valueRaw);
 
@@ -1195,6 +1307,18 @@ async function submitGroupResponses(req, res) {
         allowEmpty: true,
       });
     }
+
+    for (const [qidRaw, valueRaw] of passthroughEntries) {
+      const qid = String(qidRaw || '').trim();
+      if (!qid) continue;
+
+      await appendResponse(conn, instanceId, submitId, qid, valueRaw, {
+        type: 'text',
+        answeredBy: studentId,
+        allowEmpty: true,
+      });
+    }
+
     // ---- 1a) append one marker row for this attempt click ----
     await appendResponse(
       conn,

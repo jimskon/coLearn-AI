@@ -647,6 +647,93 @@ test('submit-group advances progress, rotates active student in submit mode, and
   assert.equal(drafts.length, 0);
 });
 
+test('submit-group only stores changed questions and freezes accepted ones', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const studentB = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    groupNumber: 1,
+    totalGroups: 3,
+    completedGroups: 0,
+    progressStatus: 'not_started',
+    activeStudentId: studentA.id,
+    activeRotationMode: 'group',
+  });
+  await addGroupMember({ instanceId, studentId: studentA.id, role: 'facilitator', connected: true, lastHeartbeat: '2026-05-01 12:00:00' });
+  await addGroupMember({ instanceId, studentId: studentB.id, role: 'analyst', connected: true, lastHeartbeat: '2026-05-01 12:00:01' });
+
+  await db.query(
+    `INSERT INTO responses
+       (activity_instance_id, question_id, submit_id, response_type, response, answered_by_user_id)
+     VALUES
+       (?, '1a', 'seed-1', 'text', 'already accepted', ?),
+       (?, '1aFM', 'seed-1', 'text', 'accepted', ?),
+       (?, '1aAF', 'seed-1', 'text', 'resolved', ?),
+       (?, '1b', 'seed-1', 'text', 'old answer', ?)`,
+    [instanceId, studentA.id, instanceId, studentA.id, instanceId, studentA.id, instanceId, studentA.id]
+  );
+
+  const response = await requestJson(studentA, `/api/activity-instances/${instanceId}/submit-group`, {
+    method: 'POST',
+    body: {
+      studentId: studentA.id,
+      groupNum: 1,
+      retriesRequired: 1,
+      attempt: {
+        submissionString: '1a=new;1b=new',
+        blocked: false,
+        canAdvance: true,
+        unanswered: [],
+        answers: {
+          '1a': 'new attempt that should be ignored',
+          '1aF1': 'ignored feedback',
+          '1aFM': 'accepted',
+          '1aAF': 'resolved',
+          '1aS': 'complete',
+          '1b': 'new answer',
+          '1bF1': 'fresh feedback',
+          '1bFM': 'needsRevision',
+          '1bAF': 'active',
+          '1bS': 'complete',
+        },
+      },
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.success, true);
+
+  const [rows] = await db.query(
+    `SELECT question_id, response
+       FROM responses
+      WHERE activity_instance_id = ?
+        AND question_id IN ('1a', '1aF1', '1aFM', '1aAF', '1aS', '1b', '1bF1', '1bFM', '1bAF', '1bS')
+      ORDER BY id`,
+    [instanceId]
+  );
+
+  const count = (qid) => rows.filter((row) => row.question_id === qid).length;
+  const latest = (qid) => [...rows].reverse().find((row) => row.question_id === qid)?.response ?? null;
+
+  assert.equal(count('1a'), 1);
+  assert.equal(count('1aF1'), 0);
+  assert.equal(count('1aFM'), 1);
+  assert.equal(latest('1a'), 'already accepted');
+
+  assert.equal(count('1b'), 2);
+  assert.equal(count('1bF1'), 1);
+  assert.equal(count('1bFM'), 1);
+  assert.equal(count('1bAF'), 1);
+  assert.equal(count('1bS'), 1);
+  assert.equal(latest('1b'), 'new answer');
+  assert.equal(latest('1bF1'), 'fresh feedback');
+});
+
 test('submit-group in group rotation mode does not rotate when the group does not advance', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');

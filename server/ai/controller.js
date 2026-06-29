@@ -359,6 +359,7 @@ async function buildAttemptHistoryContext({
     lines.push('- Attempt 1: give a gentle conceptual hint.');
     lines.push('- Attempt 2: point to the missing idea or relevant evidence.');
     lines.push('- Attempt 3: give a more directed hint or sentence starter that names exactly what is missing.');
+    lines.push('- Attempt 3 or later: if the answer has the core idea plus reasonable reasoning, accept it even if it is not fully polished.');
     lines.push('- Attempt 4 or later: if the current answer is close enough, accept it; otherwise give a direct sentence-level path forward.');
 
     return lines.join('\n');
@@ -410,6 +411,8 @@ async function buildStudentResponsePrompt({
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
+    "If the group has the core answer plus reasonable reasoning, accept it rather than asking for more detail.",
+    "As attempts increase, weaken the requirements: prefer a good-enough answer that shows understanding over a perfectly complete one.",
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
     "Write feedback in the same language as the activity/question text.",
@@ -441,6 +444,9 @@ async function buildStudentResponsePrompt({
     "Feedback language rule: use the activity/question language for the feedback, not the student's answer language if they differ.",
     "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
     "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
+    "Acceptance rule: if the group has the core answer plus reasonable reasoning, accept it instead of asking for more detail.",
+    "Acceptance rule: as attempts increase, weaken the requirements and let a good-enough answer move on.",
+    "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
     "",
     schema,

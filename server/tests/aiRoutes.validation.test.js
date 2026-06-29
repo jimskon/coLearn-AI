@@ -250,6 +250,8 @@ test('response evaluation includes prior attempts in the prompt when history exi
     assert.match(userMessage, /Current group attempt number: 3/i);
     assert.match(userMessage, /Treat this as one collaborative group conversation/i);
     assert.match(userMessage, /lower bound is enough/i);
+    assert.match(userMessage, /core answer plus reasonable reasoning/i);
+    assert.match(userMessage, /weaken the requirements/i);
     assert.match(userMessage, /tell them exactly what to add/i);
     assert.doesNotMatch(userMessage, /ignored metadata/i);
     assert.doesNotMatch(userMessage, /ignored different question/i);

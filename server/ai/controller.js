@@ -354,10 +354,12 @@ async function buildAttemptHistoryContext({
     lines.push('- Compare the current group submission with prior group attempts.');
     lines.push('- If the group improved, acknowledge the progress briefly before the next nudge.');
     lines.push('- Do not repeat prior AI feedback wording.');
+    lines.push('- Do not raise the bar beyond the question, sample, or instructor guidance.');
+    lines.push('- If the question gives a range such as 2-4 items, the lower bound satisfies the quantity requirement.');
     lines.push('- Attempt 1: give a gentle conceptual hint.');
     lines.push('- Attempt 2: point to the missing idea or relevant evidence.');
-    lines.push('- Attempt 3: give a more directed hint or sentence starter.');
-    lines.push('- Attempt 4 or later: be direct enough to help the group move forward without pretending this is a quiz.');
+    lines.push('- Attempt 3: give a more directed hint or sentence starter that names exactly what is missing.');
+    lines.push('- Attempt 4 or later: if the current answer is close enough, accept it; otherwise give a direct sentence-level path forward.');
 
     return lines.join('\n');
   } catch (err) {
@@ -845,6 +847,10 @@ async function evaluateStudentResponse(req, res) {
     "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
     "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
+    "Do not require more examples, items, evidence, or precision than the question actually asks for.",
+    "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
+    "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
+    "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
     "Write feedback in the same language as the activity/question text.",
     "Do not mirror the student's answer language if it differs from the activity language.",
     "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
@@ -873,6 +879,8 @@ async function evaluateStudentResponse(req, res) {
     `Current group submission:\n${stripHtml(studentAnswer)}`,
     "Feedback language rule: use the activity/question language for the feedback, not the student's answer language if they differ.",
     "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
+    "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
+    "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
     "",
     schema,
     forceFollowup || obviouslyBad

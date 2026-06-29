@@ -497,33 +497,54 @@ function extractStudentQuestion(answerText = "") {
 }
 
 function tokenizeHelpfulWords(text = "") {
+  const STOP_WORDS = new Set([
+    "what",
+    "why",
+    "how",
+    "when",
+    "where",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "can",
+    "could",
+    "would",
+    "should",
+    "do",
+    "does",
+    "did",
+    "is",
+    "are",
+    "am",
+    "will",
+    "may",
+    "might",
+    "the",
+    "this",
+    "that",
+    "these",
+    "those",
+    "question",
+    "activity",
+    "answer",
+    "program",
+    "code",
+    "loop",
+  ]);
   return new Set(
     String(text || "")
       .toLowerCase()
       .replace(/[^a-z0-9\s]/g, " ")
       .split(/\s+/)
       .map((word) => word.trim())
-      .filter((word) => word.length >= 4)
+      .filter((word) => word.length >= 4 && !STOP_WORDS.has(word))
   );
 }
 
 function isClearlyOffTopicQuestion(questionAsked = "", sources = []) {
   const question = String(questionAsked || "").toLowerCase().trim();
   if (!question) return false;
-
-  const sourceTokens = new Set();
-  for (const source of sources) {
-    for (const token of tokenizeHelpfulWords(source)) {
-      sourceTokens.add(token);
-    }
-  }
-
-  const questionTokens = tokenizeHelpfulWords(question);
-  for (const token of questionTokens) {
-    if (sourceTokens.has(token)) {
-      return false;
-    }
-  }
 
   const obviousOffTopic = [
     /\bweather\b/i,
@@ -545,7 +566,24 @@ function isClearlyOffTopicQuestion(questionAsked = "", sources = []) {
     /\bprice(s)?\b/i,
   ];
 
-  return obviousOffTopic.some((pattern) => pattern.test(question));
+  if (obviousOffTopic.some((pattern) => pattern.test(question))) {
+    return true;
+  }
+
+  const sourceTokens = new Set();
+  for (const source of sources) {
+    for (const token of tokenizeHelpfulWords(source)) {
+      sourceTokens.add(token);
+    }
+  }
+
+  const questionTokens = tokenizeHelpfulWords(question);
+  for (const token of questionTokens) {
+    if (sourceTokens.has(token)) {
+      return false;
+    }
+  }
+  return false;
 }
 
 async function buildStudentQuestionHelpPrompt({

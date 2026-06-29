@@ -86,6 +86,26 @@ async function postJson(path, body) {
   }
 }
 
+async function getRequestBodyText(input, init) {
+  if (init?.body) {
+    return String(init.body);
+  }
+
+  if (typeof input === 'object' && typeof input?.clone === 'function') {
+    try {
+      return await input.clone().text();
+    } catch {
+      try {
+        return await input.text();
+      } catch {
+        return '';
+      }
+    }
+  }
+
+  return '';
+}
+
 test.after(() => {
   global.fetch = nativeFetch;
 });
@@ -264,7 +284,8 @@ test('response evaluation answers a clear in-domain question before grading', as
     const url = typeof input === 'string' ? input : input?.url || '';
 
     if (url.includes('api.openai.com')) {
-      const body = JSON.parse(init?.body || '{}');
+      const bodyText = await getRequestBodyText(input, init);
+      const body = bodyText ? JSON.parse(bodyText) : {};
       const userMessage = (body?.messages || []).find((msg) => msg?.role === 'user')?.content || '';
 
       if (userMessage.includes('Student clarifying question:')) {

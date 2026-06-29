@@ -199,6 +199,49 @@ function classifyHistoryRow(questionIdRaw) {
   return null;
 }
 
+function isAcceptedHistoryMarker(questionIdRaw, responseRaw) {
+  const qid = String(questionIdRaw || '').trim();
+  if (!qid) return false;
+
+  const value = String(responseRaw ?? '').trim().toLowerCase();
+  if (!value) return false;
+
+  const acceptedValues = new Set(['accepted', 'true', 'yes', '1']);
+  if (!acceptedValues.has(value)) return false;
+
+  return /^\d+[A-Za-z]+FM$/i.test(qid) || /^\d+[A-Za-z]+CodeAccepted$/i.test(qid);
+}
+
+async function hasAcceptedHistoryLock(instanceId, qid) {
+  const baseQid = normalizeHistoryQid(qid);
+  const numericInstanceId = Number(instanceId);
+
+  if (!Number.isFinite(numericInstanceId) || numericInstanceId <= 0 || !baseQid) {
+    return false;
+  }
+
+  try {
+    const [rows] = await db.query(
+      `SELECT question_id, response
+       FROM responses
+       WHERE activity_instance_id = ?
+       ORDER BY id ASC`,
+      [numericInstanceId]
+    );
+
+    for (const row of rows || []) {
+      if (normalizeHistoryQid(row.question_id) !== baseQid) continue;
+      if (isAcceptedHistoryMarker(row.question_id, row.response)) return true;
+    }
+  } catch (err) {
+    if (AI_DEBUG) {
+      console.warn('[AI_DEBUG] hasAcceptedHistoryLock failed:', err?.message || err);
+    }
+  }
+
+  return false;
+}
+
 function clipHistoryText(value, limit = 180) {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (!text) return '';
@@ -410,6 +453,8 @@ async function buildStudentResponsePrompt({
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
+    "If the group has the core answer plus reasonable reasoning, accept it rather than asking for more detail.",
+    "As attempts increase, weaken the requirements: prefer a good-enough answer that shows understanding over a perfectly complete one.",
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
     "Write feedback in the same language as the activity/question text.",
@@ -441,6 +486,9 @@ async function buildStudentResponsePrompt({
     "Feedback language rule: use the activity/question language for the feedback, not the student's answer language if they differ.",
     "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
     "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
+    "Acceptance rule: if the group has the core answer plus reasonable reasoning, accept it instead of asking for more detail.",
+    "Acceptance rule: as attempts increase, weaken the requirements and let a good-enough answer move on.",
+    "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
     "",
     schema,
@@ -459,6 +507,310 @@ async function buildStudentResponsePrompt({
     questionGuide,
     activityGuide,
     followupQ,
+  };
+}
+
+function extractStudentQuestion(answerText = "") {
+  const text = stripHtml(answerText)
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return null;
+
+  const sentences = text
+    .split(/(?<=[?.!])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const interrogativeStart = /^(what|why|how|when|where|which|who|whom|whose|can|could|would|should|do|does|did|is|are|am|will|may|might)\b/i;
+
+  for (const sentence of sentences) {
+    if (interrogativeStart.test(sentence) && sentence.includes("?")) {
+      return sentence.replace(/[?.!]+$/g, "").trim();
+    }
+  }
+
+  for (const sentence of sentences) {
+    if (sentence.includes("?") || interrogativeStart.test(sentence)) {
+      return sentence.replace(/[?.!]+$/g, "").trim();
+    }
+  }
+
+  return null;
+}
+
+function tokenizeHelpfulWords(text = "") {
+  const STOP_WORDS = new Set([
+    "what",
+    "why",
+    "how",
+    "when",
+    "where",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "can",
+    "could",
+    "would",
+    "should",
+    "do",
+    "does",
+    "did",
+    "is",
+    "are",
+    "am",
+    "will",
+    "may",
+    "might",
+    "the",
+    "this",
+    "that",
+    "these",
+    "those",
+    "question",
+    "activity",
+    "answer",
+    "program",
+    "code",
+    "loop",
+  ]);
+  return new Set(
+    String(text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .map((word) => word.trim())
+      .filter((word) => word.length >= 4 && !STOP_WORDS.has(word))
+  );
+}
+
+function isClearlyOffTopicQuestion(questionAsked = "", sources = []) {
+  const question = String(questionAsked || "").toLowerCase().trim();
+  if (!question) return false;
+
+  const obviousOffTopic = [
+    /\bweather\b/i,
+    /\bsports?\b/i,
+    /\bmovie(s)?\b/i,
+    /\bmusic\b/i,
+    /\brecipe\b/i,
+    /\bdinner\b/i,
+    /\blunch\b/i,
+    /\bbreakfast\b/i,
+    /\bfootball\b/i,
+    /\bbasketball\b/i,
+    /\bsoccer\b/i,
+    /\bgame\b/i,
+    /\btravel\b/i,
+    /\bpolitic(s|al)?\b/i,
+    /\bcapital city\b/i,
+    /\bstock(s)?\b/i,
+    /\bprice(s)?\b/i,
+  ];
+
+  if (obviousOffTopic.some((pattern) => pattern.test(question))) {
+    return true;
+  }
+
+  const sourceTokens = new Set();
+  for (const source of sources) {
+    for (const token of tokenizeHelpfulWords(source)) {
+      sourceTokens.add(token);
+    }
+  }
+
+  const questionTokens = tokenizeHelpfulWords(question);
+  for (const token of questionTokens) {
+    if (sourceTokens.has(token)) {
+      return false;
+    }
+  }
+  return false;
+}
+
+function buildLocalClarifyingHint(questionText = "", questionAsked = "", studentAnswer = "") {
+  const q = `${questionText} ${questionAsked} ${studentAnswer}`.toLowerCase();
+
+  if (/\bloop\b|\brepeat\b/.test(q)) {
+    return "Think about the condition that controls when the loop stops.";
+  }
+
+  if (/\bturtle\b/.test(q)) {
+    return "The turtle is the drawing cursor object created by `turtle.Turtle()`.";
+  }
+
+  if (/\bprint\b|\boutput\b/.test(q)) {
+    return "Focus on what the code prints or does when it runs.";
+  }
+
+  return "Think about the part of the question that still feels unclear and connect it to the code or output.";
+}
+
+function classifyPromptMode({
+  questionText = "",
+  feedbackPrompt = "",
+  sampleResponse = "",
+  guidance = "",
+}) {
+  const hay = [
+    questionText,
+    feedbackPrompt,
+    sampleResponse,
+    guidance,
+  ]
+    .map((value) => stripHtml(value))
+    .join(" ")
+    .toLowerCase();
+
+  const questionTaskPatterns = [
+    /\badditional questions?\b/,
+    /\bwhat additional questions\b/,
+    /\bwhat questions would\b/,
+    /\bquestions? would (?:your|the) group ask\b/,
+    /\bask\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\blist\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\bgenerate\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\bwrite\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\bcome up with\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\bone short question per line\b/,
+    /\bat least\s+\d+\s+(?:clear\s+)?questions?\b/,
+    /\bclarifying questions?\b/,
+  ];
+
+  if (questionTaskPatterns.some((pattern) => pattern.test(hay))) {
+    return "questions";
+  }
+
+  return "answer";
+}
+
+function parseRequiredQuestionCount(questionText = "") {
+  const text = stripHtml(questionText);
+  const patterns = [
+    /at least\s+(\d+)\s+(?:clear\s+)?questions?/i,
+    /list\s+at least\s+(\d+)\s+(?:clear\s+)?questions?/i,
+    /write\s+at least\s+(\d+)\s+(?:clear\s+)?questions?/i,
+    /generate\s+at least\s+(\d+)\s+(?:clear\s+)?questions?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      const count = Number(match[1]);
+      if (Number.isFinite(count) && count > 0) {
+        return count;
+      }
+    }
+  }
+
+  return 5;
+}
+
+function looksLikeQuestionLine(line = "") {
+  const text = String(line || "").trim();
+  if (!text) return false;
+  if (/\?$/.test(text)) return true;
+  return /^(what|why|how|when|where|which|who|whom|whose|can|could|would|should|do|does|did|is|are|am|will|may|might)\b/i.test(text);
+}
+
+function evaluateQuestionListSubmission({
+  questionText = "",
+  studentAnswer = "",
+}) {
+  const requiredCount = parseRequiredQuestionCount(questionText);
+  const lines = String(studentAnswer || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) {
+    return {
+      accepted: false,
+      feedback: `List at least ${requiredCount} clear questions, one short question per line.`,
+    };
+  }
+
+  const questionLines = lines.filter(looksLikeQuestionLine);
+
+  if (questionLines.length < requiredCount) {
+    return {
+      accepted: false,
+      feedback: `You have ${questionLines.length} question(s); please add ${requiredCount - questionLines.length} more.`,
+    };
+  }
+
+  if (questionLines.length !== lines.length) {
+    return {
+      accepted: false,
+      feedback: "Write each item as a short question on its own line.",
+    };
+  }
+
+  const longLine = lines.find((line) => line.length > 140);
+  if (longLine) {
+    return {
+      accepted: false,
+      feedback: "Keep each question short and focused.",
+    };
+  }
+
+  return {
+    accepted: true,
+    feedback: null,
+  };
+}
+
+async function buildStudentQuestionHelpPrompt({
+  questionText,
+  studentAnswer,
+  codeContext = "",
+  sampleResponse = "",
+  feedbackPrompt = "",
+  guidance = "",
+  questionAsked = "",
+}) {
+  const activityGuide = stripHtml(guidance || "");
+  const questionGuide = stripHtml(feedbackPrompt || "");
+
+  const sys = [
+    "You are a concise learning helper for a collaborative activity.",
+    "The student's submission may include both an attempted answer and a clarifying question.",
+    "Use the activity question, any shown code, the sample response, and the student's current answer as context.",
+    "Answer only the clarifying question; do not solve the whole program or give a full worked solution.",
+    "Assume the question is on-topic unless the activity context clearly shows otherwise.",
+    "Give a short supportive answer or hint in 1-3 sentences.",
+    "Keep the reply helpful and bounded to the activity.",
+    "Do not mention grading, points, rubrics, or scoring.",
+    "If the question is clearly outside the activity, reply with exactly: This system only works in the context of its learning objectives.",
+  ].join("\n");
+
+  const user = [
+    `Activity question:\n${stripHtml(questionText)}`,
+    codeContext ? `Shown code/context:\n${stripHtml(codeContext)}` : "",
+    sampleResponse
+      ? `Sample / acceptance envelope (do not quote):\n${stripHtml(sampleResponse)}`
+      : "",
+    questionGuide
+      ? `Instructor feedbackprompt (meta; do not quote):\n${questionGuide}`
+      : "",
+    activityGuide
+      ? `Activity guidance (meta; do not quote):\n${activityGuide}`
+      : "",
+    `Student current answer:\n${stripHtml(studentAnswer)}`,
+    `Student clarifying question:\n${stripHtml(questionAsked)}`,
+    "Answer the question briefly without giving away the entire solution.",
+    "If the question is clearly off-topic, use exactly: This system only works in the context of its learning objectives.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    sys,
+    user,
+    activityGuide,
+    questionGuide,
   };
 }
 
@@ -894,6 +1246,49 @@ async function evaluateStudentResponse(req, res) {
   const policy = getEffectivePolicy(activityGuide, questionGuide);
 
   const answerRaw = String(studentAnswer || "").trim();
+  const questionAsked = extractStudentQuestion(answerRaw);
+
+  if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid)) {
+    accepted = true;
+    feedback = null;
+    return await applyGateAndSend();
+  }
+
+  const promptMode = classifyPromptMode({
+    questionText,
+    feedbackPrompt,
+    sampleResponse,
+    guidance,
+  });
+
+  if (promptMode === "questions") {
+    const localQuestionResult = evaluateQuestionListSubmission({
+      questionText,
+      studentAnswer: answerRaw,
+    });
+    accepted = localQuestionResult.accepted;
+    feedback = localQuestionResult.feedback;
+    return await applyGateAndSend();
+  }
+
+  if (questionAsked) {
+    if (isClearlyOffTopicQuestion(questionAsked, [
+      questionText,
+      codeContext,
+      sampleResponse,
+      feedbackPrompt,
+      guidance,
+    ])) {
+      accepted = false;
+      feedback = "This system only works in the context of its learning objectives.";
+      return await applyGateAndSend();
+    }
+
+    accepted = false;
+    feedback = buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
+    return await applyGateAndSend();
+  }
+
   const promptParts = await buildStudentResponsePrompt({
     questionText,
     studentAnswer,
@@ -1460,4 +1855,6 @@ module.exports = {
   callLLMJsonStrict,
   buildAttemptHistoryContext,
   buildStudentResponsePrompt,
+  buildStudentQuestionHelpPrompt,
+  extractStudentQuestion,
 };

@@ -86,6 +86,26 @@ async function postJson(path, body) {
   }
 }
 
+async function getRequestBodyText(input, init) {
+  if (init?.body) {
+    return String(init.body);
+  }
+
+  if (typeof input === 'object' && typeof input?.clone === 'function') {
+    try {
+      return await input.clone().text();
+    } catch {
+      try {
+        return await input.text();
+      } catch {
+        return '';
+      }
+    }
+  }
+
+  return '';
+}
+
 test.after(() => {
   global.fetch = nativeFetch;
 });
@@ -255,5 +275,202 @@ test('response evaluation includes prior attempts in the prompt when history exi
     assert.doesNotMatch(userMessage, /ignored different question/i);
   } finally {
     db.query = originalQuery;
+  }
+});
+
+test('response evaluation answers a clear in-domain question before grading', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+
+    if (url.includes('api.openai.com')) {
+      const bodyText = await getRequestBodyText(input, init);
+      const body = bodyText ? JSON.parse(bodyText) : {};
+      const userMessage = (body?.messages || []).find((msg) => msg?.role === 'user')?.content || '';
+
+      if (userMessage.includes('Student clarifying question:')) {
+        return new Response(
+          JSON.stringify({
+            id: 'chatcmpl-test-help',
+            object: 'chat.completion',
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: 'Think about the condition that controls when the loop stops.',
+                },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
+    }
+
+    return originalFetch(input, init);
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What does the loop do?',
+      studentAnswer: 'I think it repeats because of the condition. Why does it stop there?',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'I think it repeats because of the condition. Why does it stop there?',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.match(response.body.feedback, /condition that controls when the loop stops/i);
+    assert.notEqual(
+      response.body.feedback,
+      'This system only works in the context of its learning objectives.'
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('response evaluation returns the exact fallback for an obvious off-topic question', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    if (url.includes('api.openai.com')) {
+      throw new Error('OpenAI should not be called for an obvious off-topic question');
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What does the loop do?',
+      studentAnswer: 'I am confused. What is the weather today?',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'I am confused. What is the weather today?',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.equal(
+      response.body.feedback,
+      'This system only works in the context of its learning objectives.'
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('response evaluation accepts a well-formed question list without an extra ai call', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    if (url.includes('api.openai.com')) {
+      throw new Error('OpenAI should not be called for question-list prompts');
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const answerLines = [
+      'How long has Kim had this fever?',
+      'What date did Kim’s fever start?',
+      'What other symptoms has Kim had, and when did they start?',
+      'Where did Kim travel?',
+      'Does Kim have difficulty breathing?',
+    ];
+
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What additional questions would your group ask Kim to better understand Kim’s situation? List at least five clear questions (one short question per line).',
+      studentAnswer: answerLines.join('\n'),
+      sampleResponse: '',
+      feedbackPrompt: 'Focus on asking clear, relevant questions.',
+      guidance: 'Follow-ups: default',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: answerLines.join('\n'),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('response evaluation short-circuits when the question is already accepted', async () => {
+  const originalQuery = db.query;
+  const originalFetch = global.fetch;
+
+  db.query = async (sql) => {
+    if (String(sql).includes('FROM responses')) {
+      return [[
+        {
+          id: 11,
+          question_id: '1a',
+          response_type: 'text',
+          response: 'already accepted answer',
+          answered_by_user_id: 7,
+        },
+        {
+          id: 12,
+          question_id: '1aFM',
+          response_type: 'text',
+          response: 'accepted',
+          answered_by_user_id: 7,
+        },
+      ]];
+    }
+
+    return originalQuery(sql);
+  };
+
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    if (url.includes('api.openai.com')) {
+      throw new Error('OpenAI should not be called for an accepted question');
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      qid: '1a',
+      questionText: 'What does the loop do?',
+      studentAnswer: 'I changed my answer, but this question was already accepted.',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      instanceId: 123,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'I changed my answer, but this question was already accepted.',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    db.query = originalQuery;
+    global.fetch = originalFetch;
   }
 });

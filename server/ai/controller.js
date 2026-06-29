@@ -586,6 +586,24 @@ function isClearlyOffTopicQuestion(questionAsked = "", sources = []) {
   return false;
 }
 
+function buildLocalClarifyingHint(questionText = "", questionAsked = "", studentAnswer = "") {
+  const q = `${questionText} ${questionAsked} ${studentAnswer}`.toLowerCase();
+
+  if (/\bloop\b|\brepeat\b/.test(q)) {
+    return "Think about the condition that controls when the loop stops.";
+  }
+
+  if (/\bturtle\b/.test(q)) {
+    return "The turtle is the drawing cursor object created by `turtle.Turtle()`.";
+  }
+
+  if (/\bprint\b|\boutput\b/.test(q)) {
+    return "Focus on what the code prints or does when it runs.";
+  }
+
+  return "Think about the part of the question that still feels unclear and connect it to the code or output.";
+}
+
 async function buildStudentQuestionHelpPrompt({
   questionText,
   studentAnswer,
@@ -1109,14 +1127,16 @@ async function evaluateStudentResponse(req, res) {
       accepted = false;
       const rawFeedback = String(helpChat.choices?.[0]?.message?.content ?? "").trim();
       feedback =
-        rawFeedback ||
-        "Let's focus on the activity question and the part that's still unclear.";
+        rawFeedback &&
+        !/^let'?s focus on the activity question and the part that'?s still unclear\.?$/i.test(rawFeedback)
+          ? rawFeedback
+          : buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
 
       return await applyGateAndSend();
     } catch (err) {
       console.error("❌ OpenAI question-help branch failed:", err);
       accepted = false;
-      feedback = "Let's focus on the activity question and the part that's still unclear.";
+      feedback = buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
       return await applyGateAndSend();
     }
   }

@@ -273,7 +273,6 @@ test('response evaluation includes prior attempts in the prompt when history exi
       answeredByUserId: 7,
       retriesRequired: 0,
       submissionString: 'it keeps repeating',
-      dryRun: true,
     });
 
     assert.equal(response.status, 200);

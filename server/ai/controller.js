@@ -468,6 +468,87 @@ async function buildStudentResponsePrompt({
   };
 }
 
+function extractStudentQuestion(answerText = "") {
+  const text = stripHtml(answerText)
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return null;
+
+  const sentences = text
+    .split(/(?<=[?.!])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  const interrogativeStart = /^(what|why|how|when|where|which|who|whom|whose|can|could|would|should|do|does|did|is|are|am|will|may|might)\b/i;
+
+  for (const sentence of sentences) {
+    if (interrogativeStart.test(sentence) && sentence.includes("?")) {
+      return sentence.replace(/[?.!]+$/g, "").trim();
+    }
+  }
+
+  for (const sentence of sentences) {
+    if (sentence.includes("?") || interrogativeStart.test(sentence)) {
+      return sentence.replace(/[?.!]+$/g, "").trim();
+    }
+  }
+
+  return null;
+}
+
+async function buildStudentQuestionHelpPrompt({
+  questionText,
+  studentAnswer,
+  codeContext = "",
+  sampleResponse = "",
+  feedbackPrompt = "",
+  guidance = "",
+  questionAsked = "",
+}) {
+  const activityGuide = stripHtml(guidance || "");
+  const questionGuide = stripHtml(feedbackPrompt || "");
+
+  const sys = [
+    "You are a concise learning helper for a collaborative activity.",
+    "The student's submission may include both an attempted answer and a clarifying question.",
+    "Use the activity question, any shown code, the sample response, and the student's current answer as context.",
+    "Answer only the clarifying question; do not solve the whole program or give a full worked solution.",
+    "If the question is outside the activity's learning objectives, set inDomain=false and use exactly this feedback text: This system only works in the context of its learning objectives.",
+    "If the question is on-topic, set inDomain=true and give a short supportive answer or hint in 1-3 sentences.",
+    "Keep the reply helpful and bounded to the activity.",
+    "Do not mention grading, points, rubrics, or scoring.",
+  ].join("\n");
+
+  const user = [
+    `Activity question:\n${stripHtml(questionText)}`,
+    codeContext ? `Shown code/context:\n${stripHtml(codeContext)}` : "",
+    sampleResponse
+      ? `Sample / acceptance envelope (do not quote):\n${stripHtml(sampleResponse)}`
+      : "",
+    questionGuide
+      ? `Instructor feedbackprompt (meta; do not quote):\n${questionGuide}`
+      : "",
+    activityGuide
+      ? `Activity guidance (meta; do not quote):\n${activityGuide}`
+      : "",
+    `Student current answer:\n${stripHtml(studentAnswer)}`,
+    `Student clarifying question:\n${stripHtml(questionAsked)}`,
+    "Return JSON only with keys: inDomain, feedback",
+    "If the question is on-topic, feedback should answer the question briefly without giving away the entire solution.",
+    "If the question is off-topic for the activity, feedback must be exactly: This system only works in the context of its learning objectives.",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    sys,
+    user,
+    activityGuide,
+    questionGuide,
+  };
+}
+
 function retryKeys(groupNum) {
   const g = Number(groupNum);
   return {
@@ -900,6 +981,46 @@ async function evaluateStudentResponse(req, res) {
   const policy = getEffectivePolicy(activityGuide, questionGuide);
 
   const answerRaw = String(studentAnswer || "").trim();
+  const questionAsked = extractStudentQuestion(answerRaw);
+
+  if (questionAsked) {
+    try {
+      const helpPrompt = await buildStudentQuestionHelpPrompt({
+        questionText,
+        studentAnswer,
+        codeContext,
+        sampleResponse,
+        feedbackPrompt,
+        guidance,
+        questionAsked,
+      });
+
+      const helpChat = await callLLMJsonStrict({
+        messages: [
+          { role: "system", content: helpPrompt.sys },
+          { role: "user", content: helpPrompt.user },
+        ],
+        allowedKeys: ["inDomain", "feedback"],
+        temperature: 0.2,
+        max_tokens: 200,
+      });
+
+      accepted = false;
+      const rawFeedback = String(helpChat.feedback ?? "").trim();
+      const inDomain = helpChat.inDomain !== false;
+      feedback = inDomain
+        ? rawFeedback || "Let's focus on the activity question and the part that's still unclear."
+        : "This system only works in the context of its learning objectives.";
+
+      return await applyGateAndSend();
+    } catch (err) {
+      console.error("❌ OpenAI question-help branch failed:", err);
+      accepted = false;
+      feedback = "This system only works in the context of its learning objectives.";
+      return await applyGateAndSend();
+    }
+  }
+
   const promptParts = await buildStudentResponsePrompt({
     questionText,
     studentAnswer,
@@ -1466,4 +1587,6 @@ module.exports = {
   callLLMJsonStrict,
   buildAttemptHistoryContext,
   buildStudentResponsePrompt,
+  buildStudentQuestionHelpPrompt,
+  extractStudentQuestion,
 };

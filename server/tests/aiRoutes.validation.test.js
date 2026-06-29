@@ -257,3 +257,102 @@ test('response evaluation includes prior attempts in the prompt when history exi
     db.query = originalQuery;
   }
 });
+
+test('response evaluation answers a clear in-domain question before grading', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+
+    if (url.includes('api.openai.com')) {
+      const body = JSON.parse(init?.body || '{}');
+      const userMessage = (body?.messages || []).find((msg) => msg?.role === 'user')?.content || '';
+
+      if (userMessage.includes('Student clarifying question:')) {
+        return new Response(
+          JSON.stringify({
+            id: 'chatcmpl-test-help',
+            object: 'chat.completion',
+            choices: [
+              {
+                index: 0,
+                message: {
+                  role: 'assistant',
+                  content: JSON.stringify({
+                    feedback: 'Think about the condition that controls when the loop stops.',
+                  }),
+                },
+                finish_reason: 'stop',
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }
+        );
+      }
+    }
+
+    return originalFetch(input, init);
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What does the loop do?',
+      studentAnswer: 'I think it repeats because of the condition. Why does it stop there?',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'I think it repeats because of the condition. Why does it stop there?',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.match(response.body.feedback, /condition that controls when the loop stops/i);
+    assert.notEqual(
+      response.body.feedback,
+      'This system only works in the context of its learning objectives.'
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('response evaluation returns the exact fallback for an obvious off-topic question', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    if (url.includes('api.openai.com')) {
+      throw new Error('OpenAI should not be called for an obvious off-topic question');
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What does the loop do?',
+      studentAnswer: 'I am confused. What is the weather today?',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'I am confused. What is the weather today?',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.equal(
+      response.body.feedback,
+      'This system only works in the context of its learning objectives.'
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

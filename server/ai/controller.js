@@ -496,6 +496,58 @@ function extractStudentQuestion(answerText = "") {
   return null;
 }
 
+function tokenizeHelpfulWords(text = "") {
+  return new Set(
+    String(text || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .map((word) => word.trim())
+      .filter((word) => word.length >= 4)
+  );
+}
+
+function isClearlyOffTopicQuestion(questionAsked = "", sources = []) {
+  const question = String(questionAsked || "").toLowerCase().trim();
+  if (!question) return false;
+
+  const sourceTokens = new Set();
+  for (const source of sources) {
+    for (const token of tokenizeHelpfulWords(source)) {
+      sourceTokens.add(token);
+    }
+  }
+
+  const questionTokens = tokenizeHelpfulWords(question);
+  for (const token of questionTokens) {
+    if (sourceTokens.has(token)) {
+      return false;
+    }
+  }
+
+  const obviousOffTopic = [
+    /\bweather\b/i,
+    /\bsports?\b/i,
+    /\bmovie(s)?\b/i,
+    /\bmusic\b/i,
+    /\brecipe\b/i,
+    /\bdinner\b/i,
+    /\blunch\b/i,
+    /\bbreakfast\b/i,
+    /\bfootball\b/i,
+    /\bbasketball\b/i,
+    /\bsoccer\b/i,
+    /\bgame\b/i,
+    /\btravel\b/i,
+    /\bpolitic(s|al)?\b/i,
+    /\bcapital city\b/i,
+    /\bstock(s)?\b/i,
+    /\bprice(s)?\b/i,
+  ];
+
+  return obviousOffTopic.some((pattern) => pattern.test(question));
+}
+
 async function buildStudentQuestionHelpPrompt({
   questionText,
   studentAnswer,
@@ -513,8 +565,8 @@ async function buildStudentQuestionHelpPrompt({
     "The student's submission may include both an attempted answer and a clarifying question.",
     "Use the activity question, any shown code, the sample response, and the student's current answer as context.",
     "Answer only the clarifying question; do not solve the whole program or give a full worked solution.",
-    "If the question is outside the activity's learning objectives, set inDomain=false and use exactly this feedback text: This system only works in the context of its learning objectives.",
-    "If the question is on-topic, set inDomain=true and give a short supportive answer or hint in 1-3 sentences.",
+    "Assume the question is on-topic unless the activity context clearly shows otherwise.",
+    "Give a short supportive answer or hint in 1-3 sentences.",
     "Keep the reply helpful and bounded to the activity.",
     "Do not mention grading, points, rubrics, or scoring.",
   ].join("\n");
@@ -533,9 +585,8 @@ async function buildStudentQuestionHelpPrompt({
       : "",
     `Student current answer:\n${stripHtml(studentAnswer)}`,
     `Student clarifying question:\n${stripHtml(questionAsked)}`,
-    "Return JSON only with keys: inDomain, feedback",
-    "If the question is on-topic, feedback should answer the question briefly without giving away the entire solution.",
-    "If the question is off-topic for the activity, feedback must be exactly: This system only works in the context of its learning objectives.",
+    "Return JSON only with key: feedback",
+    "Answer the question briefly without giving away the entire solution.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -983,6 +1034,18 @@ async function evaluateStudentResponse(req, res) {
   const questionAsked = extractStudentQuestion(answerRaw);
 
   if (questionAsked) {
+    if (isClearlyOffTopicQuestion(questionAsked, [
+      questionText,
+      codeContext,
+      sampleResponse,
+      feedbackPrompt,
+      guidance,
+    ])) {
+      accepted = false;
+      feedback = "This system only works in the context of its learning objectives.";
+      return await applyGateAndSend();
+    }
+
     try {
       const helpPrompt = await buildStudentQuestionHelpPrompt({
         questionText,
@@ -999,17 +1062,14 @@ async function evaluateStudentResponse(req, res) {
           { role: "system", content: helpPrompt.sys },
           { role: "user", content: helpPrompt.user },
         ],
-        allowedKeys: ["inDomain", "feedback"],
+        allowedKeys: ["feedback"],
         temperature: 0.2,
         max_tokens: 200,
       });
 
       accepted = false;
       const rawFeedback = String(helpChat.feedback ?? "").trim();
-      const inDomain = helpChat.inDomain !== false;
-      feedback = inDomain
-        ? rawFeedback || "Let's focus on the activity question and the part that's still unclear."
-        : "This system only works in the context of its learning objectives.";
+      feedback = rawFeedback || "Let's focus on the activity question and the part that's still unclear.";
 
       return await applyGateAndSend();
     } catch (err) {

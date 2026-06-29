@@ -604,6 +604,121 @@ function buildLocalClarifyingHint(questionText = "", questionAsked = "", student
   return "Think about the part of the question that still feels unclear and connect it to the code or output.";
 }
 
+function classifyPromptMode({
+  questionText = "",
+  feedbackPrompt = "",
+  sampleResponse = "",
+  guidance = "",
+}) {
+  const hay = [
+    questionText,
+    feedbackPrompt,
+    sampleResponse,
+    guidance,
+  ]
+    .map((value) => stripHtml(value))
+    .join(" ")
+    .toLowerCase();
+
+  const questionTaskPatterns = [
+    /\badditional questions?\b/,
+    /\bwhat additional questions\b/,
+    /\bwhat questions would\b/,
+    /\bquestions? would (?:your|the) group ask\b/,
+    /\bask\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\blist\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\bgenerate\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\bwrite\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\bcome up with\b[^.\n\r]{0,60}\bquestions?\b/,
+    /\bone short question per line\b/,
+    /\bat least\s+\d+\s+(?:clear\s+)?questions?\b/,
+    /\bclarifying questions?\b/,
+  ];
+
+  if (questionTaskPatterns.some((pattern) => pattern.test(hay))) {
+    return "questions";
+  }
+
+  return "answer";
+}
+
+function parseRequiredQuestionCount(questionText = "") {
+  const text = stripHtml(questionText);
+  const patterns = [
+    /at least\s+(\d+)\s+(?:clear\s+)?questions?/i,
+    /list\s+at least\s+(\d+)\s+(?:clear\s+)?questions?/i,
+    /write\s+at least\s+(\d+)\s+(?:clear\s+)?questions?/i,
+    /generate\s+at least\s+(\d+)\s+(?:clear\s+)?questions?/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) {
+      const count = Number(match[1]);
+      if (Number.isFinite(count) && count > 0) {
+        return count;
+      }
+    }
+  }
+
+  return 5;
+}
+
+function looksLikeQuestionLine(line = "") {
+  const text = String(line || "").trim();
+  if (!text) return false;
+  if (/\?$/.test(text)) return true;
+  return /^(what|why|how|when|where|which|who|whom|whose|can|could|would|should|do|does|did|is|are|am|will|may|might)\b/i.test(text);
+}
+
+function evaluateQuestionListSubmission({
+  questionText = "",
+  studentAnswer = "",
+}) {
+  const requiredCount = parseRequiredQuestionCount(questionText);
+  const lines = String(studentAnswer || "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!lines.length) {
+    return {
+      accepted: false,
+      feedback: `List at least ${requiredCount} clear questions, one short question per line.`,
+    };
+  }
+
+  const questionLines = lines.filter(looksLikeQuestionLine);
+
+  if (questionLines.length < requiredCount) {
+    return {
+      accepted: false,
+      feedback: `You have ${questionLines.length} question(s); please add ${requiredCount - questionLines.length} more.`,
+    };
+  }
+
+  if (questionLines.length !== lines.length) {
+    return {
+      accepted: false,
+      feedback: "Write each item as a short question on its own line.",
+    };
+  }
+
+  const longLine = lines.find((line) => line.length > 140);
+  if (longLine) {
+    return {
+      accepted: false,
+      feedback: "Keep each question short and focused.",
+    };
+  }
+
+  return {
+    accepted: true,
+    feedback: null,
+  };
+}
+
 async function buildStudentQuestionHelpPrompt({
   questionText,
   studentAnswer,
@@ -1090,6 +1205,23 @@ async function evaluateStudentResponse(req, res) {
   const answerRaw = String(studentAnswer || "").trim();
   const questionAsked = extractStudentQuestion(answerRaw);
 
+  const promptMode = classifyPromptMode({
+    questionText,
+    feedbackPrompt,
+    sampleResponse,
+    guidance,
+  });
+
+  if (promptMode === "questions") {
+    const localQuestionResult = evaluateQuestionListSubmission({
+      questionText,
+      studentAnswer: answerRaw,
+    });
+    accepted = localQuestionResult.accepted;
+    feedback = localQuestionResult.feedback;
+    return await applyGateAndSend();
+  }
+
   if (questionAsked) {
     if (isClearlyOffTopicQuestion(questionAsked, [
       questionText,
@@ -1103,42 +1235,9 @@ async function evaluateStudentResponse(req, res) {
       return await applyGateAndSend();
     }
 
-    try {
-      const helpPrompt = await buildStudentQuestionHelpPrompt({
-        questionText,
-        studentAnswer,
-        codeContext,
-        sampleResponse,
-        feedbackPrompt,
-        guidance,
-        questionAsked,
-      });
-
-      const helpChat = await openai.chat.completions.create({
-        model: MODEL,
-        messages: [
-          { role: "system", content: helpPrompt.sys },
-          { role: "user", content: helpPrompt.user },
-        ],
-        temperature: 0.2,
-        max_tokens: 200,
-      });
-
-      accepted = false;
-      const rawFeedback = String(helpChat.choices?.[0]?.message?.content ?? "").trim();
-      feedback =
-        rawFeedback &&
-        !/^let'?s focus on the activity question and the part that'?s still unclear\.?$/i.test(rawFeedback)
-          ? rawFeedback
-          : buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
-
-      return await applyGateAndSend();
-    } catch (err) {
-      console.error("❌ OpenAI question-help branch failed:", err);
-      accepted = false;
-      feedback = buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
-      return await applyGateAndSend();
-    }
+    accepted = false;
+    feedback = buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
+    return await applyGateAndSend();
   }
 
   const promptParts = await buildStudentResponsePrompt({

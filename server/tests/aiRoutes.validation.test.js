@@ -4,15 +4,11 @@ const test = require('node:test');
 
 process.env.OPENAI_API_KEY ||= 'test-key';
 
-let captureOpenAiBody = null;
 const nativeFetch = global.fetch;
 global.fetch = async (input, init) => {
   const url = typeof input === 'string' ? input : input?.url || '';
 
   if (url.includes('api.openai.com')) {
-    if (typeof captureOpenAiBody === 'function') {
-      captureOpenAiBody(init?.body ? JSON.parse(init.body) : null);
-    }
     return new Response(
       JSON.stringify({
         id: 'chatcmpl-test',
@@ -43,6 +39,9 @@ global.fetch = async (input, init) => {
 
 const express = require('express');
 const aiRoutes = require('../ai/routes');
+const {
+  buildStudentResponsePrompt,
+} = require('../ai/controller');
 const db = require('../db');
 
 function createTestServer() {
@@ -159,10 +158,6 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
 
 test('response evaluation includes prior attempts in the prompt when history exists', async () => {
   const originalQuery = db.query;
-  let capturedOpenAiBody = null;
-  captureOpenAiBody = (body) => {
-    capturedOpenAiBody = body;
-  };
 
   db.query = async (sql) => {
     if (String(sql).includes('FROM responses')) {
@@ -234,7 +229,7 @@ test('response evaluation includes prior attempts in the prompt when history exi
   };
 
   try {
-    const response = await postJson('/api/ai/evaluate-response', {
+    const prompt = await buildStudentResponsePrompt({
       qid: '1a',
       questionText: 'What does the loop do?',
       studentAnswer: 'it keeps repeating',
@@ -242,16 +237,12 @@ test('response evaluation includes prior attempts in the prompt when history exi
       feedbackPrompt: 'Focus on the repetition.',
       guidance: 'Follow-ups: default',
       instanceId: 101,
-      groupNum: 1,
-      answeredByUserId: 7,
-      retriesRequired: 0,
-      submissionString: 'it keeps repeating',
+      followupPrompt: '',
+      codeContext: '',
+      historyLimit: 5,
     });
 
-    assert.equal(response.status, 200);
-    assert.ok(capturedOpenAiBody, 'expected OpenAI request body to be captured');
-
-    const userMessage = capturedOpenAiBody.messages.find((msg) => msg.role === 'user')?.content || '';
+    const userMessage = prompt.user || '';
     assert.match(userMessage, /Prior group attempts for this question/i);
     assert.match(userMessage, /Group answer: blue/i);
     assert.match(userMessage, /AI feedback already given: Try mentioning the loop/i);
@@ -264,6 +255,5 @@ test('response evaluation includes prior attempts in the prompt when history exi
     assert.doesNotMatch(userMessage, /ignored different question/i);
   } finally {
     db.query = originalQuery;
-    captureOpenAiBody = null;
   }
 });

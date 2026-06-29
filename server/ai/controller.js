@@ -370,6 +370,98 @@ async function buildAttemptHistoryContext({
   }
 }
 
+async function buildStudentResponsePrompt({
+  questionText,
+  studentAnswer,
+  codeContext = "",
+  sampleResponse = "",
+  feedbackPrompt = "",
+  followupPrompt = "",
+  guidance = "",
+  instanceId,
+  qid,
+  historyLimit = 5,
+}) {
+  const activityGuide = stripHtml(guidance || "");
+  const questionGuide = stripHtml(feedbackPrompt || "");
+  const historyContext = await buildAttemptHistoryContext({
+    instanceId,
+    qid: qid || "",
+    limit: historyLimit,
+  });
+
+  const followupQ =
+    extractFollowupFromFeedbackPrompt(feedbackPrompt) ||
+    "Please answer using one concrete detail from the code or output.";
+
+  const positiveEnabled = isPositiveFeedbackEnabled(guidance, followupPrompt);
+  const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
+  const followupRaw = fuParsed.cleaned;
+  const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
+
+  const sys = [
+    "You are a concise, supportive learning facilitator for an ungraded collaborative activity.",
+    "The submission represents a collaborative group's shared answer, even though one person may be typing.",
+    "Decide whether the group's current submission is sufficient to proceed.",
+    "Return ONLY JSON matching the schema exactly.",
+    "If the submission is on-topic and sufficient, set accepted=true.",
+    "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
+    "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
+    "If accepted=true, feedback must be null unless positive feedback is enabled.",
+    "Do not require more examples, items, evidence, or precision than the question actually asks for.",
+    "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
+    "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
+    "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
+    "Write feedback in the same language as the activity/question text.",
+    "Do not mirror the student's answer language if it differs from the activity language.",
+    "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
+    "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
+    "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
+    "Do NOT mention grading, points, rubrics, or scoring.",
+  ].join("\n");
+
+  const schema = `Return JSON only:
+{"accepted":true|false,
+ "feedback": null|string}`;
+
+  const user = [
+    `Question:\n${stripHtml(questionText)}`,
+    codeContext ? `Shown code/context:\n${stripHtml(codeContext)}` : "",
+    sampleResponse
+      ? `Sample / acceptance envelope (do not quote):\n${stripHtml(sampleResponse)}`
+      : "",
+    questionGuide
+      ? `Instructor feedbackprompt (meta; do not quote):\n${questionGuide}`
+      : "",
+    followupRaw && !followupIsNone
+      ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
+      : "",
+    historyContext,
+    `Current group submission:\n${stripHtml(studentAnswer)}`,
+    "Feedback language rule: use the activity/question language for the feedback, not the student's answer language if they differ.",
+    "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
+    "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
+    "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
+    "",
+    schema,
+    "If reasonable, prefer {\"accepted\":true}",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    sys,
+    user,
+    historyContext,
+    followupRaw,
+    followupIsNone,
+    positiveEnabled,
+    questionGuide,
+    activityGuide,
+    followupQ,
+  };
+}
+
 function retryKeys(groupNum) {
   const g = Number(groupNum);
   return {
@@ -800,22 +892,30 @@ async function evaluateStudentResponse(req, res) {
   const activityGuide = stripHtml(guidance || "");
   const questionGuide = stripHtml(feedbackPrompt || "");
   const policy = getEffectivePolicy(activityGuide, questionGuide);
-  const historyContext = await buildAttemptHistoryContext({
-    instanceId,
-    qid: qid || req.body?.questionId || req.body?.codeVersion || "",
-    limit: 5,
-  });
 
   const answerRaw = String(studentAnswer || "").trim();
+  const promptParts = await buildStudentResponsePrompt({
+    questionText,
+    studentAnswer,
+    codeContext,
+    sampleResponse,
+    feedbackPrompt,
+    followupPrompt,
+    guidance,
+    instanceId,
+    qid: qid || req.body?.questionId || req.body?.codeVersion || "",
+    historyLimit: 5,
+  });
+  const {
+    sys,
+    user,
+    followupRaw,
+    followupIsNone,
+    positiveEnabled,
+    followupQ,
+  } = promptParts;
 
-  const followupQ =
-    extractFollowupFromFeedbackPrompt(feedbackPrompt) ||
-    "Please answer using one concrete detail from the code or output.";
-
-  const positiveEnabled = isPositiveFeedbackEnabled(guidance, followupPrompt);
-  const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
-  const followupRaw = fuParsed.cleaned;
-  const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
+  const historyContext = promptParts.historyContext;
 
   if (policy.requirementsOnly) {
     if (!answerRaw || looksGibberish(answerRaw)) {
@@ -837,58 +937,6 @@ async function evaluateStudentResponse(req, res) {
   }
 
   const obviouslyBad = !answerRaw || looksGibberish(answerRaw);
-
-  const sys = [
-    "You are a concise, supportive learning facilitator for an ungraded collaborative activity.",
-    "The submission represents a collaborative group's shared answer, even though one person may be typing.",
-    "Decide whether the group's current submission is sufficient to proceed.",
-    "Return ONLY JSON matching the schema exactly.",
-    "If the submission is on-topic and sufficient, set accepted=true.",
-    "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
-    "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
-    "If accepted=true, feedback must be null unless positive feedback is enabled.",
-    "Do not require more examples, items, evidence, or precision than the question actually asks for.",
-    "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
-    "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
-    "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
-    "Write feedback in the same language as the activity/question text.",
-    "Do not mirror the student's answer language if it differs from the activity language.",
-    "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
-    "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
-    "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
-    "Do NOT mention grading, points, rubrics, or scoring.",
-  ].join("\n");
-
-  const schema = `Return JSON only:
-{"accepted":true|false,
- "feedback": null|string}`;
-
-  const user = [
-    `Question:\n${stripHtml(questionText)}`,
-    codeContext ? `Shown code/context:\n${stripHtml(codeContext)}` : "",
-    sampleResponse
-      ? `Sample / acceptance envelope (do not quote):\n${stripHtml(sampleResponse)}`
-      : "",
-    questionGuide
-      ? `Instructor feedbackprompt (meta; do not quote):\n${questionGuide}`
-      : "",
-    followupRaw && !followupIsNone
-      ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
-      : "",
-    historyContext,
-    `Current group submission:\n${stripHtml(studentAnswer)}`,
-    "Feedback language rule: use the activity/question language for the feedback, not the student's answer language if they differ.",
-    "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
-    "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
-    "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
-    "",
-    schema,
-    forceFollowup || obviouslyBad
-      ? 'If uncertain, prefer {"accepted":false}'
-      : 'If reasonable, prefer {"accepted":true}',
-  ]
-    .filter(Boolean)
-    .join("\n\n");
 
   try {
     const chat = await openai.chat.completions.create({
@@ -1410,4 +1458,6 @@ module.exports = {
   gradeTestQuestion,
   gradeTestQuestionHttp,
   callLLMJsonStrict,
+  buildAttemptHistoryContext,
+  buildStudentResponsePrompt,
 };

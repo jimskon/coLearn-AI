@@ -359,7 +359,6 @@ async function buildAttemptHistoryContext({
     lines.push('- Attempt 1: give a gentle conceptual hint.');
     lines.push('- Attempt 2: point to the missing idea or relevant evidence.');
     lines.push('- Attempt 3: give a more directed hint or sentence starter that names exactly what is missing.');
-    lines.push('- Attempt 3 or later: if the answer has the core idea plus reasonable reasoning, accept it even if it is not fully polished.');
     lines.push('- Attempt 4 or later: if the current answer is close enough, accept it; otherwise give a direct sentence-level path forward.');
 
     return lines.join('\n');

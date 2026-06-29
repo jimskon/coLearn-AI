@@ -39,6 +39,7 @@ global.fetch = async (input, init) => {
 
 const express = require('express');
 const aiRoutes = require('../ai/routes');
+const db = require('../db');
 
 function createTestServer() {
   const app = express();
@@ -150,4 +151,145 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
   assert.equal(response.body.retryCount, 0);
   assert.equal(response.body.retriesRequired, 2);
   assert.equal(typeof response.body.feedback, 'string');
+});
+
+test('response evaluation includes prior attempts in the prompt when history exists', async () => {
+  const originalFetch = global.fetch;
+  const originalQuery = db.query;
+  let capturedOpenAiBody = null;
+
+  db.query = async (sql) => {
+    if (String(sql).includes('FROM responses')) {
+      return [[
+        {
+          id: 11,
+          submit_id: 'submit-1',
+          question_id: '1a',
+          response_type: 'text',
+          response: 'blue',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:00:00',
+          updated_at: '2026-06-29 10:00:00',
+        },
+        {
+          id: 12,
+          submit_id: 'submit-1',
+          question_id: '1aResponseFeedback',
+          response_type: 'text',
+          response: 'Try mentioning the loop.',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:00:01',
+          updated_at: '2026-06-29 10:00:01',
+        },
+        {
+          id: 13,
+          submit_id: 'submit-2',
+          question_id: '1a',
+          response_type: 'text',
+          response: 'it repeats',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:01:00',
+          updated_at: '2026-06-29 10:01:00',
+        },
+        {
+          id: 14,
+          submit_id: 'submit-2',
+          question_id: '1aResponseFeedback',
+          response_type: 'text',
+          response: 'You are close, but explain why.',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:01:01',
+          updated_at: '2026-06-29 10:01:01',
+        },
+        {
+          id: 15,
+          submit_id: 'submit-2',
+          question_id: '1state',
+          response_type: 'text',
+          response: 'ignored metadata',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:01:02',
+          updated_at: '2026-06-29 10:01:02',
+        },
+        {
+          id: 16,
+          submit_id: 'submit-3',
+          question_id: '1b',
+          response_type: 'text',
+          response: 'ignored different question',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:02:00',
+          updated_at: '2026-06-29 10:02:00',
+        },
+      ]];
+    }
+
+    return [[], []];
+  };
+
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+
+    if (url.includes('api.openai.com')) {
+      capturedOpenAiBody = init?.body ? JSON.parse(init.body) : null;
+      return new Response(
+        JSON.stringify({
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  accepted: false,
+                  feedback: 'Add one more concrete detail.',
+                }),
+              },
+              finish_reason: 'stop',
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+    }
+
+    return originalFetch(input, init);
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      qid: '1a',
+      questionText: 'What does the loop do?',
+      studentAnswer: 'it keeps repeating',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      instanceId: 101,
+      groupNum: 1,
+      answeredByUserId: 7,
+      retriesRequired: 0,
+      submissionString: 'it keeps repeating',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.ok(capturedOpenAiBody, 'expected OpenAI request body to be captured');
+
+    const userMessage = capturedOpenAiBody.messages.find((msg) => msg.role === 'user')?.content || '';
+    assert.match(userMessage, /Prior group attempts for this question/i);
+    assert.match(userMessage, /Group answer: blue/i);
+    assert.match(userMessage, /AI feedback already given: Try mentioning the loop/i);
+    assert.match(userMessage, /AI feedback already given: You are close, but explain why/i);
+    assert.match(userMessage, /Current group attempt number: 3/i);
+    assert.match(userMessage, /Treat this as one collaborative group conversation/i);
+    assert.doesNotMatch(userMessage, /ignored metadata/i);
+    assert.doesNotMatch(userMessage, /ignored different question/i);
+  } finally {
+    global.fetch = originalFetch;
+    db.query = originalQuery;
+  }
 });

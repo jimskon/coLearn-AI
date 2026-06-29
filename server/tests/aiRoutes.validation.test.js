@@ -4,11 +4,15 @@ const test = require('node:test');
 
 process.env.OPENAI_API_KEY ||= 'test-key';
 
+let captureOpenAiBody = null;
 const nativeFetch = global.fetch;
 global.fetch = async (input, init) => {
   const url = typeof input === 'string' ? input : input?.url || '';
 
   if (url.includes('api.openai.com')) {
+    if (typeof captureOpenAiBody === 'function') {
+      captureOpenAiBody(init?.body ? JSON.parse(init.body) : null);
+    }
     return new Response(
       JSON.stringify({
         id: 'chatcmpl-test',
@@ -154,9 +158,11 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
 });
 
 test('response evaluation includes prior attempts in the prompt when history exists', async () => {
-  const originalFetch = global.fetch;
   const originalQuery = db.query;
   let capturedOpenAiBody = null;
+  captureOpenAiBody = (body) => {
+    capturedOpenAiBody = body;
+  };
 
   db.query = async (sql) => {
     if (String(sql).includes('FROM responses')) {
@@ -227,39 +233,6 @@ test('response evaluation includes prior attempts in the prompt when history exi
     return [[], []];
   };
 
-  global.fetch = async (input, init) => {
-    const url = typeof input === 'string' ? input : input?.url || '';
-
-    if (url.includes('api.openai.com')) {
-      capturedOpenAiBody = init?.body ? JSON.parse(init.body) : null;
-      return new Response(
-        JSON.stringify({
-          id: 'chatcmpl-test',
-          object: 'chat.completion',
-          choices: [
-            {
-              index: 0,
-              message: {
-                role: 'assistant',
-                content: JSON.stringify({
-                  accepted: false,
-                  feedback: 'Add one more concrete detail.',
-                }),
-              },
-              finish_reason: 'stop',
-            },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }
-      );
-    }
-
-    return originalFetch(input, init);
-  };
-
   try {
     const response = await postJson('/api/ai/evaluate-response', {
       qid: '1a',
@@ -290,7 +263,7 @@ test('response evaluation includes prior attempts in the prompt when history exi
     assert.doesNotMatch(userMessage, /ignored metadata/i);
     assert.doesNotMatch(userMessage, /ignored different question/i);
   } finally {
-    global.fetch = originalFetch;
     db.query = originalQuery;
+    captureOpenAiBody = null;
   }
 });

@@ -295,7 +295,7 @@ async function createInstance({
 async function addGroupMember({
   instanceId,
   studentId,
-  role = 'facilitator',
+  role = null,
   connected = false,
   lastHeartbeat = null,
 }) {

@@ -39,6 +39,10 @@ global.fetch = async (input, init) => {
 
 const express = require('express');
 const aiRoutes = require('../ai/routes');
+const {
+  buildStudentResponsePrompt,
+} = require('../ai/controller');
+const db = require('../db');
 
 function createTestServer() {
   const app = express();
@@ -150,4 +154,106 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
   assert.equal(response.body.retryCount, 0);
   assert.equal(response.body.retriesRequired, 2);
   assert.equal(typeof response.body.feedback, 'string');
+});
+
+test('response evaluation includes prior attempts in the prompt when history exists', async () => {
+  const originalQuery = db.query;
+
+  db.query = async (sql) => {
+    if (String(sql).includes('FROM responses')) {
+      return [[
+        {
+          id: 11,
+          submit_id: 'submit-1',
+          question_id: '1a',
+          response_type: 'text',
+          response: 'blue',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:00:00',
+          updated_at: '2026-06-29 10:00:00',
+        },
+        {
+          id: 12,
+          submit_id: 'submit-1',
+          question_id: '1aResponseFeedback',
+          response_type: 'text',
+          response: 'Try mentioning the loop.',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:00:01',
+          updated_at: '2026-06-29 10:00:01',
+        },
+        {
+          id: 13,
+          submit_id: 'submit-2',
+          question_id: '1a',
+          response_type: 'text',
+          response: 'it repeats',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:01:00',
+          updated_at: '2026-06-29 10:01:00',
+        },
+        {
+          id: 14,
+          submit_id: 'submit-2',
+          question_id: '1aResponseFeedback',
+          response_type: 'text',
+          response: 'You are close, but explain why.',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:01:01',
+          updated_at: '2026-06-29 10:01:01',
+        },
+        {
+          id: 15,
+          submit_id: 'submit-2',
+          question_id: '1state',
+          response_type: 'text',
+          response: 'ignored metadata',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:01:02',
+          updated_at: '2026-06-29 10:01:02',
+        },
+        {
+          id: 16,
+          submit_id: 'submit-3',
+          question_id: '1b',
+          response_type: 'text',
+          response: 'ignored different question',
+          answered_by_user_id: 7,
+          submitted_at: '2026-06-29 10:02:00',
+          updated_at: '2026-06-29 10:02:00',
+        },
+      ]];
+    }
+
+    return [[], []];
+  };
+
+  try {
+    const prompt = await buildStudentResponsePrompt({
+      qid: '1a',
+      questionText: 'What does the loop do?',
+      studentAnswer: 'it keeps repeating',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      instanceId: 101,
+      followupPrompt: '',
+      codeContext: '',
+      historyLimit: 5,
+    });
+
+    const userMessage = prompt.user || '';
+    assert.match(userMessage, /Prior group attempts for this question/i);
+    assert.match(userMessage, /Group answer: blue/i);
+    assert.match(userMessage, /AI feedback already given: Try mentioning the loop/i);
+    assert.match(userMessage, /AI feedback already given: You are close, but explain why/i);
+    assert.match(userMessage, /Current group attempt number: 3/i);
+    assert.match(userMessage, /Treat this as one collaborative group conversation/i);
+    assert.match(userMessage, /lower bound is enough/i);
+    assert.match(userMessage, /tell them exactly what to add/i);
+    assert.doesNotMatch(userMessage, /ignored metadata/i);
+    assert.doesNotMatch(userMessage, /ignored different question/i);
+  } finally {
+    db.query = originalQuery;
+  }
 });

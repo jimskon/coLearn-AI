@@ -117,6 +117,350 @@ function sendAI(res, payload, status = 200) {
   return res.status(status).json({ accepted, feedback, canContinue, retryCount, retriesRequired });
 }
 
+function normalizeHistoryQid(qidRaw) {
+  const qid = String(qidRaw || '').trim();
+  if (!qid) return null;
+
+  if (/^attempt:\d+$/i.test(qid)) return null;
+  if (/^\d+state$/i.test(qid)) return null;
+  if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return null;
+  if (/^test(?:Total|Max|Summary)Score$/i.test(qid)) return null;
+
+  const suffixPatterns = [
+    /^(?<base>\d+[A-Za-z]+)F\d+$/i,
+    /^(?<base>\d+[A-Za-z]+)FA\d+$/i,
+    /^(?<base>\d+[A-Za-z]+)FM$/i,
+    /^(?<base>\d+[A-Za-z]+)AF$/i,
+    /^(?<base>\d+[A-Za-z]+)S$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)RunFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)ResponseFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeScore$/i,
+    /^(?<base>\d+[A-Za-z]+)RunScore$/i,
+    /^(?<base>\d+[A-Za-z]+)ResponseScore$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeAccepted$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeCanContinue$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeRetryCount$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeRetriesRequired$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeSubmissionString$/i,
+    /^(?<base>\d+[A-Za-z]+)(?:Output|output\d*|code\d+|table\d+cell\d+_\d+)$/i,
+  ];
+
+  for (const pattern of suffixPatterns) {
+    const match = qid.match(pattern);
+    if (match?.groups?.base) return match.groups.base;
+  }
+
+  if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
+
+  return null;
+}
+
+function isHiddenHistoryKey(questionIdRaw) {
+  const qid = String(questionIdRaw || '').trim();
+  if (!qid) return true;
+
+  if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return true;
+  if (/^attempt:\d+$/i.test(qid)) return true;
+  if (/^\d+state$/i.test(qid)) return true;
+  if (/^\d+[A-Za-z]+AF$/i.test(qid)) return true;
+  if (/^\d+[A-Za-z]+FM$/i.test(qid)) return true;
+  if (/^\d+[A-Za-z]+S$/i.test(qid)) return true;
+
+  if (/Score$/i.test(qid)) return true;
+  if (/Accepted$/i.test(qid)) return true;
+  if (/CanContinue$/i.test(qid)) return true;
+  if (/RetryCount$/i.test(qid)) return true;
+  if (/RetriesRequired$/i.test(qid)) return true;
+  if (/SubmissionString$/i.test(qid)) return true;
+
+  return false;
+}
+
+function classifyHistoryRow(questionIdRaw) {
+  const qid = String(questionIdRaw || '').trim();
+  if (!qid || isHiddenHistoryKey(qid)) return null;
+
+  if (/^\d+[A-Za-z]+CodeFeedback$/i.test(qid)) return 'feedback';
+  if (/^\d+[A-Za-z]+RunFeedback$/i.test(qid)) return 'feedback';
+  if (/^\d+[A-Za-z]+ResponseFeedback$/i.test(qid)) return 'feedback';
+  if (/^\d+[A-Za-z]+F\d+$/i.test(qid)) return 'feedback';
+  if (/^\d+[A-Za-z]+FA\d+$/i.test(qid)) return 'feedback';
+  if (/^\d+[A-Za-z]+FM$/i.test(qid)) return 'feedback';
+
+  if (/^\d+[A-Za-z]+output\d*$/i.test(qid) || /^\d+[A-Za-z]+Output$/i.test(qid)) {
+    return 'output';
+  }
+
+  if (/^\d+[A-Za-z]+code\d+$/i.test(qid)) return 'code';
+
+  if (/^\d+[A-Za-z]+$/i.test(qid)) return 'answer';
+
+  return null;
+}
+
+function clipHistoryText(value, limit = 180) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length <= limit ? text : `${text.slice(0, limit)}...`;
+}
+
+function clipHistoryCode(value, limit = 180) {
+  const text = String(value ?? '').replace(/\r\n/g, '\n').trim();
+  if (!text) return '';
+  return text.length <= limit ? text : `${text.slice(0, limit)}...`;
+}
+
+async function buildAttemptHistoryContext({
+  instanceId,
+  qid,
+  limit = 5,
+}) {
+  const baseQid = normalizeHistoryQid(qid);
+  const numericInstanceId = Number(instanceId);
+
+  if (!Number.isFinite(numericInstanceId) || numericInstanceId <= 0 || !baseQid) {
+    return '';
+  }
+
+  try {
+    const [rows] = await db.query(
+      `SELECT
+         id,
+         submit_id,
+         question_id,
+         response_type,
+         response,
+         answered_by_user_id,
+         submitted_at,
+         updated_at
+       FROM responses
+       WHERE activity_instance_id = ?
+       ORDER BY id ASC`,
+      [numericInstanceId]
+    );
+
+    const groups = new Map();
+    const order = [];
+
+    for (const row of rows || []) {
+      const rowBase = normalizeHistoryQid(row.question_id);
+      if (rowBase !== baseQid) continue;
+
+      const kind = classifyHistoryRow(row.question_id);
+      if (!kind) continue;
+
+      const rawValue = String(row.response ?? '').trim();
+      if (!rawValue) continue;
+
+      const submitId = row.submit_id || `row-${row.id}`;
+      if (!groups.has(submitId)) {
+        groups.set(submitId, {
+          submitId,
+          firstRowId: Number(row.id) || 0,
+          rows: [],
+        });
+        order.push(submitId);
+      }
+
+      groups.get(submitId).rows.push({
+        ...row,
+        kind,
+        value: rawValue,
+      });
+    }
+
+    const attempts = [];
+    let lastSignature = '';
+    let attemptNumber = 0;
+
+    for (const submitId of order) {
+      const group = groups.get(submitId);
+      if (!group?.rows?.length) continue;
+
+      const sortedRows = [...group.rows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+      const answerParts = [];
+      const codeParts = [];
+      const outputParts = [];
+      const feedbackParts = [];
+
+      for (const row of sortedRows) {
+        if (row.kind === 'answer') {
+          answerParts.push(clipHistoryText(row.value, 220));
+          continue;
+        }
+
+        if (row.kind === 'code') {
+          codeParts.push(clipHistoryCode(row.value, 220));
+          continue;
+        }
+
+        if (row.kind === 'output') {
+          outputParts.push(clipHistoryText(row.value, 220));
+          continue;
+        }
+
+        if (row.kind === 'feedback') {
+          feedbackParts.push(clipHistoryText(row.value, 220));
+        }
+      }
+
+      const signature = [
+        answerParts.join(' / '),
+        codeParts.join(' / '),
+        outputParts.join(' / '),
+        feedbackParts.join(' / '),
+      ].join(' || ').trim().toLowerCase();
+      if (!signature) continue;
+      if (signature === lastSignature) continue;
+      lastSignature = signature;
+
+      attemptNumber += 1;
+      attempts.push({
+        attemptNumber,
+        answerParts,
+        codeParts,
+        outputParts,
+        feedbackParts,
+      });
+    }
+
+    if (!attempts.length) return '';
+
+    const visibleAttempts = attempts.slice(-Math.max(1, limit));
+    const lines = [
+      'Prior group attempts for this question (oldest first; same collaborative group instance):',
+    ];
+
+    for (const attempt of visibleAttempts) {
+      lines.push(`Attempt ${attempt.attemptNumber}:`);
+      if (attempt.answerParts.length) {
+        lines.push(`Group answer: ${attempt.answerParts.join(' / ')}`);
+      }
+      if (attempt.codeParts.length) {
+        lines.push(`Group code: ${attempt.codeParts.map((value, idx) => `[${idx + 1}] ${value}`).join(' | ')}`);
+      }
+      if (attempt.outputParts.length) {
+        lines.push(`Program output: ${attempt.outputParts.join(' / ')}`);
+      }
+      if (attempt.feedbackParts.length) {
+        lines.push(`AI feedback already given: ${attempt.feedbackParts.join(' / ')}`);
+      }
+    }
+
+    lines.push(`Current group attempt number: ${attempts.length + 1}`);
+    lines.push('Group scaffolding guidance:');
+    lines.push('- Treat this as one collaborative group conversation; the active typer may change.');
+    lines.push('- Compare the current group submission with prior group attempts.');
+    lines.push('- If the group improved, acknowledge the progress briefly before the next nudge.');
+    lines.push('- Do not repeat prior AI feedback wording.');
+    lines.push('- Do not raise the bar beyond the question, sample, or instructor guidance.');
+    lines.push('- If the question gives a range such as 2-4 items, the lower bound satisfies the quantity requirement.');
+    lines.push('- Attempt 1: give a gentle conceptual hint.');
+    lines.push('- Attempt 2: point to the missing idea or relevant evidence.');
+    lines.push('- Attempt 3: give a more directed hint or sentence starter that names exactly what is missing.');
+    lines.push('- Attempt 4 or later: if the current answer is close enough, accept it; otherwise give a direct sentence-level path forward.');
+
+    return lines.join('\n');
+  } catch (err) {
+    if (AI_DEBUG) {
+      console.warn('[AI_DEBUG] buildAttemptHistoryContext failed:', err?.message || err);
+    }
+    return '';
+  }
+}
+
+async function buildStudentResponsePrompt({
+  questionText,
+  studentAnswer,
+  codeContext = "",
+  sampleResponse = "",
+  feedbackPrompt = "",
+  followupPrompt = "",
+  guidance = "",
+  instanceId,
+  qid,
+  historyLimit = 5,
+}) {
+  const activityGuide = stripHtml(guidance || "");
+  const questionGuide = stripHtml(feedbackPrompt || "");
+  const historyContext = await buildAttemptHistoryContext({
+    instanceId,
+    qid: qid || "",
+    limit: historyLimit,
+  });
+
+  const followupQ =
+    extractFollowupFromFeedbackPrompt(feedbackPrompt) ||
+    "Please answer using one concrete detail from the code or output.";
+
+  const positiveEnabled = isPositiveFeedbackEnabled(guidance, followupPrompt);
+  const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
+  const followupRaw = fuParsed.cleaned;
+  const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
+
+  const sys = [
+    "You are a concise, supportive learning facilitator for an ungraded collaborative activity.",
+    "The submission represents a collaborative group's shared answer, even though one person may be typing.",
+    "Decide whether the group's current submission is sufficient to proceed.",
+    "Return ONLY JSON matching the schema exactly.",
+    "If the submission is on-topic and sufficient, set accepted=true.",
+    "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
+    "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
+    "If accepted=true, feedback must be null unless positive feedback is enabled.",
+    "Do not require more examples, items, evidence, or precision than the question actually asks for.",
+    "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
+    "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
+    "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
+    "Write feedback in the same language as the activity/question text.",
+    "Do not mirror the student's answer language if it differs from the activity language.",
+    "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
+    "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
+    "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
+    "Do NOT mention grading, points, rubrics, or scoring.",
+  ].join("\n");
+
+  const schema = `Return JSON only:
+{"accepted":true|false,
+ "feedback": null|string}`;
+
+  const user = [
+    `Question:\n${stripHtml(questionText)}`,
+    codeContext ? `Shown code/context:\n${stripHtml(codeContext)}` : "",
+    sampleResponse
+      ? `Sample / acceptance envelope (do not quote):\n${stripHtml(sampleResponse)}`
+      : "",
+    questionGuide
+      ? `Instructor feedbackprompt (meta; do not quote):\n${questionGuide}`
+      : "",
+    followupRaw && !followupIsNone
+      ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
+      : "",
+    historyContext,
+    `Current group submission:\n${stripHtml(studentAnswer)}`,
+    "Feedback language rule: use the activity/question language for the feedback, not the student's answer language if they differ.",
+    "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
+    "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
+    "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
+    "",
+    schema,
+    "If reasonable, prefer {\"accepted\":true}",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  return {
+    sys,
+    user,
+    historyContext,
+    followupRaw,
+    followupIsNone,
+    positiveEnabled,
+    questionGuide,
+    activityGuide,
+    followupQ,
+  };
+}
 
 function retryKeys(groupNum) {
   const g = Number(groupNum);
@@ -498,6 +842,7 @@ async function evaluateStudentResponse(req, res) {
   const {
     questionText,
     studentAnswer,
+    qid = "",
     sampleResponse = "",
     feedbackPrompt = "",
     followupPrompt = "",
@@ -549,15 +894,28 @@ async function evaluateStudentResponse(req, res) {
   const policy = getEffectivePolicy(activityGuide, questionGuide);
 
   const answerRaw = String(studentAnswer || "").trim();
+  const promptParts = await buildStudentResponsePrompt({
+    questionText,
+    studentAnswer,
+    codeContext,
+    sampleResponse,
+    feedbackPrompt,
+    followupPrompt,
+    guidance,
+    instanceId,
+    qid: qid || req.body?.questionId || req.body?.codeVersion || "",
+    historyLimit: 5,
+  });
+  const {
+    sys,
+    user,
+    followupRaw,
+    followupIsNone,
+    positiveEnabled,
+    followupQ,
+  } = promptParts;
 
-  const followupQ =
-    extractFollowupFromFeedbackPrompt(feedbackPrompt) ||
-    "Please answer using one concrete detail from the code or output.";
-
-  const positiveEnabled = isPositiveFeedbackEnabled(guidance, followupPrompt);
-  const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
-  const followupRaw = fuParsed.cleaned;
-  const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
+  const historyContext = promptParts.historyContext;
 
   if (policy.requirementsOnly) {
     if (!answerRaw || looksGibberish(answerRaw)) {
@@ -579,47 +937,6 @@ async function evaluateStudentResponse(req, res) {
   }
 
   const obviouslyBad = !answerRaw || looksGibberish(answerRaw);
-
-  const sys = [
-    "You are a concise, supportive learning facilitator for an ungraded collaborative activity.",
-    "Decide whether the submission is sufficient to proceed.",
-    "Return ONLY JSON matching the schema exactly.",
-    "If the submission is on-topic and sufficient, set accepted=true.",
-    "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
-    "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
-    "If accepted=true, feedback must be null unless positive feedback is enabled.",
-    "Write feedback in the same language as the activity/question text.",
-    "Do not mirror the student's answer language if it differs from the activity language.",
-    "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
-    "Do NOT mention grading, points, rubrics, or scoring.",
-  ].join("\n");
-
-  const schema = `Return JSON only:
-{"accepted":true|false,
- "feedback": null|string}`;
-
-  const user = [
-    `Question:\n${stripHtml(questionText)}`,
-    codeContext ? `Shown code/context:\n${stripHtml(codeContext)}` : "",
-    sampleResponse
-      ? `Sample / acceptance envelope (do not quote):\n${stripHtml(sampleResponse)}`
-      : "",
-    questionGuide
-      ? `Instructor feedbackprompt (meta; do not quote):\n${questionGuide}`
-      : "",
-    followupRaw && !followupIsNone
-      ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
-      : "",
-    `Student submission:\n${stripHtml(studentAnswer)}`,
-    "Feedback language rule: use the activity/question language for the feedback, not the student's answer language if they differ.",
-    "",
-    schema,
-    forceFollowup || obviouslyBad
-      ? 'If uncertain, prefer {"accepted":false}'
-      : 'If reasonable, prefer {"accepted":true}',
-  ]
-    .filter(Boolean)
-    .join("\n\n");
 
   try {
     const chat = await openai.chat.completions.create({
@@ -692,6 +1009,7 @@ async function evaluatePythonCode(req, res) {
     questionText,
     studentCode,
     codeVersion,
+    instanceId = null,
     guidance = "",
     isCodeOnly = false,
     feedbackPrompt = "",
@@ -716,6 +1034,8 @@ async function evaluatePythonCode(req, res) {
     questionText,
     studentCode,
     codeVersion,
+    instanceId,
+    qid: codeVersion,
     guidance,
     isCodeOnly,
     feedbackPrompt,
@@ -729,7 +1049,7 @@ async function evaluatePythonCode(req, res) {
   console.log("[EVAL_CODE RESULT]", result);
 
   // ---- EXISTING LINE ----
-  const { instanceId, groupNum, answeredByUserId, retriesRequired } = req.body || {};
+  const { groupNum, answeredByUserId, retriesRequired } = req.body || {};
 
   // ✅ ADD THIS → Step 3 INPUT LOG (RIGHT HERE)
   console.log("[RETRY_GATE INPUT]", {
@@ -892,6 +1212,8 @@ async function evaluateCode({
   questionText,
   studentCode,
   codeVersion,
+  instanceId = null,
+  qid = "",
   guidance = "",
   isCodeOnly = false,
   feedbackPrompt = "",
@@ -926,6 +1248,11 @@ async function evaluateCode({
   const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
   const followupRaw = fuParsed.cleaned;
   const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
+  const historyContext = await buildAttemptHistoryContext({
+    instanceId,
+    qid: qid || codeVersion || "",
+    limit: 5,
+  });
 
   const rules = [
     policy.requirementsOnly && "- Judge ONLY whether it meets the stated task; no extras.",
@@ -934,6 +1261,9 @@ async function evaluateCode({
     policy.noExtras && "- Do NOT ask for additional features beyond the prompt.",
     policy.failOpen && "- If minor issues but functionally OK, treat as acceptable.",
     "- Write feedback in the same language as the activity/question language. Do not switch to the student's answer language if it differs.",
+    "- If prior group attempts are provided, use them only to calibrate feedback specificity and avoid repeating earlier wording.",
+    "- Judge correctness from the current code and current observed output.",
+    "- Treat this as one collaborative group conversation; do not single out the active typer.",
     "feedbackprompt is meta guidance; do NOT quote it.",
     "Before suggesting to add a line, verify it is not already present (or equivalent) in the code.",
   ].filter(Boolean).join("\n");
@@ -945,7 +1275,8 @@ async function evaluateCode({
   const prompt = `
 You are a ${langLabel} tutor facilitating an UNGRADED collaborative learning activity.
 
-Decide whether the student's code correctly satisfies the task.
+Decide whether the collaborative group's current code correctly satisfies the task.
+The active typer may change, but prior attempts belong to the same group conversation.
 
 The sample response is ONLY an example.
 Do NOT require the student to match the sample's exact method, syntax, indices, structure, variable names, or style.
@@ -967,7 +1298,9 @@ ${stripHtml(sampleResponse || "(none)")}
 ${outputText ? `Observed program output:
 ${stripHtml(outputText)}` : "Observed program output:\n(none provided)"}
 
-Student's code (v${codeVersion}):
+${historyContext ? `${historyContext}\n` : ""}
+
+Current group code (v${codeVersion}):
 \`\`\`${fence}
 ${studentCode}
 \`\`\`
@@ -983,6 +1316,7 @@ Rules:
 - feedback must be null or brief encouragement when accepted.
 - if rejected, feedback must be ONE short actionable hint.
 - No style/naming/formatting nits. No extra features beyond the prompt.
+- Use prior group attempts to avoid repeating feedback and to choose the right scaffolding level, but decide accepted=true/false from the current code and output.
 ${rules ? "\n" + rules : ""}
 `.trim();
 
@@ -1051,6 +1385,7 @@ async function evaluateCppCode(req, res) {
     questionText,
     studentCode,
     codeVersion,
+    instanceId = null,
     guidance = "",
     isCodeOnly = false,
     feedbackPrompt = "",
@@ -1079,6 +1414,8 @@ async function evaluateCppCode(req, res) {
     questionText,
     studentCode,
     codeVersion,
+    instanceId,
+    qid: codeVersion,
     guidance,
     isCodeOnly,
     feedbackPrompt,
@@ -1089,7 +1426,7 @@ async function evaluateCppCode(req, res) {
   });
 
 
-  const { instanceId, groupNum, answeredByUserId, retriesRequired } = req.body || {};
+  const { groupNum, answeredByUserId, retriesRequired } = req.body || {};
   const groupSubmissionString =
     req.body?.groupSubmissionString ?? req.body?.submissionString ?? null;
   const gate = isDryRunAIRequest(req)
@@ -1121,4 +1458,6 @@ module.exports = {
   gradeTestQuestion,
   gradeTestQuestionHttp,
   callLLMJsonStrict,
+  buildAttemptHistoryContext,
+  buildStudentResponsePrompt,
 };

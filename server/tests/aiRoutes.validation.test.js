@@ -277,9 +277,7 @@ test('response evaluation answers a clear in-domain question before grading', as
                 index: 0,
                 message: {
                   role: 'assistant',
-                  content: JSON.stringify({
-                    feedback: 'Think about the condition that controls when the loop stops.',
-                  }),
+                  content: 'Think about the condition that controls when the loop stops.',
                 },
                 finish_reason: 'stop',
               },

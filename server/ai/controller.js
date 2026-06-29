@@ -569,6 +569,7 @@ async function buildStudentQuestionHelpPrompt({
     "Give a short supportive answer or hint in 1-3 sentences.",
     "Keep the reply helpful and bounded to the activity.",
     "Do not mention grading, points, rubrics, or scoring.",
+    "If the question is clearly outside the activity, reply with exactly: This system only works in the context of its learning objectives.",
   ].join("\n");
 
   const user = [
@@ -585,8 +586,8 @@ async function buildStudentQuestionHelpPrompt({
       : "",
     `Student current answer:\n${stripHtml(studentAnswer)}`,
     `Student clarifying question:\n${stripHtml(questionAsked)}`,
-    "Return JSON only with key: feedback",
     "Answer the question briefly without giving away the entire solution.",
+    "If the question is clearly off-topic, use exactly: This system only works in the context of its learning objectives.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -1057,25 +1058,27 @@ async function evaluateStudentResponse(req, res) {
         questionAsked,
       });
 
-      const helpChat = await callLLMJsonStrict({
+      const helpChat = await openai.chat.completions.create({
+        model: MODEL,
         messages: [
           { role: "system", content: helpPrompt.sys },
           { role: "user", content: helpPrompt.user },
         ],
-        allowedKeys: ["feedback"],
         temperature: 0.2,
         max_tokens: 200,
       });
 
       accepted = false;
-      const rawFeedback = String(helpChat.feedback ?? "").trim();
-      feedback = rawFeedback || "Let's focus on the activity question and the part that's still unclear.";
+      const rawFeedback = String(helpChat.choices?.[0]?.message?.content ?? "").trim();
+      feedback =
+        rawFeedback ||
+        "Let's focus on the activity question and the part that's still unclear.";
 
       return await applyGateAndSend();
     } catch (err) {
       console.error("❌ OpenAI question-help branch failed:", err);
       accepted = false;
-      feedback = "This system only works in the context of its learning objectives.";
+      feedback = "Let's focus on the activity question and the part that's still unclear.";
       return await applyGateAndSend();
     }
   }

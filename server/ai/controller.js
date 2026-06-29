@@ -199,6 +199,49 @@ function classifyHistoryRow(questionIdRaw) {
   return null;
 }
 
+function isAcceptedHistoryMarker(questionIdRaw, responseRaw) {
+  const qid = String(questionIdRaw || '').trim();
+  if (!qid) return false;
+
+  const value = String(responseRaw ?? '').trim().toLowerCase();
+  if (!value) return false;
+
+  const acceptedValues = new Set(['accepted', 'true', 'yes', '1']);
+  if (!acceptedValues.has(value)) return false;
+
+  return /^\d+[A-Za-z]+FM$/i.test(qid) || /^\d+[A-Za-z]+CodeAccepted$/i.test(qid);
+}
+
+async function hasAcceptedHistoryLock(instanceId, qid) {
+  const baseQid = normalizeHistoryQid(qid);
+  const numericInstanceId = Number(instanceId);
+
+  if (!Number.isFinite(numericInstanceId) || numericInstanceId <= 0 || !baseQid) {
+    return false;
+  }
+
+  try {
+    const [rows] = await db.query(
+      `SELECT question_id, response
+       FROM responses
+       WHERE activity_instance_id = ?
+       ORDER BY id ASC`,
+      [numericInstanceId]
+    );
+
+    for (const row of rows || []) {
+      if (normalizeHistoryQid(row.question_id) !== baseQid) continue;
+      if (isAcceptedHistoryMarker(row.question_id, row.response)) return true;
+    }
+  } catch (err) {
+    if (AI_DEBUG) {
+      console.warn('[AI_DEBUG] hasAcceptedHistoryLock failed:', err?.message || err);
+    }
+  }
+
+  return false;
+}
+
 function clipHistoryText(value, limit = 180) {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   if (!text) return '';
@@ -1204,6 +1247,12 @@ async function evaluateStudentResponse(req, res) {
 
   const answerRaw = String(studentAnswer || "").trim();
   const questionAsked = extractStudentQuestion(answerRaw);
+
+  if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid)) {
+    accepted = true;
+    feedback = null;
+    return await applyGateAndSend();
+  }
 
   const promptMode = classifyPromptMode({
     questionText,

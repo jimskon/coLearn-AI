@@ -467,7 +467,12 @@ export default function RunActivityHistoryView({
 
   return (
     <div className="mt-3">
-      <h4 className="mb-3">{title}</h4>
+      <div className="d-flex justify-content-between align-items-end gap-3 flex-wrap mb-3">
+        <h4 className="mb-0">{title}</h4>
+        <div className="small text-muted">
+          {timeline.length} submit{timeline.length === 1 ? '' : 's'} recorded
+        </div>
+      </div>
       <style>{`
         .history-submit-details {
           border: 1px solid #dee2e6;
@@ -498,10 +503,10 @@ export default function RunActivityHistoryView({
         const changedQids = submit.threads.map((thread) => thread.qid);
         const changedSummary = changedQids.length
           ? changedQids.slice(0, 4).join(', ') + (changedQids.length > 4 ? '…' : '')
-          : 'No changed answers';
+          : 'No updated question threads';
 
         return (
-          <details key={submit.submitId} className="history-submit-details" open={index === 0}>
+          <details key={submit.submitId} className="history-submit-details" open={submit.threads.length > 0}>
             <summary>
               <div className="d-flex justify-content-between align-items-start gap-3 flex-wrap">
                 <div>
@@ -514,7 +519,7 @@ export default function RunActivityHistoryView({
                 </div>
                 <div className="text-end">
                   <div className="small fw-semibold">
-                    {changedQids.length} changed question{changedQids.length === 1 ? '' : 's'}
+                    {changedQids.length} updated question thread{changedQids.length === 1 ? '' : 's'}
                   </div>
                   <div className="small text-muted">
                     {changedSummary}
@@ -535,7 +540,7 @@ export default function RunActivityHistoryView({
                 ))
               ) : (
                 <Alert variant="light" className="mb-0">
-                  No changed answers were recorded in this submit.
+                  No updated question threads were recorded in this submit.
                 </Alert>
               )}
             </div>

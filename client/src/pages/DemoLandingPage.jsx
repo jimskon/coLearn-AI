@@ -22,7 +22,7 @@ const demoOptions = [
     key: 'creator',
     label: 'Try Creator Demo',
     variant: 'success',
-    description: 'Preview how instructors can set up, test, and demonstrate activities with low friction.',
+    description: 'Build an activity with AI support, then test and refine it in the same flow.',
   },
   {
     key: 'info-request',

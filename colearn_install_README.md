@@ -134,7 +134,7 @@ These are intentionally **not** baked into the installer:
 
 - Google service account JSON file placement
 - AI provider API key
-- Google mailer credentials
+- SMTP relay settings and sender address
 - any post-install sharing of Google Docs / Sheets with the service account email
 
 That material belongs in your operational docs, not hardcoded into a bootstrap script.
@@ -247,6 +247,13 @@ DB_PASSWORD=replace_me
 CLIENT_ORIGIN=http://colearn.local
 SESSION_SECRET=replace_with_a_long_random_secret
 OPENAI_API_KEY=replace_me
+SMTP_HOST=smtp.example.edu
+SMTP_PORT=587
+SMTP_SECURE=0
+SMTP_SERVICE=
+SMTP_USER=
+SMTP_PASS=
+EMAIL_FROM=colearn-ai@example.edu
 EMAIL_USER=replace_me
 EMAIL_PASS=replace_me
 SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com
@@ -287,6 +294,13 @@ Common runtime values students will recognize from `server/.env` include:
 - `DB_PASSWORD`
 - `SESSION_SECRET`
 - `OPENAI_API_KEY`
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_SECURE`
+- `SMTP_SERVICE`
+- `SMTP_USER`
+- `SMTP_PASS`
+- `EMAIL_FROM`
 - `EMAIL_USER`
 - `EMAIL_PASS`
 - `CLIENT_ORIGIN`
@@ -387,7 +401,7 @@ Do these after the app is deployed:
 1. Place the Google service account JSON in a secure location on the server.
 2. Add the relevant env var(s) in `server/.env`.
 3. Add your AI provider key to `server/.env`.
-4. Configure any Google mailer credentials needed by your app.
+4. Configure the SMTP relay settings your app uses for registration and password-reset email.
 5. Share required Google Docs / Sheets with the service account email.
 6. Restart the app:
 

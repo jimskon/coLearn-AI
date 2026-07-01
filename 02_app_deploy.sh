@@ -22,6 +22,18 @@ CLIENT_ORIGIN="${CLIENT_ORIGIN:-}"
 SESSION_SECRET="${SESSION_SECRET:-}"
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+EMAIL_HOST="${EMAIL_HOST:-}"
+EMAIL_PORT="${EMAIL_PORT:-}"
+EMAIL_SECURE="${EMAIL_SECURE:-}"
+EMAIL_SERVICE="${EMAIL_SERVICE:-}"
+SMTP_HOST="${SMTP_HOST:-}"
+SMTP_PORT="${SMTP_PORT:-}"
+SMTP_SECURE="${SMTP_SECURE:-}"
+SMTP_SERVICE="${SMTP_SERVICE:-}"
+SMTP_USER="${SMTP_USER:-}"
+SMTP_PASS="${SMTP_PASS:-}"
+SMTP_FROM="${SMTP_FROM:-}"
+EMAIL_FROM="${EMAIL_FROM:-}"
 EMAIL_USER="${EMAIL_USER:-}"
 EMAIL_PASS="${EMAIL_PASS:-}"
 APP_ROOT_NAME="${APP_ROOT_NAME:-Administrator}"
@@ -148,8 +160,14 @@ resolve_settings() {
   if [[ -z "$APP_ROOT_EMAIL" ]]; then APP_ROOT_EMAIL="admin@${DOMAIN}"; fi
   prompt_default APP_ROOT_NAME "coLearn-AI root display name" "$APP_ROOT_NAME"
   prompt_default APP_ROOT_EMAIL "coLearn-AI root email" "$APP_ROOT_EMAIL"
+  prompt_default SMTP_HOST "Outgoing SMTP host" "$SMTP_HOST"
+  prompt_default SMTP_PORT "Outgoing SMTP port" "${SMTP_PORT:-587}"
+  prompt_default SMTP_SECURE "Use SMTP TLS/SSL (1 for yes, 0 for no)" "${SMTP_SECURE:-0}"
+  prompt_default SMTP_SERVICE "Outgoing Nodemailer service name (optional)" "$SMTP_SERVICE"
   prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
   prompt_secret_keep EMAIL_PASS "Outgoing email app password"
+  if [[ -z "$EMAIL_FROM" ]]; then EMAIL_FROM="${SMTP_FROM:-${SMTP_USER:-$EMAIL_USER}}"; fi
+  prompt_default EMAIL_FROM "Outgoing email from address" "$EMAIL_FROM"
   if [[ "$ENABLE_CXX_RUNNER" == "1" ]]; then
     prompt_default CXX_RUNNER_REPO_URL "C++ runner git repo URL" "$CXX_RUNNER_REPO_URL"
     prompt_default CXX_RUNNER_DIR "C++ runner directory" "$CXX_RUNNER_DIR"
@@ -227,6 +245,42 @@ write_env_files() {
   write_key_value SERVICE_ACCOUNT_EMAIL "$SERVICE_ACCOUNT_EMAIL" "$ENV_FILE"
   if [[ -n "$OPENAI_API_KEY" ]]; then
     write_key_value OPENAI_API_KEY "$OPENAI_API_KEY" "$ENV_FILE"
+  fi
+  if [[ -n "$EMAIL_HOST" ]]; then
+    write_key_value EMAIL_HOST "$EMAIL_HOST" "$ENV_FILE"
+  fi
+  if [[ -n "$EMAIL_PORT" ]]; then
+    write_key_value EMAIL_PORT "$EMAIL_PORT" "$ENV_FILE"
+  fi
+  if [[ -n "$EMAIL_SECURE" ]]; then
+    write_key_value EMAIL_SECURE "$EMAIL_SECURE" "$ENV_FILE"
+  fi
+  if [[ -n "$EMAIL_SERVICE" ]]; then
+    write_key_value EMAIL_SERVICE "$EMAIL_SERVICE" "$ENV_FILE"
+  fi
+  if [[ -n "$SMTP_HOST" ]]; then
+    write_key_value SMTP_HOST "$SMTP_HOST" "$ENV_FILE"
+  fi
+  if [[ -n "$SMTP_PORT" ]]; then
+    write_key_value SMTP_PORT "$SMTP_PORT" "$ENV_FILE"
+  fi
+  if [[ -n "$SMTP_SECURE" ]]; then
+    write_key_value SMTP_SECURE "$SMTP_SECURE" "$ENV_FILE"
+  fi
+  if [[ -n "$SMTP_SERVICE" ]]; then
+    write_key_value SMTP_SERVICE "$SMTP_SERVICE" "$ENV_FILE"
+  fi
+  if [[ -n "$SMTP_USER" ]]; then
+    write_key_value SMTP_USER "$SMTP_USER" "$ENV_FILE"
+  fi
+  if [[ -n "$SMTP_PASS" ]]; then
+    write_key_value SMTP_PASS "$SMTP_PASS" "$ENV_FILE"
+  fi
+  if [[ -n "$SMTP_FROM" ]]; then
+    write_key_value SMTP_FROM "$SMTP_FROM" "$ENV_FILE"
+  fi
+  if [[ -n "$EMAIL_FROM" ]]; then
+    write_key_value EMAIL_FROM "$EMAIL_FROM" "$ENV_FILE"
   fi
   if [[ -n "$EMAIL_USER" ]]; then
     write_key_value EMAIL_USER "$EMAIL_USER" "$ENV_FILE"

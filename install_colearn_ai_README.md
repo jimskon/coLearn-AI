@@ -113,11 +113,22 @@ sudo chmod 700 /opt/coLearn-AI/server/secure
 
 Then copy the JSON file there and set any related env vars your app expects.
 
-### 2. Google email / mailer settings
+### 2. SMTP relay settings
 
-Collect the exact sender account and any required credentials or app password.
+Collect the exact SMTP host, port, TLS setting, sender address, and any
+required credentials before you deploy.
 Do not guess these in the installer.
-Add the mail-related env vars your app expects to `server/.env`.
+Add the mail-related env vars your app expects to `server/.env`, such as:
+
+- `SMTP_HOST`
+- `SMTP_PORT`
+- `SMTP_SECURE`
+- `SMTP_SERVICE`
+- `SMTP_USER`
+- `SMTP_PASS`
+- `EMAIL_FROM`
+- `EMAIL_USER`
+- `EMAIL_PASS`
 
 ### 3. AI provider key
 

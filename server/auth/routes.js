@@ -24,21 +24,84 @@ const DEMO_ACTIVE_WINDOW_MINUTES = 2;
 const DEMO_GROUP_MAX_SIZE = 2;
 
 
-const HAVE_MAIL_CREDS = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
+function parseBool(value, fallback = false) {
+  if (value == null || value === '') return fallback;
+  return /^(1|true|yes|on)$/i.test(String(value).trim());
+}
 
-// Safe transporter (only when creds exist)
-const transporter = HAVE_MAIL_CREDS
-  ? nodemailer.createTransport({
+function buildMailTransporter() {
+  const authUser = process.env.SMTP_USER || process.env.EMAIL_USER || '';
+  const authPass = process.env.SMTP_PASS || process.env.EMAIL_PASS || '';
+  const host = process.env.SMTP_HOST || process.env.EMAIL_HOST || '';
+  const service = process.env.SMTP_SERVICE || process.env.EMAIL_SERVICE || '';
+  const portValue = process.env.SMTP_PORT || process.env.EMAIL_PORT || '';
+  const secureValue = process.env.SMTP_SECURE ?? process.env.EMAIL_SECURE;
+  const fromAddress = process.env.EMAIL_FROM || process.env.SMTP_FROM || authUser || null;
+
+  if (!host && !service && !authUser && !authPass) {
+    return { transporter: null, fromAddress };
+  }
+
+  if (host) {
+    const port = Number(portValue || (parseBool(secureValue) ? 465 : 587));
+    const options = {
+      host,
+      port: Number.isFinite(port) && port > 0 ? port : 587,
+      secure: parseBool(secureValue, Number(port) === 465),
+    };
+    if (authUser || authPass) {
+      options.auth = { user: authUser, pass: authPass };
+    }
+    return { transporter: nodemailer.createTransport(options), fromAddress };
+  }
+
+  if (service) {
+    const options = { service };
+    if (authUser || authPass) {
+      options.auth = { user: authUser, pass: authPass };
+    }
+    return { transporter: nodemailer.createTransport(options), fromAddress };
+  }
+
+  // Backward-compatible fallback for older deploys that only set EMAIL_USER/PASS.
+  return {
+    transporter: nodemailer.createTransport({
       service: 'gmail',
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+        user: authUser,
+        pass: authPass,
       },
-    })
-  : null;
+    }),
+    fromAddress,
+  };
+}
+
+const { transporter, fromAddress: mailFromAddress } = buildMailTransporter();
+
+if (transporter) {
+  console.log('[auth] Mail transport configured', {
+    host: process.env.SMTP_HOST || process.env.EMAIL_HOST || null,
+    service: process.env.SMTP_SERVICE || process.env.EMAIL_SERVICE || (process.env.SMTP_HOST || process.env.EMAIL_HOST ? null : 'gmail'),
+  });
+} else {
+  console.warn('[auth] No mail transport configured; registration and reset flows will fail until SMTP is set up.');
+}
 
 function generateCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+async function sendAuthCodeEmail({ to, subject, text }) {
+  if (!transporter) {
+    throw new Error('Mail transport is not configured');
+  }
+
+  await transporter.sendMail({
+    from: mailFromAddress || process.env.EMAIL_USER,
+    to,
+    subject,
+    text,
+  });
 }
 
 async function createUserDirect({ name, email, password }) {
@@ -248,16 +311,15 @@ router.post('/register', async (req, res) => {
         [name, email, hashedPassword, code]
       );
 
-      if (transporter) {
-        await transporter.sendMail({
-          from: process.env.EMAIL_USER,
+      try {
+        await sendAuthCodeEmail({
           to: email,
           subject: 'Your coLearn-AI Verification Code',
           text: `Your confirmation code is: ${code}`,
         });
-      } else {
-        // No mail in this environment; log the code so you can test manually
-        console.warn('[auth] Mail disabled; verification code for', email, 'is:', code);
+      } catch (mailErr) {
+        await conn.query('DELETE FROM pending_users WHERE email = ?', [email]).catch(() => {});
+        throw mailErr;
       }
 
       return res.status(200).json({ message: 'Confirmation code sent to your email.' });
@@ -552,15 +614,15 @@ router.post('/request-reset', async (req, res) => {
 
       passwordResetCodes.set(email, code);
 
-      if (transporter) {
-        await transporter.sendMail({
-          from: process.env.EMAIL_USER,
+      try {
+        await sendAuthCodeEmail({
           to: email,
           subject: 'coLearn-AI Password Reset Code',
           text: `Your reset code is: ${code}`,
         });
-      } else {
-        console.warn('[auth] Mail disabled; reset code for', email, 'is:', code);
+      } catch (mailErr) {
+        passwordResetCodes.delete(email);
+        throw mailErr;
       }
 
       return res.status(200).json({ message: 'Reset code sent to email.' });

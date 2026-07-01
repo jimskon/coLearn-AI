@@ -258,6 +258,46 @@ test('verify rejects an incorrect code without creating a user', async () => {
   assert.equal(users.length, 0);
 });
 
+test('register fails cleanly when email delivery fails and removes the pending user', async () => {
+  await ensureSchema();
+
+  const email = uniqueEmail('register-mail-fail');
+  created.pendingEmails.add(email);
+  let sentPayload = null;
+
+  const response = await requestJson('/api/auth/register', {
+    body: {
+      name: 'Mail Fail User',
+      email,
+      password: 'PendingPassword123',
+    },
+    sentMail: async (payload) => {
+      sentPayload = payload;
+      throw new Error('smtp down');
+    },
+  });
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(response.body, { error: 'Registration failed' });
+  assert.ok(sentPayload);
+
+  const code = extractLastSixDigitCode(sentPayload.text);
+  assert.match(code || '', /^\d{6}$/);
+
+  const [pending] = await db.query('SELECT email, code FROM pending_users WHERE email = ?', [email]);
+  assert.equal(pending.length, 0);
+
+  const [users] = await db.query('SELECT email FROM users WHERE email = ?', [email]);
+  assert.equal(users.length, 0);
+
+  const verify = await requestJson('/api/auth/verify', {
+    body: { email, code },
+  });
+
+  assert.equal(verify.status, 400);
+  assert.deepEqual(verify.body, { error: 'Invalid code or email.' });
+});
+
 test('request-reset emits a reset code for an existing user', async () => {
   await ensureSchema();
 
@@ -278,6 +318,47 @@ test('request-reset emits a reset code for an existing user', async () => {
   assert.equal(sent[0].to, user.email);
   const code = extractLastSixDigitCode(sent[0].text);
   assert.match(code || '', /^\d{6}$/);
+});
+
+test('request-reset fails cleanly when email delivery fails and clears the reset code', async () => {
+  await ensureSchema();
+
+  const user = await createVerifiedUser({ email: uniqueEmail('request-reset-fail') });
+  let sentPayload = null;
+
+  const server = await createTestServer({
+    sentMail: async (payload) => {
+      sentPayload = payload;
+      throw new Error('smtp down');
+    },
+  });
+  try {
+    const requestReset = await requestJsonWithServer(server.baseUrl, '/api/auth/request-reset', {
+      method: 'POST',
+      body: { email: user.email },
+    });
+
+    assert.equal(requestReset.status, 500);
+    assert.deepEqual(requestReset.body, { error: 'Failed to send reset code' });
+    assert.ok(sentPayload);
+
+    const resetCode = extractLastSixDigitCode(sentPayload.text);
+    assert.match(resetCode || '', /^\d{6}$/);
+
+    const reset = await requestJsonWithServer(server.baseUrl, '/api/auth/reset-password', {
+      method: 'POST',
+      body: {
+        email: user.email,
+        code: resetCode,
+        newPassword: 'NewPassword456',
+      },
+    });
+
+    assert.equal(reset.status, 400);
+    assert.deepEqual(reset.body, { error: 'Invalid or expired code.' });
+  } finally {
+    await server.close();
+  }
 });
 
 test('reset-password accepts the emitted code, updates the password, and clears the code', async () => {

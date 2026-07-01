@@ -676,6 +676,16 @@ DB_PASSWORD=${DB_PASSWORD}
 CLIENT_ORIGIN=${client_origin}
 SESSION_SECRET=
 OPENAI_API_KEY=replace_me
+# SMTP relay settings for registration and password-reset email.
+# If the relay uses separate SMTP credentials, fill SMTP_USER / SMTP_PASS.
+SMTP_HOST=replace_me
+SMTP_PORT=587
+SMTP_SECURE=0
+SMTP_SERVICE=
+SMTP_USER=
+SMTP_PASS=
+EMAIL_FROM=replace_me
+# Legacy fallbacks are still supported by the app:
 EMAIL_USER=replace_me
 EMAIL_PASS=replace_me
 SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com

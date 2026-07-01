@@ -62,28 +62,31 @@ if ! table_exists "audit_log"; then
 fi
 
 drop_fk_for_column "user_id"
+drop_fk_for_column "class_id"
+drop_fk_for_column "course_id"
+drop_fk_for_column "activity_id"
 drop_fk_for_column "activity_instance_id"
 
 db_exec <<'SQL'
 ALTER TABLE `audit_log`
-  ADD COLUMN `guest_token` VARCHAR(191) DEFAULT NULL AFTER `user_id`,
-  ADD COLUMN `role` VARCHAR(32) DEFAULT NULL AFTER `guest_token`,
-  ADD COLUMN `class_id` INT(11) DEFAULT NULL AFTER `role`,
-  ADD COLUMN `course_id` INT(11) DEFAULT NULL AFTER `class_id`,
-  ADD COLUMN `activity_id` INT(11) DEFAULT NULL AFTER `course_id`,
-  ADD COLUMN `request_path` VARCHAR(255) DEFAULT NULL AFTER `activity_instance_id`,
-  ADD COLUMN `ip_address` VARCHAR(64) DEFAULT NULL AFTER `request_path`,
-  ADD COLUMN `ip_country` VARCHAR(64) DEFAULT NULL AFTER `ip_address`,
-  ADD COLUMN `ip_region` VARCHAR(191) DEFAULT NULL AFTER `ip_country`,
-  ADD COLUMN `ip_city` VARCHAR(191) DEFAULT NULL AFTER `ip_region`,
-  ADD COLUMN `user_agent` TEXT DEFAULT NULL AFTER `ip_city`,
-  ADD INDEX `idx_audit_log_event_created_at` (`event_type`, `created_at`),
-  ADD INDEX `idx_audit_log_user_created_at` (`user_id`, `created_at`),
-  ADD INDEX `idx_audit_log_guest_created_at` (`guest_token`, `created_at`),
-  ADD INDEX `idx_audit_log_class_created_at` (`class_id`, `created_at`),
-  ADD INDEX `idx_audit_log_course_created_at` (`course_id`, `created_at`),
-  ADD INDEX `idx_audit_log_activity_created_at` (`activity_id`, `created_at`),
-  ADD INDEX `idx_audit_log_instance_created_at` (`activity_instance_id`, `created_at`),
+  ADD COLUMN IF NOT EXISTS `guest_token` VARCHAR(191) DEFAULT NULL AFTER `user_id`,
+  ADD COLUMN IF NOT EXISTS `role` VARCHAR(32) DEFAULT NULL AFTER `guest_token`,
+  ADD COLUMN IF NOT EXISTS `class_id` INT(11) DEFAULT NULL AFTER `role`,
+  ADD COLUMN IF NOT EXISTS `course_id` INT(11) DEFAULT NULL AFTER `class_id`,
+  ADD COLUMN IF NOT EXISTS `activity_id` INT(11) DEFAULT NULL AFTER `course_id`,
+  ADD COLUMN IF NOT EXISTS `request_path` VARCHAR(255) DEFAULT NULL AFTER `activity_instance_id`,
+  ADD COLUMN IF NOT EXISTS `ip_address` VARCHAR(64) DEFAULT NULL AFTER `request_path`,
+  ADD COLUMN IF NOT EXISTS `ip_country` VARCHAR(64) DEFAULT NULL AFTER `ip_address`,
+  ADD COLUMN IF NOT EXISTS `ip_region` VARCHAR(191) DEFAULT NULL AFTER `ip_country`,
+  ADD COLUMN IF NOT EXISTS `ip_city` VARCHAR(191) DEFAULT NULL AFTER `ip_region`,
+  ADD COLUMN IF NOT EXISTS `user_agent` TEXT DEFAULT NULL AFTER `ip_city`,
+  ADD INDEX IF NOT EXISTS `idx_audit_log_event_created_at` (`event_type`, `created_at`),
+  ADD INDEX IF NOT EXISTS `idx_audit_log_user_created_at` (`user_id`, `created_at`),
+  ADD INDEX IF NOT EXISTS `idx_audit_log_guest_created_at` (`guest_token`, `created_at`),
+  ADD INDEX IF NOT EXISTS `idx_audit_log_class_created_at` (`class_id`, `created_at`),
+  ADD INDEX IF NOT EXISTS `idx_audit_log_course_created_at` (`course_id`, `created_at`),
+  ADD INDEX IF NOT EXISTS `idx_audit_log_activity_created_at` (`activity_id`, `created_at`),
+  ADD INDEX IF NOT EXISTS `idx_audit_log_instance_created_at` (`activity_instance_id`, `created_at`),
   ADD CONSTRAINT `audit_log_user_fk`
     FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
   ADD CONSTRAINT `audit_log_class_fk`

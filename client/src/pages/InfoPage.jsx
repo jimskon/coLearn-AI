@@ -110,15 +110,15 @@ export default function InfoPage() {
       style={{
         minHeight: '100vh',
         background: 'linear-gradient(180deg, #f6f8fb 0%, #ffffff 35%, #eef6ef 100%)',
-        paddingTop: '5rem',
-        paddingBottom: '1.5rem',
+        paddingTop: '4.5rem',
+        paddingBottom: '1.25rem',
       }}
     >
-      <Container fluid="xxl" className="px-4">
-        <Row className="g-3 align-items-stretch">
-          <Col xl={5}>
+      <Container fluid className="px-3 px-xxl-4">
+        <Row className="g-3 align-items-stretch mb-3">
+          <Col xl={4}>
             <div
-              className="h-100 p-4 p-lg-4 rounded-4 shadow-sm border-0"
+              className="h-100 p-4 rounded-4 shadow-sm border-0"
               style={{
                 background: 'linear-gradient(160deg, #123524 0%, #1f5b3b 58%, #d89a38 100%)',
                 color: '#fff',
@@ -163,81 +163,79 @@ export default function InfoPage() {
             </div>
           </Col>
 
-          <Col xl={7}>
-            <Row className="g-3">
-              <Col md={6}>
-                <div
-                  className="h-100 p-3 rounded-4 border shadow-sm bg-white"
-                  style={{ borderColor: '#dfe5ee' }}
-                >
-                  <div className="text-uppercase fw-semibold text-secondary mb-2" style={{ letterSpacing: '0.08em' }}>
-                    The flow
-                  </div>
-                  <h2 className="h4 fw-bold mb-2">How the system comes together</h2>
-                  <div className="d-grid gap-2">
-                    {flowSteps.map((step, index) => (
-                      <div
-                        key={step}
-                        className="d-flex gap-3 align-items-start p-2 rounded-3"
-                        style={{ background: index % 2 === 0 ? '#f7fafc' : '#f1f8f3' }}
-                      >
-                        <div
-                          className="flex-shrink-0 d-flex align-items-center justify-content-center rounded-circle fw-bold"
-                          style={{
-                            width: 30,
-                            height: 30,
-                            background: index === 0 ? '#1d6fff' : index === 1 ? '#1f9d66' : index === 2 ? '#0ea5c6' : '#d97706',
-                            color: '#fff',
-                            fontSize: '0.9rem',
-                          }}
-                        >
-                          {index + 1}
-                        </div>
-                        <div className="text-secondary small">{step}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </Col>
-
-              <Col md={6}>
-                <div
-                  className="h-100 p-3 rounded-4 border shadow-sm"
-                  style={{
-                    borderColor: '#b9d5be',
-                    background: 'linear-gradient(180deg, #ffffff 0%, #f7fbf7 100%)',
-                  }}
-                >
-                  <div className="text-uppercase fw-semibold text-secondary mb-2" style={{ letterSpacing: '0.08em' }}>
-                    Why it matters
-                  </div>
-                  <h2 className="h4 fw-bold mb-2">Built for classroom visibility</h2>
-                  <ul className="ps-3 mb-3">
-                    <li className="mb-2">Students can work together while the system keeps the activity visible and structured.</li>
-                    <li className="mb-2">AI helps instructors create and refine activities without taking over their judgment.</li>
-                    <li className="mb-2">The dashboard and live monitoring views help instructors support a room in motion.</li>
-                    <li className="mb-2">The epistemic trace keeps the reasoning trail visible for reflection and discussion.</li>
-                  </ul>
-
-                  <div className="p-3 rounded-4" style={{ background: '#123524', color: '#fff' }}>
-                    <div className="fw-semibold mb-2">Conference snapshot</div>
-                    <div className="small" style={{ lineHeight: 1.55 }}>
-                      Use this page as the high-level overview, then move into the student demo, instructor demo, or creator demo
-                      depending on the audience and time available.
+          <Col xl={4}>
+            <div
+              className="h-100 p-3 rounded-4 border shadow-sm bg-white"
+              style={{ borderColor: '#dfe5ee' }}
+            >
+              <div className="text-uppercase fw-semibold text-secondary mb-2" style={{ letterSpacing: '0.08em' }}>
+                The flow
+              </div>
+              <h2 className="h4 fw-bold mb-3">How the system comes together</h2>
+              <div className="d-grid gap-2">
+                {flowSteps.map((step, index) => (
+                  <div
+                    key={step}
+                    className="d-flex gap-3 align-items-start p-2 rounded-3"
+                    style={{ background: index % 2 === 0 ? '#f7fafc' : '#f1f8f3' }}
+                  >
+                    <div
+                      className="flex-shrink-0 d-flex align-items-center justify-content-center rounded-circle fw-bold"
+                      style={{
+                        width: 30,
+                        height: 30,
+                        background: index === 0 ? '#1d6fff' : index === 1 ? '#1f9d66' : index === 2 ? '#0ea5c6' : '#d97706',
+                        color: '#fff',
+                        fontSize: '0.9rem',
+                      }}
+                    >
+                      {index + 1}
+                    </div>
+                    <div className="text-secondary small" style={{ lineHeight: 1.45 }}>
+                      {step}
                     </div>
                   </div>
-                </div>
-              </Col>
-            </Row>
-
-            <Row className="g-3 mt-0 mt-xl-1">
-              {featureCards.map((card) => (
-                <Col key={card.title} md={6}>
-                  <FeatureCard {...card} />
-                </Col>
-              ))}
-            </Row>
+                ))}
+              </div>
+            </div>
           </Col>
+
+          <Col xl={4}>
+            <div
+              className="h-100 p-3 rounded-4 border shadow-sm"
+              style={{
+                borderColor: '#b9d5be',
+                background: 'linear-gradient(180deg, #ffffff 0%, #f7fbf7 100%)',
+              }}
+            >
+              <div className="text-uppercase fw-semibold text-secondary mb-2" style={{ letterSpacing: '0.08em' }}>
+                Why it matters
+              </div>
+              <h2 className="h4 fw-bold mb-2">Built for classroom visibility</h2>
+              <ul className="ps-3 mb-3">
+                <li className="mb-2">Students can work together while the system keeps the activity visible and structured.</li>
+                <li className="mb-2">AI helps instructors create and refine activities without taking over their judgment.</li>
+                <li className="mb-2">The dashboard and live monitoring views help instructors support a room in motion.</li>
+                <li className="mb-2">The epistemic trace keeps the reasoning trail visible for reflection and discussion.</li>
+              </ul>
+
+              <div className="p-3 rounded-4" style={{ background: '#123524', color: '#fff' }}>
+                <div className="fw-semibold mb-2">Conference snapshot</div>
+                <div className="small" style={{ lineHeight: 1.55 }}>
+                  Use this page as the high-level overview, then move into the student demo, instructor demo, or creator demo
+                  depending on the audience and time available.
+                </div>
+              </div>
+            </div>
+          </Col>
+        </Row>
+
+        <Row className="g-3">
+          {featureCards.map((card) => (
+            <Col key={card.title} lg={6} xl={3}>
+              <FeatureCard {...card} />
+            </Col>
+          ))}
         </Row>
       </Container>
     </div>

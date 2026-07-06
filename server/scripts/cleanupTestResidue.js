@@ -329,6 +329,7 @@ async function cleanup(conn, targets) {
   await deleteOptionalInstanceTable(conn, summary, 'audit_log', 'activity_instance_id', instanceIds);
   await deleteOptionalInstanceTable(conn, summary, 'followups', 'activity_instance_id', instanceIds);
   await deleteOptionalInstanceTable(conn, summary, 'feedback', 'activity_instance_id', instanceIds);
+  await deleteOptionalInstanceTable(conn, summary, 'progress_monitor_suggestions', 'activity_instance_id', instanceIds);
 
   if (instanceIds.length && (await tableExists(conn, 'response_drafts'))) {
     await execDelete(

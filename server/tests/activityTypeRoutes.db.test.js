@@ -511,6 +511,14 @@ test('demo-instance creates a personal instance once and reuses it on repeat ope
   assert.equal(typeof first.body.instanceId, 'number');
   assert.equal(first.body.created, true);
 
+  await db.query(
+    `UPDATE group_members
+        SET connected = 0,
+            last_heartbeat = DATE_SUB(NOW(), INTERVAL 10 MINUTE)
+      WHERE activity_instance_id = ? AND student_id = ?`,
+    [first.body.instanceId, instructor.id]
+  );
+
   const second = await requestJson(
     instructor,
     `/api/activity-instances/by-activity/${courseId}/${activityId}/demo-instance`,
@@ -539,12 +547,14 @@ test('demo-instance creates a personal instance once and reuses it on repeat ope
   assert.equal(Number(instanceRow.active_student_id), instructor.id);
 
   const [members] = await db.query(
-    `SELECT student_id
+    `SELECT student_id, connected, last_heartbeat
        FROM group_members
       WHERE activity_instance_id = ?`,
     [first.body.instanceId]
   );
   assert.deepEqual(members.map((row) => Number(row.student_id)), [instructor.id]);
+  assert.equal(Number(members[0].connected), 1);
+  assert.ok(members[0].last_heartbeat);
 });
 
 test('demo-instance rejects non-demo activities and unenrolled students', async () => {

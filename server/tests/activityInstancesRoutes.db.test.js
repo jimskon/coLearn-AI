@@ -1,13 +1,18 @@
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const test = require('node:test');
+const { Server } = require('socket.io');
 
 process.env.OPENAI_API_KEY ||= 'test-key';
 
 const express = require('express');
 
 const activityInstanceRoutes = require('../activity_instances/routes');
+const progressMonitorRoutes = require('../progress_monitor/routes');
 const db = require('../db');
+const aiController = require('../ai/controller');
 
 function uniqueValue(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -37,6 +42,9 @@ async function cleanupCreatedRows() {
   const userIds = [...created.users];
 
   if (instanceIds.length) {
+    await db.query(`DELETE FROM audit_log WHERE activity_instance_id IN (?)`, [instanceIds]);
+    await db.query(`DELETE FROM followups WHERE response_id IN (SELECT id FROM responses WHERE activity_instance_id IN (?))`, [instanceIds]);
+    await db.query(`DELETE FROM feedback WHERE response_id IN (SELECT id FROM responses WHERE activity_instance_id IN (?))`, [instanceIds]);
     await db.query(`DELETE FROM response_drafts WHERE activity_instance_id IN (?)`, [instanceIds]);
     await db.query(`DELETE FROM responses WHERE activity_instance_id IN (?)`, [instanceIds]);
     await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
@@ -184,6 +192,7 @@ async function ensureSchema() {
       submit_id CHAR(36) NULL,
       response_type VARCHAR(32) NOT NULL DEFAULT 'text',
       response MEDIUMTEXT NULL,
+      submitted_at DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
       answered_by_user_id INT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       KEY idx_resp_instance_qid (activity_instance_id, question_id, id)
@@ -200,6 +209,70 @@ async function ensureSchema() {
       answered_by_user_id INT NOT NULL,
       updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       UNIQUE KEY uniq_draft (activity_instance_id, question_id)
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS feedback (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      response_id INT DEFAULT NULL,
+      feedback_text TEXT NOT NULL,
+      generated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_feedback_response (response_id)
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS followups (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      response_id INT DEFAULT NULL,
+      followup_prompt TEXT NOT NULL,
+      followup_generated TEXT NOT NULL,
+      generated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      KEY idx_followups_response (response_id)
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS progress_monitor_suggestions (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      activity_instance_id INT NOT NULL,
+      audit_log_id INT DEFAULT NULL,
+      previous_status VARCHAR(32) DEFAULT NULL,
+      status VARCHAR(32) NOT NULL,
+      suggestion_text TEXT NOT NULL,
+      context_json LONGTEXT DEFAULT NULL,
+      suggestion_state ENUM('pending','dismissed','acted_on') NOT NULL DEFAULT 'pending',
+      dismissed_at TIMESTAMP NULL DEFAULT NULL,
+      acted_on_at TIMESTAMP NULL DEFAULT NULL,
+      generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_pms_instance_generated (activity_instance_id, generated_at),
+      KEY idx_pms_state (suggestion_state),
+      KEY idx_pms_audit (audit_log_id),
+      CONSTRAINT pms_instance_fk
+        FOREIGN KEY (activity_instance_id) REFERENCES activity_instances(id) ON DELETE CASCADE,
+      CONSTRAINT pms_audit_fk
+        FOREIGN KEY (audit_log_id) REFERENCES audit_log(id) ON DELETE SET NULL
+    )
+  `);
+
+  await db.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      event_type VARCHAR(191) NOT NULL,
+      user_id INT DEFAULT NULL,
+      guest_token VARCHAR(191) DEFAULT NULL,
+      role VARCHAR(32) DEFAULT NULL,
+      class_id INT DEFAULT NULL,
+      course_id INT DEFAULT NULL,
+      activity_id INT DEFAULT NULL,
+      activity_instance_id INT DEFAULT NULL,
+      request_path VARCHAR(255) DEFAULT NULL,
+      ip_address VARCHAR(64) DEFAULT NULL,
+      user_agent VARCHAR(1000) DEFAULT NULL,
+      details LONGTEXT DEFAULT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
   `);
 }
@@ -306,7 +379,7 @@ async function addGroupMember({
   );
 }
 
-function createTestServer(user = null) {
+function createTestServer(user = null, withSockets = false) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
@@ -314,8 +387,30 @@ function createTestServer(user = null) {
     next();
   });
   app.use('/api/activity-instances', activityInstanceRoutes);
+  app.use('/api/progress-monitor', progressMonitorRoutes);
 
   const server = http.createServer(app);
+  const io = withSockets ? new Server(server, { serveClient: false }) : null;
+  if (io) {
+    global.io = io;
+    global.emitInstanceState = () => {};
+    io.on('connection', (socket) => {
+      socket.on('instance:join', ({ instanceId }) => {
+        socket.join('instance-' + instanceId);
+      });
+      socket.on('instance:leave', ({ instanceId }) => {
+        socket.leave('instance-' + instanceId);
+      });
+      socket.on('progress-monitor:join', ({ courseId, activityId }) => {
+        if (courseId) socket.join('progress-monitor-course-' + courseId);
+        if (activityId) socket.join('progress-monitor-activity-' + activityId);
+      });
+      socket.on('progress-monitor:leave', ({ courseId, activityId }) => {
+        if (courseId) socket.leave('progress-monitor-course-' + courseId);
+        if (activityId) socket.leave('progress-monitor-activity-' + activityId);
+      });
+    });
+  }
   server.keepAliveTimeout = 1;
 
   return new Promise((resolve, reject) => {
@@ -324,11 +419,13 @@ function createTestServer(user = null) {
       const { port } = server.address();
       resolve({
         baseUrl: `http://127.0.0.1:${port}`,
+        io,
         close: () =>
           new Promise((closeResolve) => {
-            server.close(closeResolve);
-            server.closeIdleConnections?.();
-          }),
+              io?.close();
+              server.close(closeResolve);
+              server.closeIdleConnections?.();
+            }),
       });
     });
   });
@@ -1428,4 +1525,334 @@ test('reopen rejects already-submitted timed tests so instructors must clear ans
     [instanceId]
   );
   assert.equal(instance.test_reopen_until, null);
+});
+
+test("classifyProgressStatus respects the active-thinking guard and feedback/fall-behind states", async () => {
+  const { classifyProgressStatus } = await import(pathToFileURL(path.join(__dirname, "..", "..", "client/src/pages/run-activity/useRunActivitySync.js")).href);
+
+  const activity = {
+    progress_status: "in_progress",
+    section_timer_started_at: "2026-05-01 12:00:00",
+    section_timer_duration_minutes: 10,
+    section_timer_paused: 0,
+  };
+
+  assert.equal(
+    classifyProgressStatus({
+      now: new Date("2026-05-01T12:02:00Z").getTime(),
+      activity,
+      currentTimedSection: { minutes: 10 },
+      groupMembers: [{ connected: false, last_heartbeat: "2026-05-01 12:01:45" }],
+      latestDraftAt: "2026-05-01 12:01:50",
+      latestSubmissionAt: null,
+      latestFeedbackAt: null,
+      submittedQuestionCount: 0,
+      currentQuestionCount: 2,
+      peerSignals: [],
+    }),
+    "active_thinking"
+  );
+
+  assert.equal(
+    classifyProgressStatus({
+      now: new Date("2026-05-01T12:06:30Z").getTime(),
+      activity,
+      currentTimedSection: { minutes: 10 },
+      groupMembers: [{ connected: false, last_heartbeat: "2026-05-01 12:01:45" }],
+      latestDraftAt: "2026-05-01 12:01:50",
+      latestSubmissionAt: null,
+      latestFeedbackAt: "2026-05-01 12:04:00",
+      submittedQuestionCount: 0,
+      currentQuestionCount: 2,
+      peerSignals: [],
+    }),
+    "stuck_after_feedback"
+  );
+
+  assert.equal(
+    classifyProgressStatus({
+      now: new Date("2026-05-01T12:09:30Z").getTime(),
+      activity,
+      currentTimedSection: { minutes: 10 },
+      groupMembers: [{ connected: false, last_heartbeat: "2026-05-01 12:00:30" }],
+      latestDraftAt: "2026-05-01 12:00:45",
+      latestSubmissionAt: null,
+      latestFeedbackAt: null,
+      submittedQuestionCount: 0,
+      currentQuestionCount: 2,
+      peerSignals: [
+        { latestDraftAt: "2026-05-01 12:08:45", latestSubmissionAt: "2026-05-01 12:08:45" },
+        { latestDraftAt: "2026-05-01 12:08:30", latestSubmissionAt: "2026-05-01 12:08:30" },
+      ],
+    }),
+    "falling_behind"
+  );
+});
+
+test("progress status changes broadcast to the room and are written to audit_log", async () => {
+  const instructor = await createUser("instructor");
+  const student = await createUser("student");
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId, activeStudentId: student.id });
+  await addGroupMember({ instanceId, studentId: student.id, connected: true });
+
+  const server = await createTestServer(instructor, true);
+  const socketIoClient = require(require.resolve("socket.io-client", { paths: [path.join(__dirname, "..", "..", "client")] }));
+  const teammateSocket = socketIoClient.io(server.baseUrl, {
+    transports: ["websocket"],
+    forceNew: true,
+    reconnection: false,
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      teammateSocket.once("connect", resolve);
+      teammateSocket.once("connect_error", reject);
+    });
+    teammateSocket.emit("instance:join", { instanceId });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const eventPromise = new Promise((resolve) => {
+      teammateSocket.once("progress:status", resolve);
+    });
+
+    const response = await fetch(server.baseUrl + "/api/activity-instances/" + instanceId + "/progress-monitor/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        previousStatus: "active_thinking",
+        newStatus: "needs_check_in",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const responseBody = await response.json();
+    assert.equal(responseBody.ok, true);
+    assert.equal(responseBody.emitted, true);
+    assert.equal(responseBody.status, "needs_check_in");
+
+    const event = await eventPromise;
+    assert.equal(Number(event.instanceId), instanceId);
+    assert.equal(Number(event.activityInstanceId), instanceId);
+    assert.equal(event.previousStatus, "active_thinking");
+    assert.equal(event.newStatus, "needs_check_in");
+
+    const [[auditRow]] = await db.query(
+      "SELECT event_type, details FROM audit_log WHERE activity_instance_id = ? ORDER BY id DESC LIMIT 1",
+      [instanceId]
+    );
+
+    assert.equal(auditRow.event_type, "progress_status_change");
+    assert.deepEqual(JSON.parse(auditRow.details), {
+      previous_status: "active_thinking",
+      new_status: "needs_check_in",
+      activity_instance_id: instanceId,
+    });
+  } finally {
+    teammateSocket.close();
+    await server.close();
+  }
+});
+
+test("progress monitor board returns the latest status rows and relays live updates", async () => {
+  const instructor = await createUser("instructor");
+  const student = await createUser("student");
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId, activeStudentId: student.id });
+  await addGroupMember({ instanceId, studentId: student.id, connected: true });
+
+  const server = await createTestServer(instructor, true);
+  const socketIoClient = require(require.resolve("socket.io-client", { paths: [path.join(__dirname, "..", "..", "client")] }));
+  const dashboardSocket = socketIoClient.io(server.baseUrl, {
+    transports: ["websocket"],
+    forceNew: true,
+    reconnection: false,
+  });
+
+  try {
+    await new Promise((resolve, reject) => {
+      dashboardSocket.once("connect", resolve);
+      dashboardSocket.once("connect_error", reject);
+    });
+
+    dashboardSocket.emit("progress-monitor:join", { courseId });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const liveEventPromise = new Promise((resolve) => {
+      dashboardSocket.once("progress:status", resolve);
+    });
+
+    const postResponse = await fetch(server.baseUrl + "/api/activity-instances/" + instanceId + "/progress-monitor/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        previousStatus: "active_thinking",
+        newStatus: "needs_check_in",
+      }),
+    });
+
+    assert.equal(postResponse.status, 200);
+    const postBody = await postResponse.json();
+    assert.equal(postBody.ok, true);
+    assert.equal(postBody.emitted, true);
+
+    const liveEvent = await liveEventPromise;
+    assert.equal(Number(liveEvent.instanceId), instanceId);
+    assert.equal(Number(liveEvent.courseId), courseId);
+    assert.equal(liveEvent.newStatus, "needs_check_in");
+
+    const boardResponse = await fetch(server.baseUrl + "/api/progress-monitor/statuses?courseId=" + courseId, {
+      credentials: "include",
+    });
+    assert.equal(boardResponse.status, 200);
+    const board = await boardResponse.json();
+    assert.equal(board.scope.courseId, courseId);
+    assert.equal(board.summary.totalGroups, 1);
+    assert.equal(board.summary.byStatus.needs_check_in, 1);
+    assert.equal(board.rows.length, 1);
+    assert.equal(board.rows[0].activityInstanceId, instanceId);
+    assert.equal(board.rows[0].currentStatus, "needs_check_in");
+    assert.ok(board.rows[0].statusAgeMs >= 0);
+
+  } finally {
+    dashboardSocket.close();
+    await server.close();
+  }
+});
+
+
+test('progress monitor suggestion pipeline stores a suggestion and lets instructors act on it', async () => {
+  const originalLLM = aiController.callLLMJsonStrict;
+  aiController.callLLMJsonStrict = async () => ({ suggestion: 'Ask the facilitator to restate the goal.' });
+
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId, activeStudentId: student.id });
+  await addGroupMember({ instanceId, studentId: student.id, connected: true });
+
+  const submitId = uniqueValue('submit');
+  await db.query(
+    `INSERT INTO responses (activity_instance_id, question_id, submit_id, response_type, response, answered_by_user_id)
+     VALUES (?, ?, ?, 'text', ?, ?)`,
+    [instanceId, '1a', submitId, 'We are still thinking about the pattern.', student.id]
+  );
+  await db.query(
+    `INSERT INTO feedback (response_id, feedback_text) VALUES ((SELECT id FROM responses WHERE activity_instance_id = ? AND question_id = ? ORDER BY id DESC LIMIT 1), ?)`,
+    [instanceId, '1a', 'Focus on the goal before choosing an operation.']
+  );
+  await db.query(
+    `INSERT INTO followups (response_id, followup_prompt, followup_generated) VALUES ((SELECT id FROM responses WHERE activity_instance_id = ? AND question_id = ? ORDER BY id DESC LIMIT 1), ?, ?)`,
+    [instanceId, '1a', 'What changed after the last attempt?', 'Ask the analyst what changed after the last attempt.']
+  );
+
+  const server = await createTestServer(instructor, true);
+  try {
+    const response = await fetch(`${server.baseUrl}/api/activity-instances/${instanceId}/progress-monitor/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ previousStatus: 'active_thinking', newStatus: 'needs_check_in' }),
+    });
+    assert.equal(response.status, 200);
+
+    let board = null;
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const boardResponse = await fetch(`${server.baseUrl}/api/progress-monitor/statuses?courseId=${courseId}`, {
+        credentials: 'include',
+      });
+      board = await boardResponse.json();
+      const suggestion = board.rows?.[0]?.suggestion;
+      if (suggestion?.text === 'Ask the facilitator to restate the goal.') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    const [suggestionRows] = await db.query(
+      'SELECT * FROM progress_monitor_suggestions WHERE activity_instance_id = ? ORDER BY id DESC',
+      [instanceId]
+    );
+    assert.equal(suggestionRows.length, 1, `expected a generated suggestion row; board=${JSON.stringify(board)}`);
+    assert.equal(suggestionRows[0].suggestion_text, 'Ask the facilitator to restate the goal.');
+    const suggestionId = suggestionRows[0].id;
+    const dismissResponse = await fetch(`${server.baseUrl}/api/progress-monitor/suggestions/${suggestionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ action: 'dismissed' }),
+    });
+    assert.equal(dismissResponse.status, 200);
+    const dismissed = await dismissResponse.json();
+    assert.equal(dismissed.suggestion.state, 'dismissed');
+
+    const [afterDismissRows] = await db.query(
+      'SELECT suggestion_state FROM progress_monitor_suggestions WHERE id = ?',
+      [suggestionId]
+    );
+    assert.equal(afterDismissRows[0].suggestion_state, 'dismissed');
+  } finally {
+    aiController.callLLMJsonStrict = originalLLM;
+    await server.close();
+  }
+});
+
+test('progress monitor suggestion debounce prevents duplicate rapid triggers', async () => {
+  const originalLLM = aiController.callLLMJsonStrict;
+  let calls = 0;
+  aiController.callLLMJsonStrict = async () => {
+    calls += 1;
+    return { suggestion: 'Give a time warning.' };
+  };
+
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({ activityId, courseId, activeStudentId: student.id });
+  await addGroupMember({ instanceId, studentId: student.id, connected: true });
+
+  const server = await createTestServer(instructor);
+  try {
+    const body = { previousStatus: 'active_thinking', newStatus: 'falling_behind' };
+    const one = fetch(`${server.baseUrl}/api/activity-instances/${instanceId}/progress-monitor/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+    const two = fetch(`${server.baseUrl}/api/activity-instances/${instanceId}/progress-monitor/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify(body),
+    });
+
+    assert.equal((await one).status, 200);
+    assert.equal((await two).status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const [suggestions] = await db.query(
+      'SELECT * FROM progress_monitor_suggestions WHERE activity_instance_id = ?',
+      [instanceId]
+    );
+    assert.equal(suggestions.length, 1);
+    assert.equal(calls, 1);
+  } finally {
+    aiController.callLLMJsonStrict = originalLLM;
+    await server.close();
+  }
+});
+
+test('progress monitor suggestion sanitizer rejects answer-like phrasing', () => {
+  const { sanitizeSuggestionText } = require('../progress_monitor/service');
+  assert.equal(sanitizeSuggestionText('The answer is 42.'), null);
+  assert.equal(sanitizeSuggestionText('Ask the group to compare the last attempt.'), 'Ask the group to compare the last attempt.');
 });

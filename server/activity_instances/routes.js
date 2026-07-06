@@ -37,6 +37,10 @@ router.get('/:id/enrolled-students', controller.getEnrolledStudents);
 // ✅ Record student heartbeat for presence
 router.post('/:instanceId/heartbeat', controller.recordHeartbeat);
 
+// ✅ Get progress monitor snapshot
+router.get('/:instanceId/progress-monitor', controller.getProgressMonitorSnapshot);
+router.post('/:instanceId/progress-monitor/status', controller.recordProgressStatusChange);
+
 // ✅ Get active student for an activity instance (auto-assign if none)
 router.get('/:instanceId/active-student', controller.getActiveStudent);
 

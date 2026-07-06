@@ -189,6 +189,28 @@ async function main() {
         CONSTRAINT audit_log_instance_fk
           FOREIGN KEY (activity_instance_id) REFERENCES activity_instances(id) ON DELETE SET NULL
       );
+
+      CREATE TABLE IF NOT EXISTS progress_monitor_suggestions (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        activity_instance_id INT NOT NULL,
+        audit_log_id INT DEFAULT NULL,
+        previous_status VARCHAR(32) DEFAULT NULL,
+        status VARCHAR(32) NOT NULL,
+        suggestion_text TEXT NOT NULL,
+        context_json LONGTEXT DEFAULT NULL,
+        suggestion_state ENUM('pending','dismissed','acted_on') NOT NULL DEFAULT 'pending',
+        dismissed_at TIMESTAMP NULL DEFAULT NULL,
+        acted_on_at TIMESTAMP NULL DEFAULT NULL,
+        generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        KEY idx_pms_instance_generated (activity_instance_id, generated_at),
+        KEY idx_pms_state (suggestion_state),
+        KEY idx_pms_audit (audit_log_id),
+        CONSTRAINT pms_instance_fk
+          FOREIGN KEY (activity_instance_id) REFERENCES activity_instances(id) ON DELETE CASCADE,
+        CONSTRAINT pms_audit_fk
+          FOREIGN KEY (audit_log_id) REFERENCES audit_log(id) ON DELETE SET NULL
+      );
     `);
 
     console.log(`Prepared test database ${DB_NAME}.`);

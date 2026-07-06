@@ -8,6 +8,7 @@ async function clearDatabase() {
     'audit_log',
     'followups',
     'feedback',
+    'progress_monitor_suggestions',
     'responses',
     'group_members',
     'activity_instances',

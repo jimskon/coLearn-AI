@@ -8,6 +8,7 @@ const { gradeTestQuestion } = require('../ai/controller');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
+const { enqueueSuggestionForStatusChange } = require('../progress_monitor/service');
 
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -39,6 +40,25 @@ function normalizeActiveRotationMode(raw) {
 }
 
 const PRESENCE_WINDOW_SEC = 120;
+const PROGRESS_STATUS_VALUES = new Set([
+  'active_thinking',
+  'needs_check_in',
+  'stuck_after_feedback',
+  'falling_behind',
+  'completed',
+]);
+
+
+async function resumeExistingMembership(conn, activityInstanceId, studentId) {
+  await conn.query(
+    `UPDATE group_members
+        SET connected = 1,
+            last_heartbeat = NOW()
+      WHERE activity_instance_id = ?
+        AND student_id = ?`,
+    [activityInstanceId, studentId]
+  );
+}
 
 function countQuestionGroups(lines = []) {
   const count = (Array.isArray(lines) ? lines : [])
@@ -472,6 +492,7 @@ async function ensureDemoInstance(req, res) {
     );
 
     if (existing?.instance_id) {
+      await resumeExistingMembership(conn, Number(existing.instance_id), userId);
       return res.json({ instanceId: Number(existing.instance_id), created: false });
     }
 
@@ -584,6 +605,7 @@ async function ensureActivitySandboxInstance(req, res) {
     );
 
     if (existing?.instance_id) {
+      await resumeExistingMembership(conn, Number(existing.instance_id), userId);
       return res.json({
         instanceId: Number(existing.instance_id),
         courseId,
@@ -2737,6 +2759,190 @@ async function getInstanceResponseHistory(req, res) {
   }
 }
 
+async function getProgressMonitorSnapshot(req, res) {
+  const { instanceId } = req.params;
+
+  try {
+    const [[activityInstance]] = await db.query(
+      "SELECT id, activity_id, course_id, progress_status, section_timer_key, section_timer_duration_minutes, section_timer_started_at, section_timer_paused, active_student_id FROM activity_instances WHERE id = ?",
+      [instanceId]
+    );
+
+    if (!activityInstance) {
+      return res.status(404).json({ error: "Activity instance not found" });
+    }
+
+    const [groupMembers] = await db.query(
+      "SELECT student_id, role, connected, last_heartbeat FROM group_members WHERE activity_instance_id = ? ORDER BY id ASC",
+      [instanceId]
+    );
+
+    const [responseRows] = await db.query(
+      "SELECT id, question_id, submitted_at FROM responses WHERE activity_instance_id = ? ORDER BY id DESC",
+      [instanceId]
+    );
+
+    const submittedQuestionIds = [];
+    const seenQuestionIds = new Set();
+    let latestSubmissionAt = null;
+    let latestBaseResponseId = null;
+
+    for (const row of responseRows) {
+      if (row.submitted_at) {
+        const rowMs = new Date(row.submitted_at).getTime();
+        const latestMs = latestSubmissionAt ? new Date(latestSubmissionAt).getTime() : null;
+        if (latestMs == null || rowMs > latestMs) {
+          latestSubmissionAt = row.submitted_at;
+        }
+      }
+
+      const baseQid = getHistoryBaseQid(row.question_id);
+      if (!baseQid) continue;
+      if (!seenQuestionIds.has(baseQid)) {
+        seenQuestionIds.add(baseQid);
+        submittedQuestionIds.push(baseQid);
+      }
+      if (!latestBaseResponseId) {
+        latestBaseResponseId = row.id;
+      }
+    }
+
+    const [[draftRow]] = await db.query(
+      "SELECT MAX(updated_at) AS latestDraftAt FROM response_drafts WHERE activity_instance_id = ?",
+      [instanceId]
+    );
+
+    let latestFeedbackAt = null;
+    if (latestBaseResponseId) {
+      const [[feedbackRow]] = await db.query(
+        "SELECT MAX(generated_at) AS latestFeedbackAt FROM feedback WHERE response_id = ?",
+        [latestBaseResponseId]
+      );
+      const [[followupRow]] = await db.query(
+        "SELECT MAX(generated_at) AS latestFollowupAt FROM followups WHERE response_id = ?",
+        [latestBaseResponseId]
+      );
+
+      const feedbackAt = feedbackRow?.latestFeedbackAt ? new Date(feedbackRow.latestFeedbackAt).getTime() : null;
+      const followupAt = followupRow?.latestFollowupAt ? new Date(followupRow.latestFollowupAt).getTime() : null;
+      const latestFeedbackMs = [feedbackAt, followupAt].filter((value) => Number.isFinite(value)).reduce((max, value) => (value > max ? value : max), null);
+      if (latestFeedbackMs != null) {
+        latestFeedbackAt = new Date(latestFeedbackMs).toISOString().slice(0, 19).replace("T", " ");
+      }
+    }
+
+    const [peerRows] = await db.query(
+      "SELECT ai.id AS activityInstanceId, ai.progress_status AS progressStatus, MAX(rd.updated_at) AS latestDraftAt, MAX(r.submitted_at) AS latestSubmissionAt FROM activity_instances ai LEFT JOIN response_drafts rd ON rd.activity_instance_id = ai.id LEFT JOIN responses r ON r.activity_instance_id = ai.id WHERE ai.activity_id = ? AND ai.course_id = ? AND ai.id <> ? AND ai.progress_status <> 'completed' GROUP BY ai.id, ai.progress_status ORDER BY ai.group_number ASC, ai.id ASC",
+      [activityInstance.activity_id, activityInstance.course_id, instanceId]
+    );
+
+    const config = {
+      idleToleranceMinutes: Number(process.env.PROGRESS_MONITOR_IDLE_TOLERANCE_MINUTES || 3),
+      recentSubmissionMinutes: Number(process.env.PROGRESS_MONITOR_RECENT_SUBMISSION_MINUTES || 3),
+      presenceWindowMinutes: Number(process.env.PROGRESS_MONITOR_PRESENCE_WINDOW_MINUTES || 2),
+      majorityElapsedThreshold: Number(process.env.PROGRESS_MONITOR_MAJORITY_ELAPSED_THRESHOLD || 0.5),
+      fallingBehindThreshold: Number(process.env.PROGRESS_MONITOR_FALLING_BEHIND_THRESHOLD || 0.8),
+      paceLagMinutes: Number(process.env.PROGRESS_MONITOR_PACE_LAG_MINUTES || 5),
+    };
+
+    return res.json({
+      activityInstance,
+      groupMembers,
+      latestDraftAt: draftRow?.latestDraftAt || null,
+      latestSubmissionAt,
+      latestFeedbackAt,
+      submittedQuestionIds,
+      peerSignals: peerRows.map((row) => ({
+        activityInstanceId: Number(row.activityInstanceId),
+        progressStatus: row.progressStatus,
+        latestDraftAt: row.latestDraftAt || null,
+        latestSubmissionAt: row.latestSubmissionAt || null,
+        latestActivityAt: row.latestSubmissionAt || row.latestDraftAt || null,
+      })),
+      config,
+    });
+  } catch (err) {
+    console.error("❌ getProgressMonitorSnapshot error:", err);
+    res.status(500).json({ error: "Failed to fetch progress monitor snapshot" });
+  }
+}
+
+async function recordProgressStatusChange(req, res) {
+  const { instanceId } = req.params;
+  const normalizeEventStatus = (value, { required = false } = {}) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) return required ? null : null;
+    return PROGRESS_STATUS_VALUES.has(normalized) ? normalized : null;
+  };
+
+  const previousStatus = normalizeEventStatus(req.body?.previousStatus);
+  const newStatus = normalizeEventStatus(req.body?.newStatus, { required: true });
+
+  if (!newStatus) {
+    return res.status(400).json({ error: "Invalid newStatus" });
+  }
+
+  if (previousStatus === newStatus) {
+    return res.json({ ok: true, emitted: false, status: newStatus });
+  }
+
+  try {
+    const [[instance]] = await db.query(
+      "SELECT id, activity_id, course_id FROM activity_instances WHERE id = ?",
+      [instanceId]
+    );
+
+    if (!instance) {
+      return res.status(404).json({ error: "Activity instance not found" });
+    }
+
+    const details = {
+      previous_status: previousStatus,
+      new_status: newStatus,
+      activity_instance_id: Number(instanceId),
+    };
+
+    const auditLogId = await recordAuditEvent("progress_status_change", {
+      req,
+      activityId: Number(instance.activity_id) || null,
+      activityInstanceId: instanceId,
+      details,
+    });
+
+    void enqueueSuggestionForStatusChange({
+      instanceId: Number(instanceId),
+      auditLogId,
+      previousStatus,
+      newStatus,
+    });
+
+    const payload = {
+      instanceId: Number(instanceId),
+      activityInstanceId: Number(instanceId),
+      activityId: instance.activity_id == null ? null : Number(instance.activity_id),
+      courseId: instance.course_id == null ? null : Number(instance.course_id),
+      previousStatus,
+      newStatus,
+      ts: Date.now(),
+    };
+
+    global.io?.to("instance-" + instanceId).emit("progress:status", payload);
+    if (payload.courseId != null) {
+      global.io?.to("progress-monitor-course-" + payload.courseId).emit("progress:status", payload);
+    }
+    if (payload.activityId != null) {
+      global.io?.to("progress-monitor-activity-" + payload.activityId).emit("progress:status", payload);
+    }
+
+    console.log("[progress-monitor] status change", details);
+
+    return res.json({ ok: true, emitted: true, status: newStatus });
+  } catch (err) {
+    console.error("❌ recordProgressStatusChange error:", err);
+    return res.status(500).json({ error: "Failed to record progress status change" });
+  }
+}
+
 // Export it as part of the module
 module.exports = {
   clearResponsesForInstance,
@@ -2746,6 +2952,8 @@ module.exports = {
   ensureActivitySandboxInstance,
   getActivityInstanceById,
   getEnrolledStudents,
+  getProgressMonitorSnapshot,
+  recordProgressStatusChange,
   recordHeartbeat,
   getActiveStudent,
   rotateActiveStudent,

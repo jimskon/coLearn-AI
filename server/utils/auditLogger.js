@@ -73,7 +73,7 @@ async function recordAuditEvent(eventType, options = {}) {
   }
 
   try {
-    await db.query(
+    const [result] = await db.query(
       `INSERT INTO audit_log
          (event_type, user_id, guest_token, role, class_id, course_id, activity_id,
           activity_instance_id, request_path, ip_address,
@@ -94,8 +94,10 @@ async function recordAuditEvent(eventType, options = {}) {
         row.details,
       ]
     );
+    return result?.insertId ?? null;
   } catch (err) {
     console.error('[audit] failed to record event', row.eventType, err?.message || err);
+    return null;
   }
 }
 

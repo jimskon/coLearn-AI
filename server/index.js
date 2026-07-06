@@ -109,6 +109,7 @@ app.use('/api/classes', require('./classes/routes'));
 app.use('/api/activity-instances', require('./activity_instances/routes'));
 app.use('/api/demo', require('./demo/routes'));
 app.use('/api/audit', require('./audit/routes'));
+app.use('/api/progress-monitor', require('./progress_monitor/routes'));
 
 
 // Log and handle unmatched API routes first
@@ -138,6 +139,14 @@ global.io = io;
 
 function roomOfInstance(instanceId) {
   return `instance-${instanceId}`;
+}
+
+function roomOfProgressMonitorCourse(courseId) {
+  return `progress-monitor-course-${courseId}`;
+}
+
+function roomOfProgressMonitorActivity(activityId) {
+  return `progress-monitor-activity-${activityId}`;
 }
 
 global.emitInstanceState = function emitInstanceState(instanceId, patch) {
@@ -181,6 +190,22 @@ io.on('connection', (socket) => {
   socket.on('joinRoom', (instanceId) => {
     socket.join(`instance-${instanceId}`);
     console.log(`👥 Client joined room instance-${instanceId} (legacy)`);
+  });
+
+  socket.on('progress-monitor:join', ({ courseId, activityId }) => {
+    if (courseId) {
+      socket.join(roomOfProgressMonitorCourse(courseId));
+      console.log(`📊 Client joined room ${roomOfProgressMonitorCourse(courseId)}`);
+    }
+    if (activityId) {
+      socket.join(roomOfProgressMonitorActivity(activityId));
+      console.log(`📊 Client joined room ${roomOfProgressMonitorActivity(activityId)}`);
+    }
+  });
+
+  socket.on('progress-monitor:leave', ({ courseId, activityId }) => {
+    if (courseId) socket.leave(roomOfProgressMonitorCourse(courseId));
+    if (activityId) socket.leave(roomOfProgressMonitorActivity(activityId));
   });
 
   // Typing / observer sync (not authoritative)

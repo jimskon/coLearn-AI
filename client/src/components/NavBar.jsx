@@ -90,6 +90,11 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
                       Manage Classes
                     </Nav.Link>
                   )}
+                  {['root', 'creator', 'instructor'].includes(user.role) && !isDemoSession && (
+                    <Nav.Link as={Link} to="/progress-monitor" className="px-2">
+                      Progress
+                    </Nav.Link>
+                  )}
                   {user.role === "root" && (
                     <>
                       <Nav.Link as={Link} to="/admin/logs" className="px-2">

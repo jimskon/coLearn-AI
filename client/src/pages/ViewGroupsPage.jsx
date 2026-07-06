@@ -15,7 +15,7 @@ import {
 } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
-import { FaUserCheck, FaLaptop } from 'react-icons/fa';
+import { FaUserCheck, FaLaptop, FaRandom } from 'react-icons/fa';
 import { parseUtcDbDatetime } from '../utils/time';
 
 function progressLabelFromInstanceRow(g) {
@@ -39,6 +39,16 @@ function isCompleteFromInstanceRow(g) {
 
   // Else, DB status decides
   return String(g.progress_status || '').toLowerCase() === 'completed';
+}
+
+function getConnectedMembers(group) {
+  return (group.members || []).filter((member) => member.connected);
+}
+
+function getActiveMember(group) {
+  const activeId = group.active_student_id == null ? null : String(group.active_student_id);
+  if (!activeId) return null;
+  return (group.members || []).find((member) => String(member.student_id) === activeId) || null;
 }
 
 function groupProgressItems(group) {
@@ -196,6 +206,7 @@ export default function ViewGroupsPage() {
   const [togglingPause, setTogglingPause] = useState(false);
   const [rotationMode, setRotationMode] = useState('submit');
   const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
+  const [rotatingGroups, setRotatingGroups] = useState(new Set());
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isDemoClass, setIsDemoClass] = useState(false);
@@ -472,6 +483,48 @@ export default function ViewGroupsPage() {
     }
   };
 
+  const handleRotateActiveMember = async (group) => {
+    const connectedMembers = getConnectedMembers(group);
+    if (connectedMembers.length < 2) return;
+
+    const currentActive = getActiveMember(group) || connectedMembers[0];
+    const currentStudentId = Number(currentActive?.student_id);
+    if (!Number.isFinite(currentStudentId) || currentStudentId <= 0) return;
+
+    const instanceId = Number(group.instance_id);
+    if (!instanceId) return;
+
+    setRotatingGroups((prev) => {
+      const next = new Set(prev);
+      next.add(instanceId);
+      return next;
+    });
+
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/${instanceId}/rotate-active-student`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ currentStudentId }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Failed to rotate active student');
+      await fetchGroups({ quiet: true });
+    } catch (err) {
+      console.error('❌ Error rotating active student:', err);
+      alert(err?.message || 'Failed to rotate active student.');
+    } finally {
+      setRotatingGroups((prev) => {
+        const next = new Set(prev);
+        next.delete(instanceId);
+        return next;
+      });
+    }
+  };
+
   const handleClearDemoRoster = async () => {
     if (!window.confirm('Clear all students, groups, and saved work for this demo activity? This cannot be undone.')) {
       return;
@@ -562,6 +615,10 @@ export default function ViewGroupsPage() {
           {groups.map((group) => {
             const isComplete = isCompleteFromInstanceRow(group);
             const timerState = getGroupTimerState(group, timerNowMs);
+            const instanceId = Number(group.instance_id);
+            const connectedMembers = getConnectedMembers(group);
+            const activeMember = getActiveMember(group);
+            const canRotateActive = !isComplete && connectedMembers.length > 1;
 
             return (
               <Col lg={4} md={6} sm={12} key={group.instance_id}>
@@ -576,6 +633,26 @@ export default function ViewGroupsPage() {
                       <Badge bg={timerState.bg} text={timerState.text}>
                         {timerState.label}
                       </Badge>
+                      {canRotateActive ? (
+                        <Button
+                          variant="outline-secondary"
+                          size="sm"
+                          disabled={rotatingGroups.has(instanceId)}
+                          onClick={() => handleRotateActiveMember(group)}
+                          title={
+                            activeMember
+                              ? `Pass active control from ${activeMember.name} to another connected member`
+                              : 'Pass active control to another connected member'
+                          }
+                        >
+                          {rotatingGroups.has(instanceId) ? 'Rotating…' : (
+                            <>
+                              <FaRandom className="me-1" />
+                              Rotate active
+                            </>
+                          )}
+                        </Button>
+                      ) : null}
                       {!isDemoInstructor ? (
                         <Button
                           variant="outline-danger"

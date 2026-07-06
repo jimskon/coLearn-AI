@@ -22,7 +22,7 @@ const demoOptions = [
     key: 'creator',
     label: 'Try Creator Demo',
     variant: 'success',
-    description: 'Preview how instructors can set up, test, and demonstrate activities with low friction.',
+    description: 'Build an activity with AI support, then test and refine it in the same flow.',
   },
   {
     key: 'info-request',
@@ -148,7 +148,7 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
       return;
     }
 
-    if (data.joinableSession) {
+    if (data.joinableSession && Number(data.joinableSession.activeMembers) > 1) {
       setJoinPrompt({
         show: true,
         session: data.joinableSession,
@@ -165,6 +165,10 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
     const course = joinPrompt.course;
     setJoinPrompt({ show: false, session: null, course: null, studentId: null });
     navigateToCourseActivities(course);
+  };
+
+  const handleJoinCancel = () => {
+    setJoinPrompt({ show: false, session: null, course: null, studentId: null });
   };
 
   const handleJoinGroup = async () => {
@@ -360,6 +364,13 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
           </div>
         </Modal.Body>
         <Modal.Footer>
+          <Button
+            variant="outline-secondary"
+            onClick={handleJoinCancel}
+            disabled={joinChoiceBusy || studentBusy}
+          >
+            Cancel
+          </Button>
           <Button
             variant="outline-secondary"
             onClick={handleJoinSolo}

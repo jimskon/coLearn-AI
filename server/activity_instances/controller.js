@@ -38,6 +38,8 @@ function normalizeActiveRotationMode(raw) {
   return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
 }
 
+const PRESENCE_WINDOW_SEC = 120;
+
 function countQuestionGroups(lines = []) {
   const count = (Array.isArray(lines) ? lines : [])
     .filter((line) => String(line || '').trimStart().startsWith('\\questiongroup'))
@@ -154,6 +156,55 @@ async function appendResponse(conn, instanceId, submitId, qid, value, {
      VALUES (?, ?, ?, ?, ?, ?)`,
     [instanceId, qid, submitId, type, v, answeredBy]
   );
+}
+
+function getHistoryBaseQid(qidRaw) {
+  const qid = String(qidRaw || '').trim();
+  if (!qid) return null;
+
+  if (/^attempt:\d+$/i.test(qid)) return null;
+  if (/^\d+state$/i.test(qid)) return null;
+  if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return null;
+  if (/^test(?:Total|Max|Summary)Score$/i.test(qid)) return null;
+
+  if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
+
+  const suffixPatterns = [
+    /^(?<base>\d+[A-Za-z]+)F\d+$/i,
+    /^(?<base>\d+[A-Za-z]+)FA\d+$/i,
+    /^(?<base>\d+[A-Za-z]+)FM$/i,
+    /^(?<base>\d+[A-Za-z]+)AF$/i,
+    /^(?<base>\d+[A-Za-z]+)S$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)RunFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)ResponseFeedback$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeScore$/i,
+    /^(?<base>\d+[A-Za-z]+)RunScore$/i,
+    /^(?<base>\d+[A-Za-z]+)ResponseScore$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeAccepted$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeCanContinue$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeRetryCount$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeRetriesRequired$/i,
+    /^(?<base>\d+[A-Za-z]+)CodeSubmissionString$/i,
+    /^(?<base>\d+[A-Za-z]+)(?:Output|output\d*|code\d+|table\d+cell\d+_\d+)$/i,
+  ];
+
+  for (const pattern of suffixPatterns) {
+    const match = qid.match(pattern);
+    if (match?.groups?.base) return match.groups.base;
+  }
+
+  return null;
+}
+
+function isAcceptedQuestionState(latestByQid, baseQid) {
+  const fm = String(latestByQid.get(`${baseQid}FM`) ?? '').trim().toLowerCase();
+  if (fm === 'accepted') return true;
+
+  const codeAccepted = String(latestByQid.get(`${baseQid}CodeAccepted`) ?? '').trim().toLowerCase();
+  if (codeAccepted === 'true') return true;
+
+  return false;
 }
 
 // ========== DOC PARSING ==========
@@ -677,8 +728,6 @@ async function recordHeartbeat(req, res) {
 
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
-  const ACTIVE_WINDOW_SEC = 60; // presence window
-
   try {
     const [[userRow]] = await db.query(`SELECT role FROM users WHERE id = ?`, [userId]);
     if (!userRow) {
@@ -777,7 +826,7 @@ async function recordHeartbeat(req, res) {
         `SELECT (last_heartbeat IS NOT NULL AND last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? SECOND)) AS present
          FROM group_members
          WHERE activity_instance_id = ? AND student_id = ?`,
-        [ACTIVE_WINDOW_SEC, instanceId, inst.active_student_id]
+        [PRESENCE_WINDOW_SEC, instanceId, inst.active_student_id]
       );
       activePresent = !!row?.present;
     }
@@ -808,7 +857,7 @@ async function recordHeartbeat(req, res) {
            AND student_id = ?
            AND last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? SECOND)
          LIMIT 1`,
-        [instanceId, userId, ACTIVE_WINDOW_SEC]
+        [instanceId, userId, PRESENCE_WINDOW_SEC]
       );
 
       let newActiveId = presentCaller?.student_id;
@@ -819,7 +868,7 @@ async function recordHeartbeat(req, res) {
              AND last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? SECOND)
            ORDER BY last_heartbeat DESC
            LIMIT 1`,
-          [instanceId, ACTIVE_WINDOW_SEC]
+          [instanceId, PRESENCE_WINDOW_SEC]
         );
         newActiveId = anyPresent?.student_id || null;
       }
@@ -882,9 +931,42 @@ async function getActiveStudent(req, res) {
       );
     }
 
-    const activeStudentId = isCompleted ? null : instance.active_student_id;
-    //console.log("Active student ID for instance", instanceId, "is", activeStudentId);
-    res.json({ activeStudentId });
+    if (isCompleted) {
+      return res.json({ activeStudentId: null });
+    }
+
+    const [members] = await db.query(
+      `SELECT student_id,
+              last_heartbeat,
+              CASE
+                WHEN last_heartbeat IS NOT NULL
+                 AND last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? SECOND)
+                THEN 1 ELSE 0
+              END AS present
+         FROM group_members
+        WHERE activity_instance_id = ?
+        ORDER BY last_heartbeat DESC, id ASC`,
+      [PRESENCE_WINDOW_SEC, instanceId]
+    );
+
+    const currentActiveId = instance.active_student_id == null ? null : Number(instance.active_student_id);
+    const currentActivePresent = members.some(
+      (member) => Number(member.student_id) === currentActiveId && Number(member.present) === 1
+    );
+
+    let activeStudentId = currentActivePresent ? currentActiveId : null;
+
+    if (!activeStudentId) {
+      activeStudentId = members.find((member) => Number(member.present) === 1)?.student_id ?? null;
+      if (activeStudentId !== currentActiveId) {
+        await db.query(
+          `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
+          [activeStudentId, instanceId]
+        );
+      }
+    }
+
+    return res.json({ activeStudentId });
   } catch (err) {
     console.error("❌ getActiveStudent error:", err);
     res.status(500).json({ error: 'Failed to fetch active student' });
@@ -897,18 +979,26 @@ async function rotateActiveStudent(req, res) {
   const { currentStudentId } = req.body;
 
   const [members] = await db.query(
-    `SELECT student_id FROM group_members
-     WHERE activity_instance_id = ? AND connected = TRUE`,
-    [instanceId]
+    `SELECT student_id,
+            CASE
+              WHEN last_heartbeat IS NOT NULL
+               AND last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? SECOND)
+              THEN 1 ELSE 0
+            END AS present
+       FROM group_members
+      WHERE activity_instance_id = ?
+      ORDER BY last_heartbeat DESC, id ASC`,
+    [PRESENCE_WINDOW_SEC, instanceId]
   );
 
   if (!currentStudentId) return res.status(400).json({ error: 'Missing currentStudentId' });
 
   try {
-    if (!members.length) return res.status(404).json({ error: 'No connected group members' });
+    const recentMembers = members.filter((member) => Number(member.present) === 1);
+    if (!recentMembers.length) return res.status(404).json({ error: 'No active group members' });
 
-    const others = members.filter(m => m.student_id !== currentStudentId);
-    const next = others.length ? others[Math.floor(Math.random() * others.length)] : members[0];
+    const others = recentMembers.filter((m) => Number(m.student_id) !== Number(currentStudentId));
+    const next = others.length ? others[Math.floor(Math.random() * others.length)] : recentMembers[0];
 
     await db.query(`UPDATE activity_instances SET active_student_id = ? WHERE id = ?`, [next.student_id, instanceId]);
     global.emitInstanceState?.(Number(instanceId), { activeStudentId: next.student_id });
@@ -1172,13 +1262,32 @@ async function submitGroupResponses(req, res) {
       return s || 'inprogress';
     };
 
+    const [latestRows] = await conn.query(
+      `SELECT r.question_id, r.response
+       FROM responses r
+       JOIN (
+         SELECT question_id, MAX(id) AS max_id
+         FROM responses
+         WHERE activity_instance_id = ?
+         GROUP BY question_id
+       ) latest
+         ON r.question_id = latest.question_id AND r.id = latest.max_id
+       WHERE r.activity_instance_id = ?`,
+      [instanceId, instanceId]
+    );
+    const latestByQid = new Map(
+      latestRows.map((row) => [String(row.question_id || '').trim(), String(row.response ?? '')])
+    );
+
     const submittedStatusEntries = Object.entries(answers).filter(([qidRaw]) => {
       const qid = String(qidRaw || '').trim();
       return new RegExp(`^${groupNum}[A-Za-z][A-Za-z0-9_]*S$`).test(qid);
     });
 
-    // ---- 1) insert all submitted answer fields as-is ----
-    // (These include: 2a, 2aF1, 2aFA1, etc.)
+    const payloadEntries = [];
+    const groupEntriesByBase = new Map();
+    const passthroughEntries = [];
+
     for (const [qidRaw, valueRaw] of Object.entries(answers)) {
       const qid = String(qidRaw || '').trim();
       if (!qid) continue;
@@ -1186,6 +1295,50 @@ async function submitGroupResponses(req, res) {
       // Group state is derived on the server from submitted question status rows.
       // Do not persist a client-computed `${groupNum}state` row.
       if (/^[0-9]+state$/i.test(qid)) continue;
+
+      if (/^attempt:\d+$/i.test(qid)) {
+        passthroughEntries.push([qid, valueRaw]);
+        continue;
+      }
+
+      const baseQid = getHistoryBaseQid(qid);
+      if (!baseQid) {
+        passthroughEntries.push([qid, valueRaw]);
+        continue;
+      }
+
+      if (!groupEntriesByBase.has(baseQid)) {
+        groupEntriesByBase.set(baseQid, {
+          baseValue: null,
+          entries: [],
+        });
+      }
+
+      const group = groupEntriesByBase.get(baseQid);
+      group.entries.push([qid, valueRaw]);
+      if (qid === baseQid) {
+        group.baseValue = valueRaw;
+      }
+    }
+
+    for (const [baseQid, group] of groupEntriesByBase.entries()) {
+      if (isAcceptedQuestionState(latestByQid, baseQid)) {
+        continue;
+      }
+
+      const currentBaseValue = String(group.baseValue ?? '');
+      const previousBaseValue = String(latestByQid.get(baseQid) ?? '');
+      if (currentBaseValue === previousBaseValue) {
+        continue;
+      }
+
+      payloadEntries.push(...group.entries);
+    }
+
+    // ---- 1) insert only the questions that actually changed ----
+    for (const [qidRaw, valueRaw] of payloadEntries) {
+      const qid = String(qidRaw || '').trim();
+      if (!qid) continue;
 
       const value = valueRaw == null ? '' : String(valueRaw);
 
@@ -1195,6 +1348,18 @@ async function submitGroupResponses(req, res) {
         allowEmpty: true,
       });
     }
+
+    for (const [qidRaw, valueRaw] of passthroughEntries) {
+      const qid = String(qidRaw || '').trim();
+      if (!qid) continue;
+
+      await appendResponse(conn, instanceId, submitId, qid, valueRaw, {
+        type: 'text',
+        answeredBy: studentId,
+        allowEmpty: true,
+      });
+    }
+
     // ---- 1a) append one marker row for this attempt click ----
     await appendResponse(
       conn,
@@ -1450,21 +1615,34 @@ async function getInstancesForActivityInCourse(req, res) {
     const groups = [];
     for (const inst of instances) {
       const [members] = await db.query(
-        `SELECT gm.student_id, gm.role, u.name AS student_name, u.email AS student_email, gm.connected
+        `SELECT gm.student_id,
+                gm.role,
+                u.name AS student_name,
+                u.email AS student_email,
+                gm.connected,
+                CASE
+                  WHEN gm.last_heartbeat IS NOT NULL
+                   AND gm.last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? SECOND)
+                  THEN 1 ELSE 0
+                END AS present
          FROM group_members gm
          JOIN users u ON gm.student_id = u.id
          WHERE gm.activity_instance_id = ?
          ORDER BY gm.role`,
-        [inst.instance_id]
+        [PRESENCE_WINDOW_SEC, inst.instance_id]
       );
-      const memberIds = new Set(members.map(m => m.student_id));
-      let activeId = inst.active_student_id;
+      const memberIds = new Set(members.map((m) => Number(m.student_id)));
+      let activeId = inst.active_student_id == null ? null : Number(inst.active_student_id);
+      const recentMembers = members.filter((member) => Number(member.present) === 1);
 
-      if (!activeId || !memberIds.has(activeId)) {
-        const connectedMember = members.find(m => !!m.connected);
-        const fallback = connectedMember?.student_id ?? members[0]?.student_id ?? null;
+      if (
+        !activeId ||
+        !memberIds.has(activeId) ||
+        !recentMembers.some((member) => Number(member.student_id) === activeId)
+      ) {
+        const fallback = recentMembers[0]?.student_id ?? null;
 
-        if (fallback !== null && fallback !== activeId) {
+        if (fallback !== activeId) {
           await db.query(
             `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
             [fallback, inst.instance_id]
@@ -1527,7 +1705,7 @@ async function getInstancesForActivityInCourse(req, res) {
           name: m.student_name,
           email: m.student_email,
           role: roleLabels[m.role] || m.role,
-          connected: !!m.connected
+          connected: Number(m.present) === 1
         }))
       });
     }

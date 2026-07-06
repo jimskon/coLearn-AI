@@ -120,6 +120,8 @@ exports.createOrUpdateCodeResponse = async (req, res) => {
       questionText: "Review the student's code and offer helpful feedback if needed.",
       studentCode: response,
       codeVersion: question_id,
+      instanceId: activity_instance_id,
+      qid: question_id,
     });
 
     const feedbackText = aiData.feedback || '';

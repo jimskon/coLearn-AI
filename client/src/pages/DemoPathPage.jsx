@@ -11,7 +11,7 @@ const pageCopy = {
   },
   creator: {
     title: 'Creator Demo',
-    body: 'Preparing the creator workbench for this demo code.',
+    body: 'Preparing the AI-assisted creator workbench for this demo code.',
   },
   instructor: {
     title: 'Instructor Demo',

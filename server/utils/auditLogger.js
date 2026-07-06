@@ -48,9 +48,6 @@ async function recordAuditEvent(eventType, options = {}) {
     activityInstanceId = null,
     requestPath = null,
     ipAddress = null,
-    ipCountry = null,
-    ipRegion = null,
-    ipCity = null,
     userAgent = null,
     details = null,
   } = options;
@@ -67,9 +64,6 @@ async function recordAuditEvent(eventType, options = {}) {
     activityInstanceId: activityInstanceId ?? null,
     requestPath: requestPath ?? ctx.requestPath ?? null,
     ipAddress: ipAddress ?? ctx.ipAddress ?? null,
-    ipCountry: ipCountry ?? null,
-    ipRegion: ipRegion ?? null,
-    ipCity: ipCity ?? null,
     userAgent: userAgent ?? ctx.userAgent ?? null,
     details: safeJson(details),
   };
@@ -82,9 +76,9 @@ async function recordAuditEvent(eventType, options = {}) {
     await db.query(
       `INSERT INTO audit_log
          (event_type, user_id, guest_token, role, class_id, course_id, activity_id,
-          activity_instance_id, request_path, ip_address, ip_country, ip_region, ip_city,
+          activity_instance_id, request_path, ip_address,
           user_agent, details)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         row.eventType,
         row.userId,
@@ -96,9 +90,6 @@ async function recordAuditEvent(eventType, options = {}) {
         row.activityInstanceId,
         row.requestPath,
         row.ipAddress,
-        row.ipCountry,
-        row.ipRegion,
-        row.ipCity,
         row.userAgent,
         row.details,
       ]

@@ -696,7 +696,7 @@ export default function ManageActivitiesPage() {
     <Container>
       <div className="mb-4">
         <h2 className="mb-2">
-          Manage POGIL Activities for {classInfo?.name || `Class ${classId}`}
+          Manage Activities for {classInfo?.name || `Class ${classId}`}
         </h2>
         {classInfo?.description ? (
           <p className="text-muted mb-0">{classInfo.description}</p>

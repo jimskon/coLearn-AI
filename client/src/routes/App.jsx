@@ -26,6 +26,7 @@ import ManageCourseTestsPage from '../pages/ManageCourseTestsPage'; // 👈 NEW
 import DemoLandingPage from '../pages/DemoLandingPage';
 import DemoPathPage from '../pages/DemoPathPage';
 import DemoInfoRequestsAdminPage from '../pages/DemoInfoRequestsAdminPage';
+import InfoPage from '../pages/InfoPage';
 import ViewTestsPage from '../pages/ViewTestsPage';
 import TestSetupPage from '../pages/TestSetupPage';
 
@@ -58,7 +59,9 @@ function AppRoutes() {
 
       <Routes>
         <Route path="/" element={<LoginPage />} />
+        <Route path="/info" element={<InfoPage />} />
         <Route path="/aied2026" element={<DemoShortcutRedirect to="/demo/aied2026" />} />
+        <Route path="/aied2026/info" element={<DemoShortcutRedirect to="/info" />} />
         <Route path="/aied2026/admin/info-requests" element={<DemoShortcutRedirect to="/demo/aied2026/admin/info-requests" />} />
         <Route path="/aied2026/:demoPath" element={<DemoShortcutRedirect />} />
         <Route path="/demo/:demoCode" element={<DemoLandingPage />} />

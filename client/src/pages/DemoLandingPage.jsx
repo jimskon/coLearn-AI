@@ -46,12 +46,13 @@ function normalizeEntryMode(rawValue) {
   return '';
 }
 
-export default function DemoLandingPage({ defaultDemoCode = '' }) {
+export default function DemoLandingPage({ defaultDemoCode = '', autoStartStudent = false }) {
   const navigate = useNavigate();
   const location = useLocation();
   const { demoCode: routeDemoCode = '' } = useParams();
   const demoCode = routeDemoCode || defaultDemoCode;
   const { setUser } = useUser();
+  const autoStartOnceRef = React.useRef(false);
   const [studentBusy, setStudentBusy] = React.useState(false);
   const [studentError, setStudentError] = React.useState('');
   const [guestName, setGuestName] = React.useState('');
@@ -206,6 +207,105 @@ export default function DemoLandingPage({ defaultDemoCode = '' }) {
       state: { guestName },
     });
   };
+
+  React.useEffect(() => {
+    if (!autoStartStudent || autoStartOnceRef.current) return;
+    autoStartOnceRef.current = true;
+    handleStudentDemo();
+  }, [autoStartStudent, handleStudentDemo]);
+
+  if (autoStartStudent) {
+    return (
+      <>
+        <div
+          style={{
+            minHeight: '100vh',
+            background: 'linear-gradient(180deg, #f4efe4 0%, #ffffff 45%, #e7f1ea 100%)',
+            paddingTop: '6rem',
+            paddingBottom: '3rem',
+          }}
+        >
+          <Container>
+            <Row className="justify-content-center">
+              <Col lg={10} xl={8}>
+                <Card className="shadow-lg border-0" style={{ borderRadius: '18px' }}>
+                  <Card.Body className="p-5">
+                    <div className="text-uppercase fw-semibold text-secondary mb-2" style={{ letterSpacing: '0.08em' }}>
+                      Demo code
+                    </div>
+                    <h1 className="h2 fw-bold mb-3">Starting the student demo</h1>
+                    <p className="text-secondary mb-0">
+                      We’re opening the learner experience for this demo code now.
+                    </p>
+                    {studentError ? (
+                      <div className="text-danger mt-4">{studentError}</div>
+                    ) : null}
+                  </Card.Body>
+                </Card>
+              </Col>
+            </Row>
+          </Container>
+        </div>
+
+        <DemoInfoRequestModal
+          show={showInfoRequestModal}
+          demoCode={demoCode}
+          onHide={() => setShowInfoRequestModal(false)}
+        />
+        <Modal
+          show={joinPrompt.show}
+          centered
+          backdrop="static"
+          keyboard={false}
+          onHide={() => setJoinPrompt({ show: false, session: null, course: null, studentId: null })}
+        >
+          <Modal.Header>
+            <Modal.Title>How are you joining?</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <p className="mb-3">
+              There is already a live demo session running.
+              {' '}
+              Group mode is recommended only if you are joining the people already in the room.
+            </p>
+            <div className="p-3 rounded-3 border bg-light">
+              <div className="fw-semibold mb-1">
+                {joinPrompt.session?.activityTitle || 'Live demo session'}
+              </div>
+              <div className="text-secondary small">
+                {joinPrompt.session?.activeMembers
+                  ? `${joinPrompt.session.activeMembers} active participant${joinPrompt.session.activeMembers === 1 ? '' : 's'} ${joinPrompt.session.activeMembers === 1 ? 'is' : 'are'} already connected.`
+                  : 'Someone is already active in this demo.'}
+              </div>
+            </div>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button
+              variant="outline-secondary"
+              onClick={handleJoinCancel}
+              disabled={joinChoiceBusy || studentBusy}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline-secondary"
+              onClick={handleJoinSolo}
+              disabled={joinChoiceBusy || studentBusy}
+            >
+              Work solo
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleJoinGroup}
+              disabled={joinChoiceBusy || studentBusy}
+            >
+              Join group
+            </Button>
+          </Modal.Footer>
+        </Modal>
+      </>
+    );
+  }
 
   return (
     <div

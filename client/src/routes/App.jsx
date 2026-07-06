@@ -36,6 +36,17 @@ function DemoShortcutRedirect({ to }) {
   return <Navigate to={target} replace />;
 }
 
+function DemoRouteEntry() {
+  const { demoCode = '' } = useParams();
+  const normalizedDemoCode = String(demoCode || '').trim().toLowerCase();
+
+  if (normalizedDemoCode === 'aied2026') {
+    return <DemoLandingPage />;
+  }
+
+  return <DemoLandingPage autoStartStudent />;
+}
+
 function AppRoutes() {
   const { user } = useUser();
   const location = useLocation();
@@ -64,7 +75,7 @@ function AppRoutes() {
         <Route path="/aied2026/info" element={<DemoShortcutRedirect to="/info" />} />
         <Route path="/aied2026/admin/info-requests" element={<DemoShortcutRedirect to="/demo/aied2026/admin/info-requests" />} />
         <Route path="/aied2026/:demoPath" element={<DemoShortcutRedirect />} />
-        <Route path="/demo/:demoCode" element={<DemoLandingPage />} />
+        <Route path="/demo/:demoCode" element={<DemoRouteEntry />} />
         <Route path="/demo/:demoCode/admin/info-requests" element={<DemoInfoRequestsAdminPage />} />
         <Route path="/demo/:demoCode/:demoPath" element={<DemoPathPage />} />
         <Route path="/register" element={<RegisterPage />} />

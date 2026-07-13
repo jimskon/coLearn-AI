@@ -3,6 +3,7 @@ import { Alert, Button, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
 import { collectInfosForTarget } from '../../utils/parseSheet';
+import useRuntimeFeatures from '../../hooks/useRuntimeFeatures';
 
 function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   if (!infos?.length) return null;
@@ -76,6 +77,7 @@ export default function RunActivityWorkspace({
   overallTestTotals,
   infoBubbleSession,
 }) {
+  const { features: runtimeFeatures } = useRuntimeFeatures();
   let globalQuestionCounter = 0;
 
   return (
@@ -124,6 +126,7 @@ export default function RunActivityWorkspace({
           setFileContents: handleUpdateFileContents,
           onFileChange: handleFileChange,
           infoBubbleSession,
+          runtimeFeatures,
         })}
 
         {groups.map((group, index) => {
@@ -175,6 +178,7 @@ export default function RunActivityWorkspace({
                   codeFeedbackShown,
                   unansweredShown,
                   infoBubbleSession,
+                  runtimeFeatures,
                 })}
 
               <p ref={questionGroupAnchorRef}>
@@ -222,6 +226,7 @@ export default function RunActivityWorkspace({
                       socket,
                     }),
                   infoBubbleSession,
+                  runtimeFeatures,
                 });
 
                 if (!isTestMode || block.type !== 'question') {

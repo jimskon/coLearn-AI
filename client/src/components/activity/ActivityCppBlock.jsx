@@ -1,6 +1,6 @@
 // src: client/src/components/activity/ActivityCppBlock.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Row, Col, Button, Form } from 'react-bootstrap';
+import { Alert, Row, Col, Button, Form } from 'react-bootstrap';
 import Prism from 'prismjs';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
@@ -22,6 +22,7 @@ export default function ActivityCppBlock({
   fileContents = {},       // { "data.txt": "10 20 30", ... }
   setFileContents,         // fn to update sheet-level file contents
   includeFiles = null,
+  runnerEnabled = true,
 }) {
   // --- code state ---
   const [code, setCode] = useState(initialCode ?? '');
@@ -334,6 +335,11 @@ export default function ActivityCppBlock({
 
   // --- unified run: interactive + sheet files ---
   const runInteractive = async () => {
+    if (!runnerEnabled) {
+      term.current?.writeln('\r\n[Remote C++ runtime is disabled on this server]');
+      return;
+    }
+
     // close previous session if any
     try {
       wsRef.current?.close();
@@ -618,6 +624,7 @@ export default function ActivityCppBlock({
     <>
       <div style={styles.controls}>
         <small className="text-muted">⏱ Time limit: {timeLimit} ms</small>
+        {!runnerEnabled && <small className="text-danger">Remote C++ runtime disabled</small>}
 
         <Button
           variant="secondary"
@@ -649,7 +656,7 @@ export default function ActivityCppBlock({
         <Button
           variant="primary"
           onClick={runInteractive}
-          disabled={isRunning}
+          disabled={isRunning || !runnerEnabled}
         >
           {isRunning ? 'Running…' : 'Run C++'}
         </Button>
@@ -678,6 +685,12 @@ export default function ActivityCppBlock({
             className="d-inline-block"
           />
         </div>
+      )}
+
+      {!runnerEnabled && (
+        <Alert variant="warning" className="mb-2">
+          This install does not include the remote C++ runtime.
+        </Alert>
       )}
 
       <div style={styles.editorWrap}>

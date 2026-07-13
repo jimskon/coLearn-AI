@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Row, Col, Button, Form } from 'react-bootstrap';
+import { Alert, Row, Col, Button, Form } from 'react-bootstrap';
 import Prism from 'prismjs';
 import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
@@ -19,6 +19,7 @@ export default function ActivityRemotePythonBlock({
   fileContents = {},
   setFileContents,
   includeFiles = null,
+  runnerEnabled = true,
 }) {
   const [code, setCode] = useState(initialCode ?? '');
   const [savedCode, setSavedCode] = useState(initialCode ?? '');
@@ -309,6 +310,11 @@ export default function ActivityRemotePythonBlock({
   }, [responseKey]);
 
   const runInteractive = async () => {
+    if (!runnerEnabled) {
+      term.current?.writeln('\r\n[Remote Python runtime is disabled on this server]');
+      return;
+    }
+
     try {
       wsRef.current?.close();
     } catch {
@@ -607,6 +613,7 @@ export default function ActivityRemotePythonBlock({
     <>
       <div style={styles.controls}>
         <small className="text-muted">⏱ Time limit: {timeLimit} ms</small>
+        {!runnerEnabled && <small className="text-danger">Remote Python runtime disabled</small>}
 
         <Button
           variant="secondary"
@@ -636,7 +643,7 @@ export default function ActivityRemotePythonBlock({
         <Button
           variant="primary"
           onClick={runInteractive}
-          disabled={isRunning}
+          disabled={isRunning || !runnerEnabled}
         >
           {isRunning ? 'Running…' : 'Run Python'}
         </Button>
@@ -663,6 +670,12 @@ export default function ActivityRemotePythonBlock({
             className="d-inline-block"
           />
         </div>
+      )}
+
+      {!runnerEnabled && (
+        <Alert variant="warning" className="mb-2">
+          This install does not include the remote Python runtime. Local Skulpt Python can still be used where authored.
+        </Alert>
       )}
 
       <div style={styles.editorWrap}>

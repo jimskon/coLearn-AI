@@ -1428,6 +1428,7 @@ export function renderBlocks(blocks, options = {}) {
     unansweredShown = {},
     onFileChange = null,
     infoBubbleSession = null,
+    runtimeFeatures = {},
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -1758,6 +1759,7 @@ export function renderBlocks(blocks, options = {}) {
     if (block.type === 'python' || block.type === 'pythonremote') {
       const PythonBlockComponent =
         block.type === 'pythonremote' ? ActivityRemotePythonBlock : ActivityPythonBlock;
+      const remotePythonEnabled = runtimeFeatures.remotePython ?? true;
 
       // Local-only top-level python: no DB keys, no prefill, always reflect sheet
       if (block.localOnly) {
@@ -1776,6 +1778,7 @@ export function renderBlocks(blocks, options = {}) {
               blockIndex={localKey}
               editable={canEdit}
               localOnly={true}             // ← no persistence
+              runnerEnabled={block.type === 'pythonremote' ? remotePythonEnabled : true}
               fileContents={fileContents}
               setFileContents={setFileContents}
               timeLimit={tl}
@@ -1855,6 +1858,7 @@ export function renderBlocks(blocks, options = {}) {
             code={displayedCode}
             blockIndex={`py-${codeKey}-${index}`}
             editable={canEdit}
+            runnerEnabled={block.type === 'pythonremote' ? remotePythonEnabled : true}
             responseKey={codeKey}
             // 👇 forward meta so the server sees the actual task
             onCodeChange={(rk, code, extra) => {
@@ -1894,6 +1898,7 @@ export function renderBlocks(blocks, options = {}) {
               blockIndex={localKey}
               editable={true}
               localOnly={true}
+              runnerEnabled={runtimeFeatures.remoteCpp ?? true}
               responseKey={localKey}
               onCodeChange={onCodeChange}
               fileContents={fileContents}
@@ -1944,6 +1949,7 @@ export function renderBlocks(blocks, options = {}) {
             code={displayedCode}
             blockIndex={`cpp-${codeKey}-${index}`}
             editable={canEdit}
+            runnerEnabled={runtimeFeatures.remoteCpp ?? true}
             responseKey={codeKey}
             onCodeChange={(rk, code, extra) => {
               if (showToggle && codeMode === 'local' && !isActive) {
@@ -2110,6 +2116,7 @@ export function renderBlocks(blocks, options = {}) {
             const codeAnchorRef = React.createRef();
             const PythonBlockComponent =
               py.type === 'pythonremote' ? ActivityRemotePythonBlock : ActivityPythonBlock;
+            const remotePythonEnabled = runtimeFeatures.remotePython ?? true;
             const cbIndex = codeIndicesByLang.python[i] ?? (i + 1);
             const responseKey = `${block.groupId}${block.id}code${cbIndex}`;
             const savedResponse = prefill?.[responseKey]?.response || py.content;
@@ -2174,6 +2181,7 @@ export function renderBlocks(blocks, options = {}) {
                   code={displayedCode}
                   blockIndex={`q-${currentGroupIndex}-${block.id}-${i}`}
                   editable={canEdit}
+                  runnerEnabled={py.type === 'pythonremote' ? remotePythonEnabled : true}
                   localOnly={runMode === 'preview'}
                   responseKey={responseKey}
                   onCodeChange={(rk, code, extra) => {
@@ -2254,6 +2262,7 @@ export function renderBlocks(blocks, options = {}) {
                   code={displayedCode}
                   blockIndex={`cpp-${block.groupId}-${block.id}-${i}`}
                   editable={canEdit}
+                  runnerEnabled={runtimeFeatures.remoteCpp ?? true}
                   localOnly={runMode === 'preview'}
                   responseKey={responseKey}
                   onCodeChange={(rk, code, extra) => {

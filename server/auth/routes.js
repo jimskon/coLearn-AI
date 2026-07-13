@@ -4,7 +4,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('node:crypto');
 const pool = require('../db');
 const router = express.Router();
-const nodemailer = require('nodemailer');
+const { sendCodeEmail } = require('../utils/mailDelivery');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
 const { recordAuditEvent } = require('../utils/auditLogger');
 
@@ -23,19 +23,6 @@ console.log('[auth] DEV_PASSWORDLESS_LOGIN =', DEV_PASSWORDLESS_LOGIN, 'raw =', 
 const DEMO_ACTIVE_WINDOW_MINUTES = 2;
 const DEMO_GROUP_MAX_SIZE = 2;
 
-
-const HAVE_MAIL_CREDS = !!(process.env.EMAIL_USER && process.env.EMAIL_PASS);
-
-// Safe transporter (only when creds exist)
-const transporter = HAVE_MAIL_CREDS
-  ? nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    })
-  : null;
 
 function generateCode() {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -248,17 +235,12 @@ router.post('/register', async (req, res) => {
         [name, email, hashedPassword, code]
       );
 
-      if (transporter) {
-        await transporter.sendMail({
-          from: process.env.EMAIL_USER,
-          to: email,
-          subject: 'Your coLearn-AI Verification Code',
-          text: `Your confirmation code is: ${code}`,
-        });
-      } else {
-        // No mail in this environment; log the code so you can test manually
-        console.warn('[auth] Mail disabled; verification code for', email, 'is:', code);
-      }
+      await sendCodeEmail({
+        recipientEmail: email,
+        purpose: 'register',
+        code,
+        requestId: `register-${Date.now()}`,
+      });
 
       return res.status(200).json({ message: 'Confirmation code sent to your email.' });
     } finally {
@@ -552,16 +534,12 @@ router.post('/request-reset', async (req, res) => {
 
       passwordResetCodes.set(email, code);
 
-      if (transporter) {
-        await transporter.sendMail({
-          from: process.env.EMAIL_USER,
-          to: email,
-          subject: 'coLearn-AI Password Reset Code',
-          text: `Your reset code is: ${code}`,
-        });
-      } else {
-        console.warn('[auth] Mail disabled; reset code for', email, 'is:', code);
-      }
+      await sendCodeEmail({
+        recipientEmail: email,
+        purpose: 'reset',
+        code,
+        requestId: `reset-${Date.now()}`,
+      });
 
       return res.status(200).json({ message: 'Reset code sent to email.' });
     } finally {

@@ -22,8 +22,13 @@ CLIENT_ORIGIN="${CLIENT_ORIGIN:-}"
 SESSION_SECRET="${SESSION_SECRET:-}"
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+MAIL_DELIVERY_MODE="${MAIL_DELIVERY_MODE:-direct}"
 EMAIL_USER="${EMAIL_USER:-}"
 EMAIL_PASS="${EMAIL_PASS:-}"
+REMOTE_MAIL_URL="${REMOTE_MAIL_URL:-}"
+REMOTE_MAIL_RELAY_ID="${REMOTE_MAIL_RELAY_ID:-}"
+REMOTE_MAIL_SECRET="${REMOTE_MAIL_SECRET:-}"
+REMOTE_MAIL_TIMEOUT_MS="${REMOTE_MAIL_TIMEOUT_MS:-10000}"
 APP_ROOT_NAME="${APP_ROOT_NAME:-Administrator}"
 APP_ROOT_EMAIL="${APP_ROOT_EMAIL:-}"
 APP_ROOT_PASSWORD="${APP_ROOT_PASSWORD:-}"
@@ -96,6 +101,25 @@ prompt_secret_keep() {
   fi
 }
 
+normalize_mail_delivery_mode() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    remote) printf 'remote' ;;
+    *) printf 'direct' ;;
+  esac
+}
+
+clear_mail_mode_settings() {
+  if [[ "$MAIL_DELIVERY_MODE" == "remote" ]]; then
+    EMAIL_USER=""
+    EMAIL_PASS=""
+  else
+    REMOTE_MAIL_URL=""
+    REMOTE_MAIL_RELAY_ID=""
+    REMOTE_MAIL_SECRET=""
+    REMOTE_MAIL_TIMEOUT_MS="10000"
+  fi
+}
+
 sql_escape() {
   local value="$1"
   value="${value//\\/\\\\}"
@@ -148,8 +172,19 @@ resolve_settings() {
   if [[ -z "$APP_ROOT_EMAIL" ]]; then APP_ROOT_EMAIL="admin@${DOMAIN}"; fi
   prompt_default APP_ROOT_NAME "coLearn-AI root display name" "$APP_ROOT_NAME"
   prompt_default APP_ROOT_EMAIL "coLearn-AI root email" "$APP_ROOT_EMAIL"
-  prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
-  prompt_secret_keep EMAIL_PASS "Outgoing email app password"
+  MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
+  prompt_default MAIL_DELIVERY_MODE "Mail delivery mode (direct or remote)" "$MAIL_DELIVERY_MODE"
+  MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
+  if [[ "$MAIL_DELIVERY_MODE" == "remote" ]]; then
+    prompt_default REMOTE_MAIL_URL "Remote mail relay base URL" "$REMOTE_MAIL_URL"
+    prompt_default REMOTE_MAIL_RELAY_ID "Remote mail relay id" "$REMOTE_MAIL_RELAY_ID"
+    prompt_secret_keep REMOTE_MAIL_SECRET "Remote mail relay shared secret"
+    prompt_default REMOTE_MAIL_TIMEOUT_MS "Remote mail relay timeout in ms" "$REMOTE_MAIL_TIMEOUT_MS"
+  else
+    prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
+    prompt_secret_keep EMAIL_PASS "Outgoing email app password"
+  fi
+  clear_mail_mode_settings
   if [[ "$ENABLE_CXX_RUNNER" == "1" ]]; then
     prompt_default CXX_RUNNER_REPO_URL "C++ runner git repo URL" "$CXX_RUNNER_REPO_URL"
     prompt_default CXX_RUNNER_DIR "C++ runner directory" "$CXX_RUNNER_DIR"
@@ -225,14 +260,24 @@ write_env_files() {
   write_key_value SESSION_SECRET "$SESSION_SECRET" "$ENV_FILE"
   write_key_value CLIENT_ORIGIN "$CLIENT_ORIGIN" "$ENV_FILE"
   write_key_value SERVICE_ACCOUNT_EMAIL "$SERVICE_ACCOUNT_EMAIL" "$ENV_FILE"
+  write_key_value MAIL_DELIVERY_MODE "$MAIL_DELIVERY_MODE" "$ENV_FILE"
   if [[ -n "$OPENAI_API_KEY" ]]; then
     write_key_value OPENAI_API_KEY "$OPENAI_API_KEY" "$ENV_FILE"
   fi
-  if [[ -n "$EMAIL_USER" ]]; then
-    write_key_value EMAIL_USER "$EMAIL_USER" "$ENV_FILE"
-  fi
-  if [[ -n "$EMAIL_PASS" ]]; then
-    write_key_value EMAIL_PASS "$EMAIL_PASS" "$ENV_FILE"
+  if [[ "$MAIL_DELIVERY_MODE" == "remote" ]]; then
+    write_key_value REMOTE_MAIL_URL "$REMOTE_MAIL_URL" "$ENV_FILE"
+    write_key_value REMOTE_MAIL_RELAY_ID "$REMOTE_MAIL_RELAY_ID" "$ENV_FILE"
+    write_key_value REMOTE_MAIL_SECRET "$REMOTE_MAIL_SECRET" "$ENV_FILE"
+    write_key_value REMOTE_MAIL_TIMEOUT_MS "$REMOTE_MAIL_TIMEOUT_MS" "$ENV_FILE"
+    sed -i '/^EMAIL_USER=/d;/^EMAIL_PASS=/d' "$ENV_FILE"
+  else
+    if [[ -n "$EMAIL_USER" ]]; then
+      write_key_value EMAIL_USER "$EMAIL_USER" "$ENV_FILE"
+    fi
+    if [[ -n "$EMAIL_PASS" ]]; then
+      write_key_value EMAIL_PASS "$EMAIL_PASS" "$ENV_FILE"
+    fi
+    sed -i '/^REMOTE_MAIL_URL=/d;/^REMOTE_MAIL_RELAY_ID=/d;/^REMOTE_MAIL_SECRET=/d;/^REMOTE_MAIL_TIMEOUT_MS=/d' "$ENV_FILE"
   fi
   chmod 600 "$ENV_FILE"
   local client_env="${APP_DIR}/client/.env"

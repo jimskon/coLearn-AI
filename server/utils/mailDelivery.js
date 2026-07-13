@@ -4,7 +4,10 @@ const nodemailer = require('nodemailer');
 const DEFAULT_APP_NAME = 'coLearn-AI';
 const DEFAULT_TIMEOUT_MS = 10000;
 const DEFAULT_EXPIRY_MINUTES = 10;
+<<<<<<< emailRelay
 const LOG_PREFIX = '[mail-delivery]';
+=======
+>>>>>>> main
 
 function getMailDeliveryMode() {
   const raw = String(process.env.MAIL_DELIVERY_MODE || 'direct').trim().toLowerCase();
@@ -29,10 +32,14 @@ function createDirectTransporter() {
 const directTransporter = createDirectTransporter();
 
 async function sendCodeEmail({ recipientEmail, purpose, code, requestId }) {
+<<<<<<< emailRelay
   const mode = getMailDeliveryMode();
   console.info(`${LOG_PREFIX} mode=${mode} purpose=${purpose} recipient=${maskEmail(recipientEmail)} requestId=${requestId || 'none'}`);
 
   if (mode === 'remote') {
+=======
+  if (getMailDeliveryMode() === 'remote') {
+>>>>>>> main
     await sendRemoteCodeEmail({ recipientEmail, purpose, code, requestId });
     return;
   }
@@ -47,14 +54,20 @@ async function sendDirectCodeEmail({ recipientEmail, purpose, code }) {
     return;
   }
 
+<<<<<<< emailRelay
   console.info(`${LOG_PREFIX} direct-send start purpose=${purpose} recipient=${maskEmail(recipientEmail)}`);
+=======
+>>>>>>> main
   await directTransporter.sendMail({
     from: process.env.EMAIL_USER,
     to: recipientEmail,
     subject: purpose === 'reset' ? 'coLearn-AI Password Reset Code' : 'Your coLearn-AI Verification Code',
     text: purpose === 'reset' ? `Your reset code is: ${code}` : `Your confirmation code is: ${code}`,
   });
+<<<<<<< emailRelay
   console.info(`${LOG_PREFIX} direct-send accepted purpose=${purpose} recipient=${maskEmail(recipientEmail)}`);
+=======
+>>>>>>> main
 }
 
 async function sendRemoteCodeEmail({ recipientEmail, purpose, code, requestId }) {
@@ -85,11 +98,16 @@ async function sendRemoteCodeEmail({ recipientEmail, purpose, code, requestId })
   const canonical = `${timestamp}.${nonce}.${bodyHash}`;
   const signature = crypto.createHmac('sha256', relaySecret).update(canonical).digest('hex');
 
+<<<<<<< emailRelay
   const relayEndpoint = `${relayUrl.replace(/\/+$/, '')}/v1/send-code`;
   console.info(`${LOG_PREFIX} remote-send start purpose=${purpose} recipient=${maskEmail(recipientEmail)} relayId=${relayId} url=${relayEndpoint} requestId=${body.requestId}`);
 
   const relayFetch = globalThis.__colearnMailRelayFetch || fetch;
   const response = await relayFetch(relayEndpoint, {
+=======
+  const relayFetch = globalThis.__colearnMailRelayFetch || fetch;
+  const response = await relayFetch(`${relayUrl.replace(/\/+$/, '')}/v1/send-code`, {
+>>>>>>> main
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -108,11 +126,16 @@ async function sendRemoteCodeEmail({ recipientEmail, purpose, code, requestId })
       failure?.error?.message ||
       failure?.message ||
       `remote mail relay request failed with status ${response.status}`;
+<<<<<<< emailRelay
     console.error(`${LOG_PREFIX} remote-send failed purpose=${purpose} recipient=${maskEmail(recipientEmail)} status=${response.status} requestId=${body.requestId}`, failure || message);
     throw new Error(message);
   }
 
   console.info(`${LOG_PREFIX} remote-send accepted purpose=${purpose} recipient=${maskEmail(recipientEmail)} status=${response.status} requestId=${body.requestId}`);
+=======
+    throw new Error(message);
+  }
+>>>>>>> main
 }
 
 async function readJsonSafely(response) {
@@ -123,6 +146,7 @@ async function readJsonSafely(response) {
   }
 }
 
+<<<<<<< emailRelay
 function maskEmail(email) {
   const value = String(email || '').trim();
   const at = value.indexOf('@');
@@ -130,6 +154,8 @@ function maskEmail(email) {
   return `${value.slice(0, 2)}***${value.slice(at)}`;
 }
 
+=======
+>>>>>>> main
 function requireRemoteEnv(name) {
   const value = String(process.env[name] || '').trim();
   if (!value) {

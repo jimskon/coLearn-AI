@@ -123,6 +123,7 @@ pkg_install() {
 }
 
 ensure_docker_repo_debian() {
+
   local distro_id="${ID:-}"
   local distro_codename="${VERSION_CODENAME:-}"
   if [[ -f /etc/os-release ]]; then
@@ -135,6 +136,7 @@ ensure_docker_repo_debian() {
     distro_codename="$(lsb_release -cs 2>/dev/null || true)"
   fi
   distro_id="${distro_id:-ubuntu}"
+
   [[ -n "$distro_codename" ]] || die "Could not determine VERSION_CODENAME from /etc/os-release for Docker repo setup."
 
   info "Configuring Docker's official apt repository for ${distro_id} ${distro_codename}"

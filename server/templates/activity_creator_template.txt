@@ -21,13 +21,17 @@ __ACTIVITY_DESCRIPTION_BLOCK__
 __REQUESTED_SECTION_MARKUP__
 \questiongroup{Question Group 1}
 
-\question{Replace this question with your own prompt.}
-\textresponse{3}
+\question{Run the remote Python example and explain what it prints.}
+\pythonremote
+values = [2, 4, 6]
+print(sum(values))
+\endpythonremote
+\textresponse{2}
 \sampleresponses{
-Sample answer
+It prints 12.
 }
 \feedbackprompt{
-Accept any reasonable response.
+Accept explanations that correctly connect the output to the sum of the list.
 }
 \endquestion
 \endquestiongroup

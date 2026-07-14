@@ -58,6 +58,10 @@ trap 'echo "${LOG_PREFIX} ERROR: command failed at line ${LINENO}" >&2' ERR
 require_root() { [[ "$EUID" -eq 0 ]] || die "Run with sudo or as root."; }
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+docker_compose_available() {
+  docker compose version >/dev/null 2>&1
+}
+
 is_local_host_target() {
   local target="$1"
   [[ "$target" == "localhost" || "$target" == *.local || "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -116,6 +120,43 @@ pkg_install() {
     yum) yum install -y "$@" ;;
     *) die "pkg_install called before platform detection" ;;
   esac
+}
+
+ensure_docker_repo_debian() {
+  local distro_id="${ID:-ubuntu}"
+  local distro_codename="${VERSION_CODENAME:-}"
+  [[ -n "$distro_codename" ]] || die "Could not determine VERSION_CODENAME from /etc/os-release for Docker repo setup."
+
+  info "Configuring Docker's official apt repository for ${distro_id} ${distro_codename}"
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL "https://download.docker.com/linux/${distro_id}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  chmod a+r /etc/apt/keyrings/docker.gpg
+  cat > /etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${distro_id} ${distro_codename} stable
+EOF
+}
+
+remove_conflicting_docker_packages_debian() {
+  local old_packages=(
+    docker.io
+    docker-doc
+    docker-compose
+    docker-compose-v2
+    podman-docker
+    containerd
+    runc
+  )
+  local installed=()
+  local pkg
+  for pkg in "${old_packages[@]}"; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+      installed+=("$pkg")
+    fi
+  done
+  if [[ "${#installed[@]}" -gt 0 ]]; then
+    info "Removing conflicting distro Docker packages: ${installed[*]}"
+    apt-get remove -y "${installed[@]}"
+  fi
 }
 
 prompt_default() {
@@ -659,11 +700,16 @@ maybe_install_docker() {
     pkg_install dnf-plugins-core || true
     pkg_install docker docker-compose-plugin || pkg_install docker docker-compose
   else
-    pkg_install docker.io docker-compose-v2 || pkg_install docker.io docker-compose
+    remove_conflicting_docker_packages_debian
+    ensure_docker_repo_debian
+    pkg_update
+    pkg_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   fi
   systemctl enable docker
   systemctl start docker
   usermod -aG docker "$APP_USER" || true
+  command_exists docker || die "Docker installation completed, but the docker command is still unavailable."
+  docker_compose_available || die "Docker is installed, but 'docker compose' is unavailable. Stage 1 requires the Docker Compose plugin."
 }
 
 resolve_cxx_proxy_setting() {

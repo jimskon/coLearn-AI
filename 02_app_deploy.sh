@@ -34,11 +34,14 @@ APP_ROOT_EMAIL="${APP_ROOT_EMAIL:-}"
 APP_ROOT_PASSWORD="${APP_ROOT_PASSWORD:-}"
 BOOTSTRAP_APP_ROOT="${BOOTSTRAP_APP_ROOT:-1}"
 SERVER_ENTRY="${SERVER_ENTRY:-server/index.js}"
-ENABLE_CXX_RUNNER="${ENABLE_CXX_RUNNER:-0}"
+ENABLE_REMOTE_CPP="${ENABLE_REMOTE_CPP:-${ENABLE_CXX_RUNNER:-ask}}"
 CXX_RUNNER_REPO_URL="${CXX_RUNNER_REPO_URL:-https://github.com/jimskon/coLearn-AI-cxx-runner.git}"
 CXX_RUNNER_DIR="${CXX_RUNNER_DIR:-/opt/cxx-runner}"
 CXX_RUNNER_BRANCH="${CXX_RUNNER_BRANCH:-main}"
 CXX_RUNNER_PORT="${CXX_RUNNER_PORT:-5055}"
+ENABLE_REMOTE_PYTHON="${ENABLE_REMOTE_PYTHON:-${ENABLE_PY_RUNNER:-ask}}"
+PY_RUNNER_DIR="${PY_RUNNER_DIR:-/opt/py-runner}"
+PY_RUNNER_PORT="${PY_RUNNER_PORT:-5056}"
 ENV_FILE="${ENV_FILE:-}"
 SCHEMA_FILE="${SCHEMA_FILE:-}"
 
@@ -172,6 +175,22 @@ resolve_settings() {
   if [[ -z "$APP_ROOT_EMAIL" ]]; then APP_ROOT_EMAIL="admin@${DOMAIN}"; fi
   prompt_default APP_ROOT_NAME "coLearn-AI root display name" "$APP_ROOT_NAME"
   prompt_default APP_ROOT_EMAIL "coLearn-AI root email" "$APP_ROOT_EMAIL"
+
+  prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
+  prompt_secret_keep EMAIL_PASS "Outgoing email app password"
+  case "$ENABLE_REMOTE_CPP" in
+    1|0|ask) ;;
+    *) die "ENABLE_REMOTE_CPP must be ask, 1, or 0" ;;
+  esac
+  if [[ "$ENABLE_REMOTE_CPP" == "ask" ]]; then
+    if prompt_yes_no "Install the remote C++ runtime?" "y"; then
+      ENABLE_REMOTE_CPP=1
+    else
+      ENABLE_REMOTE_CPP=0
+    fi
+  fi
+  if [[ "$ENABLE_REMOTE_CPP" == "1" ]]; then
+
   MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
   prompt_default MAIL_DELIVERY_MODE "Mail delivery mode (direct or remote)" "$MAIL_DELIVERY_MODE"
   MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
@@ -186,10 +205,26 @@ resolve_settings() {
   fi
   clear_mail_mode_settings
   if [[ "$ENABLE_CXX_RUNNER" == "1" ]]; then
+
     prompt_default CXX_RUNNER_REPO_URL "C++ runner git repo URL" "$CXX_RUNNER_REPO_URL"
     prompt_default CXX_RUNNER_DIR "C++ runner directory" "$CXX_RUNNER_DIR"
     prompt_default CXX_RUNNER_BRANCH "C++ runner git branch" "$CXX_RUNNER_BRANCH"
     prompt_default CXX_RUNNER_PORT "C++ runner port" "$CXX_RUNNER_PORT"
+  fi
+  case "$ENABLE_REMOTE_PYTHON" in
+    1|0|ask) ;;
+    *) die "ENABLE_REMOTE_PYTHON must be ask, 1, or 0" ;;
+  esac
+  if [[ "$ENABLE_REMOTE_PYTHON" == "ask" ]]; then
+    if prompt_yes_no "Install the remote Python runner for numpy/pandas support?" "y"; then
+      ENABLE_REMOTE_PYTHON=1
+    else
+      ENABLE_REMOTE_PYTHON=0
+    fi
+  fi
+  if [[ "$ENABLE_REMOTE_PYTHON" == "1" ]]; then
+    prompt_default PY_RUNNER_DIR "Python runner directory" "$PY_RUNNER_DIR"
+    prompt_default PY_RUNNER_PORT "Python runner port" "$PY_RUNNER_PORT"
   fi
   if [[ -z "$ENV_FILE" ]]; then ENV_FILE="${APP_DIR}/server/.env"; fi
 }
@@ -279,6 +314,8 @@ write_env_files() {
     fi
     sed -i '/^REMOTE_MAIL_URL=/d;/^REMOTE_MAIL_RELAY_ID=/d;/^REMOTE_MAIL_SECRET=/d;/^REMOTE_MAIL_TIMEOUT_MS=/d' "$ENV_FILE"
   fi
+  write_key_value RUNTIME_FEATURE_REMOTE_CPP "$ENABLE_REMOTE_CPP" "$ENV_FILE"
+  write_key_value RUNTIME_FEATURE_REMOTE_PYTHON "${ENABLE_REMOTE_PYTHON/ask/0}" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   local client_env="${APP_DIR}/client/.env"
   info "Writing client environment to $client_env"
@@ -337,14 +374,14 @@ SQL
 }
 
 ensure_docker_access() {
-  [[ "$ENABLE_CXX_RUNNER" == "1" ]] || return 0
+  [[ "$ENABLE_REMOTE_CPP" == "1" || "$ENABLE_REMOTE_PYTHON" == "1" ]] || return 0
   command -v docker >/dev/null 2>&1 || die "Docker is not installed. Run stage 1 bootstrap as root first."
   groups | grep -qw docker || die "User ${USER} is not in the docker group. Log out and back in, or add the user to docker."
 }
 
 setup_cxx_runner() {
-  [[ "$ENABLE_CXX_RUNNER" == "1" ]] || return 0
-  [[ -n "$CXX_RUNNER_REPO_URL" ]] || die "CXX_RUNNER_REPO_URL is required when ENABLE_CXX_RUNNER=1"
+  [[ "$ENABLE_REMOTE_CPP" == "1" ]] || return 0
+  [[ -n "$CXX_RUNNER_REPO_URL" ]] || die "CXX_RUNNER_REPO_URL is required when ENABLE_REMOTE_CPP=1"
   ensure_docker_access
   mkdir -p "$(dirname "$CXX_RUNNER_DIR")"
   if [[ -d "$CXX_RUNNER_DIR/.git" ]]; then
@@ -365,6 +402,23 @@ setup_cxx_runner() {
     (cd "$CXX_RUNNER_DIR" && docker compose up -d --build)
   else
     (cd "$CXX_RUNNER_DIR" && docker-compose up -d --build)
+  fi
+}
+
+setup_py_runner() {
+  [[ "$ENABLE_REMOTE_PYTHON" == "1" ]] || return 0
+  ensure_docker_access
+  mkdir -p "$(dirname "$PY_RUNNER_DIR")"
+  info "Syncing py-runner sources"
+  rm -rf "$PY_RUNNER_DIR"
+  mkdir -p "$PY_RUNNER_DIR"
+  rsync -a --delete "$APP_DIR/ops/py-runner/" "$PY_RUNNER_DIR/"
+  [[ -f "$PY_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $PY_RUNNER_DIR"
+  info "Building and starting py-runner"
+  if docker compose version >/dev/null 2>&1; then
+    (cd "$PY_RUNNER_DIR" && docker compose up -d --build)
+  else
+    (cd "$PY_RUNNER_DIR" && docker-compose up -d --build)
   fi
 }
 
@@ -397,10 +451,15 @@ print_summary() {
   echo "Node port:                 ${PORT}"
   echo "App DB name/user:          ${DB_NAME} / ${DB_USER}"
   echo "coLearn-AI root email:     ${APP_ROOT_EMAIL}"
-  if [[ "$ENABLE_CXX_RUNNER" == "1" ]]; then
+  if [[ "$ENABLE_REMOTE_CPP" == "1" ]]; then
     echo "C++ runner dir/port:       ${CXX_RUNNER_DIR} / ${CXX_RUNNER_PORT}"
   else
     echo "C++ runner:                disabled"
+  fi
+  if [[ "$ENABLE_REMOTE_PYTHON" == "1" ]]; then
+    echo "Python runner dir/port:     ${PY_RUNNER_DIR} / ${PY_RUNNER_PORT}"
+  else
+    echo "Python runner:             disabled"
   fi
   echo "PM2 process:               colearn-ai"
   echo "===================================================="
@@ -417,6 +476,7 @@ main() {
   run_repo_migrations
   bootstrap_app_root
   setup_cxx_runner
+  setup_py_runner
   start_app_pm2
   print_summary
 }

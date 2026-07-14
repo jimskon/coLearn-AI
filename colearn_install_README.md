@@ -222,11 +222,14 @@ APP_ROOT_EMAIL=admin@its.example.edu
 APP_ROOT_PASSWORD=replace_me
 BOOTSTRAP_APP_ROOT=1
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=0
+ENABLE_REMOTE_CPP=0
 CXX_RUNNER_REPO_URL=
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+ENABLE_REMOTE_PYTHON=ask
+PY_RUNNER_DIR=/opt/py-runner
+PY_RUNNER_PORT=5056
 ```
 
 ## Example `deploy.conf` for a local firewalled lab server
@@ -260,11 +263,14 @@ APP_ROOT_EMAIL=admin@colearn.local
 APP_ROOT_PASSWORD=replace_me
 BOOTSTRAP_APP_ROOT=1
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=1
+ENABLE_REMOTE_CPP=1
 CXX_RUNNER_REPO_URL=https://github.com/your-org/cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+ENABLE_REMOTE_PYTHON=1
+PY_RUNNER_DIR=/opt/py-runner
+PY_RUNNER_PORT=5056
 ```
 
 If students browse by IP address, keep the same exact IP in all three places:
@@ -375,6 +381,22 @@ bash /path/to/02_app_deploy.sh /opt/coLearn-AI/deploy.conf
 ```
 
 That updates the repo, reinstalls dependencies if needed, rebuilds the client, refreshes env files, and restarts PM2.
+If `ENABLE_REMOTE_PYTHON=1` is present in `deploy.conf` or you answer yes to the prompt, it also syncs and starts the remote Python runner and adds the `/py-run/` nginx route.
+
+The deploy script also writes runtime feature flags into `server/.env`:
+
+```bash
+RUNTIME_FEATURE_REMOTE_CPP=0|1
+RUNTIME_FEATURE_REMOTE_PYTHON=0|1
+```
+
+Those are what the app uses at runtime to decide whether remote C++ and remote Python are available on that install.
+
+If you just want to turn on the remote Python path on an existing install, use:
+
+```bash
+bash ops/04-enable-remote-python.sh /opt/coLearn-AI/deploy.conf
+```
 
 ---
 

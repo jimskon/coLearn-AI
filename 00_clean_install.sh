@@ -17,9 +17,11 @@ DB_USER="${DB_USER:-colearn_user}"
 DB_ROOT_PASSWORD="${DB_ROOT_PASSWORD:-}"
 SET_DB_ROOT_PASSWORD="${SET_DB_ROOT_PASSWORD:-ask}"
 CXX_RUNNER_DIR="${CXX_RUNNER_DIR:-/opt/cxx-runner}"
+PY_RUNNER_DIR="${PY_RUNNER_DIR:-/opt/py-runner}"
 REMOVE_DB="${REMOVE_DB:-1}"
 REMOVE_DB_USER="${REMOVE_DB_USER:-1}"
 REMOVE_CXX_RUNNER="${REMOVE_CXX_RUNNER:-1}"
+REMOVE_PY_RUNNER="${REMOVE_PY_RUNNER:-1}"
 REMOVE_ENV_FILES="${REMOVE_ENV_FILES:-1}"
 REMOVE_NODE_MODULES="${REMOVE_NODE_MODULES:-1}"
 REMOVE_BUILD_ARTIFACTS="${REMOVE_BUILD_ARTIFACTS:-1}"
@@ -228,6 +230,23 @@ stop_cxx_runner() {
   rm -rf "$CXX_RUNNER_DIR"
 }
 
+stop_py_runner() {
+  [[ "$REMOVE_PY_RUNNER" == "1" ]] || return 0
+  [[ -d "$PY_RUNNER_DIR" ]] || return 0
+  info "Stopping Python runner in $PY_RUNNER_DIR"
+  if [[ -f "$PY_RUNNER_DIR/docker-compose.yml" ]]; then
+    if command_exists docker; then
+      if docker compose version >/dev/null 2>&1; then
+        (cd "$PY_RUNNER_DIR" && docker compose down) || true
+      elif command_exists docker-compose; then
+        (cd "$PY_RUNNER_DIR" && docker-compose down) || true
+      fi
+    fi
+  fi
+  info "Removing Python runner directory"
+  rm -rf "$PY_RUNNER_DIR"
+}
+
 remove_nginx_config() {
   info "Removing nginx site config for ${SITE_NAME}"
   rm -f "$SITE_LINK" "$SITE_CONF"
@@ -300,9 +319,11 @@ Application directory:     ${APP_DIR}
 Database name/user:        ${DB_NAME} / ${DB_USER}
 nginx site config:         ${SITE_CONF}
 C++ runner directory:      ${CXX_RUNNER_DIR}
+Python runner directory:    ${PY_RUNNER_DIR}
 Remove database:           ${REMOVE_DB}
 Remove database user:      ${REMOVE_DB_USER}
 Remove C++ runner:         ${REMOVE_CXX_RUNNER}
+Remove Python runner:       ${REMOVE_PY_RUNNER}
 Remove env files:          ${REMOVE_ENV_FILES}
 Remove node_modules:       ${REMOVE_NODE_MODULES}
 Remove frontend build:     ${REMOVE_BUILD_ARTIFACTS}
@@ -326,6 +347,7 @@ main() {
 
   stop_pm2_process
   stop_cxx_runner
+  stop_py_runner
   remove_nginx_config
   remove_certificates
   drop_database_objects

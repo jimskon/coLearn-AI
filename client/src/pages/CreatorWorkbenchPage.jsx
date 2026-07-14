@@ -24,6 +24,7 @@ import {
 } from 'react-bootstrap-icons';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
+import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 
@@ -158,6 +159,7 @@ export default function CreatorWorkbenchPage() {
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
   const [fileContents, setFileContents] = useState({});
+  const { features: runtimeFeatures } = useRuntimeFeatures();
   const [skulptLoaded, setSkulptLoaded] = useState(false);
 
   const [rightMode, setRightMode] = useState('preview');
@@ -211,7 +213,8 @@ export default function CreatorWorkbenchPage() {
     fileContents,
     setFileContents: updateFileContents,
     infoBubbleSession: infoBubbleSessionRef.current,
-  }), [activeBlocks, fileContents, updateFileContents, infoBubbleSessionRef]);
+    runtimeFeatures,
+  }), [activeBlocks, fileContents, updateFileContents, infoBubbleSessionRef, runtimeFeatures]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 

@@ -91,7 +91,9 @@ prompt_secret_keep() {
   local var_name="$1"
   local prompt_text="$2"
   local existing_value="${!var_name:-}"
-  if [[ "$NONINTERACTIVE" == "1" ]]; then return 0; fi
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    return 0
+  fi
   local response=""
   if [[ -n "$existing_value" ]]; then
     read -r -s -p "${prompt_text} [leave blank to keep current]: " response
@@ -102,6 +104,21 @@ prompt_secret_keep() {
   if [[ -n "$response" ]]; then
     printf -v "$var_name" '%s' "$response"
   fi
+}
+
+prompt_yes_no() {
+  local prompt_text="$1"
+  local default_answer="$2"
+  local reply
+  local suffix="[y/N]"
+  [[ "$default_answer" == "y" ]] && suffix="[Y/n]"
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    [[ "$default_answer" == "y" ]]
+    return
+  fi
+  read -r -p "${prompt_text} ${suffix}: " reply
+  reply="${reply:-$default_answer}"
+  [[ "$reply" =~ ^[Yy]$ ]]
 }
 
 normalize_mail_delivery_mode() {
@@ -175,22 +192,6 @@ resolve_settings() {
   if [[ -z "$APP_ROOT_EMAIL" ]]; then APP_ROOT_EMAIL="admin@${DOMAIN}"; fi
   prompt_default APP_ROOT_NAME "coLearn-AI root display name" "$APP_ROOT_NAME"
   prompt_default APP_ROOT_EMAIL "coLearn-AI root email" "$APP_ROOT_EMAIL"
-
-  prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
-  prompt_secret_keep EMAIL_PASS "Outgoing email app password"
-  case "$ENABLE_REMOTE_CPP" in
-    1|0|ask) ;;
-    *) die "ENABLE_REMOTE_CPP must be ask, 1, or 0" ;;
-  esac
-  if [[ "$ENABLE_REMOTE_CPP" == "ask" ]]; then
-    if prompt_yes_no "Install the remote C++ runtime?" "y"; then
-      ENABLE_REMOTE_CPP=1
-    else
-      ENABLE_REMOTE_CPP=0
-    fi
-  fi
-  if [[ "$ENABLE_REMOTE_CPP" == "1" ]]; then
-
   MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
   prompt_default MAIL_DELIVERY_MODE "Mail delivery mode (direct or remote)" "$MAIL_DELIVERY_MODE"
   MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
@@ -204,8 +205,19 @@ resolve_settings() {
     prompt_secret_keep EMAIL_PASS "Outgoing email app password"
   fi
   clear_mail_mode_settings
-  if [[ "$ENABLE_CXX_RUNNER" == "1" ]]; then
 
+  case "$ENABLE_REMOTE_CPP" in
+    1|0|ask) ;;
+    *) die "ENABLE_REMOTE_CPP must be ask, 1, or 0" ;;
+  esac
+  if [[ "$ENABLE_REMOTE_CPP" == "ask" ]]; then
+    if prompt_yes_no "Install the remote C++ runtime?" "y"; then
+      ENABLE_REMOTE_CPP=1
+    else
+      ENABLE_REMOTE_CPP=0
+    fi
+  fi
+  if [[ "$ENABLE_REMOTE_CPP" == "1" ]]; then
     prompt_default CXX_RUNNER_REPO_URL "C++ runner git repo URL" "$CXX_RUNNER_REPO_URL"
     prompt_default CXX_RUNNER_DIR "C++ runner directory" "$CXX_RUNNER_DIR"
     prompt_default CXX_RUNNER_BRANCH "C++ runner git branch" "$CXX_RUNNER_BRANCH"
@@ -314,7 +326,7 @@ write_env_files() {
     fi
     sed -i '/^REMOTE_MAIL_URL=/d;/^REMOTE_MAIL_RELAY_ID=/d;/^REMOTE_MAIL_SECRET=/d;/^REMOTE_MAIL_TIMEOUT_MS=/d' "$ENV_FILE"
   fi
-  write_key_value RUNTIME_FEATURE_REMOTE_CPP "$ENABLE_REMOTE_CPP" "$ENV_FILE"
+  write_key_value RUNTIME_FEATURE_REMOTE_CPP "${ENABLE_REMOTE_CPP/ask/0}" "$ENV_FILE"
   write_key_value RUNTIME_FEATURE_REMOTE_PYTHON "${ENABLE_REMOTE_PYTHON/ask/0}" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   local client_env="${APP_DIR}/client/.env"
@@ -347,8 +359,10 @@ bootstrap_app_root() {
     [[ "$NONINTERACTIVE" == "1" ]] && die "APP_ROOT_PASSWORD is required in noninteractive mode when BOOTSTRAP_APP_ROOT=1"
     local confirm=""
     while true; do
-      read -r -s -p "coLearn-AI root user password: " APP_ROOT_PASSWORD; echo
-      read -r -s -p "Confirm coLearn-AI root user password: " confirm; echo
+      read -r -s -p "coLearn-AI root user password: " APP_ROOT_PASSWORD
+      echo
+      read -r -s -p "Confirm coLearn-AI root user password: " confirm
+      echo
       [[ -n "$APP_ROOT_PASSWORD" && "$APP_ROOT_PASSWORD" == "$confirm" ]] && break
       warn "Passwords did not match. Try again."
     done
@@ -457,7 +471,7 @@ print_summary() {
     echo "C++ runner:                disabled"
   fi
   if [[ "$ENABLE_REMOTE_PYTHON" == "1" ]]; then
-    echo "Python runner dir/port:     ${PY_RUNNER_DIR} / ${PY_RUNNER_PORT}"
+    echo "Python runner dir/port:    ${PY_RUNNER_DIR} / ${PY_RUNNER_PORT}"
   else
     echo "Python runner:             disabled"
   fi

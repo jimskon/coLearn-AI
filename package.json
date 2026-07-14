@@ -1,6 +1,6 @@
 {
   "name": "colearn-ai",
-  "version": "1.0.0",
+  "version": "0.9.0",
   "private": true,
   "dependencies": {
     "bootstrap": "^5.3.5",

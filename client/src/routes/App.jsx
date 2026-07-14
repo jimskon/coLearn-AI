@@ -5,6 +5,7 @@ import LoginPage from '../pages/LoginPage';
 import RegisterPage from '../pages/RegisterPage';
 import DashboardPage from '../pages/DashboardPage';
 import NavBar from '../components/NavBar';
+import AppFooter from '../components/AppFooter';
 import { UserProvider, useUser } from '../context/UserContext';
 import ManageActivitiesPage from '../pages/ManageActivitiesPage';
 import ManageClassesPage from '../pages/ManageClassesPage';
@@ -115,6 +116,8 @@ function AppRoutes() {
         <Route path="/courses/:courseId/progress" element={<ManageCourseProgressPage />} />
         <Route path="/courses/:courseId/tests" element={<ManageCourseTestsPage />} /> {/* 👈 NEW */}
       </Routes>
+
+      <AppFooter />
     </>
   );
 }

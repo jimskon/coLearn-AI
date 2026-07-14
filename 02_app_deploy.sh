@@ -50,6 +50,18 @@ warn() { echo "${LOG_PREFIX} WARNING: $*" >&2; }
 die() { echo "${LOG_PREFIX} ERROR: $*" >&2; exit 1; }
 trap 'echo "${LOG_PREFIX} ERROR: command failed at line ${LINENO}" >&2' ERR
 
+docker_compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    printf '%s\n' "docker compose"
+    return 0
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    printf '%s\n' "docker-compose"
+    return 0
+  fi
+  return 1
+}
+
 is_local_host_target() {
   local target="$1"
   [[ "$target" == "localhost" || "$target" == *.local || "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -391,12 +403,15 @@ ensure_docker_access() {
   [[ "$ENABLE_REMOTE_CPP" == "1" || "$ENABLE_REMOTE_PYTHON" == "1" ]] || return 0
   command -v docker >/dev/null 2>&1 || die "Docker is not installed. Run stage 1 bootstrap as root first."
   groups | grep -qw docker || die "User ${USER} is not in the docker group. Log out and back in, or add the user to docker."
+  docker_compose_cmd >/dev/null || die "Remote runtimes require Docker Compose, but neither 'docker compose' nor 'docker-compose' is available. Rerun stage 1 bootstrap on a server with the official Docker Compose plugin installed."
 }
 
 setup_cxx_runner() {
   [[ "$ENABLE_REMOTE_CPP" == "1" ]] || return 0
   [[ -n "$CXX_RUNNER_REPO_URL" ]] || die "CXX_RUNNER_REPO_URL is required when ENABLE_REMOTE_CPP=1"
   ensure_docker_access
+  local compose_cmd
+  compose_cmd="$(docker_compose_cmd)" || die "Docker Compose is unavailable."
   mkdir -p "$(dirname "$CXX_RUNNER_DIR")"
   if [[ -d "$CXX_RUNNER_DIR/.git" ]]; then
     info "Updating cxx-runner repo"
@@ -412,16 +427,14 @@ setup_cxx_runner() {
   fi
   [[ -f "$CXX_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $CXX_RUNNER_DIR"
   info "Building and starting cxx-runner"
-  if docker compose version >/dev/null 2>&1; then
-    (cd "$CXX_RUNNER_DIR" && docker compose up -d --build)
-  else
-    (cd "$CXX_RUNNER_DIR" && docker-compose up -d --build)
-  fi
+  (cd "$CXX_RUNNER_DIR" && $compose_cmd up -d --build)
 }
 
 setup_py_runner() {
   [[ "$ENABLE_REMOTE_PYTHON" == "1" ]] || return 0
   ensure_docker_access
+  local compose_cmd
+  compose_cmd="$(docker_compose_cmd)" || die "Docker Compose is unavailable."
   mkdir -p "$(dirname "$PY_RUNNER_DIR")"
   info "Syncing py-runner sources"
   rm -rf "$PY_RUNNER_DIR"
@@ -429,11 +442,7 @@ setup_py_runner() {
   rsync -a --delete "$APP_DIR/ops/py-runner/" "$PY_RUNNER_DIR/"
   [[ -f "$PY_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $PY_RUNNER_DIR"
   info "Building and starting py-runner"
-  if docker compose version >/dev/null 2>&1; then
-    (cd "$PY_RUNNER_DIR" && docker compose up -d --build)
-  else
-    (cd "$PY_RUNNER_DIR" && docker-compose up -d --build)
-  fi
+  (cd "$PY_RUNNER_DIR" && $compose_cmd up -d --build)
 }
 
 start_app_pm2() {

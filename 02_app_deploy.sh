@@ -192,7 +192,6 @@ resolve_settings() {
   if [[ -z "$APP_ROOT_EMAIL" ]]; then APP_ROOT_EMAIL="admin@${DOMAIN}"; fi
   prompt_default APP_ROOT_NAME "coLearn-AI root display name" "$APP_ROOT_NAME"
   prompt_default APP_ROOT_EMAIL "coLearn-AI root email" "$APP_ROOT_EMAIL"
-
   MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
   prompt_default MAIL_DELIVERY_MODE "Mail delivery mode (direct or remote)" "$MAIL_DELIVERY_MODE"
   MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
@@ -224,7 +223,6 @@ resolve_settings() {
     prompt_default CXX_RUNNER_BRANCH "C++ runner git branch" "$CXX_RUNNER_BRANCH"
     prompt_default CXX_RUNNER_PORT "C++ runner port" "$CXX_RUNNER_PORT"
   fi
-
   case "$ENABLE_REMOTE_PYTHON" in
     1|0|ask) ;;
     *) die "ENABLE_REMOTE_PYTHON must be ask, 1, or 0" ;;
@@ -240,7 +238,6 @@ resolve_settings() {
     prompt_default PY_RUNNER_DIR "Python runner directory" "$PY_RUNNER_DIR"
     prompt_default PY_RUNNER_PORT "Python runner port" "$PY_RUNNER_PORT"
   fi
-
   if [[ -z "$ENV_FILE" ]]; then ENV_FILE="${APP_DIR}/server/.env"; fi
 }
 

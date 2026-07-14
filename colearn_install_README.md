@@ -70,6 +70,7 @@ It checks:
 - nginx service
 - Node port
 - optional C++ runner port
+- optional remote Python runner port
 - application DB connectivity
 - PM2 status
 - HTTP/HTTPS response
@@ -89,6 +90,7 @@ Before you begin, decide these values:
 - whether you want Certbot to request a real certificate now
 - whether you want Docker installed now
 - whether you want nginx to proxy `/cxx-run/`
+- whether you want nginx to proxy `/py-run/`
 
 You also need the repo URL for stage 2.
 
@@ -99,8 +101,9 @@ For a robust unattended setup, prefer an **HTTPS repo URL** unless you have alre
 For local classroom or lab installs on firewalled machines, the simplest working setup is usually:
 
 - no SSL
-- Docker enabled for the C++ runner
-- `/cxx-run/` proxy enabled when students will use the runner
+- Docker enabled for any remote runner you plan to use
+- `/cxx-run/` proxy enabled when students will use the C++ runner
+- `/py-run/` proxy enabled when students will use the remote Python runner
 - one local hostname used consistently in the browser and config files
 
 In that case:
@@ -108,6 +111,7 @@ In that case:
 - set `ENABLE_CERTBOT=0`
 - set `ENABLE_DOCKER=1`
 - set `ENABLE_CXX_RUNNER_PROXY=1`
+- set `ENABLE_PY_RUNNER_PROXY=1` if you want remote Python
 - use `http://...` for `CLIENT_ORIGIN`
 
 The hostname in `CLIENT_ORIGIN` must match the exact address students use in the browser, or CORS can fail.
@@ -168,6 +172,8 @@ ADMIN_EMAIL=admin@example.edu
 ENABLE_DOCKER=1
 ENABLE_CXX_RUNNER_PROXY=1
 CXX_RUNNER_PORT=5055
+ENABLE_PY_RUNNER_PROXY=0
+PY_RUNNER_PORT=5056
 NODE_MAJOR=20
 ```
 
@@ -188,6 +194,8 @@ ENABLE_CERTBOT=0
 ENABLE_DOCKER=1
 ENABLE_CXX_RUNNER_PROXY=1
 CXX_RUNNER_PORT=5055
+ENABLE_PY_RUNNER_PROXY=1
+PY_RUNNER_PORT=5056
 NODE_MAJOR=20
 ```
 
@@ -381,6 +389,7 @@ bash /path/to/02_app_deploy.sh /opt/coLearn-AI/deploy.conf
 ```
 
 That updates the repo, reinstalls dependencies if needed, rebuilds the client, refreshes env files, and restarts PM2.
+If `ENABLE_REMOTE_CPP=1` is present in `deploy.conf` or you answer yes to the prompt, it also syncs and starts the C++ runner.
 If `ENABLE_REMOTE_PYTHON=1` is present in `deploy.conf` or you answer yes to the prompt, it also syncs and starts the remote Python runner and adds the `/py-run/` nginx route.
 
 The deploy script also writes runtime feature flags into `server/.env`:

@@ -184,7 +184,7 @@ fi
 if ! index_exists "audit_log" "idx_audit_log_event_created_at"; then
   db_exec <<'SQL'
 ALTER TABLE `audit_log`
-  ADD INDEX `idx_audit_log_event_created_at` (`event_type`, `created_at`);
+  ADD INDEX `idx_audit_log_event_created_at` (`event_type`(191), `created_at`);
 SQL
 fi
 

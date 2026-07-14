@@ -66,13 +66,53 @@ async function ensureSchema() {
   `);
 }
 
-function loadAuthRoutes({ sentMail } = {}) {
-  const authRoutesPath = require.resolve('../auth/routes');
-  const originalEmailUser = process.env.EMAIL_USER;
-  const originalEmailPass = process.env.EMAIL_PASS;
+function makeJsonResponse(status, body) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
 
-  process.env.EMAIL_USER = 'test@example.com';
-  process.env.EMAIL_PASS = 'test-pass';
+function loadAuthRoutes({ sentMail, relayFetch, mailDeliveryMode = 'direct' } = {}) {
+  const authRoutesPath = require.resolve('../auth/routes');
+  const mailDeliveryPath = require.resolve('../utils/mailDelivery');
+  const originalEnv = {
+    EMAIL_USER: process.env.EMAIL_USER,
+    EMAIL_PASS: process.env.EMAIL_PASS,
+    MAIL_DELIVERY_MODE: process.env.MAIL_DELIVERY_MODE,
+    REMOTE_MAIL_URL: process.env.REMOTE_MAIL_URL,
+    REMOTE_MAIL_RELAY_ID: process.env.REMOTE_MAIL_RELAY_ID,
+    REMOTE_MAIL_SECRET: process.env.REMOTE_MAIL_SECRET,
+    REMOTE_MAIL_TIMEOUT_MS: process.env.REMOTE_MAIL_TIMEOUT_MS,
+    CLIENT_ORIGIN: process.env.CLIENT_ORIGIN,
+  };
+  const originalRelayFetch = globalThis.__colearnMailRelayFetch;
+
+  process.env.MAIL_DELIVERY_MODE = mailDeliveryMode;
+  process.env.CLIENT_ORIGIN = 'https://colearn-ai.com';
+
+  if (mailDeliveryMode === 'remote') {
+    delete process.env.EMAIL_USER;
+    delete process.env.EMAIL_PASS;
+    process.env.REMOTE_MAIL_URL = 'https://colearn-ai.com/mail-relay';
+    process.env.REMOTE_MAIL_RELAY_ID = 'main-prod';
+    process.env.REMOTE_MAIL_SECRET = 'test-remote-secret';
+    process.env.REMOTE_MAIL_TIMEOUT_MS = '10000';
+    globalThis.__colearnMailRelayFetch = async (url, options) => {
+      if (typeof relayFetch === 'function') {
+        return relayFetch({ url, options });
+      }
+      return makeJsonResponse(202, { ok: true, queued: true, messageId: 'relay-test-id' });
+    };
+  } else {
+    process.env.EMAIL_USER = 'test@example.com';
+    process.env.EMAIL_PASS = 'test-pass';
+    delete process.env.REMOTE_MAIL_URL;
+    delete process.env.REMOTE_MAIL_RELAY_ID;
+    delete process.env.REMOTE_MAIL_SECRET;
+    delete process.env.REMOTE_MAIL_TIMEOUT_MS;
+    delete globalThis.__colearnMailRelayFetch;
+  }
 
   const originalLoad = Module._load;
   Module._load = function patchedLoad(request, parent, isMain) {
@@ -92,6 +132,7 @@ function loadAuthRoutes({ sentMail } = {}) {
   };
 
   delete require.cache[authRoutesPath];
+  delete require.cache[mailDeliveryPath];
   const authRoutes = require(authRoutesPath);
 
   return {
@@ -99,18 +140,19 @@ function loadAuthRoutes({ sentMail } = {}) {
     restore() {
       Module._load = originalLoad;
       delete require.cache[authRoutesPath];
-
-      if (originalEmailUser === undefined) delete process.env.EMAIL_USER;
-      else process.env.EMAIL_USER = originalEmailUser;
-
-      if (originalEmailPass === undefined) delete process.env.EMAIL_PASS;
-      else process.env.EMAIL_PASS = originalEmailPass;
+      delete require.cache[mailDeliveryPath];
+      for (const [key, value] of Object.entries(originalEnv)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      if (originalRelayFetch === undefined) delete globalThis.__colearnMailRelayFetch;
+      else globalThis.__colearnMailRelayFetch = originalRelayFetch;
     },
   };
 }
 
-function createTestServer({ sentMail } = {}) {
-  const { authRoutes, restore } = loadAuthRoutes({ sentMail });
+function createTestServer({ sentMail, relayFetch, mailDeliveryMode } = {}) {
+  const { authRoutes, restore } = loadAuthRoutes({ sentMail, relayFetch, mailDeliveryMode });
   const app = express();
   app.use(express.json());
   app.use(session({
@@ -160,8 +202,8 @@ async function requestJsonWithServer(baseUrl, path, { method = 'POST', body, hea
   };
 }
 
-async function requestJson(path, { method = 'POST', body, headers = {}, sentMail } = {}) {
-  const server = await createTestServer({ sentMail });
+async function requestJson(path, { method = 'POST', body, headers = {}, sentMail, relayFetch, mailDeliveryMode } = {}) {
+  const server = await createTestServer({ sentMail, relayFetch, mailDeliveryMode });
   try {
     return await requestJsonWithServer(server.baseUrl, path, { method, body, headers });
   } finally {
@@ -256,6 +298,66 @@ test('verify rejects an incorrect code without creating a user', async () => {
 
   const [users] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
   assert.equal(users.length, 0);
+});
+
+test('register uses the remote relay when MAIL_DELIVERY_MODE=remote', async () => {
+  await ensureSchema();
+
+  const email = uniqueEmail('register-remote');
+  const relayCalls = [];
+
+  const response = await requestJson('/api/auth/register', {
+    body: {
+      name: 'Remote Relay User',
+      email,
+      password: 'RemotePassword123',
+    },
+    mailDeliveryMode: 'remote',
+    relayFetch: async ({ url, options }) => {
+      relayCalls.push({ url, options, body: JSON.parse(options.body) });
+      return makeJsonResponse(202, { ok: true, queued: true, messageId: 'relay-register-id' });
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { message: 'Confirmation code sent to your email.' });
+  assert.equal(relayCalls.length, 1);
+  assert.equal(relayCalls[0].url, 'https://colearn-ai.com/mail-relay/v1/send-code');
+  assert.equal(relayCalls[0].body.recipientEmail, email);
+  assert.equal(relayCalls[0].body.purpose, 'register');
+  assert.equal(relayCalls[0].body.relayId, 'main-prod');
+  assert.equal(relayCalls[0].body.appUrl, 'https://colearn-ai.com');
+  assert.match(relayCalls[0].body.code, /^\d{6}$/);
+  assert.equal(relayCalls[0].options.headers['x-relay-id'], 'main-prod');
+  assert.match(relayCalls[0].options.headers['x-relay-signature'], /^[a-f0-9]{64}$/);
+
+  const [pending] = await db.query('SELECT id FROM pending_users WHERE email = ?', [email]);
+  assert.equal(pending.length, 1);
+  created.pendingEmails.add(email);
+});
+
+test('request-reset uses the remote relay when MAIL_DELIVERY_MODE=remote', async () => {
+  await ensureSchema();
+
+  const user = await createVerifiedUser({ email: uniqueEmail('request-reset-remote') });
+  const relayCalls = [];
+
+  const response = await requestJson('/api/auth/request-reset', {
+    body: { email: user.email },
+    mailDeliveryMode: 'remote',
+    relayFetch: async ({ url, options }) => {
+      relayCalls.push({ url, options, body: JSON.parse(options.body) });
+      return makeJsonResponse(202, { ok: true, queued: true, messageId: 'relay-reset-id' });
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, { message: 'Reset code sent to email.' });
+  assert.equal(relayCalls.length, 1);
+  assert.equal(relayCalls[0].url, 'https://colearn-ai.com/mail-relay/v1/send-code');
+  assert.equal(relayCalls[0].body.recipientEmail, user.email);
+  assert.equal(relayCalls[0].body.purpose, 'reset');
+  assert.match(relayCalls[0].body.code, /^\d{6}$/);
 });
 
 test('request-reset emits a reset code for an existing user', async () => {

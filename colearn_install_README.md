@@ -258,8 +258,13 @@ DB_PASSWORD=replace_me
 CLIENT_ORIGIN=http://colearn.local
 SESSION_SECRET=replace_with_a_long_random_secret
 OPENAI_API_KEY=replace_me
+MAIL_DELIVERY_MODE=direct
 EMAIL_USER=replace_me
 EMAIL_PASS=replace_me
+REMOTE_MAIL_URL=https://colearn-ai.com/mail-relay
+REMOTE_MAIL_RELAY_ID=main-prod
+REMOTE_MAIL_SECRET=replace_me
+REMOTE_MAIL_TIMEOUT_MS=10000
 SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com
 APP_ROOT_NAME=Administrator
 APP_ROOT_EMAIL=admin@colearn.local
@@ -301,8 +306,13 @@ Common runtime values students will recognize from `server/.env` include:
 - `DB_PASSWORD`
 - `SESSION_SECRET`
 - `OPENAI_API_KEY`
+- `MAIL_DELIVERY_MODE`
 - `EMAIL_USER`
 - `EMAIL_PASS`
+- `REMOTE_MAIL_URL`
+- `REMOTE_MAIL_RELAY_ID`
+- `REMOTE_MAIL_SECRET`
+- `REMOTE_MAIL_TIMEOUT_MS`
 - `CLIENT_ORIGIN`
 
 So the names do not have to match perfectly across every variable. The goal is for `deploy.conf` to contain enough information for stage 2 to generate the correct runtime env files.

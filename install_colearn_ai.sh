@@ -92,6 +92,11 @@ die() {
   exit 1
 }
 
+remove_container_if_present() {
+  local name="$1"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+}
+
 cleanup() {
   if [[ -n "$MYSQL_AUTH_FILE" && -f "$MYSQL_AUTH_FILE" ]]; then
     rm -f "$MYSQL_AUTH_FILE"
@@ -653,9 +658,14 @@ setup_cxx_runner() {
   chown -R "$APP_USER:$APP_USER" "$CXX_RUNNER_DIR"
 
   info "Building and starting cxx-runner"
+  info "Removing any stale cxx-runner containers"
+  remove_container_if_present "cxx-runner"
+  remove_container_if_present "cxx-redis"
   if docker compose version >/dev/null 2>&1; then
+    (cd "$CXX_RUNNER_DIR" && docker compose down --remove-orphans >/dev/null 2>&1 || true)
     (cd "$CXX_RUNNER_DIR" && docker compose up -d --build)
   else
+    (cd "$CXX_RUNNER_DIR" && docker-compose down --remove-orphans >/dev/null 2>&1 || true)
     (cd "$CXX_RUNNER_DIR" && docker-compose up -d --build)
   fi
 

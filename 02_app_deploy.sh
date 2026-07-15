@@ -62,6 +62,11 @@ docker_compose_cmd() {
   return 1
 }
 
+remove_container_if_present() {
+  local name="$1"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+}
+
 is_local_host_target() {
   local target="$1"
   [[ "$target" == "localhost" || "$target" == *.local || "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -427,6 +432,10 @@ setup_cxx_runner() {
   fi
   [[ -f "$CXX_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $CXX_RUNNER_DIR"
   info "Building and starting cxx-runner"
+  info "Removing any stale cxx-runner containers"
+  remove_container_if_present "cxx-runner"
+  remove_container_if_present "cxx-redis"
+  (cd "$CXX_RUNNER_DIR" && $compose_cmd down --remove-orphans >/dev/null 2>&1 || true)
   (cd "$CXX_RUNNER_DIR" && $compose_cmd up -d --build)
 }
 

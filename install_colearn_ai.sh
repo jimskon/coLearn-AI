@@ -708,9 +708,14 @@ setup_py_runner() {
   chown -R "$APP_USER:$APP_USER" "$PY_RUNNER_DIR"
 
   info "Building and starting py-runner"
+  info "Removing any stale py-runner containers"
+  remove_container_if_present "py-runner"
+  remove_container_if_present "py-redis"
   if docker compose version >/dev/null 2>&1; then
+    (cd "$PY_RUNNER_DIR" && docker compose down --remove-orphans >/dev/null 2>&1 || true)
     (cd "$PY_RUNNER_DIR" && docker compose up -d --build)
   else
+    (cd "$PY_RUNNER_DIR" && docker-compose down --remove-orphans >/dev/null 2>&1 || true)
     (cd "$PY_RUNNER_DIR" && docker-compose up -d --build)
   fi
 

@@ -451,6 +451,10 @@ setup_py_runner() {
   rsync -a --delete "$APP_DIR/ops/py-runner/" "$PY_RUNNER_DIR/"
   [[ -f "$PY_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $PY_RUNNER_DIR"
   info "Building and starting py-runner"
+  info "Removing any stale py-runner containers"
+  remove_container_if_present "py-runner"
+  remove_container_if_present "py-redis"
+  (cd "$PY_RUNNER_DIR" && $compose_cmd down --remove-orphans >/dev/null 2>&1 || true)
   (cd "$PY_RUNNER_DIR" && $compose_cmd up -d --build)
 }
 

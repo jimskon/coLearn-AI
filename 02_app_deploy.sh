@@ -62,6 +62,11 @@ docker_compose_cmd() {
   return 1
 }
 
+remove_container_if_present() {
+  local name="$1"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+}
+
 is_local_host_target() {
   local target="$1"
   [[ "$target" == "localhost" || "$target" == *.local || "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -427,6 +432,10 @@ setup_cxx_runner() {
   fi
   [[ -f "$CXX_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $CXX_RUNNER_DIR"
   info "Building and starting cxx-runner"
+  info "Removing any stale cxx-runner containers"
+  remove_container_if_present "cxx-runner"
+  remove_container_if_present "cxx-redis"
+  (cd "$CXX_RUNNER_DIR" && $compose_cmd down --remove-orphans >/dev/null 2>&1 || true)
   (cd "$CXX_RUNNER_DIR" && $compose_cmd up -d --build)
 }
 
@@ -442,6 +451,10 @@ setup_py_runner() {
   rsync -a --delete "$APP_DIR/ops/py-runner/" "$PY_RUNNER_DIR/"
   [[ -f "$PY_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $PY_RUNNER_DIR"
   info "Building and starting py-runner"
+  info "Removing any stale py-runner containers"
+  remove_container_if_present "py-runner"
+  remove_container_if_present "py-redis"
+  (cd "$PY_RUNNER_DIR" && $compose_cmd down --remove-orphans >/dev/null 2>&1 || true)
   (cd "$PY_RUNNER_DIR" && $compose_cmd up -d --build)
 }
 

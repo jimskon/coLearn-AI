@@ -280,6 +280,8 @@ test('response evaluation includes prior attempts in the prompt when history exi
 
 test('response evaluation answers a clear in-domain question before grading', async () => {
   const originalFetch = global.fetch;
+  let aiCalledForQuestionHelp = false;
+  const aiReply = 'A loop stops when its condition becomes false, so check which value changes each time through.';
   global.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input?.url || '';
 
@@ -289,6 +291,7 @@ test('response evaluation answers a clear in-domain question before grading', as
       const userMessage = (body?.messages || []).find((msg) => msg?.role === 'user')?.content || '';
 
       if (userMessage.includes('Student clarifying question:')) {
+        aiCalledForQuestionHelp = true;
         return new Response(
           JSON.stringify({
             id: 'chatcmpl-test-help',
@@ -298,7 +301,7 @@ test('response evaluation answers a clear in-domain question before grading', as
                 index: 0,
                 message: {
                   role: 'assistant',
-                  content: 'Think about the condition that controls when the loop stops.',
+                  content: aiReply,
                 },
                 finish_reason: 'stop',
               },
@@ -331,7 +334,8 @@ test('response evaluation answers a clear in-domain question before grading', as
 
     assert.equal(response.status, 200);
     assert.equal(response.body.accepted, false);
-    assert.match(response.body.feedback, /condition that controls when the loop stops/i);
+    assert.equal(aiCalledForQuestionHelp, true);
+    assert.equal(response.body.feedback, aiReply);
     assert.notEqual(
       response.body.feedback,
       'This system only works in the context of its learning objectives.'

@@ -50,3 +50,38 @@ test('normalizeGeneratedDraft salvages structured plain-text activity output int
   assert.match(result.text, /\\sampleresponses\{It greets the user and sometimes prints a pizza message\.\}/);
   assert.match(result.text, /\\feedbackprompt\{Compare your prediction with the actual output\.\}/);
 });
+
+test('normalizeGeneratedDraft repairs missing endquestion markers in generated markup', () => {
+  const raw = [
+    '\\title{Introduction to Python}',
+    '\\mode{group}',
+    '\\studentlevel{Any}',
+    '\\activitycontext{Any}',
+    '\\section{Exploration}',
+    '\\questiongroup{Run-and-observe}',
+    '\\question{What happened when you ran the code?}',
+    '\\textresponse{3}',
+    '\\sampleresponses{It printed a greeting.}',
+    '\\feedbackprompt{Describe the output in your own words.}',
+    '\\question{What changed after you edited the input value?}',
+    '\\textresponse{3}',
+    '\\sampleresponses{The branch output changed.}',
+    '\\feedbackprompt{Connect the changed input to the new output.}',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'Introduction to Python',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [],
+    majorSections: ['Exploration'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.equal((result.text.match(/\\endquestion/g) || []).length, 2);
+  assert.match(result.text, /\\feedbackprompt\{Describe the output in your own words\.\}\n\\endquestion\n\\question\{/);
+  assert.match(result.text, /\\feedbackprompt\{Connect the changed input to the new output\.\}\n\\endquestion\n\\endquestiongroup/);
+});

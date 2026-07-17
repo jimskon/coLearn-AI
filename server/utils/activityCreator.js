@@ -4,6 +4,7 @@ const OpenAI = require('openai');
 require('dotenv').config();
 
 const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
+const MARKUP_HOUSE_STYLE_PATH = path.join(__dirname, '..', 'templates', 'activity_markup_house_style.txt');
 const DEFAULT_CREATOR_OPENAI_TIMEOUT_MS = 45000;
 const CREATOR_HOUSE_STYLE_SUMMARY = [
   'Markup rules:',
@@ -235,6 +236,110 @@ function normalizePythonTurtleDirectives(text) {
       ? '\\pythonturtle{' + dims.replace(/\s+/g, '') + '}'
       : match;
   });
+}
+
+function repairGeneratedMarkupClosures(text) {
+  const lines = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n');
+
+  const repaired = [];
+  let inQuestionGroup = false;
+  let inQuestion = false;
+  let inAiBlock = false;
+
+  function closeAiBlock() {
+    if (inAiBlock) {
+      repaired.push('\\endai');
+      inAiBlock = false;
+    }
+  }
+
+  function closeQuestion() {
+    closeAiBlock();
+    if (inQuestion) {
+      repaired.push('\\endquestion');
+      inQuestion = false;
+    }
+  }
+
+  function closeQuestionGroup() {
+    closeQuestion();
+    if (inQuestionGroup) {
+      repaired.push('\\endquestiongroup');
+      inQuestionGroup = false;
+    }
+  }
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+
+    if (trimmed.startsWith('\\section{')) {
+      closeQuestionGroup();
+      repaired.push(rawLine);
+      continue;
+    }
+
+    if (trimmed.startsWith('\\questiongroup{')) {
+      closeQuestionGroup();
+      inQuestionGroup = true;
+      repaired.push(rawLine);
+      continue;
+    }
+
+    if (trimmed.startsWith('\\question{')) {
+      if (!inQuestionGroup) {
+        inQuestionGroup = true;
+        repaired.push('\\questiongroup{Question Group}');
+      }
+      closeQuestion();
+      inQuestion = true;
+      repaired.push(rawLine);
+      continue;
+    }
+
+    if (trimmed.startsWith('\\ai{')) {
+      if (inAiBlock) {
+        closeAiBlock();
+      }
+      inAiBlock = true;
+      repaired.push(rawLine);
+      continue;
+    }
+
+    if (trimmed === '\\endai') {
+      if (inAiBlock) {
+        repaired.push(rawLine);
+        inAiBlock = false;
+      }
+      continue;
+    }
+
+    if (trimmed === '\\endquestion') {
+      closeAiBlock();
+      if (inQuestion) {
+        repaired.push(rawLine);
+        inQuestion = false;
+      }
+      continue;
+    }
+
+    if (trimmed === '\\endquestiongroup') {
+      closeQuestion();
+      if (inQuestionGroup) {
+        repaired.push(rawLine);
+        inQuestionGroup = false;
+      }
+      continue;
+    }
+
+    repaired.push(rawLine);
+  }
+
+  closeQuestionGroup();
+
+  return repaired.join('\n');
 }
 
 function escapeMarkupText(value) {
@@ -470,13 +575,15 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
 
 function normalizeGeneratedDraft(text, fallbackInput) {
   const stripped = stripCodeFences(text);
-  const cleaned = normalizePythonTurtleDirectives(
-    applyTimedSectionDirectives(
-      applyRetriesDirective(
-        normalizeLearningObjectivesSection(stripped),
-        fallbackInput.retriesRequired
-      ),
-      fallbackInput.timedSections
+  const cleaned = repairGeneratedMarkupClosures(
+    normalizePythonTurtleDirectives(
+      applyTimedSectionDirectives(
+        applyRetriesDirective(
+          normalizeLearningObjectivesSection(stripped),
+          fallbackInput.retriesRequired
+        ),
+        fallbackInput.timedSections
+      )
     )
   );
 
@@ -484,13 +591,15 @@ function normalizeGeneratedDraft(text, fallbackInput) {
     ? coercePlaintextActivityToMarkup(cleaned, fallbackInput)
     : null;
   const normalized = repaired
-    ? normalizePythonTurtleDirectives(
-        applyTimedSectionDirectives(
-          applyRetriesDirective(
-            normalizeLearningObjectivesSection(repaired),
-            fallbackInput.retriesRequired
-          ),
-          fallbackInput.timedSections
+    ? repairGeneratedMarkupClosures(
+        normalizePythonTurtleDirectives(
+          applyTimedSectionDirectives(
+            applyRetriesDirective(
+              normalizeLearningObjectivesSection(repaired),
+              fallbackInput.retriesRequired
+            ),
+            fallbackInput.timedSections
+          )
         )
       )
     : cleaned;
@@ -818,5 +927,6 @@ module.exports = {
   renderFallbackTemplate,
   normalizeGeneratedDraft,
   normalizeTimedSections,
+  repairGeneratedMarkupClosures,
   renderFallbackTemplate,
 };

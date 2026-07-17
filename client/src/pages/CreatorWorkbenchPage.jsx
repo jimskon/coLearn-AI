@@ -230,6 +230,7 @@ export default function CreatorWorkbenchPage() {
   const [sandboxUrl, setSandboxUrl] = useState('');
   const [selectedPreviewKey, setSelectedPreviewKey] = useState('');
   const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
+  const [showPreviewInspector, setShowPreviewInspector] = useState(true);
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
@@ -388,6 +389,7 @@ export default function CreatorWorkbenchPage() {
       setQuestionInspectorDraft(null);
       return;
     }
+    setShowPreviewInspector(true);
     setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
   }, [selectedQuestionBlock]);
 
@@ -678,6 +680,11 @@ export default function CreatorWorkbenchPage() {
           gap: 12px;
           align-items: start;
         }
+        .creator-preview-toolbar {
+          display: flex;
+          justify-content: flex-end;
+          margin-bottom: 0.75rem;
+        }
         .creator-preview-inspector {
           border: 1px solid #d9dee3;
           border-radius: 10px;
@@ -927,108 +934,132 @@ export default function CreatorWorkbenchPage() {
                 {!activity?.id && !activeText ? (
                   <Alert variant="secondary" className="mb-0">Create a draft to preview it here.</Alert>
                 ) : (
-                  <div className="creator-preview-layout">
+                  <>
+                    <div className="creator-preview-toolbar">
+                      <Button
+                        size="sm"
+                        variant={showPreviewInspector ? 'outline-secondary' : 'outline-primary'}
+                        onClick={() => setShowPreviewInspector((prev) => !prev)}
+                      >
+                        {showPreviewInspector ? 'Hide Panel' : 'Show Panel'}
+                      </Button>
+                    </div>
+                    <div className="creator-preview-layout">
                     <div className="creator-preview-surface">{renderedActivity}</div>
-                    <aside className="creator-preview-inspector">
-                      {!selectedQuestionBlock ? (
-                        <div className="text-muted small">
-                          Click a question in Preview to inspect and refine it without editing raw source.
+                    {showPreviewInspector ? (
+                      <aside className="creator-preview-inspector">
+                        <div className="d-flex align-items-start justify-content-between gap-2 mb-2">
+                          <div className="fw-semibold">Question Panel</div>
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0 text-muted"
+                            onClick={() => setShowPreviewInspector(false)}
+                            aria-label="Hide question panel"
+                          >
+                            <X />
+                          </Button>
                         </div>
-                      ) : (
-                        <>
-                          <div className="fw-semibold mb-2">Question Panel</div>
-                          <div className="text-muted small mb-3">
-                            {selectedQuestionBlock.label} · group {selectedQuestionBlock.groupId}
+                        {!selectedQuestionBlock ? (
+                          <div className="text-muted small">
+                            Click a question in Preview to inspect and refine it without editing raw source.
                           </div>
+                        ) : (
+                          <>
+                            <div className="text-muted small mb-3">
+                              {selectedQuestionBlock.label} · group {selectedQuestionBlock.groupId}
+                            </div>
 
-                          <Form.Group className="mb-3">
-                            <Form.Label>Question Text</Form.Label>
-                            <Form.Control
-                              as="textarea"
-                              rows={4}
-                              value={questionInspectorDraft?.prompt || ''}
-                              disabled={!questionInspectorDraft || !!proposal}
-                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), prompt: event.target.value }))}
-                            />
-                          </Form.Group>
+                            <Form.Group className="mb-3">
+                              <Form.Label>Question Text</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={4}
+                                value={questionInspectorDraft?.prompt || ''}
+                                disabled={!questionInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), prompt: event.target.value }))}
+                              />
+                            </Form.Group>
 
-                          <Form.Group className="mb-3">
-                            <Form.Label>Sample Answer</Form.Label>
-                            <Form.Control
-                              as="textarea"
-                              rows={3}
-                              value={questionInspectorDraft?.sampleResponse || ''}
-                              disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] || !!proposal}
-                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), sampleResponse: event.target.value }))}
-                            />
-                            {!selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] ? (
-                              <div className="text-muted small mt-1">No existing `\\sampleresponses` line to edit yet.</div>
-                            ) : null}
-                          </Form.Group>
+                            <Form.Group className="mb-3">
+                              <Form.Label>Sample Answer</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                value={questionInspectorDraft?.sampleResponse || ''}
+                                disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), sampleResponse: event.target.value }))}
+                              />
+                              {!selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] ? (
+                                <div className="text-muted small mt-1">No existing `\\sampleresponses` line to edit yet.</div>
+                              ) : null}
+                            </Form.Group>
 
-                          <Form.Group className="mb-3">
-                            <Form.Label>Feedback Guidance</Form.Label>
-                            <Form.Control
-                              as="textarea"
-                              rows={3}
-                              value={questionInspectorDraft?.feedbackPrompt || ''}
-                              disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] || !!proposal}
-                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), feedbackPrompt: event.target.value }))}
-                            />
-                            {!selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] ? (
-                              <div className="text-muted small mt-1">No existing `\\feedbackprompt` line to edit yet.</div>
-                            ) : null}
-                          </Form.Group>
+                            <Form.Group className="mb-3">
+                              <Form.Label>Feedback Guidance</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                value={questionInspectorDraft?.feedbackPrompt || ''}
+                                disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), feedbackPrompt: event.target.value }))}
+                              />
+                              {!selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] ? (
+                                <div className="text-muted small mt-1">No existing `\\feedbackprompt` line to edit yet.</div>
+                              ) : null}
+                            </Form.Group>
 
-                          <Form.Group className="mb-3">
-                            <Form.Label>Follow-up Prompt</Form.Label>
-                            <Form.Control
-                              as="textarea"
-                              rows={3}
-                              value={questionInspectorDraft?.followupPrompt || ''}
-                              disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.followupLines?.[0] || !!proposal}
-                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), followupPrompt: event.target.value }))}
-                            />
-                            {!selectedQuestionBlock?.sourceMeta?.followupLines?.[0] ? (
-                              <div className="text-muted small mt-1">No existing `\\followupprompt` line to edit yet.</div>
-                            ) : null}
-                          </Form.Group>
+                            <Form.Group className="mb-3">
+                              <Form.Label>Follow-up Prompt</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                value={questionInspectorDraft?.followupPrompt || ''}
+                                disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.followupLines?.[0] || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), followupPrompt: event.target.value }))}
+                              />
+                              {!selectedQuestionBlock?.sourceMeta?.followupLines?.[0] ? (
+                                <div className="text-muted small mt-1">No existing `\\followupprompt` line to edit yet.</div>
+                              ) : null}
+                            </Form.Group>
 
-                          <Form.Group className="mb-3">
-                            <Form.Label>Response Lines</Form.Label>
-                            <Form.Control
-                              type="number"
-                              min="1"
-                              value={questionInspectorDraft?.responseLines || 1}
-                              disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.textResponseLine || !!proposal}
-                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: event.target.value }))}
-                            />
-                            {!selectedQuestionBlock?.sourceMeta?.textResponseLine ? (
-                              <div className="text-muted small mt-1">This question does not currently use `\\textresponse`.</div>
-                            ) : null}
-                          </Form.Group>
+                            <Form.Group className="mb-3">
+                              <Form.Label>Response Lines</Form.Label>
+                              <Form.Control
+                                type="number"
+                                min="1"
+                                value={questionInspectorDraft?.responseLines || 1}
+                                disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.textResponseLine || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: event.target.value }))}
+                              />
+                              {!selectedQuestionBlock?.sourceMeta?.textResponseLine ? (
+                                <div className="text-muted small mt-1">This question does not currently use `\\textresponse`.</div>
+                              ) : null}
+                            </Form.Group>
 
-                          <div className="d-flex gap-2">
-                            <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal} onClick={applyQuestionInspectorChanges}>
-                              Apply
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline-secondary"
-                              onClick={() => setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock))}
-                              disabled={!selectedQuestionBlock}
-                            >
-                              Reset
-                            </Button>
-                          </div>
+                            <div className="d-flex gap-2">
+                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal} onClick={applyQuestionInspectorChanges}>
+                                Apply
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline-secondary"
+                                onClick={() => setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock))}
+                                disabled={!selectedQuestionBlock}
+                              >
+                                Reset
+                              </Button>
+                            </div>
 
-                          <div className="text-muted small mt-3">
-                            Phase 1 edits existing question-source lines only. This keeps the preview editor safe while we build out richer controls.
-                          </div>
-                        </>
-                      )}
-                    </aside>
-                  </div>
+                            <div className="text-muted small mt-3">
+                              Phase 1 edits existing question-source lines only. This keeps the preview editor safe while we build out richer controls.
+                            </div>
+                          </>
+                        )}
+                      </aside>
+                    ) : null}
+                    </div>
+                  </>
                 )}
               </div>
             ) : null}

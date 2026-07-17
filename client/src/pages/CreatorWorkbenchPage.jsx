@@ -240,6 +240,82 @@ function buildQuestionInspectorDraft(block) {
   };
 }
 
+function applyAiEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.aiLine || !sourceMeta?.endAiLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  const title = String(edits.title || '').trim();
+  const prompt = String(edits.prompt || '').trim();
+  const guardrail = String(edits.guardrail || '').trim();
+  const context = Array.isArray(edits.contextSources)
+    ? edits.contextSources
+    : String(edits.contextSources || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const inputRows = Math.max(2, Number.parseInt(edits.inputRows, 10) || 4);
+  const insertions = [];
+
+  updateLine(lines, sourceMeta.aiLine, `\\ai{${String(edits.mode || 'explain').trim().toLowerCase() || 'explain'}}`);
+
+  if (sourceMeta.titleLine) {
+    updateLine(lines, sourceMeta.titleLine, `\\aititle{${title}}`);
+  } else if (title) {
+    insertions.push({ anchorLine: sourceMeta.aiLine, text: `\\aititle{${title}}` });
+  }
+
+  if (sourceMeta.promptLine) {
+    updateLine(lines, sourceMeta.promptLine, `\\aiprompt{${prompt}}`);
+  } else if (prompt) {
+    insertions.push({ anchorLine: sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiprompt{${prompt}}` });
+  }
+
+  if (sourceMeta.guardrailLine) {
+    updateLine(lines, sourceMeta.guardrailLine, `\\aiguardrail{${guardrail}}`);
+  } else if (guardrail) {
+    insertions.push({ anchorLine: sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiguardrail{${guardrail}}` });
+  }
+
+  if (sourceMeta.contextLine) {
+    updateLine(lines, sourceMeta.contextLine, `\\aicontext{${context.join(',')}}`);
+  } else if (context.length) {
+    insertions.push({ anchorLine: sourceMeta.guardrailLine || sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aicontext{${context.join(',')}}` });
+  }
+
+  if (sourceMeta.inputLine) {
+    updateLine(lines, sourceMeta.inputLine, `\\aiinput{${inputRows}}`);
+  } else {
+    insertions.push({ anchorLine: sourceMeta.contextLine || sourceMeta.guardrailLine || sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiinput{${inputRows}}` });
+  }
+
+  insertLinesAfterAnchors(lines, insertions);
+  return lines.join('\n');
+}
+
+function buildAiInspectorDraft(block) {
+  return {
+    mode: String(block?.mode || 'explain').trim().toLowerCase() || 'explain',
+    title: htmlToEditorText(block?.title || 'AI Coach'),
+    prompt: htmlToEditorText(block?.prompt),
+    guardrail: htmlToEditorText(block?.guardrail),
+    contextSources: Array.isArray(block?.contextSources) ? block.contextSources.join(', ') : '',
+    inputRows: Number(block?.inputRows) || 4,
+  };
+}
+
+function findSelectableBlockByPreviewKey(blocks, previewKey) {
+  if (!previewKey) return null;
+  for (const block of blocks || []) {
+    if (block?.previewKey === previewKey) return block;
+    if (Array.isArray(block?.aiBlocks)) {
+      const aiMatch = block.aiBlocks.find((aiBlock) => aiBlock?.previewKey === previewKey);
+      if (aiMatch) return aiMatch;
+    }
+  }
+  return null;
+}
+
 export default function CreatorWorkbenchPage() {
   const { classId, activityId } = useParams();
   const navigate = useNavigate();
@@ -276,6 +352,7 @@ export default function CreatorWorkbenchPage() {
   const [sandboxUrl, setSandboxUrl] = useState('');
   const [selectedPreviewKey, setSelectedPreviewKey] = useState('');
   const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
+  const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
 
   const autoTimerRef = useRef(null);
@@ -320,9 +397,12 @@ export default function CreatorWorkbenchPage() {
     selectedPreviewKey,
   }), [activeBlocks, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures]);
 
-  const selectedQuestionBlock = useMemo(() => (
-    activeBlocks.find((block) => block?.type === 'question' && block.previewKey === selectedPreviewKey) || null
+  const selectedPreviewBlock = useMemo(() => (
+    findSelectableBlockByPreviewKey(activeBlocks, selectedPreviewKey)
   ), [activeBlocks, selectedPreviewKey]);
+
+  const selectedQuestionBlock = selectedPreviewBlock?.type === 'question' ? selectedPreviewBlock : null;
+  const selectedAiBlock = selectedPreviewBlock?.type === 'ai' ? selectedPreviewBlock : null;
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 
@@ -433,11 +513,20 @@ export default function CreatorWorkbenchPage() {
   useEffect(() => {
     if (!selectedQuestionBlock) {
       setQuestionInspectorDraft(null);
-      return;
+    } else {
+      setShowPreviewInspector(true);
+      setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
     }
-    setShowPreviewInspector(true);
-    setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
   }, [selectedQuestionBlock]);
+
+  useEffect(() => {
+    if (!selectedAiBlock) {
+      setAiInspectorDraft(null);
+    } else {
+      setShowPreviewInspector(true);
+      setAiInspectorDraft(buildAiInspectorDraft(selectedAiBlock));
+    }
+  }, [selectedAiBlock]);
 
   useEffect(() => {
     if (!proposal) return;
@@ -655,6 +744,15 @@ export default function CreatorWorkbenchPage() {
     setRawText(nextText);
     compileText(nextText);
     setNotice('Updated question settings in source.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const applyAiInspectorChanges = () => {
+    if (!selectedAiBlock || !aiInspectorDraft || proposal) return;
+    const nextText = applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft);
+    setRawText(nextText);
+    compileText(nextText);
+    setNotice('Updated AI block settings in source.');
     setTimeout(() => setNotice(''), 1800);
   };
 
@@ -995,7 +1093,9 @@ export default function CreatorWorkbenchPage() {
                     {showPreviewInspector ? (
                       <aside className="creator-preview-inspector">
                         <div className="d-flex align-items-start justify-content-between gap-2 mb-2">
-                          <div className="fw-semibold">Question Panel</div>
+                          <div className="fw-semibold">
+                            {selectedAiBlock ? 'AI Panel' : 'Question Panel'}
+                          </div>
                           <Button
                             size="sm"
                             variant="link"
@@ -1007,9 +1107,104 @@ export default function CreatorWorkbenchPage() {
                           </Button>
                         </div>
                         {!selectedQuestionBlock ? (
-                          <div className="text-muted small">
-                            Click a question in Preview to inspect and refine it without editing raw source.
-                          </div>
+                          !selectedAiBlock ? (
+                            <div className="text-muted small">
+                              Click a question or AI block in Preview to inspect and refine it without editing raw source.
+                            </div>
+                          ) : (
+                            <>
+                              <div className="text-muted small mb-3">
+                                AI block · group {selectedAiBlock.groupId} · question {selectedAiBlock.parentQuestionId}
+                              </div>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Mode</Form.Label>
+                                <Form.Select
+                                  value={aiInspectorDraft?.mode || 'explain'}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), mode: event.target.value }))}
+                                >
+                                  <option value="explain">Explain</option>
+                                  <option value="critique">Critique</option>
+                                  <option value="testgen">Testgen</option>
+                                  <option value="generate">Generate</option>
+                                </Form.Select>
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Title</Form.Label>
+                                <Form.Control
+                                  value={aiInspectorDraft?.title || ''}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), title: event.target.value }))}
+                                />
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Student Prompt</Form.Label>
+                                <Form.Control
+                                  as="textarea"
+                                  rows={4}
+                                  value={aiInspectorDraft?.prompt || ''}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), prompt: event.target.value }))}
+                                />
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Guardrail</Form.Label>
+                                <Form.Control
+                                  as="textarea"
+                                  rows={4}
+                                  value={aiInspectorDraft?.guardrail || ''}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), guardrail: event.target.value }))}
+                                />
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Context Sources</Form.Label>
+                                <Form.Control
+                                  value={aiInspectorDraft?.contextSources || ''}
+                                  placeholder="current-question,current-code,student-response"
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), contextSources: event.target.value }))}
+                                />
+                                {!selectedAiBlock?.sourceMeta?.contextLine ? (
+                                  <div className="text-muted small mt-1">Applying will add a new `\\aicontext` line to this AI block.</div>
+                                ) : null}
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Input Rows</Form.Label>
+                                <Form.Control
+                                  type="number"
+                                  min="2"
+                                  value={aiInspectorDraft?.inputRows || 4}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), inputRows: event.target.value }))}
+                                />
+                              </Form.Group>
+
+                              <div className="d-flex gap-2">
+                                <Button size="sm" variant="primary" disabled={!aiInspectorDraft || !!proposal} onClick={applyAiInspectorChanges}>
+                                  Apply
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline-secondary"
+                                  onClick={() => setAiInspectorDraft(buildAiInspectorDraft(selectedAiBlock))}
+                                  disabled={!selectedAiBlock}
+                                >
+                                  Reset
+                                </Button>
+                              </div>
+
+                              <div className="text-muted small mt-3">
+                                This phase adds the authoring shell for `\\ai` blocks in Preview. Live AI execution comes next.
+                              </div>
+                            </>
+                          )
                         ) : (
                           <>
                             <div className="text-muted small mb-3">

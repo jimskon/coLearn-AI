@@ -399,6 +399,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let inGroup = false;
   let currentGroupIntro = null;
   let pendingIncludeFiles = null;
+  let currentAiBlock = null;
 
   // track some structural state to report missing closures
   let openGroupLine = null;
@@ -406,6 +407,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let openFileLine = null;
   let openScoreLine = null;
   let openListLine = null;
+  let openAiLine = null;
 
 
   const flushCurrentBlock = () => {
@@ -1081,6 +1083,13 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (!inGroup) {
         pushIssue('error', lineNo, '\\endquestiongroup without a matching \\questiongroup', line);
       }
+      if (currentAiBlock && currentQuestion) {
+        pushIssue('error', lineNo, 'Closing group while an \\ai block is still open. Missing \\endai before \\endquestiongroup.', line);
+        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
+        currentQuestion.aiBlocks.push(currentAiBlock);
+        currentAiBlock = null;
+        openAiLine = null;
+      }
       if (currentQuestion) {
         pushIssue('error', lineNo, 'Closing group while a \\question is still open. Missing \\endquestion before \\endquestiongroup.', line);
       }
@@ -1154,6 +1163,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         samples: [],
         feedback: [],
         followups: [],
+        aiBlocks: [],
         infos: [],
         codeBlocks: [],
         scores: {},
@@ -1178,6 +1188,14 @@ export function parseSheetToBlocks(lines, options = {}) {
         continue;
       }
 
+      if (currentAiBlock) {
+        pushIssue('error', lineNo, 'Closing question while an \\ai block is still open. Missing \\endai before \\endquestion.', line);
+        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
+        currentQuestion.aiBlocks.push(currentAiBlock);
+        currentAiBlock = null;
+        openAiLine = null;
+      }
+
       // finalize as you already do
       const hasAnyCode =
         (currentQuestion.codeBlocks?.length || 0) > 0 ||
@@ -1199,6 +1217,104 @@ export function parseSheetToBlocks(lines, options = {}) {
       blocks.push(currentQuestion);
       currentQuestion = null;
       openQuestionLine = null;
+      continue;
+    }
+
+    if (trimmed.startsWith('\\ai{')) {
+      if (!currentQuestion) {
+        pushIssue('error', lineNo, '\\ai found outside of a \\question. AI blocks are currently only supported inside questions.', line);
+        continue;
+      }
+
+      if (currentAiBlock) {
+        pushIssue('error', lineNo, 'New \\ai block started before the previous \\ai block was closed. Missing \\endai.', line);
+        currentQuestion.aiBlocks.push(currentAiBlock);
+      }
+
+      const match = trimmed.match(/^\\ai\{([\s\S]*?)\}\s*$/);
+      const mode = String(match?.[1] || 'explain').trim().toLowerCase() || 'explain';
+      const aiIndex = (currentQuestion.aiBlocks?.length || 0) + 1;
+
+      currentAiBlock = {
+        type: 'ai',
+        parentQuestionId: currentQuestion.id,
+        groupId: currentQuestion.groupId,
+        previewKey: `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`,
+        mode,
+        title: format('AI Coach'),
+        prompt: '',
+        guardrail: '',
+        contextSources: [],
+        inputRows: 4,
+        sourceMeta: {
+          aiLine: lineNo,
+          titleLine: null,
+          promptLine: null,
+          guardrailLine: null,
+          contextLine: null,
+          inputLine: null,
+          endAiLine: null,
+        },
+      };
+      openAiLine = lineNo;
+      continue;
+    }
+
+    if (trimmed === '\\endai') {
+      if (!currentAiBlock || !currentQuestion) {
+        pushIssue('error', lineNo, '\\endai without a matching \\ai{...}', line);
+        continue;
+      }
+
+      currentAiBlock.sourceMeta.endAiLine = lineNo;
+      currentQuestion.aiBlocks.push(currentAiBlock);
+      currentAiBlock = null;
+      openAiLine = null;
+      continue;
+    }
+
+    if (currentAiBlock) {
+      const titleMatch = trimmed.match(/^\\aititle\{([\s\S]*?)\}\s*$/);
+      if (titleMatch) {
+        currentAiBlock.title = format(titleMatch[1] || '');
+        currentAiBlock.sourceMeta.titleLine = lineNo;
+        continue;
+      }
+
+      const promptMatch = trimmed.match(/^\\aiprompt\{([\s\S]*?)\}\s*$/);
+      if (promptMatch) {
+        currentAiBlock.prompt = format(promptMatch[1] || '');
+        currentAiBlock.sourceMeta.promptLine = lineNo;
+        continue;
+      }
+
+      const guardrailMatch = trimmed.match(/^\\aiguardrail\{([\s\S]*?)\}\s*$/);
+      if (guardrailMatch) {
+        currentAiBlock.guardrail = format(guardrailMatch[1] || '');
+        currentAiBlock.sourceMeta.guardrailLine = lineNo;
+        continue;
+      }
+
+      const contextMatch = trimmed.match(/^\\aicontext\{([\s\S]*?)\}\s*$/);
+      if (contextMatch) {
+        currentAiBlock.contextSources = String(contextMatch[1] || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean);
+        currentAiBlock.sourceMeta.contextLine = lineNo;
+        continue;
+      }
+
+      const inputMatch = trimmed.match(/^\\aiinput\{(\d+)\}\s*$/);
+      if (inputMatch) {
+        currentAiBlock.inputRows = Math.max(2, parseInt(inputMatch[1], 10) || 4);
+        currentAiBlock.sourceMeta.inputLine = lineNo;
+        continue;
+      }
+
+      if (trimmed) {
+        pushIssue('warn', lineNo, `Unrecognized content inside \\ai block ignored: ${trimmed}`, line);
+      }
       continue;
     }
 
@@ -1389,6 +1505,9 @@ export function parseSheetToBlocks(lines, options = {}) {
   }
   if (inScoreBlock) {
     pushIssue('error', openScoreLine ?? null, 'Unclosed \\score block: missing \\endscore at end of document.', null);
+  }
+  if (currentAiBlock) {
+    pushIssue('error', openAiLine ?? null, 'Unclosed \\ai block: missing \\endai at end of document.', null);
   }
   if (inList) {
     pushIssue('error', openListLine ?? null, 'Unclosed list: missing \\end{itemize} or \\end{enumerate}.', null);
@@ -2380,6 +2499,74 @@ export function renderBlocks(blocks, options = {}) {
               </table>
             </div>
           ))}
+
+          {block.aiBlocks?.map((aiBlock, i) => {
+            const aiSelected = runMode === 'preview' && selectedPreviewKey === aiBlock.previewKey;
+            return (
+              <div
+                key={`q-ai-${block.groupId}-${block.id}-${i}`}
+                className="border rounded p-3 my-3"
+                data-preview-key={aiBlock.previewKey}
+                onClick={(event) => {
+                  if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
+                  if (event.target.closest('textarea, input, button, select, a')) return;
+                  event.stopPropagation();
+                  onSelectBlock(aiBlock);
+                }}
+                style={
+                  runMode === 'preview'
+                    ? {
+                      cursor: onSelectBlock ? 'pointer' : 'default',
+                      borderColor: aiSelected ? '#0d6efd' : '#d9dee3',
+                      boxShadow: aiSelected ? '0 0 0 3px rgba(13,110,253,0.12)' : 'none',
+                      background: aiSelected ? 'rgba(13,110,253,0.04)' : '#fcfcfd',
+                    }
+                    : {
+                      background: '#fcfcfd',
+                    }
+                }
+              >
+                <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+                  <div className="fw-semibold">
+                    <span dangerouslySetInnerHTML={{ __html: aiBlock.title || 'AI Coach' }} />
+                  </div>
+                  <span className="badge bg-warning text-dark text-uppercase">{aiBlock.mode}</span>
+                </div>
+
+                {aiBlock.prompt ? (
+                  <div className="mb-2">
+                    <span dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
+                  </div>
+                ) : (
+                  <div className="text-muted small mb-2">No student-facing AI prompt set yet.</div>
+                )}
+
+                {aiBlock.contextSources?.length ? (
+                  <div className="text-muted small mb-2">
+                    Context: {aiBlock.contextSources.join(', ')}
+                  </div>
+                ) : null}
+
+                {runMode === 'preview' && aiBlock.guardrail ? (
+                  <div className="text-muted small mb-2">
+                    Guardrail: <span dangerouslySetInnerHTML={{ __html: aiBlock.guardrail }} />
+                  </div>
+                ) : null}
+
+                <Form.Control
+                  as="textarea"
+                  rows={Math.max(aiBlock.inputRows || 4, 2)}
+                  className="mt-2"
+                  placeholder="Student asks the AI for help here..."
+                  readOnly
+                  value=""
+                />
+                <div className="alert alert-light border mt-2 mb-0 py-2 small text-muted">
+                  AI response preview appears here. Live AI behavior will be connected in a later phase.
+                </div>
+              </div>
+            );
+          })}
 
           {showTextArea ? (
             (() => {

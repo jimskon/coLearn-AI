@@ -18,6 +18,7 @@ The system supports:
 - Runnable C++ blocks (with optional timeout)
 - Runnable Python Turtle blocks (with window size + timeout)
 - Editable and readonly file blocks
+- Inline AI help blocks for guided student questions
 - Structured AI feedback directives
 - Structured scoring rubrics
 - Tables with editable cells
@@ -89,6 +90,68 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 | `\followupprompt{...}` | Optional AI follow-up hint | `\followupprompt{Why might greedy fail?}` |
 
 Every `\question` must explicitly end with `\endquestion`.
+
+---
+
+## 3A. Inline AI Help Blocks
+
+```text
+\ai{explain}
+\aititle{AI Coach}
+\aiprompt{Ask the AI for help understanding what this code does.}
+\aiguardrail{Help the student reason about the code without giving away the whole worksheet answer.}
+\aicontext{current-question,current-code,student-response}
+\aiinput{5}
+\endai
+```
+
+`\\ai` blocks are currently supported only inside a `\\question`.
+
+| Syntax | Description | Example |
+|--------|-------------|---------|
+| `\ai{mode}` | Starts an inline AI help block | `\ai{explain}` |
+| `\aititle{...}` | Visible card title | `\aititle{AI Coach}` |
+| `\aiprompt{...}` | Student-facing instructions | `\aiprompt{Ask the AI for help interpreting the loop.}` |
+| `\aiguardrail{...}` | Creator-facing AI restriction / scope | `\aiguardrail{Guide the student but do not provide the final worksheet answer.}` |
+| `\aicontext{...}` | Comma-separated context sources | `\aicontext{current-question,current-code}` |
+| `\aiinput{n}` | Student input box height (minimum 2) | `\aiinput{5}` |
+| `\endai` | Ends the AI help block | `\endai` |
+
+### Supported Initial Modes
+
+- `explain`
+- `critique`
+- `testgen`
+- `generate`
+
+### Supported Initial Context Sources
+
+- `current-question`
+- `current-code`
+- `student-response`
+- `nearby-text`
+
+### Example
+
+```text
+\question{What does this loop do?}
+\textresponse{4}
+
+\python
+for i in range(5):
+    print(i * 2)
+\endpython
+
+\ai{explain}
+\aititle{AI Coach}
+\aiprompt{If you are unsure, ask the AI for help understanding the loop.}
+\aiguardrail{Explain the behavior of the code and guide the student toward the pattern. Do not give away broader worksheet answers.}
+\aicontext{current-question,current-code,student-response}
+\aiinput{5}
+\endai
+
+\endquestion
+```
 
 ---
 

@@ -346,6 +346,14 @@ function questionLikelyNeedsPythonBlock(questionLines) {
   const joined = questionLines.join('\n');
   const lower = joined.toLowerCase();
 
+  const definitelyProseTask =
+    /\b(objective|objectives|reflection|reflect|paragraph|sentence|sentences|explain|description|describe|summarize|summary|idea|ideas|list)\b/.test(lower) ||
+    (/\bprompt\b/.test(lower) && !/\bpython prompt\b/.test(lower) && !/\bcode prompt\b/.test(lower));
+
+  if (definitelyProseTask) {
+    return false;
+  }
+
   const asksForCodeWork =
     /\b(write|modify|change|edit|update|create|build|complete|revise|fix)\b/.test(lower) &&
     /\b(code|program|python|script)\b/.test(lower);
@@ -800,11 +808,12 @@ async function generateWithOpenAI({
     'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
     'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
     'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp, \\python ... \\endpython, or \\pythonremote ... \\endpythonremote. Never paste raw code directly into question text.',
-    'If students are asked to write, edit, modify, complete, or show Python code, give them a runnable \\python block for that task instead of a \\textresponse box.',
+    'Only use a runnable \\python block when students must write or modify executable Python code.',
     'If students are asked to modify existing code, repeat the current code in a new editable \\python block so they can run and test the changed version.',
-    'Reserve \\textresponse for prose explanations, predictions, reflections, and short written answers, not code entry.',
+    'Use \\textresponse for prose tasks such as objectives, predictions, explanations, prompt-writing, reflections, lists, and short written answers.',
     'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
-    'Use \\ai blocks only when they clearly support the pedagogical brief. Keep each AI block tightly scoped and include a guardrail.',
+    'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
+    'If you do use an \\ai block, keep it tightly scoped and include a guardrail.',
     'Use the compact house-style rules below as syntax guidance.',
     'For mode=group, use collaborative prompts and progression.',
     'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',

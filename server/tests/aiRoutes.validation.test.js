@@ -41,6 +41,7 @@ const express = require('express');
 const aiRoutes = require('../ai/routes');
 const {
   buildStudentResponsePrompt,
+  __testHooks,
 } = require('../ai/controller');
 const db = require('../db');
 
@@ -279,43 +280,45 @@ test('response evaluation includes prior attempts in the prompt when history exi
 });
 
 test('response evaluation answers a clear in-domain question before grading', async () => {
-  const originalFetch = global.fetch;
-  let aiCalledForQuestionHelp = false;
+  const originalCreate = __testHooks.openai.chat.completions.create;
   const aiReply = 'A loop stops when its condition becomes false, so check which value changes each time through.';
-  global.fetch = async (input, init) => {
-    const url = typeof input === 'string' ? input : input?.url || '';
-
-    if (url.includes('api.openai.com')) {
-      const bodyText = await getRequestBodyText(input, init);
-      const body = bodyText ? JSON.parse(bodyText) : {};
-      const userMessage = (body?.messages || []).find((msg) => msg?.role === 'user')?.content || '';
-
-      if (userMessage.includes('Student clarifying question:')) {
-        aiCalledForQuestionHelp = true;
-        return new Response(
-          JSON.stringify({
-            id: 'chatcmpl-test-help',
-            object: 'chat.completion',
-            choices: [
-              {
-                index: 0,
-                message: {
-                  role: 'assistant',
-                  content: aiReply,
-                },
-                finish_reason: 'stop',
-              },
-            ],
-          }),
+  let aiCalledForQuestionHelp = false;
+  __testHooks.openai.chat.completions.create = async (body) => {
+    const userMessage = (body?.messages || []).find((msg) => msg?.role === 'user')?.content || '';
+    if (userMessage.includes('Student clarifying question:')) {
+      aiCalledForQuestionHelp = true;
+      return {
+        id: 'chatcmpl-test-help',
+        object: 'chat.completion',
+        choices: [
           {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          }
-        );
-      }
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: aiReply,
+            },
+            finish_reason: 'stop',
+          },
+        ],
+      };
     }
-
-    return originalFetch(input, init);
+    return {
+      id: 'chatcmpl-test-default',
+      object: 'chat.completion',
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: JSON.stringify({
+              accepted: false,
+              feedback: 'Please answer the question with one concrete detail.',
+            }),
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    };
   };
 
   try {
@@ -341,7 +344,7 @@ test('response evaluation answers a clear in-domain question before grading', as
       'This system only works in the context of its learning objectives.'
     );
   } finally {
-    global.fetch = originalFetch;
+    __testHooks.openai.chat.completions.create = originalCreate;
   }
 });
 

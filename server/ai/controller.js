@@ -1885,4 +1885,7 @@ module.exports = {
   buildStudentResponsePrompt,
   buildStudentQuestionHelpPrompt,
   extractStudentQuestion,
+  __testHooks: {
+    openai,
+  },
 };

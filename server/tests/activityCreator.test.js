@@ -151,3 +151,72 @@ test('normalizeGeneratedDraft uses a python block when salvaging plain-text code
   assert.match(result.text, /\\question\{Change the program so it also asks for a favorite color and prints it\.\}/);
   assert.match(result.text, /\\python\nname = input\("What is your name\? "\)\nprint\("Hello, " \+ name\)\n\\endpython/);
 });
+
+test('normalizeGeneratedDraft decodes common html entities in generated markup', () => {
+  const raw = [
+    '\\title{Roles &amp; Teams}',
+    '\\mode{group}',
+    '\\studentlevel{Any}',
+    '\\activitycontext{Any}',
+    '\\section{Exploration}',
+    '\\questiongroup{Intro &amp; Roles}',
+    '\\question{Explain what &lt;role&gt; means in this activity.}',
+    '\\textresponse{3}',
+    '\\sampleresponses{A role is a specific job in the group.}',
+    '\\feedbackprompt{Use plain language.}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'Roles & Teams',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [],
+    majorSections: ['Exploration'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.match(result.text, /\\title\{Roles & Teams\}/);
+  assert.match(result.text, /\\questiongroup\{Intro & Roles\}/);
+  assert.match(result.text, /\\question\{Explain what <role> means in this activity\.\}/);
+});
+
+test('normalizeGeneratedDraft removes unsupported one-per-line and per-member textbox prompts', () => {
+  const raw = [
+    '\\title{POGIL Roles}',
+    '\\mode{group}',
+    '\\studentlevel{Any}',
+    '\\activitycontext{Any}',
+    '\\section{Exploration}',
+    '\\questiongroup{Intro & Roles}',
+    '\\question{List the four POGIL roles used in this course (one per line).}',
+    '\\textresponse{4}',
+    '\\sampleresponses{Manager, Recorder, Presenter, Reflector.}',
+    '\\feedbackprompt{Make sure all four roles are included.}',
+    '\\endquestion',
+    '\\question{Each group member: write your name and which role you were assigned.}',
+    '\\textresponse{4}',
+    '\\sampleresponses{Jim - Recorder; Ana - Manager.}',
+    '\\feedbackprompt{Match each person to a role.}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'POGIL Roles',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [],
+    majorSections: ['Exploration'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.doesNotMatch(result.text, /\(one per line\)/i);
+  assert.match(result.text, /\\question\{List the four POGIL roles used in this course\.\}/);
+  assert.match(result.text, /\\question\{As a group, briefly note which roles were assigned within your group\.\}/);
+});

@@ -143,6 +143,15 @@ function normalizeLegacyCommandSyntax(text) {
     .replace(/^\\end\{pythonturtle\}$/gm, '\\endpythonturtle');
 }
 
+function decodeCommonHtmlEntities(text) {
+  return String(text || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
 function splitObjectiveCandidates(text) {
   return String(text || '')
     .split(/\n|;|(?=\d+\))/)
@@ -503,6 +512,22 @@ function repairCodingQuestionsToUsePythonBlocks(text) {
   return output.join('\n');
 }
 
+function repairUnsupportedStructuredResponsePrompts(text) {
+  return String(text || '')
+    .replace(/\s*\(one per line\)\.?/gi, '')
+    .replace(/\s*\(one on each line\)\.?/gi, '')
+    .replace(/\s*\(one idea per line\)\.?/gi, '')
+    .replace(/\s*\(one sentence per line\)\.?/gi, '')
+    .replace(
+      /\\question\{Each group member:\s*write your name and which role you were assigned\.?\}/gi,
+      '\\question{As a group, briefly note which roles were assigned within your group.}'
+    )
+    .replace(
+      /\\question\{Each group member:\s*([^}]*)\}/gi,
+      '\\question{As a group, give one concise shared response: $1}'
+    );
+}
+
 function escapeMarkupText(value) {
   return String(value == null ? '' : value)
     .replace(/\r\n/g, '\n')
@@ -747,7 +772,11 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
 }
 
 function normalizeGeneratedDraft(text, fallbackInput) {
-  const stripped = normalizeLegacyCommandSyntax(stripCodeFences(text));
+  const stripped = repairUnsupportedStructuredResponsePrompts(
+    decodeCommonHtmlEntities(
+      normalizeLegacyCommandSyntax(stripCodeFences(text))
+    )
+  );
   const cleaned = repairCodingQuestionsToUsePythonBlocks(
     repairGeneratedMarkupClosures(
       normalizePythonTurtleDirectives(
@@ -855,6 +884,9 @@ async function generateWithOpenAI({
     'Only use a runnable \\python block when students must write or modify executable Python code.',
     'If students are asked to modify existing code, repeat the current code in a new editable \\python block so they can run and test the changed version.',
     'Use \\textresponse for prose tasks such as objectives, predictions, explanations, prompt-writing, reflections, lists, and short written answers.',
+    'Do not ask multiple students to type separate answers into one shared text box.',
+    'Do not ask for unsupported response formats such as "one per line", per-student rosters, tables-in-a-textbox, or "each group member writes ..." inside a single \\textresponse.',
+    'If you need multiple contributions, ask for one concise group summary or split the work into separate questions.',
     'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
     'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
     'If you do use an \\ai block, keep it tightly scoped and include a guardrail.',

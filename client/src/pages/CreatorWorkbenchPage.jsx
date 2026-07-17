@@ -354,7 +354,7 @@ export default function CreatorWorkbenchPage() {
   const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
   const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
-  const [issuePanelExpanded, setIssuePanelExpanded] = useState(false);
+  const [showIssuesModal, setShowIssuesModal] = useState(false);
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
@@ -533,12 +533,6 @@ export default function CreatorWorkbenchPage() {
     if (!proposal) return;
     setSelectedPreviewKey('');
   }, [proposal]);
-
-  useEffect(() => {
-    if (activeIssues.some((issue) => issue.severity === 'error')) {
-      setIssuePanelExpanded(true);
-    }
-  }, [activeIssues]);
 
   const handleDraftChange = (field, value) => {
     setDraft((prev) => {
@@ -857,25 +851,12 @@ export default function CreatorWorkbenchPage() {
           border: 0;
           background: #fff;
         }
-        .creator-issues-panel {
+        .creator-issues-bar {
           border-top: 1px solid #d9dee3;
           background: #fffaf2;
-          display: flex;
-          flex-direction: column;
-          min-height: 160px;
-          max-height: 50vh;
-          resize: vertical;
-          overflow: auto;
         }
-        .creator-issues-panel[data-severity="error"] {
+        .creator-issues-bar[data-severity="error"] {
           background: #fff6f6;
-        }
-        .creator-issues-header {
-          position: sticky;
-          top: 0;
-          z-index: 1;
-          background: inherit;
-          border-bottom: 1px solid #eadfdf;
         }
         .creator-issue-item {
           white-space: pre-wrap;
@@ -1361,35 +1342,24 @@ export default function CreatorWorkbenchPage() {
 
           {activeIssues.length ? (
             <div
-              className="creator-issues-panel"
+              className="creator-issues-bar px-2 py-2 d-flex align-items-center justify-content-between gap-2"
               data-severity={activeIssues.some((issue) => issue.severity === 'error') ? 'error' : 'warning'}
-              style={{ height: issuePanelExpanded ? '38vh' : 220 }}
             >
-              <div className="creator-issues-header px-2 py-2 d-flex align-items-center justify-content-between gap-2">
-                <div className="small">
-                  <strong>{activeIssues.some((issue) => issue.severity === 'error') ? 'Parser errors' : 'Parser warnings'}</strong>
-                  <span className="text-muted"> · {activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</span>
-                </div>
-                <div className="d-flex gap-2">
-                  <Button size="sm" variant="outline-secondary" onClick={() => setRightMode('edit')}>
-                    Open In Edit
-                  </Button>
-                  <Button size="sm" variant="outline-secondary" onClick={() => setIssuePanelExpanded((prev) => !prev)}>
-                    {issuePanelExpanded ? 'Collapse' : 'Expand'}
-                  </Button>
-                </div>
+              <div className="small text-truncate">
+                <strong>{activeIssues.some((issue) => issue.severity === 'error') ? 'Parser errors' : 'Parser warnings'}</strong>
+                <span className="text-muted"> · {activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</span>
+                <span className="ms-2">
+                  {typeof activeIssues[0]?.line === 'number' ? `Line ${activeIssues[0].line}: ` : ''}
+                  {activeIssues[0]?.message}
+                </span>
               </div>
-              <div className="p-2">
-                {activeIssues.map((issue, index) => (
-                  <Alert
-                    key={`creator-issue-${index}`}
-                    variant={issue.severity === 'error' ? 'danger' : 'warning'}
-                    className="creator-issue-item py-2 px-2 mb-2 small"
-                  >
-                    <strong>{String(issue.severity || '').toUpperCase()}</strong>
-                    {typeof issue.line === 'number' ? ` line ${issue.line}` : ''}: {issue.message}
-                  </Alert>
-                ))}
+              <div className="d-flex gap-2 flex-shrink-0">
+                <Button size="sm" variant="outline-secondary" onClick={() => setRightMode('edit')}>
+                  Open In Edit
+                </Button>
+                <Button size="sm" variant="outline-secondary" onClick={() => setShowIssuesModal(true)}>
+                  View All
+                </Button>
               </div>
             </div>
           ) : null}
@@ -1457,6 +1427,33 @@ export default function CreatorWorkbenchPage() {
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowAdvanced(false)}>Close</Button>
         </Modal.Footer>
+      </Modal>
+      <Modal show={showIssuesModal} onHide={() => setShowIssuesModal(false)} size="lg" centered scrollable>
+        <Modal.Header closeButton>
+          <Modal.Title>
+            {activeIssues.some((issue) => issue.severity === 'error') ? 'Parser Errors' : 'Parser Warnings'}
+          </Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div className="d-flex justify-content-end mb-3">
+            <Button size="sm" variant="outline-secondary" onClick={() => {
+              setShowIssuesModal(false);
+              setRightMode('edit');
+            }}>
+              Open In Edit
+            </Button>
+          </div>
+          {activeIssues.map((issue, index) => (
+            <Alert
+              key={`creator-issue-modal-${index}`}
+              variant={issue.severity === 'error' ? 'danger' : 'warning'}
+              className="creator-issue-item py-2 px-3 mb-2"
+            >
+              <strong>{String(issue.severity || '').toUpperCase()}</strong>
+              {typeof issue.line === 'number' ? ` line ${issue.line}` : ''}: {issue.message}
+            </Alert>
+          ))}
+        </Modal.Body>
       </Modal>
       <CreatorTutorialOverlay
         phase={creatorTutorial.phase}

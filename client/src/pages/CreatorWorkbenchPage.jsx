@@ -590,7 +590,7 @@ export default function CreatorWorkbenchPage() {
           createdBy: user?.id,
         }),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Failed to create draft.');
 
       setActivity(data);

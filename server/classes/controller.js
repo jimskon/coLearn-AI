@@ -36,13 +36,47 @@ async function tableExists(conn, tableName) {
   return rows.length > 0;
 }
 
+async function columnExists(conn, tableName, columnName) {
+  const [rows] = await conn.query(
+    `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = ?
+        AND column_name = ?
+      LIMIT 1
+    `,
+    [tableName, columnName]
+  );
+  return rows.length > 0;
+}
+
 async function deleteByInstanceIdsIfPresent(conn, tableName, fkColumn, instanceIds) {
-  if (!instanceIds.length || !(await tableExists(conn, tableName))) {
+  if (
+    !instanceIds.length ||
+    !(await tableExists(conn, tableName)) ||
+    !(await columnExists(conn, tableName, fkColumn))
+  ) {
     return 0;
   }
   const [result] = await conn.query(
     `DELETE FROM ${tableName} WHERE ${fkColumn} IN (?)`,
     [instanceIds]
+  );
+  return Number(result.affectedRows || 0);
+}
+
+async function deleteByResponseIdsIfPresent(conn, tableName, fkColumn, responseIds) {
+  if (
+    !responseIds.length ||
+    !(await tableExists(conn, tableName)) ||
+    !(await columnExists(conn, tableName, fkColumn))
+  ) {
+    return 0;
+  }
+  const [result] = await conn.query(
+    `DELETE FROM ${tableName} WHERE ${fkColumn} IN (?)`,
+    [responseIds]
   );
   return Number(result.affectedRows || 0);
 }
@@ -252,11 +286,21 @@ exports.deleteActivityFromClass = async (req, res) => {
       [activityIdNum]
     );
     const instanceIds = instances.map((row) => Number(row.id)).filter(Number.isFinite);
+    let responseIds = [];
+
+    if (instanceIds.length && await tableExists(conn, 'responses')) {
+      const [responses] = await conn.query(
+        `SELECT id FROM responses WHERE activity_instance_id IN (?)`,
+        [instanceIds]
+      );
+      responseIds = responses.map((row) => Number(row.id)).filter(Number.isFinite);
+    }
 
     await deleteByInstanceIdsIfPresent(conn, 'activity_heartbeats', 'activity_instance_id', instanceIds);
     await deleteByInstanceIdsIfPresent(conn, 'audit_log', 'activity_instance_id', instanceIds);
-    await deleteByInstanceIdsIfPresent(conn, 'followups', 'activity_instance_id', instanceIds);
-    await deleteByInstanceIdsIfPresent(conn, 'feedback', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'event_log', 'activity_instance_id', instanceIds);
+    await deleteByResponseIdsIfPresent(conn, 'followups', 'response_id', responseIds);
+    await deleteByResponseIdsIfPresent(conn, 'feedback', 'response_id', responseIds);
     await deleteByInstanceIdsIfPresent(conn, 'response_drafts', 'activity_instance_id', instanceIds);
     await deleteByInstanceIdsIfPresent(conn, 'responses', 'activity_instance_id', instanceIds);
     await deleteByInstanceIdsIfPresent(conn, 'group_members', 'activity_instance_id', instanceIds);

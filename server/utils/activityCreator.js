@@ -342,6 +342,115 @@ function repairGeneratedMarkupClosures(text) {
   return repaired.join('\n');
 }
 
+function questionLikelyNeedsPythonBlock(questionLines) {
+  const joined = questionLines.join('\n');
+  const lower = joined.toLowerCase();
+
+  const asksForCodeWork =
+    /\b(write|modify|change|edit|update|create|build|complete|revise|fix)\b/.test(lower) &&
+    /\b(code|program|python|script)\b/.test(lower);
+
+  const asksToShowCode =
+    /\b(show|paste|enter)\b/.test(lower) &&
+    /\b(code|program)\b/.test(lower);
+
+  const sampleLooksLikeCode =
+    /\\sampleresponses\{[\s\S]*(print\s*\(|input\s*\(|if\s+|[A-Za-z_][A-Za-z0-9_]*\s*=)/i.test(joined);
+
+  return asksForCodeWork || asksToShowCode || sampleLooksLikeCode;
+}
+
+function questionNeedsPythonBlockFromParts({ prompt = '', details = [], sample = '' }) {
+  return questionLikelyNeedsPythonBlock([
+    `\\question{${prompt}}`,
+    ...details,
+    sample ? `\\sampleresponses{${sample}}` : '',
+  ].filter(Boolean));
+}
+
+function repairCodingQuestionsToUsePythonBlocks(text) {
+  const lines = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n');
+
+  const output = [];
+  let questionBuffer = null;
+  let currentCodeTemplate = [];
+
+  function flushQuestionBuffer() {
+    if (!questionBuffer) return;
+
+    const hasPythonBlock = questionBuffer.lines.some((line) =>
+      /^\\(python|pythonremote|pythonturtle)(?:\{|$)/i.test(line.trim())
+    );
+
+    if (!hasPythonBlock && questionLikelyNeedsPythonBlock(questionBuffer.lines)) {
+      const insertAt = questionBuffer.lines.findIndex((line) => /^\\textresponse\{/.test(line.trim()));
+      const pythonSeed = currentCodeTemplate.length ? [...currentCodeTemplate] : ['# Write your Python code here'];
+      const pythonBlock = ['\\python', ...pythonSeed, '\\endpython'];
+
+      if (insertAt >= 0) {
+        questionBuffer.lines.splice(insertAt, 1, ...pythonBlock);
+      } else {
+        const endIndex = questionBuffer.lines.findIndex((line) => line.trim() === '\\endquestion');
+        if (endIndex >= 0) {
+          questionBuffer.lines.splice(endIndex, 0, ...pythonBlock);
+        } else {
+          questionBuffer.lines.push(...pythonBlock);
+        }
+      }
+    }
+
+    output.push(...questionBuffer.lines);
+    questionBuffer = null;
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const rawLine = lines[index];
+    const trimmed = rawLine.trim();
+
+    if (trimmed.startsWith('\\question{')) {
+      flushQuestionBuffer();
+      questionBuffer = { lines: [rawLine] };
+      continue;
+    }
+
+    if (questionBuffer) {
+      questionBuffer.lines.push(rawLine);
+      if (trimmed === '\\endquestion') {
+        flushQuestionBuffer();
+      }
+    } else {
+      output.push(rawLine);
+    }
+
+    if (/^\\(python|pythonremote|pythonturtle)(?:\{|$)/i.test(trimmed)) {
+      const nextTemplate = [];
+      index += 1;
+      while (index < lines.length && !/^\\end(python|pythonremote|pythonturtle)$/i.test(lines[index].trim())) {
+        nextTemplate.push(lines[index]);
+        if (!questionBuffer) {
+          output.push(lines[index]);
+        }
+        index += 1;
+      }
+      if (index < lines.length) {
+        const closingLine = lines[index];
+        if (!questionBuffer) {
+          output.push(closingLine);
+        } else {
+          questionBuffer.lines.push(...nextTemplate, closingLine);
+        }
+      }
+      currentCodeTemplate = nextTemplate;
+    }
+  }
+
+  flushQuestionBuffer();
+  return output.join('\n');
+}
+
 function escapeMarkupText(value) {
   return String(value == null ? '' : value)
     .replace(/\r\n/g, '\n')
@@ -375,9 +484,16 @@ function flushPlaintextQuestion(question, output) {
     output.push('\\python');
     output.push(...question.code);
     output.push('\\endpython');
+  } else if (questionNeedsPythonBlockFromParts(question)) {
+    const pythonSeed = question.codeTemplate?.length
+      ? [...question.codeTemplate]
+      : ['# Write your Python code here'];
+    output.push('\\python');
+    output.push(...pythonSeed);
+    output.push('\\endpython');
+  } else {
+    output.push(`\\textresponse{${question.responseLines}}`);
   }
-
-  output.push(`\\textresponse{${question.responseLines}}`);
 
   if (question.sample) {
     output.push(`\\sampleresponses{${escapeMarkupText(question.sample)}}`);
@@ -423,6 +539,7 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
   let currentSection = '';
   let currentGroupTitle = '';
   let currentQuestion = null;
+  let currentCodeTemplate = [];
   let inObjectivesList = false;
   let sawQuestionGroup = false;
 
@@ -436,6 +553,9 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
   function closeQuestion() {
     if (currentQuestion) {
       flushPlaintextQuestion(currentQuestion, output);
+      if (currentQuestion.code.length) {
+        currentCodeTemplate = [...currentQuestion.code];
+      }
       currentQuestion = null;
     }
   }
@@ -522,6 +642,7 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
         prompt: questionMatch[1].trim(),
         details: [],
         code: [],
+        codeTemplate: currentCodeTemplate,
         sample: '',
         feedback: '',
         responseLines: 3,
@@ -575,14 +696,16 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
 
 function normalizeGeneratedDraft(text, fallbackInput) {
   const stripped = stripCodeFences(text);
-  const cleaned = repairGeneratedMarkupClosures(
-    normalizePythonTurtleDirectives(
-      applyTimedSectionDirectives(
-        applyRetriesDirective(
-          normalizeLearningObjectivesSection(stripped),
-          fallbackInput.retriesRequired
-        ),
-        fallbackInput.timedSections
+  const cleaned = repairCodingQuestionsToUsePythonBlocks(
+    repairGeneratedMarkupClosures(
+      normalizePythonTurtleDirectives(
+        applyTimedSectionDirectives(
+          applyRetriesDirective(
+            normalizeLearningObjectivesSection(stripped),
+            fallbackInput.retriesRequired
+          ),
+          fallbackInput.timedSections
+        )
       )
     )
   );
@@ -591,14 +714,16 @@ function normalizeGeneratedDraft(text, fallbackInput) {
     ? coercePlaintextActivityToMarkup(cleaned, fallbackInput)
     : null;
   const normalized = repaired
-    ? repairGeneratedMarkupClosures(
-        normalizePythonTurtleDirectives(
-          applyTimedSectionDirectives(
-            applyRetriesDirective(
-              normalizeLearningObjectivesSection(repaired),
-              fallbackInput.retriesRequired
-            ),
-            fallbackInput.timedSections
+    ? repairCodingQuestionsToUsePythonBlocks(
+        repairGeneratedMarkupClosures(
+          normalizePythonTurtleDirectives(
+            applyTimedSectionDirectives(
+              applyRetriesDirective(
+                normalizeLearningObjectivesSection(repaired),
+                fallbackInput.retriesRequired
+              ),
+              fallbackInput.timedSections
+            )
           )
         )
       )
@@ -675,6 +800,9 @@ async function generateWithOpenAI({
     'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
     'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
     'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp, \\python ... \\endpython, or \\pythonremote ... \\endpythonremote. Never paste raw code directly into question text.',
+    'If students are asked to write, edit, modify, complete, or show Python code, give them a runnable \\python block for that task instead of a \\textresponse box.',
+    'If students are asked to modify existing code, repeat the current code in a new editable \\python block so they can run and test the changed version.',
+    'Reserve \\textresponse for prose explanations, predictions, reflections, and short written answers, not code entry.',
     'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
     'Use \\ai blocks only when they clearly support the pedagogical brief. Keep each AI block tightly scoped and include a guardrail.',
     'Use the compact house-style rules below as syntax guidance.',

@@ -85,3 +85,69 @@ test('normalizeGeneratedDraft repairs missing endquestion markers in generated m
   assert.match(result.text, /\\feedbackprompt\{Describe the output in your own words\.\}\n\\endquestion\n\\question\{/);
   assert.match(result.text, /\\feedbackprompt\{Connect the changed input to the new output\.\}\n\\endquestion\n\\endquestiongroup/);
 });
+
+test('normalizeGeneratedDraft replaces textresponse with python block for code-writing markup prompts', () => {
+  const raw = [
+    '\\title{Introduction to Python}',
+    '\\mode{group}',
+    '\\studentlevel{Any}',
+    '\\activitycontext{Any}',
+    '\\section{Application}',
+    '\\questiongroup{Write code}',
+    '\\question{Write a short Python program that asks for a name and prints a greeting.}',
+    '\\textresponse{6}',
+    '\\sampleresponses{name = input("Name? ")\nprint("Hello, " + name)}',
+    '\\feedbackprompt{Run the code and check that it greets the user.}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'Introduction to Python',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [],
+    majorSections: ['Application'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.doesNotMatch(result.text, /\\textresponse\{6\}/);
+  assert.match(result.text, /\\question\{Write a short Python program/);
+  assert.match(result.text, /\\python\n# Write your Python code here\n\\endpython/);
+});
+
+test('normalizeGeneratedDraft uses a python block when salvaging plain-text code-writing prompts', () => {
+  const raw = [
+    'Title: Introduction to Python',
+    'mode: group',
+    'Student level: Any',
+    'Context: Any',
+    '',
+    'Exploration',
+    '1. Run and change',
+    'a. Run the code below and explain what it does.',
+    'name = input("What is your name? ")',
+    'print("Hello, " + name)',
+    'Sample: It asks for a name and prints a greeting.',
+    'Feedback: Run it once before changing anything.',
+    'b. Change the program so it also asks for a favorite color and prints it.',
+    'Sample: name = input("What is your name? ") print("Hello, " + name)',
+    'Feedback: Test the changed version.',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'Introduction to Python',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [],
+    majorSections: ['Exploration'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.match(result.text, /\\question\{Change the program so it also asks for a favorite color and prints it\.\}/);
+  assert.match(result.text, /\\python\nname = input\("What is your name\? "\)\nprint\("Hello, " \+ name\)\n\\endpython/);
+});

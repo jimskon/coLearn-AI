@@ -157,30 +157,76 @@ function updateLine(lines, lineNumber, nextValue) {
   return true;
 }
 
+function insertLinesAfterAnchors(lines, insertions) {
+  const ordered = [...insertions]
+    .filter((item) => Number.isFinite(item?.anchorLine) && item.anchorLine >= 0 && item.text)
+    .sort((a, b) => a.anchorLine - b.anchorLine);
+
+  let offset = 0;
+  for (const insertion of ordered) {
+    const index = Math.max(0, Math.min(lines.length, insertion.anchorLine + offset));
+    lines.splice(index, 0, insertion.text);
+    offset += 1;
+  }
+}
+
 function applyQuestionEditsToSource(sourceText, block, edits) {
   const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine) return sourceText;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
 
   const lines = String(sourceText || '').split('\n');
   updateLine(lines, sourceMeta.questionLine, `\\question{${String(edits.prompt || '').trim()}}`);
 
+  const responseLineCount = Math.max(1, Number.parseInt(edits.responseLines, 10) || 1);
+  const sampleResponse = String(edits.sampleResponse || '').trim();
+  const feedbackPrompt = String(edits.feedbackPrompt || '').trim();
+  const followupPrompt = String(edits.followupPrompt || '').trim();
+  const insertions = [];
+
   if (sourceMeta.textResponseLine) {
-    const responseLineCount = Math.max(1, Number.parseInt(edits.responseLines, 10) || 1);
     updateLine(lines, sourceMeta.textResponseLine, `\\textresponse{${responseLineCount}}`);
+  } else if (responseLineCount > 0) {
+    insertions.push({
+      anchorLine: sourceMeta.questionLine,
+      text: `\\textresponse{${responseLineCount}}`,
+    });
   }
 
   if (Array.isArray(sourceMeta.sampleLines) && sourceMeta.sampleLines[0]) {
-    updateLine(lines, sourceMeta.sampleLines[0], `\\sampleresponses{${String(edits.sampleResponse || '').trim()}}`);
+    updateLine(lines, sourceMeta.sampleLines[0], `\\sampleresponses{${sampleResponse}}`);
+  } else if (sampleResponse) {
+    insertions.push({
+      anchorLine: sourceMeta.textResponseLine || sourceMeta.questionLine,
+      text: `\\sampleresponses{${sampleResponse}}`,
+    });
   }
 
   if (Array.isArray(sourceMeta.feedbackLines) && sourceMeta.feedbackLines[0]) {
-    updateLine(lines, sourceMeta.feedbackLines[0], `\\feedbackprompt{${String(edits.feedbackPrompt || '').trim()}}`);
+    updateLine(lines, sourceMeta.feedbackLines[0], `\\feedbackprompt{${feedbackPrompt}}`);
+  } else if (feedbackPrompt) {
+    insertions.push({
+      anchorLine:
+        sourceMeta.sampleLines?.[0] ||
+        sourceMeta.textResponseLine ||
+        sourceMeta.questionLine,
+      text: `\\feedbackprompt{${feedbackPrompt}}`,
+    });
   }
 
   if (Array.isArray(sourceMeta.followupLines) && sourceMeta.followupLines[0]) {
-    updateLine(lines, sourceMeta.followupLines[0], `\\followupprompt{${String(edits.followupPrompt || '').trim()}}`);
+    updateLine(lines, sourceMeta.followupLines[0], `\\followupprompt{${followupPrompt}}`);
+  } else if (followupPrompt) {
+    insertions.push({
+      anchorLine:
+        sourceMeta.feedbackLines?.[0] ||
+        sourceMeta.sampleLines?.[0] ||
+        sourceMeta.textResponseLine ||
+        sourceMeta.questionLine,
+      text: `\\followupprompt{${followupPrompt}}`,
+    });
   }
 
+  insertLinesAfterAnchors(lines, insertions);
   return lines.join('\n');
 }
 
@@ -987,11 +1033,11 @@ export default function CreatorWorkbenchPage() {
                                 as="textarea"
                                 rows={3}
                                 value={questionInspectorDraft?.sampleResponse || ''}
-                                disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] || !!proposal}
+                                disabled={!questionInspectorDraft || !!proposal}
                                 onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), sampleResponse: event.target.value }))}
                               />
                               {!selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] ? (
-                                <div className="text-muted small mt-1">No existing `\\sampleresponses` line to edit yet.</div>
+                                <div className="text-muted small mt-1">Applying will add a new `\\sampleresponses` line to this question.</div>
                               ) : null}
                             </Form.Group>
 
@@ -1001,11 +1047,11 @@ export default function CreatorWorkbenchPage() {
                                 as="textarea"
                                 rows={3}
                                 value={questionInspectorDraft?.feedbackPrompt || ''}
-                                disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] || !!proposal}
+                                disabled={!questionInspectorDraft || !!proposal}
                                 onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), feedbackPrompt: event.target.value }))}
                               />
                               {!selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] ? (
-                                <div className="text-muted small mt-1">No existing `\\feedbackprompt` line to edit yet.</div>
+                                <div className="text-muted small mt-1">Applying will add a new `\\feedbackprompt` line to this question.</div>
                               ) : null}
                             </Form.Group>
 
@@ -1015,11 +1061,11 @@ export default function CreatorWorkbenchPage() {
                                 as="textarea"
                                 rows={3}
                                 value={questionInspectorDraft?.followupPrompt || ''}
-                                disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.followupLines?.[0] || !!proposal}
+                                disabled={!questionInspectorDraft || !!proposal}
                                 onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), followupPrompt: event.target.value }))}
                               />
                               {!selectedQuestionBlock?.sourceMeta?.followupLines?.[0] ? (
-                                <div className="text-muted small mt-1">No existing `\\followupprompt` line to edit yet.</div>
+                                <div className="text-muted small mt-1">Applying will add a new `\\followupprompt` line to this question.</div>
                               ) : null}
                             </Form.Group>
 
@@ -1029,11 +1075,11 @@ export default function CreatorWorkbenchPage() {
                                 type="number"
                                 min="1"
                                 value={questionInspectorDraft?.responseLines || 1}
-                                disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.textResponseLine || !!proposal}
+                                disabled={!questionInspectorDraft || !!proposal}
                                 onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: event.target.value }))}
                               />
                               {!selectedQuestionBlock?.sourceMeta?.textResponseLine ? (
-                                <div className="text-muted small mt-1">This question does not currently use `\\textresponse`.</div>
+                                <div className="text-muted small mt-1">Applying will add a new `\\textresponse` line to this question.</div>
                               ) : null}
                             </Form.Group>
 
@@ -1052,7 +1098,7 @@ export default function CreatorWorkbenchPage() {
                             </div>
 
                             <div className="text-muted small mt-3">
-                              Phase 1 edits existing question-source lines only. This keeps the preview editor safe while we build out richer controls.
+                              This phase can now edit existing question metadata and add the common missing question lines when needed.
                             </div>
                           </>
                         )}

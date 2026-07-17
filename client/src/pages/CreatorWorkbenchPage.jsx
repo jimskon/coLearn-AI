@@ -354,6 +354,7 @@ export default function CreatorWorkbenchPage() {
   const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
   const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
+  const [issuePanelExpanded, setIssuePanelExpanded] = useState(false);
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
@@ -532,6 +533,12 @@ export default function CreatorWorkbenchPage() {
     if (!proposal) return;
     setSelectedPreviewKey('');
   }, [proposal]);
+
+  useEffect(() => {
+    if (activeIssues.some((issue) => issue.severity === 'error')) {
+      setIssuePanelExpanded(true);
+    }
+  }, [activeIssues]);
 
   const handleDraftChange = (field, value) => {
     setDraft((prev) => {
@@ -849,6 +856,30 @@ export default function CreatorWorkbenchPage() {
           height: 100%;
           border: 0;
           background: #fff;
+        }
+        .creator-issues-panel {
+          border-top: 1px solid #d9dee3;
+          background: #fffaf2;
+          display: flex;
+          flex-direction: column;
+          min-height: 88px;
+          max-height: 45vh;
+          resize: vertical;
+          overflow: auto;
+        }
+        .creator-issues-panel[data-severity="error"] {
+          background: #fff6f6;
+        }
+        .creator-issues-header {
+          position: sticky;
+          top: 0;
+          z-index: 1;
+          background: inherit;
+          border-bottom: 1px solid #eadfdf;
+        }
+        .creator-issue-item {
+          white-space: pre-wrap;
+          word-break: break-word;
         }
         @media (max-width: 900px) {
           .creator-shell {
@@ -1329,17 +1360,37 @@ export default function CreatorWorkbenchPage() {
           </div>
 
           {activeIssues.length ? (
-            <div className="border-top p-2" style={{ maxHeight: 180, overflow: 'auto' }}>
-              {activeIssues.map((issue, index) => (
-                <Alert
-                  key={`creator-issue-${index}`}
-                  variant={issue.severity === 'error' ? 'danger' : 'warning'}
-                  className="py-1 px-2 mb-1 small"
-                >
-                  <strong>{String(issue.severity || '').toUpperCase()}</strong>
-                  {typeof issue.line === 'number' ? ` line ${issue.line}` : ''}: {issue.message}
-                </Alert>
-              ))}
+            <div
+              className="creator-issues-panel"
+              data-severity={activeIssues.some((issue) => issue.severity === 'error') ? 'error' : 'warning'}
+              style={{ height: issuePanelExpanded ? 260 : 112 }}
+            >
+              <div className="creator-issues-header px-2 py-2 d-flex align-items-center justify-content-between gap-2">
+                <div className="small">
+                  <strong>{activeIssues.some((issue) => issue.severity === 'error') ? 'Parser errors' : 'Parser warnings'}</strong>
+                  <span className="text-muted"> · {activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</span>
+                </div>
+                <div className="d-flex gap-2">
+                  <Button size="sm" variant="outline-secondary" onClick={() => setRightMode('edit')}>
+                    Open In Edit
+                  </Button>
+                  <Button size="sm" variant="outline-secondary" onClick={() => setIssuePanelExpanded((prev) => !prev)}>
+                    {issuePanelExpanded ? 'Collapse' : 'Expand'}
+                  </Button>
+                </div>
+              </div>
+              <div className="p-2">
+                {activeIssues.map((issue, index) => (
+                  <Alert
+                    key={`creator-issue-${index}`}
+                    variant={issue.severity === 'error' ? 'danger' : 'warning'}
+                    className="creator-issue-item py-2 px-2 mb-2 small"
+                  >
+                    <strong>{String(issue.severity || '').toUpperCase()}</strong>
+                    {typeof issue.line === 'number' ? ` line ${issue.line}` : ''}: {issue.message}
+                  </Alert>
+                ))}
+              </div>
             </div>
           ) : null}
         </section>

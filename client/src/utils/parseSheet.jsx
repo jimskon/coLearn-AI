@@ -1146,6 +1146,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         type: 'question',
         id,
         groupId: groupNumber,
+        previewKey: `question:${groupNumber}:${id}`,
         label: `${id}.`,
         responseId: responseId++,
         prompt: format(rawClean),
@@ -1157,6 +1158,14 @@ export function parseSheetToBlocks(lines, options = {}) {
         codeBlocks: [],
         scores: {},
         retriesRequired: currentGroupRetriesRequired,
+        sourceMeta: {
+          questionLine: lineNo,
+          textResponseLine: null,
+          sampleLines: [],
+          feedbackLines: [],
+          followupLines: [],
+          endQuestionLine: null,
+        },
       };
 
       openQuestionLine = lineNo;
@@ -1180,6 +1189,9 @@ export function parseSheetToBlocks(lines, options = {}) {
       currentQuestion.hasCpp = !!(currentQuestion.cppBlocks && currentQuestion.cppBlocks.length);
       currentQuestion.hasPythonOnly = currentQuestion.hasPython && !currentQuestion.hasTextResponse;
       currentQuestion.hasCodeOnly = hasAnyCode && !currentQuestion.hasTextResponse && !hasTable;
+      if (currentQuestion.sourceMeta) {
+        currentQuestion.sourceMeta.endQuestionLine = lineNo;
+      }
 
       currentQuestion._initialCode =
         (currentQuestion.codeBlocks?.map(cb => cb.content || '') || []).filter(x => x !== undefined);
@@ -1221,25 +1233,37 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (match && currentQuestion) {
         currentQuestion.responseLines = parseInt(match[1]);
         currentQuestion.hasTextResponse = true;
+        if (currentQuestion.sourceMeta) {
+          currentQuestion.sourceMeta.textResponseLine = lineNo;
+        }
       }
       continue;
     }
 
     if (trimmed.startsWith('\\sampleresponses{')) {
       const m = trimmed.match(/\\sampleresponses\{([\s\S]+?)\}/);
-      if (m && currentQuestion) currentQuestion.samples.push(format(m[1]));
+      if (m && currentQuestion) {
+        currentQuestion.samples.push(format(m[1]));
+        currentQuestion.sourceMeta?.sampleLines.push(lineNo);
+      }
       continue;
     }
     if (trimmed.startsWith('\\feedbackprompt{')) {
       const m = trimmed.match(/\\feedbackprompt\{([\s\S]+?)\}/);
-      if (m && currentQuestion) currentQuestion.feedback.push(format(m[1]));
+      if (m && currentQuestion) {
+        currentQuestion.feedback.push(format(m[1]));
+        currentQuestion.sourceMeta?.feedbackLines.push(lineNo);
+      }
       continue;
     }
     if (trimmed.startsWith('\\followupprompt{')) {
       const m = trimmed.match(/\\followupprompt\{([\s\S]+?)\}/);
       if (m && currentQuestion) {
         const raw = (m[1] || '').trim();
-        if (raw) currentQuestion.followups.push(format(raw));
+        if (raw) {
+          currentQuestion.followups.push(format(raw));
+          currentQuestion.sourceMeta?.followupLines.push(lineNo);
+        }
       }
       continue;
     }
@@ -1429,6 +1453,8 @@ export function renderBlocks(blocks, options = {}) {
     onFileChange = null,
     infoBubbleSession = null,
     runtimeFeatures = {},
+    onSelectBlock = null,
+    selectedPreviewKey = null,
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -2078,11 +2104,31 @@ export function renderBlocks(blocks, options = {}) {
         }
       }
 
+      const isSelectedPreviewBlock = runMode === 'preview' && selectedPreviewKey === block.previewKey;
+
       return (
         <div
           key={`q-${block.groupId}-${block.id}`}  // ✅ unique per question
           className="mb-4"
           ref={questionAnchorRef}
+          data-preview-key={block.previewKey}
+          onClick={(event) => {
+            if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
+            if (event.target.closest('textarea, input, button, select, a')) return;
+            onSelectBlock(block);
+          }}
+          style={
+            runMode === 'preview'
+              ? {
+                cursor: onSelectBlock ? 'pointer' : 'default',
+                border: isSelectedPreviewBlock ? '2px solid #0d6efd' : '1px solid transparent',
+                borderRadius: 10,
+                padding: '0.75rem',
+                boxShadow: isSelectedPreviewBlock ? '0 0 0 3px rgba(13,110,253,0.12)' : 'none',
+                background: isSelectedPreviewBlock ? 'rgba(13,110,253,0.03)' : 'transparent',
+              }
+              : undefined
+          }
         >
           <p>
             <strong>{block.label}</strong>{' '}

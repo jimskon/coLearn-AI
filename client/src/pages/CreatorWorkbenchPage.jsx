@@ -141,6 +141,59 @@ function parseActivityText(text) {
   return { blocks, issues, files: collectFileContents(blocks) };
 }
 
+function htmlToEditorText(value) {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+function updateLine(lines, lineNumber, nextValue) {
+  if (!Number.isFinite(lineNumber) || lineNumber <= 0) return false;
+  const index = lineNumber - 1;
+  if (index < 0 || index >= lines.length) return false;
+  lines[index] = nextValue;
+  return true;
+}
+
+function applyQuestionEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  updateLine(lines, sourceMeta.questionLine, `\\question{${String(edits.prompt || '').trim()}}`);
+
+  if (sourceMeta.textResponseLine) {
+    const responseLineCount = Math.max(1, Number.parseInt(edits.responseLines, 10) || 1);
+    updateLine(lines, sourceMeta.textResponseLine, `\\textresponse{${responseLineCount}}`);
+  }
+
+  if (Array.isArray(sourceMeta.sampleLines) && sourceMeta.sampleLines[0]) {
+    updateLine(lines, sourceMeta.sampleLines[0], `\\sampleresponses{${String(edits.sampleResponse || '').trim()}}`);
+  }
+
+  if (Array.isArray(sourceMeta.feedbackLines) && sourceMeta.feedbackLines[0]) {
+    updateLine(lines, sourceMeta.feedbackLines[0], `\\feedbackprompt{${String(edits.feedbackPrompt || '').trim()}}`);
+  }
+
+  if (Array.isArray(sourceMeta.followupLines) && sourceMeta.followupLines[0]) {
+    updateLine(lines, sourceMeta.followupLines[0], `\\followupprompt{${String(edits.followupPrompt || '').trim()}}`);
+  }
+
+  return lines.join('\n');
+}
+
+function buildQuestionInspectorDraft(block) {
+  return {
+    prompt: htmlToEditorText(block?.prompt),
+    responseLines: Number(block?.responseLines) || 1,
+    sampleResponse: htmlToEditorText(block?.samples?.[0]),
+    feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
+    followupPrompt: htmlToEditorText(block?.followups?.[0]),
+  };
+}
+
 export default function CreatorWorkbenchPage() {
   const { classId, activityId } = useParams();
   const navigate = useNavigate();
@@ -175,6 +228,8 @@ export default function CreatorWorkbenchPage() {
   const [messages, setMessages] = useState([]);
   const [proposal, setProposal] = useState(null);
   const [sandboxUrl, setSandboxUrl] = useState('');
+  const [selectedPreviewKey, setSelectedPreviewKey] = useState('');
+  const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
@@ -214,7 +269,13 @@ export default function CreatorWorkbenchPage() {
     setFileContents: updateFileContents,
     infoBubbleSession: infoBubbleSessionRef.current,
     runtimeFeatures,
-  }), [activeBlocks, fileContents, updateFileContents, infoBubbleSessionRef, runtimeFeatures]);
+    onSelectBlock: proposal ? null : (block) => setSelectedPreviewKey(block?.previewKey || ''),
+    selectedPreviewKey,
+  }), [activeBlocks, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures]);
+
+  const selectedQuestionBlock = useMemo(() => (
+    activeBlocks.find((block) => block?.type === 'question' && block.previewKey === selectedPreviewKey) || null
+  ), [activeBlocks, selectedPreviewKey]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 
@@ -321,6 +382,19 @@ export default function CreatorWorkbenchPage() {
     autoTimerRef.current = setTimeout(() => compileText(rawText), 250);
     return () => clearTimeout(autoTimerRef.current);
   }, [compileText, proposal, rawText, skulptLoaded]);
+
+  useEffect(() => {
+    if (!selectedQuestionBlock) {
+      setQuestionInspectorDraft(null);
+      return;
+    }
+    setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
+  }, [selectedQuestionBlock]);
+
+  useEffect(() => {
+    if (!proposal) return;
+    setSelectedPreviewKey('');
+  }, [proposal]);
 
   const handleDraftChange = (field, value) => {
     setDraft((prev) => {
@@ -527,6 +601,15 @@ export default function CreatorWorkbenchPage() {
     setRightMode(mode);
   };
 
+  const applyQuestionInspectorChanges = () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
+    const nextText = applyQuestionEditsToSource(rawText, selectedQuestionBlock, questionInspectorDraft);
+    setRawText(nextText);
+    compileText(nextText);
+    setNotice('Updated question settings in source.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
   return (
     <Container fluid className="creator-workbench px-3">
       <style>{`
@@ -588,6 +671,25 @@ export default function CreatorWorkbenchPage() {
         .creator-preview-surface {
           max-width: 980px;
           margin: 0 auto;
+        }
+        .creator-preview-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 12px;
+          align-items: start;
+        }
+        .creator-preview-inspector {
+          border: 1px solid #d9dee3;
+          border-radius: 10px;
+          background: #fafbfc;
+          padding: 0.9rem;
+          position: sticky;
+          top: 0;
+        }
+        @media (min-width: 1180px) {
+          .creator-preview-layout {
+            grid-template-columns: minmax(0, 1fr) 320px;
+          }
         }
         .creator-sandbox-frame {
           width: 100%;
@@ -823,7 +925,108 @@ export default function CreatorWorkbenchPage() {
                 {!activity?.id && !activeText ? (
                   <Alert variant="secondary" className="mb-0">Create a draft to preview it here.</Alert>
                 ) : (
-                  <div className="creator-preview-surface">{renderedActivity}</div>
+                  <div className="creator-preview-layout">
+                    <div className="creator-preview-surface">{renderedActivity}</div>
+                    <aside className="creator-preview-inspector">
+                      {!selectedQuestionBlock ? (
+                        <div className="text-muted small">
+                          Click a question in Preview to inspect and refine it without editing raw source.
+                        </div>
+                      ) : (
+                        <>
+                          <div className="fw-semibold mb-2">Question Panel</div>
+                          <div className="text-muted small mb-3">
+                            {selectedQuestionBlock.label} · group {selectedQuestionBlock.groupId}
+                          </div>
+
+                          <Form.Group className="mb-3">
+                            <Form.Label>Question Text</Form.Label>
+                            <Form.Control
+                              as="textarea"
+                              rows={4}
+                              value={questionInspectorDraft?.prompt || ''}
+                              disabled={!questionInspectorDraft || !!proposal}
+                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), prompt: event.target.value }))}
+                            />
+                          </Form.Group>
+
+                          <Form.Group className="mb-3">
+                            <Form.Label>Sample Answer</Form.Label>
+                            <Form.Control
+                              as="textarea"
+                              rows={3}
+                              value={questionInspectorDraft?.sampleResponse || ''}
+                              disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] || !!proposal}
+                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), sampleResponse: event.target.value }))}
+                            />
+                            {!selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] ? (
+                              <div className="text-muted small mt-1">No existing `\\sampleresponses` line to edit yet.</div>
+                            ) : null}
+                          </Form.Group>
+
+                          <Form.Group className="mb-3">
+                            <Form.Label>Feedback Guidance</Form.Label>
+                            <Form.Control
+                              as="textarea"
+                              rows={3}
+                              value={questionInspectorDraft?.feedbackPrompt || ''}
+                              disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] || !!proposal}
+                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), feedbackPrompt: event.target.value }))}
+                            />
+                            {!selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] ? (
+                              <div className="text-muted small mt-1">No existing `\\feedbackprompt` line to edit yet.</div>
+                            ) : null}
+                          </Form.Group>
+
+                          <Form.Group className="mb-3">
+                            <Form.Label>Follow-up Prompt</Form.Label>
+                            <Form.Control
+                              as="textarea"
+                              rows={3}
+                              value={questionInspectorDraft?.followupPrompt || ''}
+                              disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.followupLines?.[0] || !!proposal}
+                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), followupPrompt: event.target.value }))}
+                            />
+                            {!selectedQuestionBlock?.sourceMeta?.followupLines?.[0] ? (
+                              <div className="text-muted small mt-1">No existing `\\followupprompt` line to edit yet.</div>
+                            ) : null}
+                          </Form.Group>
+
+                          <Form.Group className="mb-3">
+                            <Form.Label>Response Lines</Form.Label>
+                            <Form.Control
+                              type="number"
+                              min="1"
+                              value={questionInspectorDraft?.responseLines || 1}
+                              disabled={!questionInspectorDraft || !selectedQuestionBlock?.sourceMeta?.textResponseLine || !!proposal}
+                              onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: event.target.value }))}
+                            />
+                            {!selectedQuestionBlock?.sourceMeta?.textResponseLine ? (
+                              <div className="text-muted small mt-1">This question does not currently use `\\textresponse`.</div>
+                            ) : null}
+                          </Form.Group>
+
+                          <div className="d-flex gap-2">
+                            <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal} onClick={applyQuestionInspectorChanges}>
+                              Apply
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline-secondary"
+                              onClick={() => setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock))}
+                              disabled={!selectedQuestionBlock}
+                            >
+                              Reset
+                            </Button>
+                          </div>
+
+                          <div className="text-muted small mt-3">
+                            Phase 1 edits existing question-source lines only. This keeps the preview editor safe while we build out richer controls.
+                          </div>
+                        </>
+                      )}
+                    </aside>
+                  </div>
                 )}
               </div>
             ) : null}

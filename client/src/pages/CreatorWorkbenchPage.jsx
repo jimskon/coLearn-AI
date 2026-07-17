@@ -862,8 +862,8 @@ export default function CreatorWorkbenchPage() {
           background: #fffaf2;
           display: flex;
           flex-direction: column;
-          min-height: 88px;
-          max-height: 45vh;
+          min-height: 160px;
+          max-height: 50vh;
           resize: vertical;
           overflow: auto;
         }
@@ -1363,7 +1363,7 @@ export default function CreatorWorkbenchPage() {
             <div
               className="creator-issues-panel"
               data-severity={activeIssues.some((issue) => issue.severity === 'error') ? 'error' : 'warning'}
-              style={{ height: issuePanelExpanded ? 260 : 112 }}
+              style={{ height: issuePanelExpanded ? '38vh' : 220 }}
             >
               <div className="creator-issues-header px-2 py-2 d-flex align-items-center justify-content-between gap-2">
                 <div className="small">

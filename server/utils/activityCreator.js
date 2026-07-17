@@ -4,8 +4,19 @@ const OpenAI = require('openai');
 require('dotenv').config();
 
 const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
-const MARKUP_HOUSE_STYLE_PATH = path.join(__dirname, '..', 'templates', 'activity_markup_house_style.txt');
-const DEFAULT_CREATOR_OPENAI_TIMEOUT_MS = 25000;
+const DEFAULT_CREATOR_OPENAI_TIMEOUT_MS = 45000;
+const CREATOR_HOUSE_STYLE_SUMMARY = [
+  'Markup rules:',
+  '- Start with \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, and \\retries{n}.',
+  '- Use \\section{Title} or \\section{Title}{minutes} for each requested section.',
+  '- Put interactive work inside \\questiongroup{...} ... \\endquestiongroup.',
+  '- Put each prompt inside \\question{...} ... \\endquestion.',
+  '- Use \\textresponse{n} for short written answers.',
+  '- Use \\sampleresponses{...} and \\feedbackprompt{...} with plain text only.',
+  '- Wrap runnable Python in \\python ... \\endpython or \\pythonremote ... \\endpythonremote.',
+  '- Use \\ai{mode} ... \\endai only when it clearly supports the pedagogy.',
+  '- Do not include Markdown fences, prose before the activity, or diagnostics.',
+].join('\n');
 
 function sanitizeHeaderValue(value, fallback = '') {
   return String(value == null ? fallback : value)
@@ -535,7 +546,6 @@ async function generateWithOpenAI({
   activityDescription,
 }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const houseStyle = fs.readFileSync(MARKUP_HOUSE_STYLE_PATH, 'utf8').trim();
   const normalizedTimedSections = normalizeTimedSections(timedSections);
   const timeoutMs = getCreatorOpenAiTimeoutMs();
 
@@ -558,14 +568,13 @@ async function generateWithOpenAI({
     'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp, \\python ... \\endpython, or \\pythonremote ... \\endpythonremote. Never paste raw code directly into question text.',
     'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
     'Use \\ai blocks only when they clearly support the pedagogical brief. Keep each AI block tightly scoped and include a guardrail.',
-    'Use the house-style example below as syntax guidance and imitate its structure when relevant.',
+    'Use the compact house-style rules below as syntax guidance.',
     'For mode=group, use collaborative prompts and progression.',
     'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
     'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
     'Make the activity reflect the creator brief, not generic filler.',
     '',
-    'House-style example:',
-    houseStyle,
+    CREATOR_HOUSE_STYLE_SUMMARY,
   ].join('\n');
 
   const user = [

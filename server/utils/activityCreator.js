@@ -226,18 +226,265 @@ function normalizePythonTurtleDirectives(text) {
   });
 }
 
+function escapeMarkupText(value) {
+  return String(value == null ? '' : value)
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/[{}]/g, '')
+    .trim();
+}
+
+function looksLikePythonCode(line) {
+  const text = String(line || '');
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/^(if|elif|else|for|while|def|class|return|import|from|print)\b/.test(trimmed)) return true;
+  if (/^[A-Za-z_][A-Za-z0-9_]*\s*=/.test(trimmed)) return true;
+  if (/(input|print|lower)\s*\(/.test(trimmed)) return true;
+  if (/^\s+/.test(text) && /[A-Za-z0-9_]/.test(trimmed)) return true;
+  return false;
+}
+
+function flushPlaintextQuestion(question, output) {
+  if (!question?.prompt) return;
+
+  const promptParts = [question.prompt];
+  if (question.details.length) {
+    promptParts.push(question.details.join(' '));
+  }
+
+  output.push(`\\question{${escapeMarkupText(promptParts.join(' '))}}`);
+
+  if (question.code.length) {
+    output.push('\\python');
+    output.push(...question.code);
+    output.push('\\endpython');
+  }
+
+  output.push(`\\textresponse{${question.responseLines}}`);
+
+  if (question.sample) {
+    output.push(`\\sampleresponses{${escapeMarkupText(question.sample)}}`);
+  }
+
+  if (question.feedback) {
+    output.push(`\\feedbackprompt{${escapeMarkupText(question.feedback)}}`);
+  }
+
+  output.push('\\endquestion');
+}
+
+function coercePlaintextActivityToMarkup(text, fallbackInput) {
+  const rawLines = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n');
+
+  if (rawLines.some((line) => line.trim().startsWith('\\'))) {
+    return null;
+  }
+
+  const normalizedSections = Array.isArray(fallbackInput?.majorSections) && fallbackInput.majorSections.length
+    ? fallbackInput.majorSections
+    : ['Learning Objectives', 'Exploration', 'Concept Invention', 'Application', 'Reflection'];
+
+  const metadata = {
+    title: sanitizeHeaderValue(fallbackInput?.title, 'New Activity'),
+    mode: sanitizeHeaderValue(fallbackInput?.mode, 'group'),
+    studentLevel: sanitizeHeaderValue(fallbackInput?.classLevel, 'Any'),
+    activityContext: sanitizeHeaderValue(fallbackInput?.classTopicDomain, 'Any'),
+  };
+
+  const sectionSet = new Set(normalizedSections.map((item) => item.trim()));
+  const output = [
+    `\\title{${metadata.title}}`,
+    `\\mode{${metadata.mode}}`,
+    `\\studentlevel{${metadata.studentLevel}}`,
+    `\\activitycontext{${metadata.activityContext}}`,
+    `\\retries{${Math.max(0, Math.round(Number(fallbackInput?.retriesRequired) || 0))}}`,
+  ];
+
+  let currentSection = '';
+  let currentGroupTitle = '';
+  let currentQuestion = null;
+  let inObjectivesList = false;
+  let sawQuestionGroup = false;
+
+  function closeObjectivesList() {
+    if (inObjectivesList) {
+      output.push('\\end{itemize}');
+      inObjectivesList = false;
+    }
+  }
+
+  function closeQuestion() {
+    if (currentQuestion) {
+      flushPlaintextQuestion(currentQuestion, output);
+      currentQuestion = null;
+    }
+  }
+
+  function closeQuestionGroup() {
+    closeQuestion();
+    if (currentGroupTitle) {
+      output.push('\\endquestiongroup');
+      currentGroupTitle = '';
+    }
+  }
+
+  for (const rawLine of rawLines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+
+    const titleMatch = line.match(/^Title:\s*(.+)$/i);
+    if (titleMatch) {
+      metadata.title = sanitizeHeaderValue(titleMatch[1], metadata.title);
+      output[0] = `\\title{${metadata.title}}`;
+      continue;
+    }
+
+    const modeMatch = line.match(/^mode:\s*(.+)$/i);
+    if (modeMatch) {
+      metadata.mode = sanitizeHeaderValue(modeMatch[1], metadata.mode);
+      output[1] = `\\mode{${metadata.mode}}`;
+      continue;
+    }
+
+    const levelMatch = line.match(/^Student level:\s*(.+)$/i);
+    if (levelMatch) {
+      metadata.studentLevel = sanitizeHeaderValue(levelMatch[1], metadata.studentLevel);
+      output[2] = `\\studentlevel{${metadata.studentLevel}}`;
+      continue;
+    }
+
+    const contextMatch = line.match(/^Context:\s*(.+)$/i);
+    if (contextMatch) {
+      metadata.activityContext = sanitizeHeaderValue(contextMatch[1], metadata.activityContext);
+      output[3] = `\\activitycontext{${metadata.activityContext}}`;
+      continue;
+    }
+
+    if (sectionSet.has(line)) {
+      closeObjectivesList();
+      closeQuestionGroup();
+      currentSection = line;
+      const timedMinutes = normalizeTimedSections(fallbackInput?.timedSections).find((section) => section.title === line)?.minutes;
+      output.push(Number.isFinite(timedMinutes) ? `\\section{${line}}{${timedMinutes}}` : `\\section{${line}}`);
+      continue;
+    }
+
+    if (currentSection === 'Learning Objectives' && /^Students will be able to:?$/i.test(line)) {
+      output.push('\\text{Students will be able to:}');
+      output.push('\\begin{itemize}');
+      inObjectivesList = true;
+      continue;
+    }
+
+    if (currentSection === 'Learning Objectives' && !currentGroupTitle) {
+      if (!inObjectivesList) {
+        output.push('\\text{Students will be able to:}');
+        output.push('\\begin{itemize}');
+        inObjectivesList = true;
+      }
+      output.push(`\\item ${escapeMarkupText(line.replace(/^[-*]\s*/, ''))}`);
+      continue;
+    }
+
+    closeObjectivesList();
+
+    const groupMatch = line.match(/^(?:\d+\.\s*)?(.+)$/);
+    const questionMatch = line.match(/^[a-z]\.\s+(.+)$/i);
+
+    if (questionMatch) {
+      if (!currentGroupTitle) {
+        currentGroupTitle = 'Question Group';
+        output.push(`\\questiongroup{${currentGroupTitle}}`);
+        sawQuestionGroup = true;
+      }
+      closeQuestion();
+      currentQuestion = {
+        prompt: questionMatch[1].trim(),
+        details: [],
+        code: [],
+        sample: '',
+        feedback: '',
+        responseLines: 3,
+      };
+      continue;
+    }
+
+    if (groupMatch && /^\d+\.\s+/.test(line) && !/^Question Group\b/i.test(groupMatch[1].trim())) {
+      closeQuestionGroup();
+      currentGroupTitle = escapeMarkupText(groupMatch[1]);
+      output.push(`\\questiongroup{${currentGroupTitle}}`);
+      sawQuestionGroup = true;
+      continue;
+    }
+
+    if (!currentQuestion) {
+      continue;
+    }
+
+    if (/^Sample:\s*/i.test(line)) {
+      currentQuestion.sample = line.replace(/^Sample:\s*/i, '').trim();
+      continue;
+    }
+
+    if (/^Feedback:\s*/i.test(line)) {
+      currentQuestion.feedback = line.replace(/^Feedback:\s*/i, '').trim();
+      continue;
+    }
+
+    if (/^⏱/.test(line) || /^Type input\(\) here/i.test(line)) {
+      continue;
+    }
+
+    if (looksLikePythonCode(rawLine)) {
+      currentQuestion.code.push(rawLine.replace(/\t/g, '  '));
+      continue;
+    }
+
+    currentQuestion.details.push(line);
+  }
+
+  closeObjectivesList();
+  closeQuestionGroup();
+
+  if (!sawQuestionGroup) {
+    return null;
+  }
+
+  return output.join('\n');
+}
+
 function normalizeGeneratedDraft(text, fallbackInput) {
+  const stripped = stripCodeFences(text);
   const cleaned = normalizePythonTurtleDirectives(
     applyTimedSectionDirectives(
       applyRetriesDirective(
-        normalizeLearningObjectivesSection(stripCodeFences(text)),
+        normalizeLearningObjectivesSection(stripped),
         fallbackInput.retriesRequired
       ),
       fallbackInput.timedSections
     )
   );
 
-  if (!cleaned.includes('\\title{') || !cleaned.includes('\\questiongroup{')) {
+  const repaired = (!cleaned.includes('\\title{') || !cleaned.includes('\\questiongroup{'))
+    ? coercePlaintextActivityToMarkup(cleaned, fallbackInput)
+    : null;
+  const normalized = repaired
+    ? normalizePythonTurtleDirectives(
+        applyTimedSectionDirectives(
+          applyRetriesDirective(
+            normalizeLearningObjectivesSection(repaired),
+            fallbackInput.retriesRequired
+          ),
+          fallbackInput.timedSections
+        )
+      )
+    : cleaned;
+
+  if (!normalized.includes('\\title{') || !normalized.includes('\\questiongroup{')) {
     return {
       text: renderFallbackTemplate(fallbackInput),
       usedFallback: true,
@@ -246,10 +493,10 @@ function normalizeGeneratedDraft(text, fallbackInput) {
     };
   }
   return {
-    text: cleaned,
+    text: normalized,
     usedFallback: false,
     reason: null,
-    rawOutput: cleaned,
+    rawOutput: normalized,
   };
 }
 

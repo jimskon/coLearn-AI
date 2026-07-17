@@ -193,41 +193,14 @@ function InlineAiAssistBlock({
           }
       }
     >
-      <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
-        <div className="fw-semibold">
-          <span dangerouslySetInnerHTML={{ __html: aiBlock.title || 'AI Coach' }} />
-        </div>
-        <span className="badge bg-warning text-dark text-uppercase">{aiBlock.mode}</span>
-      </div>
-
-      {aiBlock.prompt ? (
-        <div className="mb-2">
-          <span dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
-        </div>
-      ) : (
-        <div className="text-muted small mb-2">No student-facing AI prompt set yet.</div>
-      )}
-
-      {aiBlock.contextSources?.length ? (
-        <div className="text-muted small mb-2">
-          Context: {aiBlock.contextSources.join(', ')}
-        </div>
-      ) : null}
-
-      {runMode === 'preview' && aiBlock.guardrail ? (
-        <div className="text-muted small mb-2">
-          Guardrail: <span dangerouslySetInnerHTML={{ __html: aiBlock.guardrail }} />
-        </div>
-      ) : null}
-
-      <Form.Group className="mt-2">
-        <Form.Label className="small text-muted mb-1">AI Prompt</Form.Label>
+      <Form.Group>
+        <Form.Label className="small text-muted mb-1">Query</Form.Label>
         <Form.Control
           as="textarea"
           rows={Math.max(aiBlock.inputRows || 4, 2)}
           value={inputValue}
           onChange={(event) => setInputValue(event.target.value)}
-          placeholder="Type a prompt for the AI here..."
+          placeholder="Type your AI query here..."
         />
       </Form.Group>
 
@@ -243,7 +216,7 @@ function InlineAiAssistBlock({
       ) : null}
 
       <Form.Group className="mt-2 mb-0">
-        <Form.Label className="small text-muted mb-1">AI Response</Form.Label>
+        <Form.Label className="small text-muted mb-1">Response</Form.Label>
         <Form.Control
           as="textarea"
           rows={Math.max(Math.min((responseValue.split('\n').length || 1) + 1, 8), 3)}

@@ -275,6 +275,58 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.deepEqual(listAfterDelete.body, []);
 });
 
+test('class activity delete also removes assigned activity instances through cascade', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const activityName = uniqueName('assigned-activity').toLowerCase();
+
+  const create = await requestJson(`/api/classes/${classId}/activities`, {
+    method: 'POST',
+    body: {
+      name: activityName,
+      title: 'Assigned Activity',
+      sheet_url: 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit',
+      order_index: 1,
+      createdBy: creatorId,
+    },
+  });
+
+  assert.equal(create.status, 201);
+  remember('activities', create.body.id);
+
+  const [courseResult] = await db.query(
+    `INSERT INTO courses (name, join_code, instructor_id, class_id) VALUES (?, ?, ?, ?)`,
+    [uniqueName('Course'), uniqueName('join'), creatorId, classId]
+  );
+  const courseId = remember('courses', courseResult.insertId);
+
+  const [instanceResult] = await db.query(
+    `INSERT INTO activity_instances (activity_id, course_id, status) VALUES (?, ?, 'not_started')`,
+    [create.body.id, courseId]
+  );
+  const instanceId = Number(instanceResult.insertId);
+
+  const remove = await requestJson(`/api/classes/${classId}/activities/${create.body.id}`, {
+    method: 'DELETE',
+  });
+
+  assert.equal(remove.status, 200);
+  assert.deepEqual(remove.body, { success: true });
+
+  const [[activityCount]] = await db.query(
+    `SELECT COUNT(*) AS count FROM pogil_activities WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(Number(activityCount.count), 0);
+
+  const [[instanceCount]] = await db.query(
+    `SELECT COUNT(*) AS count FROM activity_instances WHERE id = ?`,
+    [instanceId]
+  );
+  assert.equal(Number(instanceCount.count), 0);
+});
+
 test('class activity routes can create a local stored activity', async () => {
   await ensureSchema();
   const classId = await createClassRecord();

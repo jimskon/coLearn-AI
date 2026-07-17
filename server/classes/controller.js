@@ -218,18 +218,6 @@ exports.deleteActivityFromClass = async (req, res) => {
     }
 
     const activityIdNum = activity[0].id;
-
-    const [instances] = await db.query(
-      `SELECT COUNT(*) AS count FROM activity_instances WHERE activity_id = ?`,
-      [activityIdNum]
-    );
-
-    if (instances[0].count > 0) {
-      return res.status(400).json({
-        error: `This activity cannot be deleted because it has been assigned to ${instances[0].count} group(s). Please remove those assignments before deleting the activity.`
-      });
-    }
-
     await db.query(`DELETE FROM pogil_activities WHERE id = ?`, [activityIdNum]);
     res.json({ success: true });
 

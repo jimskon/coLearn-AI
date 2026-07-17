@@ -214,10 +214,21 @@ async function requestJson(path, { method = 'POST', body, headers = {}, sentMail
 async function createVerifiedUser({ name = 'Lifecycle User', email = uniqueEmail('lifecycle'), password = 'StartPassword123' } = {}) {
   created.userEmails.add(email);
   const passwordHash = await bcrypt.hash(password, 10);
-  const [result] = await db.query(
-    'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
-    [name, email, passwordHash]
-  );
+  let result;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      [result] = await db.query(
+        'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
+        [name, email, passwordHash]
+      );
+      break;
+    } catch (err) {
+      if (err?.code !== 'ER_LOCK_DEADLOCK' || attempt === 2) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
   return {
     id: remember('users', result.insertId),
     name,

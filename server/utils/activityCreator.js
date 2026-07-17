@@ -5,6 +5,7 @@ require('dotenv').config();
 
 const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
 const MARKUP_HOUSE_STYLE_PATH = path.join(__dirname, '..', 'templates', 'activity_markup_house_style.txt');
+const DEFAULT_CREATOR_OPENAI_TIMEOUT_MS = 25000;
 
 function sanitizeHeaderValue(value, fallback = '') {
   return String(value == null ? fallback : value)
@@ -252,6 +253,27 @@ function normalizeGeneratedDraft(text, fallbackInput) {
   };
 }
 
+function getCreatorOpenAiTimeoutMs() {
+  const parsed = Number(process.env.CREATOR_OPENAI_TIMEOUT_MS || DEFAULT_CREATOR_OPENAI_TIMEOUT_MS);
+  return Number.isFinite(parsed) && parsed >= 1000 ? parsed : DEFAULT_CREATOR_OPENAI_TIMEOUT_MS;
+}
+
+async function withTimeout(promise, timeoutMs, label) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function generateWithOpenAI({
   title,
   mode,
@@ -268,6 +290,7 @@ async function generateWithOpenAI({
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const houseStyle = fs.readFileSync(MARKUP_HOUSE_STYLE_PATH, 'utf8').trim();
   const normalizedTimedSections = normalizeTimedSections(timedSections);
+  const timeoutMs = getCreatorOpenAiTimeoutMs();
 
   const system = [
     'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
@@ -317,14 +340,18 @@ async function generateWithOpenAI({
     instructions: system,
     input: user,
     text: { format: { type: 'text' } },
-    max_output_tokens: 5000,
+    max_output_tokens: 3500,
   };
 
   if (!String(selectedModel || '').startsWith('gpt-5')) {
     request.temperature = 0.7;
   }
 
-  const response = await openai.responses.create(request);
+  const response = await withTimeout(
+    openai.responses.create(request),
+    timeoutMs,
+    'Creator draft generation'
+  );
   const raw = response.output_text || '';
   return raw;
 }
@@ -341,6 +368,7 @@ async function reviseWithOpenAI({
 }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const houseStyle = fs.readFileSync(MARKUP_HOUSE_STYLE_PATH, 'utf8').trim();
+  const timeoutMs = getCreatorOpenAiTimeoutMs();
 
   const system = [
     'You are an expert instructional designer revising coLearn-AI activity markup.',
@@ -384,14 +412,18 @@ async function reviseWithOpenAI({
     instructions: system,
     input: user,
     text: { format: { type: 'text' } },
-    max_output_tokens: 9000,
+    max_output_tokens: 5000,
   };
 
   if (!String(selectedModel || '').startsWith('gpt-5')) {
     request.temperature = 0.45;
   }
 
-  const response = await openai.responses.create(request);
+  const response = await withTimeout(
+    openai.responses.create(request),
+    timeoutMs,
+    'Creator draft revision'
+  );
   return response.output_text || '';
 }
 

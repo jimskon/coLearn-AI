@@ -685,6 +685,8 @@ export default function CreatorWorkbenchPage() {
           padding: 0.9rem;
           position: sticky;
           top: 0;
+          max-height: calc(100vh - 120px);
+          overflow-y: auto;
         }
         @media (min-width: 1180px) {
           .creator-preview-layout {

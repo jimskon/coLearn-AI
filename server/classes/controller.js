@@ -22,6 +22,31 @@ const CREATOR_MAJOR_SECTION_OPTIONS = [
   'Reflection',
 ];
 
+async function tableExists(conn, tableName) {
+  const [rows] = await conn.query(
+    `
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = DATABASE()
+        AND table_name = ?
+      LIMIT 1
+    `,
+    [tableName]
+  );
+  return rows.length > 0;
+}
+
+async function deleteByInstanceIdsIfPresent(conn, tableName, fkColumn, instanceIds) {
+  if (!instanceIds.length || !(await tableExists(conn, tableName))) {
+    return 0;
+  }
+  const [result] = await conn.query(
+    `DELETE FROM ${tableName} WHERE ${fkColumn} IN (?)`,
+    [instanceIds]
+  );
+  return Number(result.affectedRows || 0);
+}
+
 // Get all classes
 exports.getAllClasses = async (req, res) => {
   try {
@@ -207,23 +232,49 @@ exports.deleteActivityFromClass = async (req, res) => {
   const { classId, activityId } = req.params;
   console.log(`Deleting activity "${activityId}" from class ${classId}`);
 
+  const conn = await db.getConnection();
   try {
-    const [activity] = await db.query(
+    await conn.beginTransaction();
+
+    const [activity] = await conn.query(
       `SELECT id FROM pogil_activities WHERE id = ? AND class_id = ?`,
       [activityId, classId]
     );
 
     if (!activity.length) {
+      await conn.rollback();
       return res.status(404).json({ error: "Activity not found." });
     }
 
     const activityIdNum = activity[0].id;
-    await db.query(`DELETE FROM pogil_activities WHERE id = ?`, [activityIdNum]);
+    const [instances] = await conn.query(
+      `SELECT id FROM activity_instances WHERE activity_id = ?`,
+      [activityIdNum]
+    );
+    const instanceIds = instances.map((row) => Number(row.id)).filter(Number.isFinite);
+
+    await deleteByInstanceIdsIfPresent(conn, 'activity_heartbeats', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'audit_log', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'followups', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'feedback', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'response_drafts', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'responses', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'group_members', 'activity_instance_id', instanceIds);
+
+    if (instanceIds.length) {
+      await conn.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
+    }
+
+    await conn.query(`DELETE FROM pogil_activities WHERE id = ?`, [activityIdNum]);
+    await conn.commit();
     res.json({ success: true });
 
   } catch (err) {
+    try { await conn.rollback(); } catch {}
     console.error("Error deleting activity:", err);
     res.status(500).json({ error: "Server error." });
+  } finally {
+    conn.release();
   }
 };
 

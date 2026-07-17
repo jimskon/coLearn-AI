@@ -127,6 +127,29 @@ function normalizeStringList(value) {
     : [];
 }
 
+function normalizeLegacyCommandSyntax(text) {
+  return String(text || '')
+    .replace(/^\\begin\{questiongroup\}\{([^}]*)\}$/gm, '\\questiongroup{$1}')
+    .replace(/^\\begin\{question\}\{([^}]*)\}$/gm, '\\question{$1}')
+    .replace(/^\\begin\{pythonremote\}$/gm, '\\pythonremote')
+    .replace(/^\\begin\{python\}$/gm, '\\python')
+    .replace(/^\\begin\{cpp\}$/gm, '\\cpp')
+    .replace(/^\\begin\{pythonturtle\}(?:\{([^}]*)\})?$/gm, (_match, args) => args ? `\\pythonturtle{${args}}` : '\\pythonturtle')
+    .replace(/^\\end\{questiongroup\}$/gm, '\\endquestiongroup')
+    .replace(/^\\end\{question\}$/gm, '\\endquestion')
+    .replace(/^\\end\{pythonremote\}$/gm, '\\endpythonremote')
+    .replace(/^\\end\{python\}$/gm, '\\endpython')
+    .replace(/^\\end\{cpp\}$/gm, '\\endcpp')
+    .replace(/^\\end\{pythonturtle\}$/gm, '\\endpythonturtle');
+}
+
+function splitObjectiveCandidates(text) {
+  return String(text || '')
+    .split(/\n|;|(?=\d+\))/)
+    .map((item) => item.replace(/^\d+\)\s*/, '').trim())
+    .filter(Boolean);
+}
+
 function normalizeLearningObjectivesSection(text) {
   const lines = String(text || '').split(/\r?\n/);
   const startIndex = lines.findIndex((line) => /^\\section\{Learning Objectives\}(?:\{\d+\})?$/.test(line.trim()));
@@ -183,10 +206,31 @@ function normalizeLearningObjectivesSection(text) {
     return text;
   }
 
+  const containsCommands = objectiveLines.some((line) => line.startsWith('\\'));
+  const normalizedObjectiveLines = containsCommands
+    ? objectiveLines.flatMap((line) => {
+        if (/^\\sampleresponses\{/.test(line)) {
+          const args = parseCommandArgs(line, 'sampleresponses');
+          return splitObjectiveCandidates(args?.[0] || '');
+        }
+        if (line.startsWith('\\item ')) {
+          return [line.replace(/^\\item\s+/, '').trim()];
+        }
+        if (!line.startsWith('\\')) {
+          return splitObjectiveCandidates(line);
+        }
+        return [];
+      })
+    : objectiveLines;
+
+  if (!normalizedObjectiveLines.length) {
+    return text;
+  }
+
   const replacement = [
     '\\text{Students will be able to:}',
     '\\begin{itemize}',
-    ...objectiveLines.map((line) => `\\item ${line.replace(/^[-*]\s*/, '')}`),
+    ...normalizedObjectiveLines.map((line) => `\\item ${line.replace(/^[-*]\s*/, '')}`),
     '\\end{itemize}',
   ];
 
@@ -703,7 +747,7 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
 }
 
 function normalizeGeneratedDraft(text, fallbackInput) {
-  const stripped = stripCodeFences(text);
+  const stripped = normalizeLegacyCommandSyntax(stripCodeFences(text));
   const cleaned = repairCodingQuestionsToUsePythonBlocks(
     repairGeneratedMarkupClosures(
       normalizePythonTurtleDirectives(

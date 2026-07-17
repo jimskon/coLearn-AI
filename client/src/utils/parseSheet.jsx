@@ -9,8 +9,9 @@ import ActivityRemotePythonBlock from '../components/activity/ActivityRemotePyth
 import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { makeResponseAttrs } from './responseDom';
+import { API_BASE_URL } from '../config';
 
-import { Form } from 'react-bootstrap';
+import { Form, Button, Spinner } from 'react-bootstrap';
 
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
@@ -118,6 +119,140 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
         />
       )}
     </figure>
+  );
+}
+
+function InlineAiAssistBlock({
+  aiBlock,
+  questionBlock,
+  runMode,
+  selectedPreviewKey,
+  onSelectBlock,
+}) {
+  const [inputValue, setInputValue] = useState('');
+  const [responseValue, setResponseValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const aiSelected = runMode === 'preview' && selectedPreviewKey === aiBlock.previewKey;
+
+  const submitPrompt = async () => {
+    const trimmed = inputValue.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/ai/assist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          mode: aiBlock.mode,
+          title: aiBlock.title || 'AI Assistant',
+          assistantPrompt: aiBlock.prompt || '',
+          guardrail: aiBlock.guardrail || '',
+          contextSources: aiBlock.contextSources || [],
+          questionText: questionBlock?.prompt || '',
+          sampleResponse: questionBlock?.samples?.[0] || '',
+          studentCode: Array.isArray(questionBlock?.pythonBlocks)
+            ? questionBlock.pythonBlocks.map((block) => block.content || '').join('\n\n').trim()
+            : '',
+          studentInput: trimmed,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'AI help failed.');
+      setResponseValue(String(data?.response || '').trim());
+    } catch (err) {
+      setError(err?.message || 'AI help failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="border rounded p-3 my-3"
+      data-preview-key={aiBlock.previewKey}
+      onClick={(event) => {
+        if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
+        if (event.target.closest('textarea, input, button, select, a')) return;
+        event.stopPropagation();
+        onSelectBlock(aiBlock);
+      }}
+      style={
+        runMode === 'preview'
+          ? {
+            cursor: onSelectBlock ? 'pointer' : 'default',
+            borderColor: aiSelected ? '#0d6efd' : '#d9dee3',
+            boxShadow: aiSelected ? '0 0 0 3px rgba(13,110,253,0.12)' : 'none',
+            background: aiSelected ? 'rgba(13,110,253,0.04)' : '#fcfcfd',
+          }
+          : {
+            background: '#fcfcfd',
+          }
+      }
+    >
+      <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+        <div className="fw-semibold">
+          <span dangerouslySetInnerHTML={{ __html: aiBlock.title || 'AI Coach' }} />
+        </div>
+        <span className="badge bg-warning text-dark text-uppercase">{aiBlock.mode}</span>
+      </div>
+
+      {aiBlock.prompt ? (
+        <div className="mb-2">
+          <span dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
+        </div>
+      ) : (
+        <div className="text-muted small mb-2">No student-facing AI prompt set yet.</div>
+      )}
+
+      {aiBlock.contextSources?.length ? (
+        <div className="text-muted small mb-2">
+          Context: {aiBlock.contextSources.join(', ')}
+        </div>
+      ) : null}
+
+      {runMode === 'preview' && aiBlock.guardrail ? (
+        <div className="text-muted small mb-2">
+          Guardrail: <span dangerouslySetInnerHTML={{ __html: aiBlock.guardrail }} />
+        </div>
+      ) : null}
+
+      <Form.Group className="mt-2">
+        <Form.Label className="small text-muted mb-1">AI Prompt</Form.Label>
+        <Form.Control
+          as="textarea"
+          rows={Math.max(aiBlock.inputRows || 4, 2)}
+          value={inputValue}
+          onChange={(event) => setInputValue(event.target.value)}
+          placeholder="Type a prompt for the AI here..."
+        />
+      </Form.Group>
+
+      <div className="d-flex justify-content-end mt-2">
+        <Button size="sm" variant="primary" disabled={busy || !inputValue.trim()} onClick={submitPrompt}>
+          {busy ? <Spinner animation="border" size="sm" className="me-2" /> : null}
+          Ask AI
+        </Button>
+      </div>
+
+      {error ? (
+        <div className="alert alert-danger mt-2 mb-0 py-2 small">{error}</div>
+      ) : null}
+
+      <Form.Group className="mt-2 mb-0">
+        <Form.Label className="small text-muted mb-1">AI Response</Form.Label>
+        <Form.Control
+          as="textarea"
+          rows={Math.max(Math.min((responseValue.split('\n').length || 1) + 1, 8), 3)}
+          readOnly
+          value={responseValue}
+          placeholder="The AI response will appear here."
+        />
+      </Form.Group>
+    </div>
   );
 }
 
@@ -2501,70 +2636,15 @@ export function renderBlocks(blocks, options = {}) {
           ))}
 
           {block.aiBlocks?.map((aiBlock, i) => {
-            const aiSelected = runMode === 'preview' && selectedPreviewKey === aiBlock.previewKey;
             return (
-              <div
+              <InlineAiAssistBlock
                 key={`q-ai-${block.groupId}-${block.id}-${i}`}
-                className="border rounded p-3 my-3"
-                data-preview-key={aiBlock.previewKey}
-                onClick={(event) => {
-                  if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
-                  if (event.target.closest('textarea, input, button, select, a')) return;
-                  event.stopPropagation();
-                  onSelectBlock(aiBlock);
-                }}
-                style={
-                  runMode === 'preview'
-                    ? {
-                      cursor: onSelectBlock ? 'pointer' : 'default',
-                      borderColor: aiSelected ? '#0d6efd' : '#d9dee3',
-                      boxShadow: aiSelected ? '0 0 0 3px rgba(13,110,253,0.12)' : 'none',
-                      background: aiSelected ? 'rgba(13,110,253,0.04)' : '#fcfcfd',
-                    }
-                    : {
-                      background: '#fcfcfd',
-                    }
-                }
-              >
-                <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
-                  <div className="fw-semibold">
-                    <span dangerouslySetInnerHTML={{ __html: aiBlock.title || 'AI Coach' }} />
-                  </div>
-                  <span className="badge bg-warning text-dark text-uppercase">{aiBlock.mode}</span>
-                </div>
-
-                {aiBlock.prompt ? (
-                  <div className="mb-2">
-                    <span dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
-                  </div>
-                ) : (
-                  <div className="text-muted small mb-2">No student-facing AI prompt set yet.</div>
-                )}
-
-                {aiBlock.contextSources?.length ? (
-                  <div className="text-muted small mb-2">
-                    Context: {aiBlock.contextSources.join(', ')}
-                  </div>
-                ) : null}
-
-                {runMode === 'preview' && aiBlock.guardrail ? (
-                  <div className="text-muted small mb-2">
-                    Guardrail: <span dangerouslySetInnerHTML={{ __html: aiBlock.guardrail }} />
-                  </div>
-                ) : null}
-
-                <Form.Control
-                  as="textarea"
-                  rows={Math.max(aiBlock.inputRows || 4, 2)}
-                  className="mt-2"
-                  placeholder="Student asks the AI for help here..."
-                  readOnly
-                  value=""
-                />
-                <div className="alert alert-light border mt-2 mb-0 py-2 small text-muted">
-                  AI response preview appears here. Live AI behavior will be connected in a later phase.
-                </div>
-              </div>
+                aiBlock={aiBlock}
+                questionBlock={block}
+                runMode={runMode}
+                selectedPreviewKey={selectedPreviewKey}
+                onSelectBlock={onSelectBlock}
+              />
             );
           })}
 

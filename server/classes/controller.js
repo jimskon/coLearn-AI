@@ -447,20 +447,7 @@ exports.createCreatorDraft = async (req, res) => {
       classDescription: classRow.description,
       activityDescription: normalizedDescription,
     });
-    const fallbackDiagnostics = generation.generation_status === 'fallback'
-      ? [
-          '',
-          '\\section{Generation Diagnostics}',
-          `Status: ${generation.generation_status}`,
-          `Error: ${generation.generation_error || 'Unknown fallback reason.'}`,
-          '',
-          generation.raw_model_output
-            ? ['Model output preview:', String(generation.raw_model_output).trim()].join('\n')
-            : 'Model output preview: (none captured; generation likely failed before a usable response was returned.)',
-        ].join('\n')
-      : '';
-
-    const contentText = generation.text + fallbackDiagnostics;
+    const contentText = generation.text;
 
     const [result] = await db.query(
       `INSERT INTO pogil_activities

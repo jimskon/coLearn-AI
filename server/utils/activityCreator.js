@@ -286,6 +286,7 @@ async function generateWithOpenAI({
     'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
     'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
     'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp or \\python ... \\endpython. Never paste raw code directly into question text.',
+    'For student-facing AI query interfaces, keep the visible prompt broad and easy to use. Do not force students to specify every feature. Put the important constraints in hidden guardrails, and let the AI infer reasonable defaults and fill in missing details for creative tasks.',
     'Use the house-style example below as syntax guidance and imitate its structure when relevant.',
     'For mode=group, use collaborative prompts and progression.',
     'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
@@ -357,6 +358,7 @@ async function reviseWithOpenAI({
     'Do not put activity commands such as \\pythonturtle, \\python, \\question, or \\section inside \\sampleresponses{...}, \\feedbackprompt{...}, or \\followupprompt{...}.',
     'Keep sample responses and feedback prompts plain text.',
     'Never omit required closing tags such as \\endquestion and \\endquestiongroup.',
+    'For student-facing AI query interfaces, keep the visible prompt broad and easy to use. Do not force students to specify every feature. Put the important constraints in hidden guardrails, and let the AI infer reasonable defaults and fill in missing details for creative tasks.',
     'Use this house-style example as syntax guidance:',
     houseStyle,
   ].join('\n');

@@ -36,5 +36,6 @@ Rules illustrated above:
 - If you include runnable Python code, wrap it in \python ... \endpython.
 - If you include turtle code, always wrap it in \pythonturtle ... \endpythonturtle.
 - If you include runnable turtle code, prefer omitting the timeout unless a specific non-default limit is required. Use \pythonturtle{WxH} ... \endpythonturtle when only dimensions matter, or \pythonturtle ... \endpythonturtle if defaults are fine.
+- For the embedded Skulpt turtle runtime, prefer portable basics only: forward, backward, left, right, penup, pendown, goto, circle, color, begin_fill, end_fill, hideturtle, done, and turtle.Screen(). Avoid module-level calls like turtle.bgcolor(); if you want a background color, use screen = turtle.Screen(); screen.bgcolor(...), or omit the background entirely.
 - Do not paste raw code directly into question text.
 - Keep all interactive questions inside \questiongroup blocks.

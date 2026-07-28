@@ -303,7 +303,7 @@ test('class activity delete also removes assigned activity instances through cas
   const courseId = remember('courses', courseResult.insertId);
 
   const [instanceResult] = await db.query(
-    `INSERT INTO activity_instances (activity_id, course_id, status) VALUES (?, ?, 'not_started')`,
+    `INSERT INTO activity_instances (activity_id, course_id, status) VALUES (?, ?, 'in_progress')`,
     [create.body.id, courseId]
   );
   const instanceId = Number(instanceResult.insertId);

@@ -81,7 +81,7 @@ test('normalizeGeneratedDraft repairs missing endquestion markers in generated m
   });
 
   assert.equal(result.usedFallback, false);
-  assert.equal((result.text.match(/\\endquestion/g) || []).length, 2);
+  assert.equal((result.text.match(/^\\endquestion$/gm) || []).length, 2);
   assert.match(result.text, /\\feedbackprompt\{Describe the output in your own words\.\}\n\\endquestion\n\\question\{/);
   assert.match(result.text, /\\feedbackprompt\{Connect the changed input to the new output\.\}\n\\endquestion\n\\endquestiongroup/);
 });

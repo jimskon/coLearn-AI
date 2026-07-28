@@ -514,10 +514,14 @@ function repairCodingQuestionsToUsePythonBlocks(text) {
 
 function repairUnsupportedStructuredResponsePrompts(text) {
   return String(text || '')
-    .replace(/\s*\(one per line\)\.?/gi, '')
-    .replace(/\s*\(one on each line\)\.?/gi, '')
-    .replace(/\s*\(one idea per line\)\.?/gi, '')
-    .replace(/\s*\(one sentence per line\)\.?/gi, '')
+    .replace(/\s*\(one per line\)\./gi, '.')
+    .replace(/\s*\(one on each line\)\./gi, '.')
+    .replace(/\s*\(one idea per line\)\./gi, '.')
+    .replace(/\s*\(one sentence per line\)\./gi, '.')
+    .replace(/\s*\(one per line\)/gi, '')
+    .replace(/\s*\(one on each line\)/gi, '')
+    .replace(/\s*\(one idea per line\)/gi, '')
+    .replace(/\s*\(one sentence per line\)/gi, '')
     .replace(
       /\\question\{Each group member:\s*write your name and which role you were assigned\.?\}/gi,
       '\\question{As a group, briefly note which roles were assigned within your group.}'
@@ -777,12 +781,13 @@ function normalizeGeneratedDraft(text, fallbackInput) {
       normalizeLegacyCommandSyntax(stripCodeFences(text))
     )
   );
+  const plaintextMarkup = coercePlaintextActivityToMarkup(stripped, fallbackInput);
   const cleaned = repairCodingQuestionsToUsePythonBlocks(
     repairGeneratedMarkupClosures(
       normalizePythonTurtleDirectives(
         applyTimedSectionDirectives(
           applyRetriesDirective(
-            normalizeLearningObjectivesSection(stripped),
+            normalizeLearningObjectivesSection(plaintextMarkup || stripped),
             fallbackInput.retriesRequired
           ),
           fallbackInput.timedSections
@@ -790,25 +795,7 @@ function normalizeGeneratedDraft(text, fallbackInput) {
       )
     )
   );
-
-  const repaired = (!cleaned.includes('\\title{') || !cleaned.includes('\\questiongroup{'))
-    ? coercePlaintextActivityToMarkup(cleaned, fallbackInput)
-    : null;
-  const normalized = repaired
-    ? repairCodingQuestionsToUsePythonBlocks(
-        repairGeneratedMarkupClosures(
-          normalizePythonTurtleDirectives(
-            applyTimedSectionDirectives(
-              applyRetriesDirective(
-                normalizeLearningObjectivesSection(repaired),
-                fallbackInput.retriesRequired
-              ),
-              fallbackInput.timedSections
-            )
-          )
-        )
-      )
-    : cleaned;
+  const normalized = cleaned;
 
   if (!normalized.includes('\\title{') || !normalized.includes('\\questiongroup{')) {
     return {

@@ -105,7 +105,7 @@ Every `\question` must explicitly end with `\endquestion`.
 \endai
 ```
 
-`\\ai` blocks are currently supported only inside a `\\question`.
+`\ai` blocks are currently supported only inside a `\question`.
 
 | Syntax | Description | Example |
 |--------|-------------|---------|

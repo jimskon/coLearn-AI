@@ -18,6 +18,7 @@ import {
   Eye,
   PencilSquare,
   PlayCircle,
+  PlusLg,
   Save,
   Stars,
   X,
@@ -316,6 +317,20 @@ function findSelectableBlockByPreviewKey(blocks, previewKey) {
   return null;
 }
 
+const starterQuestionLines = [
+  '\\question{New question prompt.}',
+  '\\textresponse{3}',
+  '\\sampleresponses{Example response.}',
+  '\\feedbackprompt{Explain what a strong answer includes.}',
+  '\\endquestion',
+];
+
+const starterQuestionGroupLines = [
+  '\\questiongroup{New Question Group}',
+  ...starterQuestionLines,
+  '\\endquestiongroup',
+];
+
 export default function CreatorWorkbenchPage() {
   const { classId, activityId } = useParams();
   const navigate = useNavigate();
@@ -385,6 +400,77 @@ export default function CreatorWorkbenchPage() {
       : creatorModelOptions
   ), [isDemoCreator]);
 
+  function selectInsertedQuestion(parsed, questionLine) {
+    const inserted = parsed.blocks.find((block) => (
+      block?.type === 'question' && block?.sourceMeta?.questionLine === questionLine
+    ));
+    setSelectedPreviewKey(inserted?.previewKey || '');
+  }
+
+  function insertStarterQuestion(block, placement) {
+    const sourceMeta = block?.sourceMeta;
+    if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
+
+    const lines = String(rawText || '').split('\n');
+    const insertionIndex = placement === 'before'
+      ? sourceMeta.questionLine - 1
+      : sourceMeta.endQuestionLine;
+    const nextText = [...lines];
+    nextText.splice(insertionIndex, 0, ...starterQuestionLines);
+    const nextSource = nextText.join('\n');
+    const parsed = compileText(nextSource);
+
+    setRawText(nextSource);
+    setSandboxUrl('');
+    selectInsertedQuestion(parsed, insertionIndex + 1);
+    setNotice('Added a new question. Use the Question Panel to edit it.');
+    setTimeout(() => setNotice(''), 2400);
+  }
+
+  function insertStarterQuestionGroup(block, placement) {
+    const sourceMeta = block?.sourceMeta;
+    const groupLine = sourceMeta?.groupLine;
+    const endGroupLine = sourceMeta?.endGroupLine;
+    const insertionIndex = placement === 'before'
+      ? groupLine - 1
+      : endGroupLine;
+
+    if (!Number.isFinite(insertionIndex) || insertionIndex < 0) return;
+
+    const lines = String(rawText || '').split('\n');
+    const nextText = [...lines];
+    nextText.splice(insertionIndex, 0, ...starterQuestionGroupLines);
+    const nextSource = nextText.join('\n');
+    const parsed = compileText(nextSource);
+
+    setRawText(nextSource);
+    setSandboxUrl('');
+    selectInsertedQuestion(parsed, insertionIndex + 2);
+    setNotice('Added a new question group. Use the Question Panel to edit its starter question.');
+    setTimeout(() => setNotice(''), 2400);
+  }
+
+  function renderInsertionMarker(key, label, onClick) {
+    return (
+      <div key={key} className="creator-insert-slot">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline-primary"
+          className="creator-insert-button"
+          aria-label={label}
+          title={label}
+          onClick={(event) => {
+            event.stopPropagation();
+            onClick();
+          }}
+        >
+          <PlusLg />
+        </Button>
+      </div>
+    );
+  }
+
   const renderedActivity = useMemo(() => renderBlocks(activeBlocks, {
     mode: 'preview',
     editable: true,
@@ -396,7 +482,27 @@ export default function CreatorWorkbenchPage() {
     runtimeFeatures,
     onSelectBlock: proposal ? null : (block) => setSelectedPreviewKey(block?.previewKey || ''),
     selectedPreviewKey,
-  }), [activeBlocks, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures]);
+    renderInsertBeforeQuestion: proposal ? null : (block) => renderInsertionMarker(
+      `before-question-${block.previewKey}`,
+      'Add question before',
+      () => insertStarterQuestion(block, 'before')
+    ),
+    renderInsertAfterQuestion: proposal ? null : (block) => renderInsertionMarker(
+      `after-question-${block.previewKey}`,
+      'Add question after',
+      () => insertStarterQuestion(block, 'after')
+    ),
+    renderInsertBeforeGroup: proposal ? null : (block) => renderInsertionMarker(
+      `before-group-${block.groupId}`,
+      'Add question group before',
+      () => insertStarterQuestionGroup(block, 'before')
+    ),
+    renderInsertAfterGroup: proposal ? null : (block) => renderInsertionMarker(
+      `after-group-${block.groupId}`,
+      'Add question group after',
+      () => insertStarterQuestionGroup(block, 'after')
+    ),
+  }), [activeBlocks, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures, insertStarterQuestion, insertStarterQuestionGroup]);
 
   const selectedPreviewBlock = useMemo(() => (
     findSelectableBlockByPreviewKey(activeBlocks, selectedPreviewKey)
@@ -818,6 +924,38 @@ export default function CreatorWorkbenchPage() {
         .creator-preview-surface {
           max-width: 980px;
           margin: 0 auto;
+        }
+        .creator-insert-slot {
+          height: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          position: relative;
+        }
+        .creator-insert-slot::before {
+          content: '';
+          width: 100%;
+          border-top: 1px dashed #c8d3df;
+        }
+        .creator-insert-button {
+          position: absolute;
+          z-index: 1;
+          width: 24px;
+          height: 24px;
+          padding: 0;
+          border-radius: 50%;
+          background: #fff;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0;
+          transform: scale(0.85);
+          transition: opacity 120ms ease, transform 120ms ease;
+        }
+        .creator-insert-slot:hover .creator-insert-button,
+        .creator-insert-slot:focus-within .creator-insert-button {
+          opacity: 1;
+          transform: scale(1);
         }
         .creator-preview-layout {
           display: grid;

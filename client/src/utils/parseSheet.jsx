@@ -1181,6 +1181,10 @@ export function parseSheetToBlocks(lines, options = {}) {
         content,
         infos: [],
         retriesRequired: currentGroupRetriesRequired, // ✅ include it
+        sourceMeta: {
+          groupLine: lineNo,
+          endGroupLine: null,
+        },
       });
       currentGroupIntro = blocks.at(-1);
       meta.groupRetries[groupNumber] = currentGroupRetriesRequired;
@@ -1201,7 +1205,14 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (currentQuestion) {
         pushIssue('error', lineNo, 'Closing group while a \\question is still open. Missing \\endquestion before \\endquestiongroup.', line);
       }
-      blocks.push({ type: 'endGroup' });
+      if (currentGroupIntro?.sourceMeta) {
+        currentGroupIntro.sourceMeta.endGroupLine = lineNo;
+      }
+      blocks.push({
+        type: 'endGroup',
+        groupId: groupNumber,
+        sourceMeta: { endGroupLine: lineNo },
+      });
       inGroup = false;
       openGroupLine = null;
       currentGroupIntro = null;
@@ -1682,6 +1693,10 @@ export function renderBlocks(blocks, options = {}) {
     runtimeFeatures = {},
     onSelectBlock = null,
     selectedPreviewKey = null,
+    renderInsertBeforeQuestion = null,
+    renderInsertAfterQuestion = null,
+    renderInsertBeforeGroup = null,
+    renderInsertAfterGroup = null,
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -1718,7 +1733,12 @@ export function renderBlocks(blocks, options = {}) {
 
   return blocks.map((block, index) => {
     if (hiddenTypes.includes(block.type) && runMode !== 'preview') return null;
-    if (block.type === 'endGroup') return null;
+    if (block.type === 'endGroup') {
+      const nextBlock = blocks[index + 1];
+      return nextBlock?.type === 'groupIntro' || typeof renderInsertAfterGroup !== 'function'
+        ? null
+        : renderInsertAfterGroup(block);
+    }
 
     // 🔹 Render headers (title/name/activitycontext/studentlevel) inline where they appear
     if (block.type === 'header') {
@@ -1838,16 +1858,19 @@ export function renderBlocks(blocks, options = {}) {
     if (block.type === 'groupIntro') {
       const groupIntroAnchorRef = React.createRef();
       return (
-        <div key={`groupIntro-${index}`} className="mb-2" ref={groupIntroAnchorRef}>
-          <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
-          {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
-          {runMode === 'preview' && renderInfoBubbles(
-            block,
-            'submitbutton',
-            `groupIntro-submit-${index}`,
-            groupIntroAnchorRef
-          )}
-        </div>
+        <React.Fragment key={`groupIntro-${index}`}>
+          {typeof renderInsertBeforeGroup === 'function' ? renderInsertBeforeGroup(block) : null}
+          <div className="mb-2" ref={groupIntroAnchorRef}>
+            <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
+            {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
+            {runMode === 'preview' && renderInfoBubbles(
+              block,
+              'submitbutton',
+              `groupIntro-submit-${index}`,
+              groupIntroAnchorRef
+            )}
+          </div>
+        </React.Fragment>
 
       );
     }
@@ -2334,7 +2357,11 @@ export function renderBlocks(blocks, options = {}) {
       const isSelectedPreviewBlock = runMode === 'preview' && selectedPreviewKey === block.previewKey;
 
       return (
-        <div
+        <React.Fragment key={`q-wrap-${block.groupId}-${block.id}`}>
+          {typeof renderInsertBeforeQuestion === 'function' && blocks[index - 1]?.type !== 'question'
+            ? renderInsertBeforeQuestion(block)
+            : null}
+          <div
           key={`q-${block.groupId}-${block.id}`}  // ✅ unique per question
           className="mb-4"
           ref={questionAnchorRef}
@@ -2795,7 +2822,9 @@ export function renderBlocks(blocks, options = {}) {
 
 
 
-        </div>
+          </div>
+          {typeof renderInsertAfterQuestion === 'function' ? renderInsertAfterQuestion(block) : null}
+        </React.Fragment>
       );
     }
 

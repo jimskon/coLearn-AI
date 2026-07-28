@@ -133,25 +133,41 @@ test('requirements-only response evaluation rejects keyboard-mash gibberish', as
 });
 
 test('requirements-only response evaluation rejects plainly off-prompt text before fail-open', async () => {
-  const response = await postJson('/api/ai/evaluate-response', {
-    questionText: 'What is the output of the program below? What would the program print if the value of grade was 90?',
-    studentAnswer: 'hello dolly',
-    sampleResponse: 'It prints "Excellent!" when the grade is 95. It prints nothing when the grade is 90 because the condition is false.',
-    feedbackPrompt: 'Require an answer that explicitly states both outputs: that the program prints "Excellent!" for grade = 95, and that it prints nothing for grade = 90. Reject answers that do not mention both cases or that mention unrelated output.',
-    guidance: 'Follow-ups: gibberish-only\nThis activity uses a requirements-only check.\nChecker errors should not block progress (fail-open on errors).',
-    codeContext: 'grade = 95\nif grade >= 94:\n   print("Excellent!")',
-    instanceId: 0,
-    groupNum: 1,
-    answeredByUserId: 15,
-    retriesRequired: 0,
-    submissionString: 'hello dolly',
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          accepted: false,
+          feedback: 'Please answer the question with one concrete detail.',
+        }),
+      },
+    }],
   });
 
-  assert.equal(response.status, 200);
-  assert.equal(response.body.accepted, false);
-  assert.equal(response.body.canContinue, true);
-  assert.equal(typeof response.body.feedback, 'string');
-  assert.match(response.body.feedback, /answer|detail|question|response/i);
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What is the output of the program below? What would the program print if the value of grade was 90?',
+      studentAnswer: 'hello dolly',
+      sampleResponse: 'It prints "Excellent!" when the grade is 95. It prints nothing when the grade is 90 because the condition is false.',
+      feedbackPrompt: 'Require an answer that explicitly states both outputs: that the program prints "Excellent!" for grade = 95, and that it prints nothing for grade = 90. Reject answers that do not mention both cases or that mention unrelated output.',
+      guidance: 'Follow-ups: gibberish-only\nThis activity uses a requirements-only check.\nChecker errors should not block progress (fail-open on errors).',
+      codeContext: 'grade = 95\nif grade >= 94:\n   print("Excellent!")',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 15,
+      retriesRequired: 0,
+      submissionString: 'hello dolly',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, true);
+    assert.equal(typeof response.body.feedback, 'string');
+    assert.match(response.body.feedback, /answer|detail|question|response/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
 });
 
 test('dry-run response evaluation skips persistent retry bookkeeping', async () => {

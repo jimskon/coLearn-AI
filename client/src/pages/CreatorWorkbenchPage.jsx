@@ -1056,10 +1056,10 @@ export default function CreatorWorkbenchPage() {
             <div className="d-flex align-items-center gap-2">
               <ButtonGroup size="sm">
                 <Button variant={rightMode === 'preview' ? 'primary' : 'outline-primary'} onClick={() => selectRightMode('preview')}>
-                  <Eye className="me-1" /> Preview
+                  <Eye className="me-1" /> Visual Editor
                 </Button>
                 <Button variant={rightMode === 'edit' ? 'primary' : 'outline-primary'} onClick={() => selectRightMode('edit')}>
-                  <PencilSquare className="me-1" /> Edit
+                  <PencilSquare className="me-1" /> Source
                 </Button>
                 <Button
                   ref={tutorialRefs.sandbox}
@@ -1088,7 +1088,7 @@ export default function CreatorWorkbenchPage() {
             {rightMode === 'preview' ? (
               <div className="p-3">
                 {!activity?.id && !activeText ? (
-                  <Alert variant="secondary" className="mb-0">Create a draft to preview it here.</Alert>
+                  <Alert variant="secondary" className="mb-0">Create a draft to edit it visually here.</Alert>
                 ) : (
                   <>
                     <div className="creator-preview-toolbar">
@@ -1121,7 +1121,7 @@ export default function CreatorWorkbenchPage() {
                         {!selectedQuestionBlock ? (
                           !selectedAiBlock ? (
                             <div className="text-muted small">
-                              Click a question or AI block in Preview to inspect and refine it without editing raw source.
+                              Click a question or AI block in the Visual Editor to inspect and refine it without editing raw source.
                             </div>
                           ) : (
                             <>
@@ -1213,7 +1213,7 @@ export default function CreatorWorkbenchPage() {
                               </div>
 
                               <div className="text-muted small mt-3">
-                                This phase adds the authoring shell for `\\ai` blocks in Preview. Live AI execution comes next.
+                                This phase adds the authoring shell for `\\ai` blocks in the Visual Editor. Live AI execution comes next.
                               </div>
                             </>
                           )
@@ -1355,7 +1355,7 @@ export default function CreatorWorkbenchPage() {
               </div>
               <div className="d-flex gap-2 flex-shrink-0">
                 <Button size="sm" variant="outline-secondary" onClick={() => setRightMode('edit')}>
-                  Open In Edit
+                  Open Source
                 </Button>
                 <Button size="sm" variant="outline-secondary" onClick={() => setShowIssuesModal(true)}>
                   View All
@@ -1440,7 +1440,7 @@ export default function CreatorWorkbenchPage() {
               setShowIssuesModal(false);
               setRightMode('edit');
             }}>
-              Open In Edit
+              Open Source
             </Button>
           </div>
           {activeIssues.map((issue, index) => (

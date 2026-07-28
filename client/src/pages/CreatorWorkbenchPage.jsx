@@ -21,6 +21,7 @@ import {
   PlusLg,
   Save,
   Stars,
+  Trash,
   X,
 } from 'react-bootstrap-icons';
 import { useUser } from '../context/UserContext';
@@ -863,6 +864,53 @@ export default function CreatorWorkbenchPage() {
     setTimeout(() => setNotice(''), 1800);
   };
 
+  const removeQuestionGroup = (groupId, { skipConfirmation = false } = {}) => {
+    if (proposal) return;
+    const group = blocks.find((block) => block?.type === 'groupIntro' && block?.groupId === groupId);
+    const startLine = group?.sourceMeta?.groupLine;
+    const endLine = group?.sourceMeta?.endGroupLine;
+    if (!startLine || !endLine) return;
+
+    if (!skipConfirmation && !window.confirm('Remove this question group and every question in it?')) return;
+
+    const lines = String(rawText || '').split('\n');
+    lines.splice(startLine - 1, endLine - startLine + 1);
+    const nextText = lines.join('\n');
+    setRawText(nextText);
+    setSandboxUrl('');
+    setSelectedPreviewKey('');
+    compileText(nextText);
+    setNotice('Removed question group.');
+    setTimeout(() => setNotice(''), 2400);
+  };
+
+  const removeSelectedQuestion = () => {
+    if (!selectedQuestionBlock || proposal) return;
+    const sourceMeta = selectedQuestionBlock.sourceMeta;
+    if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
+
+    const questionsInGroup = blocks.filter((block) => (
+      block?.type === 'question' && block?.groupId === selectedQuestionBlock.groupId
+    ));
+    if (questionsInGroup.length <= 1) {
+      if (!window.confirm('This is the only question in its group. Remove the entire question group?')) return;
+      removeQuestionGroup(selectedQuestionBlock.groupId, { skipConfirmation: true });
+      return;
+    }
+
+    if (!window.confirm('Remove this question?')) return;
+
+    const lines = String(rawText || '').split('\n');
+    lines.splice(sourceMeta.questionLine - 1, sourceMeta.endQuestionLine - sourceMeta.questionLine + 1);
+    const nextText = lines.join('\n');
+    setRawText(nextText);
+    setSandboxUrl('');
+    setSelectedPreviewKey('');
+    compileText(nextText);
+    setNotice('Removed question.');
+    setTimeout(() => setNotice(''), 2400);
+  };
+
   return (
     <Container fluid className="creator-workbench px-3">
       <style>{`
@@ -1440,6 +1488,28 @@ export default function CreatorWorkbenchPage() {
                               >
                                 Reset
                               </Button>
+                            </div>
+
+                            <div className="border-top mt-3 pt-3">
+                              <div className="text-muted small mb-2">Remove</div>
+                              <div className="d-flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline-danger"
+                                  disabled={!!proposal}
+                                  onClick={removeSelectedQuestion}
+                                >
+                                  <Trash className="me-1" /> Remove Question
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline-danger"
+                                  disabled={!!proposal}
+                                  onClick={() => removeQuestionGroup(selectedQuestionBlock.groupId)}
+                                >
+                                  <Trash className="me-1" /> Remove Question Group
+                                </Button>
+                              </div>
                             </div>
 
                             <div className="text-muted small mt-3">

@@ -330,7 +330,7 @@ test('register uses the remote relay when MAIL_DELIVERY_MODE=remote', async () =
     },
   });
 
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 201);
   assert.deepEqual(response.body, { message: 'Confirmation code sent to your email.' });
   assert.equal(relayCalls.length, 1);
   assert.equal(relayCalls[0].url, 'https://colearn-ai.com/mail-relay/v1/send-code');

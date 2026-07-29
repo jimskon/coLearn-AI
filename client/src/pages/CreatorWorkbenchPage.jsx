@@ -177,53 +177,74 @@ function applyQuestionEditsToSource(sourceText, block, edits) {
   if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
 
   const lines = String(sourceText || '').split('\n');
-  updateLine(lines, sourceMeta.questionLine, `\\question{${String(edits.prompt || '').trim()}}`);
+  const requestedResponseLines = String(edits.responseLines ?? '').trim();
+  const responseLineCount = requestedResponseLines
+    ? Math.max(1, Number.parseInt(requestedResponseLines, 10) || 1)
+    : 0;
+  const removedResponseLine = sourceMeta.textResponseLine && responseLineCount === 0
+    ? sourceMeta.textResponseLine
+    : null;
 
-  const responseLineCount = Math.max(1, Number.parseInt(edits.responseLines, 10) || 1);
+  if (removedResponseLine) lines.splice(removedResponseLine - 1, 1);
+
+  const shiftLine = (line) => (
+    !line || !removedResponseLine || line < removedResponseLine ? line : line - 1
+  );
+  const workingMeta = {
+    ...sourceMeta,
+    questionLine: shiftLine(sourceMeta.questionLine),
+    textResponseLine: removedResponseLine ? null : shiftLine(sourceMeta.textResponseLine),
+    sampleLines: sourceMeta.sampleLines?.map(shiftLine),
+    feedbackLines: sourceMeta.feedbackLines?.map(shiftLine),
+    followupLines: sourceMeta.followupLines?.map(shiftLine),
+  };
+
+  updateLine(lines, workingMeta.questionLine, `\\question{${String(edits.prompt || '').trim()}}`);
+
   const sampleResponse = String(edits.sampleResponse || '').trim();
   const feedbackPrompt = String(edits.feedbackPrompt || '').trim();
   const followupPrompt = String(edits.followupPrompt || '').trim();
   const insertions = [];
 
-  if (sourceMeta.textResponseLine) {
-    updateLine(lines, sourceMeta.textResponseLine, `\\textresponse{${responseLineCount}}`);
+  if (workingMeta.textResponseLine) {
+    updateLine(lines, workingMeta.textResponseLine, `\\textresponse{${responseLineCount}}`);
   } else if (responseLineCount > 0) {
     insertions.push({
-      anchorLine: sourceMeta.questionLine,
+      anchorLine: workingMeta.questionLine,
       text: `\\textresponse{${responseLineCount}}`,
     });
   }
 
-  if (Array.isArray(sourceMeta.sampleLines) && sourceMeta.sampleLines[0]) {
-    updateLine(lines, sourceMeta.sampleLines[0], `\\sampleresponses{${sampleResponse}}`);
+  if (Array.isArray(workingMeta.sampleLines) && workingMeta.sampleLines[0]) {
+    updateLine(lines, workingMeta.sampleLines[0], `\\sampleresponses{${sampleResponse}}`);
   } else if (sampleResponse) {
     insertions.push({
-      anchorLine: sourceMeta.textResponseLine || sourceMeta.questionLine,
+      anchorLine: workingMeta.textResponseLine || workingMeta.questionLine,
       text: `\\sampleresponses{${sampleResponse}}`,
     });
   }
 
-  if (Array.isArray(sourceMeta.feedbackLines) && sourceMeta.feedbackLines[0]) {
-    updateLine(lines, sourceMeta.feedbackLines[0], `\\feedbackprompt{${feedbackPrompt}}`);
+  if (Array.isArray(workingMeta.feedbackLines) && workingMeta.feedbackLines[0]) {
+    updateLine(lines, workingMeta.feedbackLines[0], `\\feedbackprompt{${feedbackPrompt}}`);
   } else if (feedbackPrompt) {
     insertions.push({
       anchorLine:
-        sourceMeta.sampleLines?.[0] ||
-        sourceMeta.textResponseLine ||
-        sourceMeta.questionLine,
+        workingMeta.sampleLines?.[0] ||
+        workingMeta.textResponseLine ||
+        workingMeta.questionLine,
       text: `\\feedbackprompt{${feedbackPrompt}}`,
     });
   }
 
-  if (Array.isArray(sourceMeta.followupLines) && sourceMeta.followupLines[0]) {
-    updateLine(lines, sourceMeta.followupLines[0], `\\followupprompt{${followupPrompt}}`);
+  if (Array.isArray(workingMeta.followupLines) && workingMeta.followupLines[0]) {
+    updateLine(lines, workingMeta.followupLines[0], `\\followupprompt{${followupPrompt}}`);
   } else if (followupPrompt) {
     insertions.push({
       anchorLine:
-        sourceMeta.feedbackLines?.[0] ||
-        sourceMeta.sampleLines?.[0] ||
-        sourceMeta.textResponseLine ||
-        sourceMeta.questionLine,
+        workingMeta.feedbackLines?.[0] ||
+        workingMeta.sampleLines?.[0] ||
+        workingMeta.textResponseLine ||
+        workingMeta.questionLine,
       text: `\\followupprompt{${followupPrompt}}`,
     });
   }
@@ -235,7 +256,7 @@ function applyQuestionEditsToSource(sourceText, block, edits) {
 function buildQuestionInspectorDraft(block) {
   return {
     prompt: htmlToEditorText(block?.prompt),
-    responseLines: Number(block?.responseLines) || 1,
+    responseLines: block?.hasTextResponse ? (Number(block?.responseLines) || 1) : '',
     sampleResponse: htmlToEditorText(block?.samples?.[0]),
     feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
     followupPrompt: htmlToEditorText(block?.followups?.[0]),
@@ -1043,6 +1064,20 @@ export default function CreatorWorkbenchPage() {
     setSandboxUrl('');
     compileText(nextText);
     setNotice(`Updated ${selectedQuestionCodeBlock.label} starter code.`);
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const removeResponseLines = () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
+    const nextText = applyQuestionEditsToSource(rawText, selectedQuestionBlock, {
+      ...questionInspectorDraft,
+      responseLines: '',
+    });
+    setRawText(nextText);
+    setSandboxUrl('');
+    compileText(nextText);
+    setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: '' }));
+    setNotice('Removed written response lines from this question.');
     setTimeout(() => setNotice(''), 1800);
   };
 
@@ -1856,13 +1891,30 @@ export default function CreatorWorkbenchPage() {
                               <Form.Control
                                 type="number"
                                 min="1"
-                                value={questionInspectorDraft?.responseLines || 1}
+                                placeholder="No written response"
+                                value={questionInspectorDraft?.responseLines ?? ''}
                                 disabled={!questionInspectorDraft || !!proposal}
                                 onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: event.target.value }))}
                               />
-                              {!selectedQuestionBlock?.sourceMeta?.textResponseLine ? (
-                                <div className="text-muted small mt-1">Applying will add a new `\\textresponse` line to this question.</div>
-                              ) : null}
+                              <div className="d-flex gap-2 mt-2">
+                                {selectedQuestionBlock?.sourceMeta?.textResponseLine ? (
+                                  <Button size="sm" variant="outline-danger" disabled={!!proposal} onClick={removeResponseLines}>
+                                    Remove Response Lines
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline-secondary"
+                                    disabled={!questionInspectorDraft || !!proposal}
+                                    onClick={() => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: prev?.responseLines || 3 }))}
+                                  >
+                                    Add Response Lines
+                                  </Button>
+                                )}
+                              </div>
+                              <div className="text-muted small mt-1">
+                                Written responses are optional for code questions. Leave this blank to omit them; use Apply to set or change the count.
+                              </div>
                             </Form.Group>
 
                             <div className="d-flex gap-2">

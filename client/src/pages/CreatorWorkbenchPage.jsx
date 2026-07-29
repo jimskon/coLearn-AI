@@ -696,6 +696,26 @@ export default function CreatorWorkbenchPage() {
   ), [rawText, selectedQuestionBlock]);
   const selectedQuestionGroupBlock = selectedPreviewBlock?.type === 'groupIntro' ? selectedPreviewBlock : null;
   const selectedAiBlock = selectedPreviewBlock?.type === 'ai' ? selectedPreviewBlock : null;
+  const proposedQuestionPreview = useMemo(() => {
+    const markup = questionRevisionProposal?.proposedMarkup;
+    if (!markup) return null;
+
+    // Questions are only valid inside a group in the activity markup. Wrap the
+    // proposal for parsing, then render just the question in this read-only preview.
+    const parsed = parseActivityText([
+      '\\questiongroup{Proposed question preview}',
+      markup,
+      '\\endquestiongroup',
+    ].join('\n'));
+    const questionBlocks = parsed.blocks.filter((block) => block?.type === 'question');
+    return renderBlocks(questionBlocks, {
+      mode: 'preview',
+      editable: false,
+      isInstructor: true,
+      fileContents: parsed.files,
+      runtimeFeatures,
+    });
+  }, [questionRevisionProposal?.proposedMarkup, runtimeFeatures]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 
@@ -1920,6 +1940,10 @@ export default function CreatorWorkbenchPage() {
                                     value={questionRevisionProposal.proposedMarkup}
                                     className="creator-question-diff"
                                   />
+                                  <div className="text-muted small mt-2 mb-1">Rendered proposal</div>
+                                  <div className="border rounded bg-light p-2 creator-question-proposal-preview">
+                                    {proposedQuestionPreview}
+                                  </div>
                                   {questionRevisionProposal.warnings?.length ? (
                                     <Alert variant="warning" className="py-2 mt-2 mb-2">
                                       {questionRevisionProposal.warnings.join(' ')}

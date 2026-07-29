@@ -1,4 +1,3 @@
-// src: client/src/components/activity/ActivityCppBlock.jsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Row, Col, Button, Form } from 'react-bootstrap';
 import Prism from 'prismjs';
@@ -6,32 +5,28 @@ import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
 
-import 'prismjs/components/prism-clike';
-import 'prismjs/components/prism-c';
-import 'prismjs/components/prism-cpp';
+import 'prismjs/components/prism-python';
 
-export default function ActivityCppBlock({
+export default function ActivityRemotePythonBlock({
   code: initialCode,
   responseKey,
   onCodeChange,
-  timeLimit = 50000,        // currently unused but kept for API compatibility
+  timeLimit = 50000,
   editable = true,
   blockIndex = 0,
-  localOnly = false,       // if true, don't send files / remote sync
+  localOnly = false,
   codeFeedbackShown = {},
-  fileContents = {},       // { "data.txt": "10 20 30", ... }
-  setFileContents,         // fn to update sheet-level file contents
+  fileContents = {},
+  setFileContents,
   includeFiles = null,
   runnerEnabled = true,
 }) {
-  // --- code state ---
   const [code, setCode] = useState(initialCode ?? '');
   const [savedCode, setSavedCode] = useState(initialCode ?? '');
   const [isEditing, setIsEditing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
-  const [layoutMode, setLayoutMode] = useState('side'); // 'side' | 'stacked'
+  const [layoutMode, setLayoutMode] = useState('side');
 
-  // keep track of last initial to avoid loops
   const lastInitialRef = useRef(initialCode ?? '');
   useEffect(() => {
     const next = initialCode ?? '';
@@ -43,12 +38,10 @@ export default function ActivityCppBlock({
       lastSentRef.current = next;
       pendingRemoteRef.current = null;
     } else {
-      // if currently editing, queue remote update
       pendingRemoteRef.current = next;
     }
   }, [initialCode, isEditing]);
 
-  // When localOnly toggles true, reset from initial
   useEffect(() => {
     if (localOnly) {
       const base = initialCode ?? '';
@@ -57,7 +50,6 @@ export default function ActivityCppBlock({
     }
   }, [localOnly, initialCode]);
 
-  // --- terminal + ws refs ---
   const termRef = useRef(null);
   const term = useRef(null);
   const fit = useRef(null);
@@ -66,21 +58,17 @@ export default function ActivityCppBlock({
   const onDataDisposeRef = useRef(null);
   const inputBufferRef = useRef('');
 
-  // --- Prism / editor refs ---
-  const codeId = `cpp-code-${blockIndex}`;
+  const codeId = `pyremote-code-${blockIndex}`;
   const codeRef = useRef(null);
   const taRef = useRef(null);
   const gutterRef = useRef(null);
   const codeScrollRef = useRef(null);
   const selectionRef = useRef(null);
 
-
-  // --- debounce plumbing for broadcast / sync ---
   const debounceMs = 300;
   const broadcastTimerRef = useRef(null);
   const lastSentRef = useRef(initialCode ?? '');
   const pendingRemoteRef = useRef(null);
-
 
   useEffect(
     () => () => {
@@ -117,10 +105,9 @@ export default function ActivityCppBlock({
     const start = el.selectionStart ?? 0;
     const end = el.selectionEnd ?? start;
 
-    // TAB → insert indent instead of leaving textarea
     if (e.key === 'Tab') {
       e.preventDefault();
-      const indent = '    '; // change to '\t' if you want hard tabs
+      const indent = '    ';
       const newValue = value.slice(0, start) + indent + value.slice(end);
       const newPos = start + indent.length;
 
@@ -130,7 +117,6 @@ export default function ActivityCppBlock({
       return;
     }
 
-    // ENTER → auto-indent
     if (e.key === 'Enter') {
       e.preventDefault();
 
@@ -146,7 +132,6 @@ export default function ActivityCppBlock({
       setCode(newValue);
       if (editable) scheduleBroadcast(newValue);
       selectionRef.current = { start: newPos, end: newPos };
-      return;
     }
   };
 
@@ -160,7 +145,6 @@ export default function ActivityCppBlock({
     }
   };
 
-  // focus textarea when entering edit mode
   useEffect(() => {
     if (isEditing && taRef.current) {
       requestAnimationFrame(() => {
@@ -175,7 +159,6 @@ export default function ActivityCppBlock({
     }
   }, [isEditing]);
 
-  // Prism highlight when not editing
   useEffect(() => {
     if (!isEditing && codeRef.current) {
       Prism.highlightElement(codeRef.current);
@@ -187,11 +170,12 @@ export default function ActivityCppBlock({
     const { start, end } = selectionRef.current;
     try {
       taRef.current.setSelectionRange(start, end);
-    } catch { }
+    } catch {
+      /* ignore */
+    }
     selectionRef.current = null;
   }, [code, isEditing]);
 
-  // init terminal once
   useEffect(() => {
     if (!termRef.current) return;
 
@@ -211,7 +195,9 @@ export default function ActivityCppBlock({
     t.open(termRef.current);
     try {
       f.fit();
-    } catch { }
+    } catch {
+      /* ignore */
+    }
     t.focus();
 
     term.current = t;
@@ -230,19 +216,24 @@ export default function ActivityCppBlock({
       window.removeEventListener('resize', onResize);
       try {
         onDataDisposeRef.current?.dispose();
-      } catch { }
+      } catch {
+        /* ignore */
+      }
       try {
         wsRef.current?.close();
-      } catch { }
+      } catch {
+        /* ignore */
+      }
       try {
         term.current?.dispose();
-      } catch { }
+      } catch {
+        /* ignore */
+      }
       term.current = null;
       fit.current = null;
     };
   }, []);
 
-  // --- line numbers + scroll sync ---
   const LINE_H = 1.45;
   const EOL_SPLIT = /\r\n|\n|\r/;
 
@@ -261,10 +252,9 @@ export default function ActivityCppBlock({
     if (codeScrollRef.current) syncGutterScroll(codeScrollRef.current.scrollTop);
   };
 
-  // --- ws URL helper ---
   const wsUrl = (sid) => {
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    return `${proto}://${window.location.host}/cxx-run/session/ws/${sid}`;
+    return `${proto}://${window.location.host}/py-run/session/ws/${sid}`;
   };
 
   const [includeText, setIncludeText] = useState(
@@ -289,24 +279,19 @@ export default function ActivityCppBlock({
     if (!entries.length) return undefined;
 
     const includeList = parseIncludeList(includeText);
-
-    // If no includes specified: legacy behavior, send everything.
     if (!includeList.length) {
       return { ...fileContents };
     }
 
     const selected = {};
-
-    // 1) Add explicitly included files if present
     for (const name of includeList) {
       if (fileContents[name] !== undefined) {
         selected[name] = fileContents[name];
       }
     }
 
-    // 2) Always include non-C++ files as data (e.g., data.txt)
     for (const [name, content] of entries) {
-      if (!/\.(cpp|cc|cxx|c)$/i.test(name) && selected[name] === undefined) {
+      if (!/\.py$/i.test(name) && selected[name] === undefined) {
         selected[name] = content;
       }
     }
@@ -314,54 +299,47 @@ export default function ActivityCppBlock({
     return Object.keys(selected).length ? selected : undefined;
   };
 
-  // --- terminal output capture for grading ---
   const [terminalOutput, setTerminalOutput] = useState('');
-
   const appendOutput = (chunk) => {
     setTerminalOutput((prev) => prev + chunk);
   };
 
-  // Derive the output key from the code key, e.g. 1acode1 -> 1aoutput1
   const outputKey = useMemo(() => {
     if (!responseKey) return '';
     return responseKey.replace(/code(\d+)$/, 'output$1');
   }, [responseKey]);
 
-  //const baseQid = useMemo(() => {
-  //  if (!responseKey) return '';
-  //  // e.g., "1acode1" -> "1a"
-  //  return responseKey.replace(/code\d+$/, '');
-  //}, [responseKey]);
-
-  // --- unified run: interactive + sheet files ---
   const runInteractive = async () => {
     if (!runnerEnabled) {
-      term.current?.writeln('\r\n[Remote C++ runtime is disabled on this server]');
+      term.current?.writeln('\r\n[Remote Python runtime is disabled on this server]');
       return;
     }
 
-    // close previous session if any
     try {
       wsRef.current?.close();
-    } catch { }
+    } catch {
+      /* ignore */
+    }
     try {
       onDataDisposeRef.current?.dispose();
-    } catch { }
+    } catch {
+      /* ignore */
+    }
 
     setTerminalOutput('');
     term.current?.clear();
-    term.current?.writeln('Compiling...');
-    appendOutput('Compiling...\n');
+    term.current?.writeln('Starting Python...');
+    appendOutput('Starting Python...\n');
     term.current?.focus();
     setIsRunning(true);
 
     try {
-    const filesPayload = buildFilesPayload();
-    const payload = filesPayload ? { code, files: filesPayload } : { code };
+      const filesPayload = buildFilesPayload();
+      const payload = filesPayload ? { code, files: filesPayload } : { code };
 
       const compileController = new AbortController();
       const compileTimer = setTimeout(() => compileController.abort(), timeLimit);
-      const res = await fetch('/cxx-run/session/new', {
+      const res = await fetch('/py-run/session/new', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: compileController.signal,
@@ -385,7 +363,7 @@ export default function ActivityCppBlock({
 
       const data = await res.json();
       if (!data.ok) {
-        const msg = '\r\nCompile error:\n' + (data.compile_error || data.error || '(no details)');
+        const msg = '\r\nRun error:\n' + (data.error || data.compile_error || '(no details)');
         term.current.writeln(msg);
         appendOutput(msg + '\n');
         setIsRunning(false);
@@ -403,28 +381,32 @@ export default function ActivityCppBlock({
         term.current.focus();
         inputBufferRef.current = '';
 
-        // Enforce run-time limit for the program
         try {
           clearTimeout(wsTimerRef.current);
-        } catch { }
+        } catch {
+          /* ignore */
+        }
         wsTimerRef.current = setTimeout(() => {
           try {
             ws.send('\u0003');
-          } catch { }
+          } catch {
+            /* ignore */
+          }
           const tmsg = `\r\n⏱️ Program time limit reached (${timeLimit} ms). Sending Ctrl+C...`;
           term.current.writeln(tmsg);
           appendOutput(tmsg + '\n');
           setTimeout(() => {
             try {
               ws.close();
-            } catch { }
+            } catch {
+              /* ignore */
+            }
           }, 250);
         }, timeLimit);
 
         const onData = (d) => {
           if (ws.readyState !== WebSocket.OPEN) return;
 
-          // ENTER: send buffered line
           if (d === '\r') {
             const line = inputBufferRef.current;
             term.current.write('\r\n');
@@ -434,7 +416,6 @@ export default function ActivityCppBlock({
             return;
           }
 
-          // BACKSPACE
           if (d === '\u007F') {
             if (inputBufferRef.current.length > 0) {
               inputBufferRef.current = inputBufferRef.current.slice(0, -1);
@@ -443,7 +424,6 @@ export default function ActivityCppBlock({
             return;
           }
 
-          // Ctrl+C
           if (d === '\u0003') {
             ws.send(d);
             inputBufferRef.current = '';
@@ -452,7 +432,6 @@ export default function ActivityCppBlock({
             return;
           }
 
-          // printable char
           if (d >= ' ' && d !== '\x7f') {
             inputBufferRef.current += d;
             term.current.write(d);
@@ -462,7 +441,9 @@ export default function ActivityCppBlock({
 
         try {
           onDataDisposeRef.current?.dispose();
-        } catch { }
+        } catch {
+          /* ignore */
+        }
         onDataDisposeRef.current = term.current.onData(onData);
       };
 
@@ -477,7 +458,7 @@ export default function ActivityCppBlock({
                 ...(prev || {}),
                 ...(updated || {}),
               }));
-            } catch (e) {
+            } catch {
               const warnMsg = '\r\n[Warning] Failed to parse returned files metadata.\r\n';
               term.current.writeln(warnMsg);
               appendOutput(warnMsg + '\n');
@@ -486,8 +467,7 @@ export default function ActivityCppBlock({
           return;
         }
 
-        const text =
-          typeof msg === 'string' ? msg : new TextDecoder().decode(msg);
+        const text = typeof msg === 'string' ? msg : new TextDecoder().decode(msg);
         term.current.write(text);
         appendOutput(text);
       };
@@ -495,7 +475,9 @@ export default function ActivityCppBlock({
       ws.onerror = () => {
         try {
           clearTimeout(wsTimerRef.current);
-        } catch { }
+        } catch {
+          /* ignore */
+        }
         const msg = '\r\n[WebSocket error]';
         term.current.writeln(msg);
         appendOutput(msg + '\n');
@@ -504,10 +486,14 @@ export default function ActivityCppBlock({
       ws.onclose = () => {
         try {
           clearTimeout(wsTimerRef.current);
-        } catch { }
+        } catch {
+          /* ignore */
+        }
         try {
           onDataDisposeRef.current?.dispose();
-        } catch { }
+        } catch {
+          /* ignore */
+        }
         inputBufferRef.current = '';
         const msg = '\r\n[Program finished]';
         term.current.writeln(msg);
@@ -516,7 +502,7 @@ export default function ActivityCppBlock({
       };
     } catch (e) {
       if (e?.name === 'AbortError') {
-        const msg = `\r\nTimed out during compilation after ${timeLimit} ms`;
+        const msg = `\r\nTimed out during startup after ${timeLimit} ms`;
         term.current.writeln(msg);
         appendOutput(msg + '\n');
       } else {
@@ -528,40 +514,44 @@ export default function ActivityCppBlock({
     }
   };
 
-  // --- styles ---
+  const handleDoneEditing = () => {
+    setIsEditing(false);
+    if (editable && code !== savedCode) {
+      sendUpstream(code, { broadcastOnly: false });
+      setSavedCode(code);
+    }
+    flushPendingRemoteIfAny();
+  };
+
   const mono =
     'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
   const styles = {
     controls: {
       display: 'flex',
       gap: 8,
       alignItems: 'center',
       marginBottom: 8,
+      position: 'relative',
+      zIndex: 2,
       flexWrap: 'wrap',
     },
     editorWrap: {
       display: 'flex',
-      alignItems: 'stretch',
-      width: '100%',
-      border: '1px solid #dee2e6',
-      borderRadius: '0.375rem',
+      border: '1px solid #ddd',
+      borderRadius: 6,
       overflow: 'hidden',
-      background: '#f8f9fa',
-      fontFamily: mono,
-      fontSize: '0.95rem',
-      lineHeight: LINE_H,
-      marginTop: '0.25rem',
+      minHeight: 420,
+      background: '#fff',
     },
     gutter: {
+      width: '3.5em',
       margin: 0,
-      padding: '8px 8px 8px 12px',
-      minWidth: '3ch',
-      maxWidth: '8ch',
+      padding: '8px 0',
+      background: '#f8f9fa',
       color: '#6c757d',
       textAlign: 'right',
       userSelect: 'none',
-      background: '#f1f3f5',
-      borderRight: '1px solid #dee2e6',
       overflow: 'hidden',
       whiteSpace: 'pre',
       lineHeight: LINE_H,
@@ -583,7 +573,6 @@ export default function ActivityCppBlock({
       fontFamily: mono,
       fontSize: '0.95rem',
     },
-
     codeView: {
       flex: 1,
       overflow: 'auto',
@@ -624,16 +613,14 @@ export default function ActivityCppBlock({
     <>
       <div style={styles.controls}>
         <small className="text-muted">⏱ Time limit: {timeLimit} ms</small>
-        {!runnerEnabled && <small className="text-danger">Remote C++ runtime disabled</small>}
+        {!runnerEnabled && <small className="text-danger">Remote Python runtime disabled</small>}
 
         <Button
           variant="secondary"
           onClick={() => {
             setIsEditing((prev) => {
               const next = !prev;
-              if (next) {
-                flushPendingRemoteIfAny();
-              }
+              if (next) flushPendingRemoteIfAny();
               return next;
             });
           }}
@@ -658,14 +645,12 @@ export default function ActivityCppBlock({
           onClick={runInteractive}
           disabled={isRunning || !runnerEnabled}
         >
-          {isRunning ? 'Running…' : 'Run C++'}
+          {isRunning ? 'Running…' : 'Run Python'}
         </Button>
 
         <Button
           variant="outline-secondary"
-          onClick={() =>
-            setLayoutMode((m) => (m === 'side' ? 'stacked' : 'side'))
-          }
+          onClick={() => setLayoutMode((m) => (m === 'side' ? 'stacked' : 'side'))}
         >
           {layoutMode === 'side' ? 'Above' : 'Beside'}
         </Button>
@@ -674,14 +659,14 @@ export default function ActivityCppBlock({
       {!localOnly && (
         <div className="mb-1">
           <small className="text-muted me-1">
-            Included files for compile:
+            Included files for run:
           </small>
           <Form.Control
             type="text"
             size="sm"
             value={includeText}
             onChange={(e) => setIncludeText(e.target.value)}
-            placeholder="(all .cpp files if left blank)"
+            placeholder="(all .py files and data if left blank)"
             className="d-inline-block"
           />
         </div>
@@ -689,7 +674,7 @@ export default function ActivityCppBlock({
 
       {!runnerEnabled && (
         <Alert variant="warning" className="mb-2">
-          This install does not include the remote C++ runtime.
+          This install does not include the remote Python runtime. Local Skulpt Python can still be used where authored.
         </Alert>
       )}
 
@@ -718,8 +703,6 @@ export default function ActivityCppBlock({
             style={{ ...styles.textarea, minHeight: 420 }}
           />
         ) : (
-
-
           <div
             ref={codeScrollRef}
             style={{ ...styles.codeView, minHeight: 420 }}
@@ -729,7 +712,7 @@ export default function ActivityCppBlock({
               <code
                 id={codeId}
                 ref={codeRef}
-                className="language-cpp"
+                className="language-python"
                 style={styles.codeTag}
               >
                 {code}
@@ -748,26 +731,15 @@ export default function ActivityCppBlock({
     </>
   );
 
-
-  // --- render ---
   return (
     <>
       <Row className="mb-4">
-        {/* CODE: full-width in 'stacked', half-width in 'side' */}
-        <Col md={layoutMode === 'side' ? 6 : 12}>
-          {editorSection}
-        </Col>
-
-        {/* TERMINAL: same, but below in stacked mode via mt-3 */}
-        <Col
-          md={layoutMode === 'side' ? 6 : 12}
-          className={layoutMode === 'side' ? '' : 'mt-3'}
-        >
+        <Col md={layoutMode === 'side' ? 6 : 12}>{editorSection}</Col>
+        <Col md={layoutMode === 'side' ? 6 : 12} className={layoutMode === 'side' ? '' : 'mt-3'}>
           {terminalSection}
         </Col>
       </Row>
 
-      {/* Hidden mirror of code for test grading (independent of edit mode) */}
       {responseKey && (
         <textarea
           style={{ display: 'none' }}
@@ -777,12 +749,8 @@ export default function ActivityCppBlock({
         />
       )}
 
-      {/* Hidden mirror of terminal output for test grading */}
       {outputKey && (
-        <pre
-          style={{ display: 'none' }}
-          data-output-key={outputKey}
-        >
+        <pre style={{ display: 'none' }} data-output-key={outputKey}>
           {terminalOutput}
         </pre>
       )}

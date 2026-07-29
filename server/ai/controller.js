@@ -1285,7 +1285,35 @@ async function evaluateStudentResponse(req, res) {
     }
 
     accepted = false;
-    feedback = buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
+    try {
+      const promptParts = await buildStudentQuestionHelpPrompt({
+        questionText,
+        studentAnswer,
+        codeContext,
+        sampleResponse,
+        feedbackPrompt,
+        guidance,
+        questionAsked,
+      });
+
+      const chat = await openai.chat.completions.create({
+        model: MODEL,
+        messages: [
+          { role: "system", content: promptParts.sys },
+          { role: "user", content: promptParts.user },
+        ],
+        temperature: 0.2,
+        max_tokens: 180,
+      });
+
+      const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
+      feedback = raw || buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
+    } catch (err) {
+      if (AI_DEBUG) {
+        console.warn("[AI_DEBUG] clarifying-question help failed; using local fallback", err?.message || err);
+      }
+      feedback = buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
+    }
     return await applyGateAndSend();
   }
 
@@ -1857,4 +1885,7 @@ module.exports = {
   buildStudentResponsePrompt,
   buildStudentQuestionHelpPrompt,
   extractStudentQuestion,
+  __testHooks: {
+    openai,
+  },
 };

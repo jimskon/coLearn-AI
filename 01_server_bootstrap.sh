@@ -24,6 +24,8 @@ ENABLE_CERTBOT="${ENABLE_CERTBOT:-ask}"
 ENABLE_DOCKER="${ENABLE_DOCKER:-1}"
 ENABLE_CXX_RUNNER_PROXY="${ENABLE_CXX_RUNNER_PROXY:-ask}"
 CXX_RUNNER_PORT="${CXX_RUNNER_PORT:-5055}"
+ENABLE_PY_RUNNER_PROXY="${ENABLE_PY_RUNNER_PROXY:-ask}"
+PY_RUNNER_PORT="${PY_RUNNER_PORT:-5056}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 
 PKG_MANAGER=""
@@ -39,6 +41,7 @@ SITE_LINK=""
 CERT_FULLCHAIN=""
 CERT_PRIVKEY=""
 ENABLE_CXX_RUNNER_PROXY_FINAL=0
+ENABLE_PY_RUNNER_PROXY_FINAL=0
 
 info() { echo "${LOG_PREFIX} $*"; }
 warn() { echo "${LOG_PREFIX} WARNING: $*" >&2; }
@@ -54,6 +57,10 @@ trap 'echo "${LOG_PREFIX} ERROR: command failed at line ${LINENO}" >&2' ERR
 
 require_root() { [[ "$EUID" -eq 0 ]] || die "Run with sudo or as root."; }
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+docker_compose_available() {
+  docker compose version >/dev/null 2>&1
+}
 
 is_local_host_target() {
   local target="$1"
@@ -113,6 +120,55 @@ pkg_install() {
     yum) yum install -y "$@" ;;
     *) die "pkg_install called before platform detection" ;;
   esac
+}
+
+ensure_docker_repo_debian() {
+
+  local distro_id="${ID:-}"
+  local distro_codename="${VERSION_CODENAME:-}"
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    source /etc/os-release
+    distro_id="${distro_id:-${ID:-ubuntu}}"
+    distro_codename="${distro_codename:-${VERSION_CODENAME:-}}"
+  fi
+  if [[ -z "$distro_codename" ]] && command -v lsb_release >/dev/null 2>&1; then
+    distro_codename="$(lsb_release -cs 2>/dev/null || true)"
+  fi
+  distro_id="${distro_id:-ubuntu}"
+
+  [[ -n "$distro_codename" ]] || die "Could not determine VERSION_CODENAME from /etc/os-release for Docker repo setup."
+
+  info "Configuring Docker's official apt repository for ${distro_id} ${distro_codename}"
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL "https://download.docker.com/linux/${distro_id}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  chmod a+r /etc/apt/keyrings/docker.gpg
+  cat > /etc/apt/sources.list.d/docker.list <<EOF
+deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${distro_id} ${distro_codename} stable
+EOF
+}
+
+remove_conflicting_docker_packages_debian() {
+  local old_packages=(
+    docker.io
+    docker-doc
+    docker-compose
+    docker-compose-v2
+    podman-docker
+    containerd
+    runc
+  )
+  local installed=()
+  local pkg
+  for pkg in "${old_packages[@]}"; do
+    if dpkg -s "$pkg" >/dev/null 2>&1; then
+      installed+=("$pkg")
+    fi
+  done
+  if [[ "${#installed[@]}" -gt 0 ]]; then
+    info "Removing conflicting distro Docker packages: ${installed[*]}"
+    apt-get remove -y "${installed[@]}"
+  fi
 }
 
 prompt_default() {
@@ -461,6 +517,17 @@ EOFHTTP
     }
 EOFCXX
   fi
+  if [[ "$ENABLE_PY_RUNNER_PROXY_FINAL" == "1" ]]; then
+    cat >> "$SITE_CONF" <<EOFPY
+    location /py-run/ {
+        proxy_pass http://127.0.0.1:${PY_RUNNER_PORT}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+EOFPY
+  fi
   cat >> "$SITE_CONF" <<EOFFOOT
     location / { try_files \$uri \$uri/ /index.html; }
     client_max_body_size 25m;
@@ -542,6 +609,17 @@ EOFHTTPS
         proxy_set_header Host \$host;
     }
 EOFCXX2
+  fi
+  if [[ "$ENABLE_PY_RUNNER_PROXY_FINAL" == "1" ]]; then
+    cat >> "$SITE_CONF" <<EOFPY2
+    location /py-run/ {
+        proxy_pass http://127.0.0.1:${PY_RUNNER_PORT}/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+EOFPY2
   fi
   cat >> "$SITE_CONF" <<EOFFOOT2
     location / { try_files \$uri \$uri/ /index.html; }
@@ -634,11 +712,16 @@ maybe_install_docker() {
     pkg_install dnf-plugins-core || true
     pkg_install docker docker-compose-plugin || pkg_install docker docker-compose
   else
-    pkg_install docker.io docker-compose-v2 || pkg_install docker.io docker-compose
+    remove_conflicting_docker_packages_debian
+    ensure_docker_repo_debian
+    pkg_update
+    pkg_install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   fi
   systemctl enable docker
   systemctl start docker
   usermod -aG docker "$APP_USER" || true
+  command_exists docker || die "Docker installation completed, but the docker command is still unavailable."
+  docker_compose_available || die "Docker is installed, but 'docker compose' is unavailable. Stage 1 requires the Docker Compose plugin."
 }
 
 resolve_cxx_proxy_setting() {
@@ -652,6 +735,20 @@ resolve_cxx_proxy_setting() {
         ENABLE_CXX_RUNNER_PROXY_FINAL=0
       fi ;;
     *) die "ENABLE_CXX_RUNNER_PROXY must be ask, 1, or 0" ;;
+  esac
+}
+
+resolve_py_proxy_setting() {
+  case "$ENABLE_PY_RUNNER_PROXY" in
+    1) ENABLE_PY_RUNNER_PROXY_FINAL=1 ;;
+    0) ENABLE_PY_RUNNER_PROXY_FINAL=0 ;;
+    ask)
+      if prompt_yes_no "Configure nginx proxy location for /py-run/?" "y"; then
+        ENABLE_PY_RUNNER_PROXY_FINAL=1
+      else
+        ENABLE_PY_RUNNER_PROXY_FINAL=0
+      fi ;;
+    *) die "ENABLE_PY_RUNNER_PROXY must be ask, 1, or 0" ;;
   esac
 }
 
@@ -676,19 +773,28 @@ DB_PASSWORD=${DB_PASSWORD}
 CLIENT_ORIGIN=${client_origin}
 SESSION_SECRET=
 OPENAI_API_KEY=replace_me
+MAIL_DELIVERY_MODE=direct
 EMAIL_USER=replace_me
 EMAIL_PASS=replace_me
+REMOTE_MAIL_URL=https://${DOMAIN}/mail-relay
+REMOTE_MAIL_RELAY_ID=main-prod
+REMOTE_MAIL_SECRET=replace_me
+REMOTE_MAIL_TIMEOUT_MS=10000
 SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com
 APP_ROOT_NAME=Administrator
 APP_ROOT_EMAIL=admin@${DOMAIN}
 APP_ROOT_PASSWORD=
 BOOTSTRAP_APP_ROOT=1
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=${ENABLE_CXX_RUNNER_PROXY_FINAL}
+ENABLE_REMOTE_CPP=${ENABLE_CXX_RUNNER_PROXY_FINAL}
 CXX_RUNNER_REPO_URL=https://github.com/jimskon/coLearn-AI-cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=${CXX_RUNNER_PORT}
+ENABLE_REMOTE_PYTHON=ask
+PY_RUNNER_DIR=/opt/py-runner
+ENABLE_PY_RUNNER_PROXY=${ENABLE_PY_RUNNER_PROXY_FINAL}
+PY_RUNNER_PORT=${PY_RUNNER_PORT}
 EOFCONF
   chown "$APP_USER:$APP_USER" "$template_file"
   chmod 600 "$template_file"
@@ -748,6 +854,7 @@ main() {
   maybe_set_mariadb_root_password
   setup_database
   resolve_cxx_proxy_setting
+  resolve_py_proxy_setting
   maybe_install_docker
   install_or_refresh_nginx_config
   maybe_install_cert

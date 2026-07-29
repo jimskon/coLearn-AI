@@ -22,18 +22,26 @@ CLIENT_ORIGIN="${CLIENT_ORIGIN:-}"
 SESSION_SECRET="${SESSION_SECRET:-}"
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_EMAIL:-pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com}"
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+MAIL_DELIVERY_MODE="${MAIL_DELIVERY_MODE:-direct}"
 EMAIL_USER="${EMAIL_USER:-}"
 EMAIL_PASS="${EMAIL_PASS:-}"
+REMOTE_MAIL_URL="${REMOTE_MAIL_URL:-}"
+REMOTE_MAIL_RELAY_ID="${REMOTE_MAIL_RELAY_ID:-}"
+REMOTE_MAIL_SECRET="${REMOTE_MAIL_SECRET:-}"
+REMOTE_MAIL_TIMEOUT_MS="${REMOTE_MAIL_TIMEOUT_MS:-10000}"
 APP_ROOT_NAME="${APP_ROOT_NAME:-Administrator}"
 APP_ROOT_EMAIL="${APP_ROOT_EMAIL:-}"
 APP_ROOT_PASSWORD="${APP_ROOT_PASSWORD:-}"
 BOOTSTRAP_APP_ROOT="${BOOTSTRAP_APP_ROOT:-1}"
 SERVER_ENTRY="${SERVER_ENTRY:-server/index.js}"
-ENABLE_CXX_RUNNER="${ENABLE_CXX_RUNNER:-0}"
+ENABLE_REMOTE_CPP="${ENABLE_REMOTE_CPP:-${ENABLE_CXX_RUNNER:-ask}}"
 CXX_RUNNER_REPO_URL="${CXX_RUNNER_REPO_URL:-https://github.com/jimskon/coLearn-AI-cxx-runner.git}"
 CXX_RUNNER_DIR="${CXX_RUNNER_DIR:-/opt/cxx-runner}"
 CXX_RUNNER_BRANCH="${CXX_RUNNER_BRANCH:-main}"
 CXX_RUNNER_PORT="${CXX_RUNNER_PORT:-5055}"
+ENABLE_REMOTE_PYTHON="${ENABLE_REMOTE_PYTHON:-${ENABLE_PY_RUNNER:-ask}}"
+PY_RUNNER_DIR="${PY_RUNNER_DIR:-/opt/py-runner}"
+PY_RUNNER_PORT="${PY_RUNNER_PORT:-5056}"
 ENV_FILE="${ENV_FILE:-}"
 SCHEMA_FILE="${SCHEMA_FILE:-}"
 
@@ -41,6 +49,23 @@ info() { echo "${LOG_PREFIX} $*"; }
 warn() { echo "${LOG_PREFIX} WARNING: $*" >&2; }
 die() { echo "${LOG_PREFIX} ERROR: $*" >&2; exit 1; }
 trap 'echo "${LOG_PREFIX} ERROR: command failed at line ${LINENO}" >&2' ERR
+
+docker_compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    printf '%s\n' "docker compose"
+    return 0
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    printf '%s\n' "docker-compose"
+    return 0
+  fi
+  return 1
+}
+
+remove_container_if_present() {
+  local name="$1"
+  docker rm -f "$name" >/dev/null 2>&1 || true
+}
 
 is_local_host_target() {
   local target="$1"
@@ -83,7 +108,9 @@ prompt_secret_keep() {
   local var_name="$1"
   local prompt_text="$2"
   local existing_value="${!var_name:-}"
-  if [[ "$NONINTERACTIVE" == "1" ]]; then return 0; fi
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    return 0
+  fi
   local response=""
   if [[ -n "$existing_value" ]]; then
     read -r -s -p "${prompt_text} [leave blank to keep current]: " response
@@ -93,6 +120,40 @@ prompt_secret_keep() {
   echo
   if [[ -n "$response" ]]; then
     printf -v "$var_name" '%s' "$response"
+  fi
+}
+
+prompt_yes_no() {
+  local prompt_text="$1"
+  local default_answer="$2"
+  local reply
+  local suffix="[y/N]"
+  [[ "$default_answer" == "y" ]] && suffix="[Y/n]"
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    [[ "$default_answer" == "y" ]]
+    return
+  fi
+  read -r -p "${prompt_text} ${suffix}: " reply
+  reply="${reply:-$default_answer}"
+  [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+normalize_mail_delivery_mode() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    remote) printf 'remote' ;;
+    *) printf 'direct' ;;
+  esac
+}
+
+clear_mail_mode_settings() {
+  if [[ "$MAIL_DELIVERY_MODE" == "remote" ]]; then
+    EMAIL_USER=""
+    EMAIL_PASS=""
+  else
+    REMOTE_MAIL_URL=""
+    REMOTE_MAIL_RELAY_ID=""
+    REMOTE_MAIL_SECRET=""
+    REMOTE_MAIL_TIMEOUT_MS="10000"
   fi
 }
 
@@ -148,13 +209,51 @@ resolve_settings() {
   if [[ -z "$APP_ROOT_EMAIL" ]]; then APP_ROOT_EMAIL="admin@${DOMAIN}"; fi
   prompt_default APP_ROOT_NAME "coLearn-AI root display name" "$APP_ROOT_NAME"
   prompt_default APP_ROOT_EMAIL "coLearn-AI root email" "$APP_ROOT_EMAIL"
-  prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
-  prompt_secret_keep EMAIL_PASS "Outgoing email app password"
-  if [[ "$ENABLE_CXX_RUNNER" == "1" ]]; then
+  MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
+  prompt_default MAIL_DELIVERY_MODE "Mail delivery mode (direct or remote)" "$MAIL_DELIVERY_MODE"
+  MAIL_DELIVERY_MODE="$(normalize_mail_delivery_mode "$MAIL_DELIVERY_MODE")"
+  if [[ "$MAIL_DELIVERY_MODE" == "remote" ]]; then
+    prompt_default REMOTE_MAIL_URL "Remote mail relay base URL" "$REMOTE_MAIL_URL"
+    prompt_default REMOTE_MAIL_RELAY_ID "Remote mail relay id" "$REMOTE_MAIL_RELAY_ID"
+    prompt_secret_keep REMOTE_MAIL_SECRET "Remote mail relay shared secret"
+    prompt_default REMOTE_MAIL_TIMEOUT_MS "Remote mail relay timeout in ms" "$REMOTE_MAIL_TIMEOUT_MS"
+  else
+    prompt_default EMAIL_USER "Outgoing email account" "$EMAIL_USER"
+    prompt_secret_keep EMAIL_PASS "Outgoing email app password"
+  fi
+  clear_mail_mode_settings
+
+  case "$ENABLE_REMOTE_CPP" in
+    1|0|ask) ;;
+    *) die "ENABLE_REMOTE_CPP must be ask, 1, or 0" ;;
+  esac
+  if [[ "$ENABLE_REMOTE_CPP" == "ask" ]]; then
+    if prompt_yes_no "Install the remote C++ runtime?" "y"; then
+      ENABLE_REMOTE_CPP=1
+    else
+      ENABLE_REMOTE_CPP=0
+    fi
+  fi
+  if [[ "$ENABLE_REMOTE_CPP" == "1" ]]; then
     prompt_default CXX_RUNNER_REPO_URL "C++ runner git repo URL" "$CXX_RUNNER_REPO_URL"
     prompt_default CXX_RUNNER_DIR "C++ runner directory" "$CXX_RUNNER_DIR"
     prompt_default CXX_RUNNER_BRANCH "C++ runner git branch" "$CXX_RUNNER_BRANCH"
     prompt_default CXX_RUNNER_PORT "C++ runner port" "$CXX_RUNNER_PORT"
+  fi
+  case "$ENABLE_REMOTE_PYTHON" in
+    1|0|ask) ;;
+    *) die "ENABLE_REMOTE_PYTHON must be ask, 1, or 0" ;;
+  esac
+  if [[ "$ENABLE_REMOTE_PYTHON" == "ask" ]]; then
+    if prompt_yes_no "Install the remote Python runner for numpy/pandas support?" "y"; then
+      ENABLE_REMOTE_PYTHON=1
+    else
+      ENABLE_REMOTE_PYTHON=0
+    fi
+  fi
+  if [[ "$ENABLE_REMOTE_PYTHON" == "1" ]]; then
+    prompt_default PY_RUNNER_DIR "Python runner directory" "$PY_RUNNER_DIR"
+    prompt_default PY_RUNNER_PORT "Python runner port" "$PY_RUNNER_PORT"
   fi
   if [[ -z "$ENV_FILE" ]]; then ENV_FILE="${APP_DIR}/server/.env"; fi
 }
@@ -225,15 +324,27 @@ write_env_files() {
   write_key_value SESSION_SECRET "$SESSION_SECRET" "$ENV_FILE"
   write_key_value CLIENT_ORIGIN "$CLIENT_ORIGIN" "$ENV_FILE"
   write_key_value SERVICE_ACCOUNT_EMAIL "$SERVICE_ACCOUNT_EMAIL" "$ENV_FILE"
+  write_key_value MAIL_DELIVERY_MODE "$MAIL_DELIVERY_MODE" "$ENV_FILE"
   if [[ -n "$OPENAI_API_KEY" ]]; then
     write_key_value OPENAI_API_KEY "$OPENAI_API_KEY" "$ENV_FILE"
   fi
-  if [[ -n "$EMAIL_USER" ]]; then
-    write_key_value EMAIL_USER "$EMAIL_USER" "$ENV_FILE"
+  if [[ "$MAIL_DELIVERY_MODE" == "remote" ]]; then
+    write_key_value REMOTE_MAIL_URL "$REMOTE_MAIL_URL" "$ENV_FILE"
+    write_key_value REMOTE_MAIL_RELAY_ID "$REMOTE_MAIL_RELAY_ID" "$ENV_FILE"
+    write_key_value REMOTE_MAIL_SECRET "$REMOTE_MAIL_SECRET" "$ENV_FILE"
+    write_key_value REMOTE_MAIL_TIMEOUT_MS "$REMOTE_MAIL_TIMEOUT_MS" "$ENV_FILE"
+    sed -i '/^EMAIL_USER=/d;/^EMAIL_PASS=/d' "$ENV_FILE"
+  else
+    if [[ -n "$EMAIL_USER" ]]; then
+      write_key_value EMAIL_USER "$EMAIL_USER" "$ENV_FILE"
+    fi
+    if [[ -n "$EMAIL_PASS" ]]; then
+      write_key_value EMAIL_PASS "$EMAIL_PASS" "$ENV_FILE"
+    fi
+    sed -i '/^REMOTE_MAIL_URL=/d;/^REMOTE_MAIL_RELAY_ID=/d;/^REMOTE_MAIL_SECRET=/d;/^REMOTE_MAIL_TIMEOUT_MS=/d' "$ENV_FILE"
   fi
-  if [[ -n "$EMAIL_PASS" ]]; then
-    write_key_value EMAIL_PASS "$EMAIL_PASS" "$ENV_FILE"
-  fi
+  write_key_value RUNTIME_FEATURE_REMOTE_CPP "${ENABLE_REMOTE_CPP/ask/0}" "$ENV_FILE"
+  write_key_value RUNTIME_FEATURE_REMOTE_PYTHON "${ENABLE_REMOTE_PYTHON/ask/0}" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   local client_env="${APP_DIR}/client/.env"
   info "Writing client environment to $client_env"
@@ -265,8 +376,10 @@ bootstrap_app_root() {
     [[ "$NONINTERACTIVE" == "1" ]] && die "APP_ROOT_PASSWORD is required in noninteractive mode when BOOTSTRAP_APP_ROOT=1"
     local confirm=""
     while true; do
-      read -r -s -p "coLearn-AI root user password: " APP_ROOT_PASSWORD; echo
-      read -r -s -p "Confirm coLearn-AI root user password: " confirm; echo
+      read -r -s -p "coLearn-AI root user password: " APP_ROOT_PASSWORD
+      echo
+      read -r -s -p "Confirm coLearn-AI root user password: " confirm
+      echo
       [[ -n "$APP_ROOT_PASSWORD" && "$APP_ROOT_PASSWORD" == "$confirm" ]] && break
       warn "Passwords did not match. Try again."
     done
@@ -292,15 +405,18 @@ SQL
 }
 
 ensure_docker_access() {
-  [[ "$ENABLE_CXX_RUNNER" == "1" ]] || return 0
+  [[ "$ENABLE_REMOTE_CPP" == "1" || "$ENABLE_REMOTE_PYTHON" == "1" ]] || return 0
   command -v docker >/dev/null 2>&1 || die "Docker is not installed. Run stage 1 bootstrap as root first."
   groups | grep -qw docker || die "User ${USER} is not in the docker group. Log out and back in, or add the user to docker."
+  docker_compose_cmd >/dev/null || die "Remote runtimes require Docker Compose, but neither 'docker compose' nor 'docker-compose' is available. Rerun stage 1 bootstrap on a server with the official Docker Compose plugin installed."
 }
 
 setup_cxx_runner() {
-  [[ "$ENABLE_CXX_RUNNER" == "1" ]] || return 0
-  [[ -n "$CXX_RUNNER_REPO_URL" ]] || die "CXX_RUNNER_REPO_URL is required when ENABLE_CXX_RUNNER=1"
+  [[ "$ENABLE_REMOTE_CPP" == "1" ]] || return 0
+  [[ -n "$CXX_RUNNER_REPO_URL" ]] || die "CXX_RUNNER_REPO_URL is required when ENABLE_REMOTE_CPP=1"
   ensure_docker_access
+  local compose_cmd
+  compose_cmd="$(docker_compose_cmd)" || die "Docker Compose is unavailable."
   mkdir -p "$(dirname "$CXX_RUNNER_DIR")"
   if [[ -d "$CXX_RUNNER_DIR/.git" ]]; then
     info "Updating cxx-runner repo"
@@ -316,11 +432,30 @@ setup_cxx_runner() {
   fi
   [[ -f "$CXX_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $CXX_RUNNER_DIR"
   info "Building and starting cxx-runner"
-  if docker compose version >/dev/null 2>&1; then
-    (cd "$CXX_RUNNER_DIR" && docker compose up -d --build)
-  else
-    (cd "$CXX_RUNNER_DIR" && docker-compose up -d --build)
-  fi
+  info "Removing any stale cxx-runner containers"
+  remove_container_if_present "cxx-runner"
+  remove_container_if_present "cxx-redis"
+  (cd "$CXX_RUNNER_DIR" && $compose_cmd down --remove-orphans >/dev/null 2>&1 || true)
+  (cd "$CXX_RUNNER_DIR" && $compose_cmd up -d --build)
+}
+
+setup_py_runner() {
+  [[ "$ENABLE_REMOTE_PYTHON" == "1" ]] || return 0
+  ensure_docker_access
+  local compose_cmd
+  compose_cmd="$(docker_compose_cmd)" || die "Docker Compose is unavailable."
+  mkdir -p "$(dirname "$PY_RUNNER_DIR")"
+  info "Syncing py-runner sources"
+  rm -rf "$PY_RUNNER_DIR"
+  mkdir -p "$PY_RUNNER_DIR"
+  rsync -a --delete "$APP_DIR/ops/py-runner/" "$PY_RUNNER_DIR/"
+  [[ -f "$PY_RUNNER_DIR/docker-compose.yml" ]] || die "docker-compose.yml not found in $PY_RUNNER_DIR"
+  info "Building and starting py-runner"
+  info "Removing any stale py-runner containers"
+  remove_container_if_present "py-runner"
+  remove_container_if_present "py-redis"
+  (cd "$PY_RUNNER_DIR" && $compose_cmd down --remove-orphans >/dev/null 2>&1 || true)
+  (cd "$PY_RUNNER_DIR" && $compose_cmd up -d --build)
 }
 
 start_app_pm2() {
@@ -352,10 +487,15 @@ print_summary() {
   echo "Node port:                 ${PORT}"
   echo "App DB name/user:          ${DB_NAME} / ${DB_USER}"
   echo "coLearn-AI root email:     ${APP_ROOT_EMAIL}"
-  if [[ "$ENABLE_CXX_RUNNER" == "1" ]]; then
+  if [[ "$ENABLE_REMOTE_CPP" == "1" ]]; then
     echo "C++ runner dir/port:       ${CXX_RUNNER_DIR} / ${CXX_RUNNER_PORT}"
   else
     echo "C++ runner:                disabled"
+  fi
+  if [[ "$ENABLE_REMOTE_PYTHON" == "1" ]]; then
+    echo "Python runner dir/port:    ${PY_RUNNER_DIR} / ${PY_RUNNER_PORT}"
+  else
+    echo "Python runner:             disabled"
   fi
   echo "PM2 process:               colearn-ai"
   echo "===================================================="
@@ -372,6 +512,7 @@ main() {
   run_repo_migrations
   bootstrap_app_root
   setup_cxx_runner
+  setup_py_runner
   start_app_pm2
   print_summary
 }

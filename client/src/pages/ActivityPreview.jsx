@@ -7,6 +7,7 @@ import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-python';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
+import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 
 export default function ActivityPreview() {
@@ -26,6 +27,7 @@ export default function ActivityPreview() {
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxError, setSandboxError] = useState('');
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
+  const { features: runtimeFeatures } = useRuntimeFeatures();
 
   // NEW: local state used by renderBlocks / code blocks
   const [codeViewMode, setCodeViewMode] = useState({}); // { responseKey: 'active'|'local' }
@@ -377,6 +379,7 @@ export default function ActivityPreview() {
           onLocalCodeChange: updateLocalCode,
           onCodeChange: handleCodeChange,
           infoBubbleSession: infoBubbleSessionRef.current,
+          runtimeFeatures,
         })
       )}
     </Container>

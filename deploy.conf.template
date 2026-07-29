@@ -19,8 +19,13 @@ DB_PASSWORD=replace_me
 CLIENT_ORIGIN=http://colearn.local
 SESSION_SECRET=replace_with_a_long_random_secret
 OPENAI_API_KEY=replace_me
+MAIL_DELIVERY_MODE=direct
 EMAIL_USER=replace_me
 EMAIL_PASS=replace_me
+REMOTE_MAIL_URL=https://colearn-ai.com/mail-relay
+REMOTE_MAIL_RELAY_ID=main-prod
+REMOTE_MAIL_SECRET=replace_me
+REMOTE_MAIL_TIMEOUT_MS=10000
 SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com
 
 APP_ROOT_NAME=Administrator
@@ -29,8 +34,11 @@ APP_ROOT_PASSWORD=replace_me
 BOOTSTRAP_APP_ROOT=1
 
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=1
+ENABLE_REMOTE_CPP=ask
 CXX_RUNNER_REPO_URL=https://github.com/jimskon/coLearn-AI-cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+ENABLE_REMOTE_PYTHON=ask
+PY_RUNNER_DIR=/opt/py-runner
+PY_RUNNER_PORT=5056

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Container, Row, Col, Button, Form, Alert, Modal, Spinner, Tabs, Tab } from 'react-bootstrap';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
+import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 
 export default function ActivityEditor() {
@@ -30,6 +31,7 @@ export default function ActivityEditor() {
   const [fileContents, setFileContents] = useState({});
   const fileContentsRef = useRef({});
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
+  const { features: runtimeFeatures } = useRuntimeFeatures();
 
   // ---- Auto-fix state ----
   const docBeforeAutofixRef = useRef('');
@@ -293,6 +295,7 @@ export default function ActivityEditor() {
         fileContents: files,
         setFileContents: handleUpdateFileContents,
         infoBubbleSession: infoBubbleSessionRef.current,
+        runtimeFeatures,
       });
 
       setElements(rendered);
@@ -366,6 +369,12 @@ export default function ActivityEditor() {
     return () => clearTimeout(autoTimerRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawText, autoCompileEnabled]);
+
+  useEffect(() => {
+    if (!rawText.trim()) return;
+    handleCompile(rawText, 'auto');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeFeatures]);
 
   // "Check" button (manual parse + show errors pane)
   const handleCheck = () => {
@@ -556,6 +565,7 @@ export default function ActivityEditor() {
         fileContents: files2,
         setFileContents: handleUpdateFileContents,
         infoBubbleSession: infoBubbleSessionRef.current,
+        runtimeFeatures,
       });
 
       setAutofixElements(rendered2);

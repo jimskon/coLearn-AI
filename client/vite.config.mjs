@@ -1,4 +1,5 @@
 // vite.config.mjs
+import { execSync } from 'node:child_process';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -8,8 +9,18 @@ export default defineConfig(() => {
     process.env.DEV_REACT_BUILD === 'true' ||
     process.env.VITE_DEV_REACT_BUILD === 'true';
 
+  let gitCommitCount = '0';
+  try {
+    gitCommitCount = execSync('git rev-list --count HEAD', { encoding: 'utf8' }).trim();
+  } catch {
+    gitCommitCount = '0';
+  }
+
   return {
     plugins: [react()],
+    define: {
+      __APP_GIT_COMMIT_COUNT__: JSON.stringify(gitCommitCount),
+    },
     server: {
       host: true,
       port: 3000,

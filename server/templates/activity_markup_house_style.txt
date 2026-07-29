@@ -34,6 +34,7 @@ Rules illustrated above:
 - Do not invent new \info targets such as instructor.
 - If you include runnable C++ code, wrap it in \cpp ... \endcpp.
 - If you include runnable Python code, wrap it in \python ... \endpython.
+- If you include remote Python code that should run on the server, wrap it in \pythonremote ... \endpythonremote.
 - If you include turtle code, always wrap it in \pythonturtle ... \endpythonturtle.
 - If you include runnable turtle code, prefer omitting the timeout unless a specific non-default limit is required. Use \pythonturtle{WxH} ... \endpythonturtle when only dimensions matter, or \pythonturtle ... \endpythonturtle if defaults are fine.
 - Do not paste raw code directly into question text.

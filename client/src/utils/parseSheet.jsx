@@ -5,6 +5,7 @@ import ActivityQuestionBlock from '../components/activity/ActivityQuestionBlock'
 import ActivityHeader from '../components/activity/ActivityHeader';
 import ActivityEnvironment from '../components/activity/ActivityEnvironment';
 import ActivityPythonBlock from '../components/activity/ActivityPythonBlock';
+import ActivityRemotePythonBlock from '../components/activity/ActivityRemotePythonBlock';
 import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { makeResponseAttrs } from './responseDom';
@@ -124,7 +125,7 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
 // Keeps everything else as-is. Works for any \SomeTag{ ... } (including section*, link, image, etc.)
 function collapseBracedCommands(rawLines) {
   const startsTag = (s) =>
-    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|cpp|include)\{/.test(s);
+    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
   const out = [];
   let buf = null;
   let depth = 0;
@@ -747,6 +748,7 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     const pythonMatch = trimmed.match(/^\\python(?:\{([^}]*)\})?$/);
+    const pythonRemoteMatch = trimmed.match(/^\\pythonremote(?:\{([^}]*)\})?$/i);
     const turtleMatch = trimmed.match(/^\\pythonturtle(?:\{([^}]*)\})?$/i);
 
     if (pythonMatch) {
@@ -796,6 +798,59 @@ export function parseSheetToBlocks(lines, options = {}) {
           content: '',        // fill on \endpython
           timeLimit,
           includeFiles: imports || null,   // not strictly needed, but consistent
+        });
+      } else {
+        blocks.push({ ...blockObj, localOnly: !inGroup });
+      }
+
+      continue;
+    }
+    if (pythonRemoteMatch) {
+      flushCurrentBlock();
+      currentField = 'pythonremote';
+
+      const argStr = pythonRemoteMatch[1] ? pythonRemoteMatch[1].trim() : '';
+      let timeLimit = 50000;
+      let imports = null;
+
+      if (argStr) {
+        const parts = argStr
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean);
+
+        if (parts.length > 0 && /^\d+$/.test(parts[0])) {
+          timeLimit = parseInt(parts[0], 10);
+          parts.shift();
+        }
+
+        const impPart = parts.find(p => p.toLowerCase().startsWith('imports='));
+        if (impPart) {
+          const listStr = impPart.slice('imports='.length).trim();
+          if (listStr) {
+            imports = listStr
+              .split(/[;,]/)
+              .map(s => s.trim())
+              .filter(Boolean);
+          }
+        }
+      }
+
+      const blockObj = { type: 'pythonremote', lines: [], timeLimit, imports };
+
+      if (currentQuestion && currentQuestion.type === 'question') {
+        if (!currentQuestion.pythonBlocks) currentQuestion.pythonBlocks = [];
+        currentQuestion.pythonBlocks.push(blockObj);
+
+        const nextIndex = (currentQuestion.codeBlocks?.length || 0) + 1;
+        currentQuestion.codeBlocks.push({
+          lang: 'python',
+          runner: 'remote',
+          index: nextIndex,
+          editable: true,
+          content: '',
+          timeLimit,
+          includeFiles: imports || null,
         });
       } else {
         blocks.push({ ...blockObj, localOnly: !inGroup });
@@ -858,10 +913,10 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    if (trimmed === '\\endpython' || trimmed === '\\endpythonturtle') {
-      if (currentField === 'python' || currentField === 'pythonturtle') {
+    if (trimmed === '\\endpython' || trimmed === '\\endpythonturtle' || trimmed === '\\endpythonremote') {
+      if (currentField === 'python' || currentField === 'pythonturtle' || currentField === 'pythonremote') {
         const lastBlock = blocks.at(-1);
-        if ((lastBlock?.type === 'python' || lastBlock?.type === 'pythonturtle') && lastBlock.lines) {
+        if ((lastBlock?.type === 'python' || lastBlock?.type === 'pythonturtle' || lastBlock?.type === 'pythonremote') && lastBlock.lines) {
           lastBlock.content = lastBlock.lines.join('\n');
           delete lastBlock.lines;
         } else if (currentQuestion?.pythonBlocks?.length > 0) {
@@ -888,6 +943,9 @@ export function parseSheetToBlocks(lines, options = {}) {
               currentQuestion.codeBlocks[real].width = block.width;
               currentQuestion.codeBlocks[real].height = block.height;
             }
+            if (currentField === 'pythonremote') {
+              currentQuestion.codeBlocks[real].runner = 'remote';
+            }
           }
         }
         currentField = 'prompt';
@@ -895,9 +953,9 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    if (currentField === 'python' || currentField === 'pythonturtle') {
+    if (currentField === 'python' || currentField === 'pythonturtle' || currentField === 'pythonremote') {
       const lastBlock = blocks.at(-1);
-      if ((lastBlock?.type === 'python' || lastBlock?.type === 'pythonturtle') && lastBlock.lines) {
+      if ((lastBlock?.type === 'python' || lastBlock?.type === 'pythonturtle' || lastBlock?.type === 'pythonremote') && lastBlock.lines) {
         lastBlock.lines.push(line);
       } else if (currentQuestion?.pythonBlocks?.length > 0) {
         const lastQuestionBlock = currentQuestion.pythonBlocks.at(-1);
@@ -1370,6 +1428,7 @@ export function renderBlocks(blocks, options = {}) {
     unansweredShown = {},
     onFileChange = null,
     infoBubbleSession = null,
+    runtimeFeatures = {},
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -1697,7 +1756,11 @@ export function renderBlocks(blocks, options = {}) {
       );
     }
 
-    if (block.type === 'python') {
+    if (block.type === 'python' || block.type === 'pythonremote') {
+      const PythonBlockComponent =
+        block.type === 'pythonremote' ? ActivityRemotePythonBlock : ActivityPythonBlock;
+      const remotePythonEnabled = runtimeFeatures.remotePython ?? true;
+
       // Local-only top-level python: no DB keys, no prefill, always reflect sheet
       if (block.localOnly) {
         const tl = block.timeLimit ?? 50000;
@@ -1710,11 +1773,12 @@ export function renderBlocks(blocks, options = {}) {
                 ⏱ Time limit: {formatTimeLimit(tl)} · <span className="badge bg-secondary">Local (not saved)</span>
               </div>
             )}
-            <ActivityPythonBlock
+            <PythonBlockComponent
               code={block.content || ''}   // ← always the sheet content
               blockIndex={localKey}
               editable={canEdit}
               localOnly={true}             // ← no persistence
+              runnerEnabled={block.type === 'pythonremote' ? remotePythonEnabled : true}
               fileContents={fileContents}
               setFileContents={setFileContents}
               timeLimit={tl}
@@ -1789,11 +1853,12 @@ export function renderBlocks(blocks, options = {}) {
               </button>
             </div>
           )}
-          <ActivityPythonBlock
+          <PythonBlockComponent
             key={`py-${index}-${block.content?.slice(0, 10) || ''}`}
             code={displayedCode}
             blockIndex={`py-${codeKey}-${index}`}
             editable={canEdit}
+            runnerEnabled={block.type === 'pythonremote' ? remotePythonEnabled : true}
             responseKey={codeKey}
             // 👇 forward meta so the server sees the actual task
             onCodeChange={(rk, code, extra) => {
@@ -1833,6 +1898,7 @@ export function renderBlocks(blocks, options = {}) {
               blockIndex={localKey}
               editable={true}
               localOnly={true}
+              runnerEnabled={runtimeFeatures.remoteCpp ?? true}
               responseKey={localKey}
               onCodeChange={onCodeChange}
               fileContents={fileContents}
@@ -1883,6 +1949,7 @@ export function renderBlocks(blocks, options = {}) {
             code={displayedCode}
             blockIndex={`cpp-${codeKey}-${index}`}
             editable={canEdit}
+            runnerEnabled={runtimeFeatures.remoteCpp ?? true}
             responseKey={codeKey}
             onCodeChange={(rk, code, extra) => {
               if (showToggle && codeMode === 'local' && !isActive) {
@@ -2047,6 +2114,9 @@ export function renderBlocks(blocks, options = {}) {
 
           {block.pythonBlocks?.map((py, i) => {
             const codeAnchorRef = React.createRef();
+            const PythonBlockComponent =
+              py.type === 'pythonremote' ? ActivityRemotePythonBlock : ActivityPythonBlock;
+            const remotePythonEnabled = runtimeFeatures.remotePython ?? true;
             const cbIndex = codeIndicesByLang.python[i] ?? (i + 1);
             const responseKey = `${block.groupId}${block.id}code${cbIndex}`;
             const savedResponse = prefill?.[responseKey]?.response || py.content;
@@ -2106,11 +2176,12 @@ export function renderBlocks(blocks, options = {}) {
                     </button>
                   </div>
                 )}
-                <ActivityPythonBlock
+                <PythonBlockComponent
                   key={`q-${block.groupId}-${block.id}-py-${i}`}
                   code={displayedCode}
                   blockIndex={`q-${currentGroupIndex}-${block.id}-${i}`}
                   editable={canEdit}
+                  runnerEnabled={py.type === 'pythonremote' ? remotePythonEnabled : true}
                   localOnly={runMode === 'preview'}
                   responseKey={responseKey}
                   onCodeChange={(rk, code, extra) => {
@@ -2191,6 +2262,7 @@ export function renderBlocks(blocks, options = {}) {
                   code={displayedCode}
                   blockIndex={`cpp-${block.groupId}-${block.id}-${i}`}
                   editable={canEdit}
+                  runnerEnabled={runtimeFeatures.remoteCpp ?? true}
                   localOnly={runMode === 'preview'}
                   responseKey={responseKey}
                   onCodeChange={(rk, code, extra) => {

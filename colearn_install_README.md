@@ -70,6 +70,7 @@ It checks:
 - nginx service
 - Node port
 - optional C++ runner port
+- optional remote Python runner port
 - application DB connectivity
 - PM2 status
 - HTTP/HTTPS response
@@ -89,6 +90,7 @@ Before you begin, decide these values:
 - whether you want Certbot to request a real certificate now
 - whether you want Docker installed now
 - whether you want nginx to proxy `/cxx-run/`
+- whether you want nginx to proxy `/py-run/`
 
 You also need the repo URL for stage 2.
 
@@ -99,8 +101,9 @@ For a robust unattended setup, prefer an **HTTPS repo URL** unless you have alre
 For local classroom or lab installs on firewalled machines, the simplest working setup is usually:
 
 - no SSL
-- Docker enabled for the C++ runner
-- `/cxx-run/` proxy enabled when students will use the runner
+- Docker enabled for any remote runner you plan to use
+- `/cxx-run/` proxy enabled when students will use the C++ runner
+- `/py-run/` proxy enabled when students will use the remote Python runner
 - one local hostname used consistently in the browser and config files
 
 In that case:
@@ -108,6 +111,7 @@ In that case:
 - set `ENABLE_CERTBOT=0`
 - set `ENABLE_DOCKER=1`
 - set `ENABLE_CXX_RUNNER_PROXY=1`
+- set `ENABLE_PY_RUNNER_PROXY=1` if you want remote Python
 - use `http://...` for `CLIENT_ORIGIN`
 
 The hostname in `CLIENT_ORIGIN` must match the exact address students use in the browser, or CORS can fail.
@@ -168,6 +172,8 @@ ADMIN_EMAIL=admin@example.edu
 ENABLE_DOCKER=1
 ENABLE_CXX_RUNNER_PROXY=1
 CXX_RUNNER_PORT=5055
+ENABLE_PY_RUNNER_PROXY=0
+PY_RUNNER_PORT=5056
 NODE_MAJOR=20
 ```
 
@@ -188,6 +194,8 @@ ENABLE_CERTBOT=0
 ENABLE_DOCKER=1
 ENABLE_CXX_RUNNER_PROXY=1
 CXX_RUNNER_PORT=5055
+ENABLE_PY_RUNNER_PROXY=1
+PY_RUNNER_PORT=5056
 NODE_MAJOR=20
 ```
 
@@ -222,11 +230,14 @@ APP_ROOT_EMAIL=admin@its.example.edu
 APP_ROOT_PASSWORD=replace_me
 BOOTSTRAP_APP_ROOT=1
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=0
+ENABLE_REMOTE_CPP=0
 CXX_RUNNER_REPO_URL=
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+ENABLE_REMOTE_PYTHON=ask
+PY_RUNNER_DIR=/opt/py-runner
+PY_RUNNER_PORT=5056
 ```
 
 ## Example `deploy.conf` for a local firewalled lab server
@@ -247,19 +258,27 @@ DB_PASSWORD=replace_me
 CLIENT_ORIGIN=http://colearn.local
 SESSION_SECRET=replace_with_a_long_random_secret
 OPENAI_API_KEY=replace_me
+MAIL_DELIVERY_MODE=direct
 EMAIL_USER=replace_me
 EMAIL_PASS=replace_me
+REMOTE_MAIL_URL=https://colearn-ai.com/mail-relay
+REMOTE_MAIL_RELAY_ID=main-prod
+REMOTE_MAIL_SECRET=replace_me
+REMOTE_MAIL_TIMEOUT_MS=10000
 SERVICE_ACCOUNT_EMAIL=pogil-sheets-reader@colearn-ai.iam.gserviceaccount.com
 APP_ROOT_NAME=Administrator
 APP_ROOT_EMAIL=admin@colearn.local
 APP_ROOT_PASSWORD=replace_me
 BOOTSTRAP_APP_ROOT=1
 SERVER_ENTRY=server/index.js
-ENABLE_CXX_RUNNER=1
+ENABLE_REMOTE_CPP=1
 CXX_RUNNER_REPO_URL=https://github.com/your-org/cxx-runner.git
 CXX_RUNNER_DIR=/opt/cxx-runner
 CXX_RUNNER_BRANCH=main
 CXX_RUNNER_PORT=5055
+ENABLE_REMOTE_PYTHON=1
+PY_RUNNER_DIR=/opt/py-runner
+PY_RUNNER_PORT=5056
 ```
 
 If students browse by IP address, keep the same exact IP in all three places:
@@ -287,8 +306,13 @@ Common runtime values students will recognize from `server/.env` include:
 - `DB_PASSWORD`
 - `SESSION_SECRET`
 - `OPENAI_API_KEY`
+- `MAIL_DELIVERY_MODE`
 - `EMAIL_USER`
 - `EMAIL_PASS`
+- `REMOTE_MAIL_URL`
+- `REMOTE_MAIL_RELAY_ID`
+- `REMOTE_MAIL_SECRET`
+- `REMOTE_MAIL_TIMEOUT_MS`
 - `CLIENT_ORIGIN`
 
 So the names do not have to match perfectly across every variable. The goal is for `deploy.conf` to contain enough information for stage 2 to generate the correct runtime env files.
@@ -365,6 +389,23 @@ bash /path/to/02_app_deploy.sh /opt/coLearn-AI/deploy.conf
 ```
 
 That updates the repo, reinstalls dependencies if needed, rebuilds the client, refreshes env files, and restarts PM2.
+If `ENABLE_REMOTE_CPP=1` is present in `deploy.conf` or you answer yes to the prompt, it also syncs and starts the C++ runner.
+If `ENABLE_REMOTE_PYTHON=1` is present in `deploy.conf` or you answer yes to the prompt, it also syncs and starts the remote Python runner and adds the `/py-run/` nginx route.
+
+The deploy script also writes runtime feature flags into `server/.env`:
+
+```bash
+RUNTIME_FEATURE_REMOTE_CPP=0|1
+RUNTIME_FEATURE_REMOTE_PYTHON=0|1
+```
+
+Those are what the app uses at runtime to decide whether remote C++ and remote Python are available on that install.
+
+If you just want to turn on the remote Python path on an existing install, use:
+
+```bash
+bash ops/04-enable-remote-python.sh /opt/coLearn-AI/deploy.conf
+```
 
 ---
 

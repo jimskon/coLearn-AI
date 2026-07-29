@@ -1,6 +1,6 @@
 {
   "name": "colearn-ai",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "private": true,
   "dependencies": {
     "bootstrap": "^5.3.5",
@@ -17,6 +17,9 @@
     "@playwright/test": "^1.60.0"
   },
   "scripts": {
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "version:patch": "node scripts/bump-version.mjs patch",
+    "version:minor": "node scripts/bump-version.mjs minor",
+    "version:major": "node scripts/bump-version.mjs major"
   }
 }

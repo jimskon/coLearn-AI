@@ -42,7 +42,8 @@ All interactive content must appear inside a `\questiongroup`.
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
 | `\mode{demo}` | In-class demonstration mode. All question groups are visible, there is no submit button, and each student edits their own saved sandbox. | `\mode{demo}` |
 | `\test` | Marks activity as graded assessment | `\test` |
-| `\section{...}` | Structural heading (non-interactive) | `\section{Introduction}` |
+| `\section{...}` | Structural heading (non-interactive, no timer) | `\section{Introduction}` |
+| `\section{...}{minutes}` | Structural heading with a shared section timer | `\section{Exploration}{12}` |
 
 Notes:
 
@@ -51,7 +52,28 @@ Notes:
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
 - `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
-- `\section` is structural only.
+- `\section{Title}` is structural only.
+- `\section{Title}{minutes}` starts a shared countdown timer, in whole minutes, for the question groups in that section. `minutes` must be a positive integer.
+- A section applies to every following question group until the next `\section` command. Put the section command immediately before its first question group.
+- The timer belongs to the section, not to each individual question group. To give different groups separate timers, place each group under its own timed section.
+
+Example:
+
+```text
+\section{Exploration}{12}
+\questiongroup{Observe the pattern}
+...
+\endquestiongroup
+
+\questiongroup{Explain the pattern}
+...
+\endquestiongroup
+
+\section{Application}{8}
+\questiongroup{Apply the rule}
+...
+\endquestiongroup
+```
 
 ---
 

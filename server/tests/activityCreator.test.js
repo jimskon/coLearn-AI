@@ -279,3 +279,31 @@ test('normalizeGeneratedDraft removes unsupported one-per-line and per-member te
   assert.match(result.text, /\\question\{List the four POGIL roles used in this course\.\}/);
   assert.match(result.text, /\\question\{As a group, briefly note which roles were assigned within your group\.\}/);
 });
+
+test('normalizeGeneratedDraft applies requested timers to matching sections', () => {
+  const raw = [
+    '\\title{Timed activity}',
+    '\\mode{group}',
+    '\\studentlevel{Any}',
+    '\\activitycontext{Any}',
+    '\\section{Exploration}',
+    '\\questiongroup{Try it}',
+    '\\question{What do you notice?}',
+    '\\textresponse{2}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'Timed activity',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [{ title: 'Exploration', minutes: 12 }],
+    majorSections: ['Exploration'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.match(result.text, /\\section\{Exploration\}\{12\}/);
+});

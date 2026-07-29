@@ -60,6 +60,7 @@ const creatorModelOptions = [
 const emptyAdvancedDraft = {
   language: 'English',
   include_timing: false,
+  timed_section_minutes: {},
   submit_retries: '3',
   include_info: false,
   difficulty: 'medium',
@@ -82,7 +83,23 @@ function cloneEmptyDraft(overrides = {}) {
 }
 
 function cloneEmptyAdvancedDraft() {
-  return { ...emptyAdvancedDraft };
+  return {
+    ...emptyAdvancedDraft,
+    timed_section_minutes: { ...emptyAdvancedDraft.timed_section_minutes },
+  };
+}
+
+function allocateTimedSectionMinutes(sectionNames, totalMinutes) {
+  const sections = Array.isArray(sectionNames) ? sectionNames : [];
+  const total = Math.round(Number(totalMinutes));
+  if (!sections.length || !Number.isFinite(total) || total < sections.length) return {};
+
+  const base = Math.floor(total / sections.length);
+  const remainder = total % sections.length;
+  return Object.fromEntries(sections.map((sectionName, index) => [
+    sectionName,
+    String(base + (index < remainder ? 1 : 0)),
+  ]));
 }
 
 function buildAdvancedPromptText(advanced) {
@@ -90,9 +107,6 @@ function buildAdvancedPromptText(advanced) {
   const language = String(advanced?.language || '').trim();
   if (language && language.toLowerCase() !== 'english') {
     lines.push(`Make the activity in ${language}.`);
-  }
-  if (advanced?.include_timing) {
-    lines.push('Include timing on sections.');
   }
   const retries = parseInt(advanced?.submit_retries, 10);
   if (Number.isFinite(retries) && retries !== 3) {
@@ -923,18 +937,38 @@ export default function CreatorWorkbenchPage() {
       }
       return { ...prev, [field]: value };
     });
+
+    if (field === 'duration_minutes' || field === 'mode') {
+      setAdvancedDraft((prev) => prev.include_timing
+        ? {
+          ...prev,
+          timed_section_minutes: allocateTimedSectionMinutes(
+            field === 'mode' ? majorSectionOptions : draft.major_sections,
+            field === 'duration_minutes' ? value : draft.duration_minutes
+          ),
+        }
+        : prev);
+    }
   };
 
   const toggleMajorSection = (sectionName) => {
+    const selected = new Set(draft.major_sections || []);
+    if (selected.has(sectionName)) selected.delete(sectionName);
+    else selected.add(sectionName);
+    const majorSections = majorSectionOptions.filter((option) => selected.has(option));
+
     setDraft((prev) => {
-      const selected = new Set(prev.major_sections || []);
-      if (selected.has(sectionName)) selected.delete(sectionName);
-      else selected.add(sectionName);
       return {
         ...prev,
-        major_sections: majorSectionOptions.filter((option) => selected.has(option)),
+        major_sections: majorSections,
       };
     });
+    setAdvancedDraft((prev) => prev.include_timing
+      ? {
+        ...prev,
+        timed_section_minutes: allocateTimedSectionMinutes(majorSections, draft.duration_minutes),
+      }
+      : prev);
   };
 
   const createDraft = async () => {
@@ -957,6 +991,35 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
+    const retriesRequired = parseInt(advancedDraft.submit_retries, 10);
+    if (!Number.isFinite(retriesRequired) || retriesRequired < 0) {
+      setError('Enter zero or more submit retries.');
+      return;
+    }
+
+    const useTimedSections = advancedDraft.include_timing;
+    const timedSections = useTimedSections
+      ? draft.major_sections.map((title) => ({
+        title,
+        minutes: parseInt(advancedDraft.timed_section_minutes?.[title], 10),
+      }))
+      : [];
+    if (useTimedSections) {
+      if (durationMinutes < timedSections.length) {
+        setError('The activity duration must allow at least one minute for each timed section.');
+        return;
+      }
+      if (timedSections.some((section) => !Number.isFinite(section.minutes) || section.minutes <= 0)) {
+        setError('Give every selected timed section a positive whole number of minutes.');
+        return;
+      }
+      const totalTimedMinutes = timedSections.reduce((total, section) => total + section.minutes, 0);
+      if (totalTimedMinutes !== durationMinutes) {
+        setError(`Section timers total ${totalTimedMinutes} minutes; they must equal the activity duration of ${durationMinutes} minutes.`);
+        return;
+      }
+    }
+
     setCreateBusy(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/creator-draft`, {
@@ -969,6 +1032,9 @@ export default function CreatorWorkbenchPage() {
           mode: draft.mode,
           selected_model: draft.selected_model,
           major_sections: draft.major_sections,
+          use_timed_sections: useTimedSections,
+          timed_sections: timedSections,
+          retries_required: retriesRequired,
           description: appendAdvancedPrompt(draft.description, advancedPromptText),
           createdBy: user?.id,
         }),
@@ -2265,7 +2331,7 @@ export default function CreatorWorkbenchPage() {
         </Modal.Header>
         <Modal.Body>
           <p className="text-muted small mb-3">
-            These settings only add extra instructions to the prompt. Nothing is saved.
+            These settings guide this draft. Section timers are included in the generated activity markup.
           </p>
 
           <Form.Group className="mb-3">
@@ -2281,10 +2347,51 @@ export default function CreatorWorkbenchPage() {
             className="mb-3"
             type="checkbox"
             id="advanced-include-timing"
-            label="Include timing on sections"
+            label="Add a shared timer for each selected section"
             checked={advancedDraft.include_timing}
-            onChange={(event) => setAdvancedDraft((prev) => ({ ...prev, include_timing: event.target.checked }))}
+            onChange={(event) => setAdvancedDraft((prev) => ({
+              ...prev,
+              include_timing: event.target.checked,
+              timed_section_minutes: event.target.checked
+                ? allocateTimedSectionMinutes(draft.major_sections, draft.duration_minutes)
+                : prev.timed_section_minutes,
+            }))}
           />
+
+          {advancedDraft.include_timing && (
+            <Form.Group className="mb-3">
+              <Form.Label>Minutes by section</Form.Label>
+              <div className="small text-muted mb-2">
+                Each timer applies to all question groups in that section. The section totals must equal the activity duration.
+              </div>
+              <div className="d-grid gap-2">
+                {draft.major_sections.map((sectionName) => (
+                  <div className="d-flex align-items-center gap-2" key={sectionName}>
+                    <Form.Label className="mb-0 flex-grow-1" htmlFor={`timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}>
+                      {sectionName}
+                    </Form.Label>
+                    <Form.Control
+                      id={`timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                      type="number"
+                      min="1"
+                      step="1"
+                      aria-label={`${sectionName} minutes`}
+                      style={{ width: '6rem' }}
+                      value={advancedDraft.timed_section_minutes?.[sectionName] || ''}
+                      onChange={(event) => setAdvancedDraft((prev) => ({
+                        ...prev,
+                        timed_section_minutes: {
+                          ...prev.timed_section_minutes,
+                          [sectionName]: event.target.value,
+                        },
+                      }))}
+                    />
+                    <span className="text-muted small">min</span>
+                  </div>
+                ))}
+              </div>
+            </Form.Group>
+          )}
 
           <Form.Group className="mb-3">
             <Form.Label>Submit Retries</Form.Label>

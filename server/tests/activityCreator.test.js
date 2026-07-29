@@ -3,8 +3,10 @@ const test = require('node:test');
 
 const {
   buildQuestionRevisionInstructions,
+  buildQuestionRevisionResponseFormat,
   normalizeGeneratedDraft,
   normalizeQuestionMarkup,
+  parseQuestionRevisionOutput,
 } = require('../utils/activityCreator');
 
 test('question revision instructions require learner-facing prompt updates when the task changes', () => {
@@ -14,6 +16,25 @@ test('question revision instructions require learner-facing prompt updates when 
   assert.match(instructions, /explicitly rewrite the learner-facing \\question\{\.\.\.\} text/i);
   assert.match(instructions, /Do not leave that text unchanged merely because you updated starter code/i);
   assert.match(instructions, /question prompt, code, response type, sample responses, feedback prompts, follow-up prompts/i);
+});
+
+test('question revision uses strict structured output and recovers a complete direct-markup response', () => {
+  const format = buildQuestionRevisionResponseFormat();
+  assert.equal(format.type, 'json_schema');
+  assert.equal(format.strict, true);
+  assert.deepEqual(format.schema.required, ['proposedQuestionMarkup', 'summary', 'warnings']);
+
+  const directMarkup = [
+    'Here is the revised question:',
+    '\\question{Change the program to count from 20 down to 0.}',
+    '\\cpp',
+    '#include <iostream>',
+    '\\endcpp',
+    '\\endquestion',
+  ].join('\n');
+  const result = parseQuestionRevisionOutput(directMarkup);
+  assert.equal(result.recoveredFromMarkup, true);
+  assert.match(result.proposedQuestionMarkup, /count from 20 down to 0/);
 });
 
 test('normalizeQuestionMarkup accepts exactly one complete question block', () => {

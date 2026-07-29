@@ -1006,6 +1006,55 @@ function normalizeQuestionMarkup(text) {
   return normalized;
 }
 
+function buildQuestionRevisionResponseFormat() {
+  return {
+    type: 'json_schema',
+    name: 'question_revision',
+    strict: true,
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['proposedQuestionMarkup', 'summary', 'warnings'],
+      properties: {
+        proposedQuestionMarkup: { type: 'string' },
+        summary: { type: 'array', items: { type: 'string' } },
+        warnings: { type: 'array', items: { type: 'string' } },
+      },
+    },
+  };
+}
+
+function extractQuestionMarkupFromText(text) {
+  const raw = stripCodeFences(text);
+  const start = raw.indexOf('\\question{');
+  const end = raw.lastIndexOf('\\endquestion');
+  if (start < 0 || end < start) return null;
+  return normalizeQuestionMarkup(raw.slice(start, end + '\\endquestion'.length));
+}
+
+function parseQuestionRevisionOutput(raw) {
+  try {
+    const parsed = extractJsonObject(raw);
+    return {
+      proposedQuestionMarkup: normalizeQuestionMarkup(
+        parsed.proposedQuestionMarkup || parsed.proposed_question_markup || parsed.markup
+      ),
+      summary: normalizeStringList(parsed.summary),
+      warnings: normalizeStringList(parsed.warnings),
+      recoveredFromMarkup: false,
+    };
+  } catch (error) {
+    const proposedQuestionMarkup = extractQuestionMarkupFromText(raw);
+    if (!proposedQuestionMarkup) throw error;
+    return {
+      proposedQuestionMarkup,
+      summary: ['Recovered the proposed question from the model response.'],
+      warnings: ['The model did not return valid JSON, but its complete question markup was recovered.'],
+      recoveredFromMarkup: true,
+    };
+  }
+}
+
 function buildQuestionRevisionInstructions() {
   return [
     'You are an expert instructional designer revising one coLearn-AI question block.',
@@ -1049,7 +1098,7 @@ async function reviseQuestionWithOpenAI({
     model: selectedModel,
     instructions: system,
     input: user,
-    text: { format: { type: 'text' } },
+    text: { format: buildQuestionRevisionResponseFormat() },
     max_output_tokens: 1400,
   };
   if (!String(selectedModel || '').startsWith('gpt-5')) request.temperature = 0.35;
@@ -1224,10 +1273,8 @@ async function reviseQuestionDraft(input) {
       classDescription: input.classDescription,
       groupTitle: input.groupTitle,
     });
-    const parsed = extractJsonObject(raw);
-    const proposedQuestionMarkup = normalizeQuestionMarkup(
-      parsed.proposedQuestionMarkup || parsed.proposed_question_markup || parsed.markup
-    );
+    const parsed = parseQuestionRevisionOutput(raw);
+    const proposedQuestionMarkup = parsed.proposedQuestionMarkup;
     if (!proposedQuestionMarkup) {
       return {
         proposedQuestionMarkup: questionMarkup,
@@ -1240,8 +1287,8 @@ async function reviseQuestionDraft(input) {
     }
     return {
       proposedQuestionMarkup,
-      summary: normalizeStringList(parsed.summary),
-      warnings: normalizeStringList(parsed.warnings),
+      summary: parsed.summary,
+      warnings: parsed.warnings,
       generation_status: 'generated',
       generation_error: null,
       raw_model_output: raw,
@@ -1264,6 +1311,8 @@ module.exports = {
   reviseActivityDraft,
   reviseQuestionDraft,
   buildQuestionRevisionInstructions,
+  buildQuestionRevisionResponseFormat,
+  parseQuestionRevisionOutput,
   normalizeQuestionMarkup,
   renderFallbackTemplate,
   normalizeGeneratedDraft,

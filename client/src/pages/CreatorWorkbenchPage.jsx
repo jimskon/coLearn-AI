@@ -1666,58 +1666,6 @@ export default function CreatorWorkbenchPage() {
                             ) : null}
 
                             <div className="border-top mt-3 pt-3">
-                              <div className="fw-semibold mb-2">AI Revise This Question</div>
-                              <Form.Control
-                                as="textarea"
-                                rows={3}
-                                placeholder="Describe the change you want—for example, make the prompt more concrete or add a misconception check."
-                                value={questionRevisionRequest}
-                                disabled={questionRevisionBusy || !!proposal}
-                                onChange={(event) => setQuestionRevisionRequest(event.target.value)}
-                              />
-                              <Button
-                                size="sm"
-                                className="mt-2"
-                                variant="outline-primary"
-                                disabled={!questionRevisionRequest.trim() || questionRevisionBusy || !!proposal}
-                                onClick={requestQuestionRevision}
-                              >
-                                {questionRevisionBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Stars className="me-1" />}
-                                Propose Revision
-                              </Button>
-
-                              {questionRevisionProposal ? (
-                                <div className="mt-3">
-                                  <div className="text-muted small mb-1">Current question</div>
-                                  <Form.Control
-                                    as="textarea"
-                                    rows={5}
-                                    readOnly
-                                    value={questionRevisionProposal.currentMarkup}
-                                    className="creator-question-diff"
-                                  />
-                                  <div className="text-muted small mt-2 mb-1">Proposed question</div>
-                                  <Form.Control
-                                    as="textarea"
-                                    rows={5}
-                                    readOnly
-                                    value={questionRevisionProposal.proposedMarkup}
-                                    className="creator-question-diff"
-                                  />
-                                  {questionRevisionProposal.warnings?.length ? (
-                                    <Alert variant="warning" className="py-2 mt-2 mb-2">
-                                      {questionRevisionProposal.warnings.join(' ')}
-                                    </Alert>
-                                  ) : null}
-                                  <div className="d-flex gap-2 mt-2">
-                                    <Button size="sm" variant="primary" onClick={applyQuestionRevision}>Apply Revision</Button>
-                                    <Button size="sm" variant="outline-secondary" onClick={() => setQuestionRevisionProposal(null)}>Discard</Button>
-                                  </div>
-                                </div>
-                              ) : null}
-                            </div>
-
-                            <div className="border-top mt-3 pt-3">
                               <Button
                                 size="sm"
                                 variant="outline-danger"
@@ -1929,6 +1877,58 @@ export default function CreatorWorkbenchPage() {
                               >
                                 Reset
                               </Button>
+                            </div>
+
+                            <div className="border-top mt-3 pt-3">
+                              <div className="fw-semibold mb-2">AI Revise This Question</div>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                placeholder="Describe the change you want—for example, make the prompt more concrete or add a misconception check."
+                                value={questionRevisionRequest}
+                                disabled={questionRevisionBusy || !!proposal}
+                                onChange={(event) => setQuestionRevisionRequest(event.target.value)}
+                              />
+                              <Button
+                                size="sm"
+                                className="mt-2"
+                                variant="outline-primary"
+                                disabled={!questionRevisionRequest.trim() || questionRevisionBusy || !!proposal}
+                                onClick={requestQuestionRevision}
+                              >
+                                {questionRevisionBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Stars className="me-1" />}
+                                Propose Revision
+                              </Button>
+
+                              {questionRevisionProposal ? (
+                                <div className="mt-3">
+                                  <div className="text-muted small mb-1">Current question</div>
+                                  <Form.Control
+                                    as="textarea"
+                                    rows={5}
+                                    readOnly
+                                    value={questionRevisionProposal.currentMarkup}
+                                    className="creator-question-diff"
+                                  />
+                                  <div className="text-muted small mt-2 mb-1">Proposed question</div>
+                                  <Form.Control
+                                    as="textarea"
+                                    rows={5}
+                                    readOnly
+                                    value={questionRevisionProposal.proposedMarkup}
+                                    className="creator-question-diff"
+                                  />
+                                  {questionRevisionProposal.warnings?.length ? (
+                                    <Alert variant="warning" className="py-2 mt-2 mb-2">
+                                      {questionRevisionProposal.warnings.join(' ')}
+                                    </Alert>
+                                  ) : null}
+                                  <div className="d-flex gap-2 mt-2">
+                                    <Button size="sm" variant="primary" onClick={applyQuestionRevision}>Apply Revision</Button>
+                                    <Button size="sm" variant="outline-secondary" onClick={() => setQuestionRevisionProposal(null)}>Discard</Button>
+                                  </div>
+                                </div>
+                              ) : null}
                             </div>
 
                             <div className="border-top mt-3 pt-3">

@@ -14,6 +14,8 @@ import {
 import {
   ArrowLeft,
   ArrowCounterclockwise,
+  ArrowDown,
+  ArrowUp,
   Check2,
   ChatDots,
   Eye,
@@ -30,6 +32,7 @@ import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
+import { getSectionKeyAtLine, swapSourceRanges } from '../utils/creatorVisualEdits';
 
 const emptyDraft = {
   title: '',
@@ -564,6 +567,20 @@ export default function CreatorWorkbenchPage() {
     setSelectedPreviewKey(inserted?.previewKey || '');
   }
 
+  function selectMovedQuestion(parsed, questionLine) {
+    const moved = parsed.blocks.find((block) => (
+      block?.type === 'question' && block?.sourceMeta?.questionLine === questionLine
+    ));
+    setSelectedPreviewKey(moved?.previewKey || '');
+  }
+
+  function selectMovedQuestionGroup(parsed, groupLine) {
+    const moved = parsed.blocks.find((block) => (
+      block?.type === 'groupIntro' && block?.sourceMeta?.groupLine === groupLine
+    ));
+    setSelectedPreviewKey(moved?.previewKey || '');
+  }
+
   function recordVisualEdit(label) {
     setVisualUndoStack((previous) => ([
       ...previous,
@@ -708,6 +725,22 @@ export default function CreatorWorkbenchPage() {
   ), [rawText, selectedQuestionBlock]);
   const selectedQuestionGroupBlock = selectedPreviewBlock?.type === 'groupIntro' ? selectedPreviewBlock : null;
   const selectedAiBlock = selectedPreviewBlock?.type === 'ai' ? selectedPreviewBlock : null;
+  const selectedQuestionMoveState = useMemo(() => {
+    if (!selectedQuestionBlock) return { index: -1, questions: [] };
+    const questions = blocks
+      .filter((block) => block?.type === 'question' && block?.groupId === selectedQuestionBlock.groupId)
+      .sort((left, right) => left.sourceMeta.questionLine - right.sourceMeta.questionLine);
+    return { index: questions.indexOf(selectedQuestionBlock), questions };
+  }, [blocks, selectedQuestionBlock]);
+  const selectedGroupMoveState = useMemo(() => {
+    if (!selectedQuestionGroupBlock) return { index: -1, groups: [] };
+    const selectedSection = getSectionKeyAtLine(rawText, selectedQuestionGroupBlock.sourceMeta?.groupLine);
+    const groups = blocks
+      .filter((block) => block?.type === 'groupIntro'
+        && getSectionKeyAtLine(rawText, block.sourceMeta?.groupLine) === selectedSection)
+      .sort((left, right) => left.sourceMeta.groupLine - right.sourceMeta.groupLine);
+    return { index: groups.indexOf(selectedQuestionGroupBlock), groups };
+  }, [blocks, rawText, selectedQuestionGroupBlock]);
   const proposedQuestionPreview = useMemo(() => {
     const markup = questionRevisionProposal?.proposedMarkup;
     if (!markup) return null;
@@ -1273,6 +1306,54 @@ export default function CreatorWorkbenchPage() {
     setTimeout(() => setNotice(''), 2400);
   };
 
+  const moveSelectedQuestion = (direction) => {
+    if (!selectedQuestionBlock || proposal) return;
+    const { index, questions } = selectedQuestionMoveState;
+    const target = questions[index + direction];
+    const sourceMeta = selectedQuestionBlock.sourceMeta;
+    const targetMeta = target?.sourceMeta;
+    if (!target || !sourceMeta?.questionLine || !sourceMeta?.endQuestionLine
+      || !targetMeta?.questionLine || !targetMeta?.endQuestionLine) return;
+
+    const nextText = swapSourceRanges(rawText,
+      { startLine: sourceMeta.questionLine, endLine: sourceMeta.endQuestionLine },
+      { startLine: targetMeta.questionLine, endLine: targetMeta.endQuestionLine },
+    );
+    if (nextText === rawText) return;
+
+    const parsed = compileText(nextText);
+    recordVisualEdit(`moving a question ${direction < 0 ? 'up' : 'down'}`);
+    setRawText(nextText);
+    setSandboxUrl('');
+    selectMovedQuestion(parsed, targetMeta.questionLine);
+    setNotice(`Moved question ${direction < 0 ? 'up' : 'down'}.`);
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const moveSelectedQuestionGroup = (direction) => {
+    if (!selectedQuestionGroupBlock || proposal) return;
+    const { index, groups } = selectedGroupMoveState;
+    const target = groups[index + direction];
+    const sourceMeta = selectedQuestionGroupBlock.sourceMeta;
+    const targetMeta = target?.sourceMeta;
+    if (!target || !sourceMeta?.groupLine || !sourceMeta?.endGroupLine
+      || !targetMeta?.groupLine || !targetMeta?.endGroupLine) return;
+
+    const nextText = swapSourceRanges(rawText,
+      { startLine: sourceMeta.groupLine, endLine: sourceMeta.endGroupLine },
+      { startLine: targetMeta.groupLine, endLine: targetMeta.endGroupLine },
+    );
+    if (nextText === rawText) return;
+
+    const parsed = compileText(nextText);
+    recordVisualEdit(`moving a question group ${direction < 0 ? 'up' : 'down'}`);
+    setRawText(nextText);
+    setSandboxUrl('');
+    selectMovedQuestionGroup(parsed, targetMeta.groupLine);
+    setNotice(`Moved question group ${direction < 0 ? 'up' : 'down'} within this section.`);
+    setTimeout(() => setNotice(''), 1800);
+  };
+
   return (
     <Container fluid className="creator-workbench px-3">
       <style>{`
@@ -1718,6 +1799,28 @@ export default function CreatorWorkbenchPage() {
                               </Button>
                             </div>
 
+                            <div className="border-top mt-3 pt-3">
+                              <div className="text-muted small mb-2">Reorder within this section</div>
+                              <div className="d-flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline-secondary"
+                                  disabled={!!proposal || selectedGroupMoveState.index <= 0}
+                                  onClick={() => moveSelectedQuestionGroup(-1)}
+                                >
+                                  <ArrowUp className="me-1" /> Move Up
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline-secondary"
+                                  disabled={!!proposal || selectedGroupMoveState.index < 0 || selectedGroupMoveState.index >= selectedGroupMoveState.groups.length - 1}
+                                  onClick={() => moveSelectedQuestionGroup(1)}
+                                >
+                                  <ArrowDown className="me-1" /> Move Down
+                                </Button>
+                              </div>
+                            </div>
+
                             {selectedQuestionCodeBlock ? (
                               <div className="border-top mt-3 pt-3">
                                 <div className="fw-semibold mb-2">{selectedQuestionCodeBlock.label} Starter Code</div>
@@ -2011,6 +2114,28 @@ export default function CreatorWorkbenchPage() {
                                   </div>
                                 </div>
                               ) : null}
+                            </div>
+
+                            <div className="border-top mt-3 pt-3">
+                              <div className="text-muted small mb-2">Reorder within this question group</div>
+                              <div className="d-flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline-secondary"
+                                  disabled={!!proposal || selectedQuestionMoveState.index <= 0}
+                                  onClick={() => moveSelectedQuestion(-1)}
+                                >
+                                  <ArrowUp className="me-1" /> Move Up
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline-secondary"
+                                  disabled={!!proposal || selectedQuestionMoveState.index < 0 || selectedQuestionMoveState.index >= selectedQuestionMoveState.questions.length - 1}
+                                  onClick={() => moveSelectedQuestion(1)}
+                                >
+                                  <ArrowDown className="me-1" /> Move Down
+                                </Button>
+                              </div>
                             </div>
 
                             <div className="border-top mt-3 pt-3">

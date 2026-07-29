@@ -285,8 +285,10 @@ ensure_repo() {
 ensure_database_schema_if_empty() {
   [[ -n "$SCHEMA_FILE" && -f "$SCHEMA_FILE" ]] || die "Could not find schema.sql in the repo."
   local table_count
-  table_count="$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';" 2>/dev/null || echo 0)"
-  table_count="${table_count:-0}"
+  if ! table_count="$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';")"; then
+    die "Cannot inspect database ${DB_NAME}. Verify DB_HOST, DB_PORT, DB_USER, and DB_PASSWORD before rerunning; schema import was not attempted."
+  fi
+  [[ "$table_count" =~ ^[0-9]+$ ]] || die "Unexpected database table-count response: ${table_count@Q}"
   if [[ "$table_count" -eq 0 ]]; then
     info "Database is empty; importing schema from $SCHEMA_FILE"
     {

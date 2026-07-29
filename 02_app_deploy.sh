@@ -471,9 +471,6 @@ setup_py_runner() {
 
 start_app_pm2() {
   info "Starting app with PM2"
-  # Older deployments used this name.  Stop it first so it cannot retain the
-  # application port and leave the new process running with stale settings.
-  pm2 delete colearn-api >/dev/null 2>&1 || true
   pm2 delete colearn-ai >/dev/null 2>&1 || true
   (cd "$APP_DIR" && pm2 start "$SERVER_ENTRY" --name colearn-ai)
   pm2 save

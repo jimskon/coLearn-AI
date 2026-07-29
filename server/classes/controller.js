@@ -22,6 +22,65 @@ const CREATOR_MAJOR_SECTION_OPTIONS = [
   'Reflection',
 ];
 
+async function tableExists(conn, tableName) {
+  const [rows] = await conn.query(
+    `
+      SELECT 1
+      FROM information_schema.tables
+      WHERE table_schema = DATABASE()
+        AND table_name = ?
+      LIMIT 1
+    `,
+    [tableName]
+  );
+  return rows.length > 0;
+}
+
+async function columnExists(conn, tableName, columnName) {
+  const [rows] = await conn.query(
+    `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = ?
+        AND column_name = ?
+      LIMIT 1
+    `,
+    [tableName, columnName]
+  );
+  return rows.length > 0;
+}
+
+async function deleteByInstanceIdsIfPresent(conn, tableName, fkColumn, instanceIds) {
+  if (
+    !instanceIds.length ||
+    !(await tableExists(conn, tableName)) ||
+    !(await columnExists(conn, tableName, fkColumn))
+  ) {
+    return 0;
+  }
+  const [result] = await conn.query(
+    `DELETE FROM ${tableName} WHERE ${fkColumn} IN (?)`,
+    [instanceIds]
+  );
+  return Number(result.affectedRows || 0);
+}
+
+async function deleteByResponseIdsIfPresent(conn, tableName, fkColumn, responseIds) {
+  if (
+    !responseIds.length ||
+    !(await tableExists(conn, tableName)) ||
+    !(await columnExists(conn, tableName, fkColumn))
+  ) {
+    return 0;
+  }
+  const [result] = await conn.query(
+    `DELETE FROM ${tableName} WHERE ${fkColumn} IN (?)`,
+    [responseIds]
+  );
+  return Number(result.affectedRows || 0);
+}
+
 // Get all classes
 exports.getAllClasses = async (req, res) => {
   try {
@@ -207,35 +266,59 @@ exports.deleteActivityFromClass = async (req, res) => {
   const { classId, activityId } = req.params;
   console.log(`Deleting activity "${activityId}" from class ${classId}`);
 
+  const conn = await db.getConnection();
   try {
-    const [activity] = await db.query(
+    await conn.beginTransaction();
+
+    const [activity] = await conn.query(
       `SELECT id FROM pogil_activities WHERE id = ? AND class_id = ?`,
       [activityId, classId]
     );
 
     if (!activity.length) {
+      await conn.rollback();
       return res.status(404).json({ error: "Activity not found." });
     }
 
     const activityIdNum = activity[0].id;
-
-    const [instances] = await db.query(
-      `SELECT COUNT(*) AS count FROM activity_instances WHERE activity_id = ?`,
+    const [instances] = await conn.query(
+      `SELECT id FROM activity_instances WHERE activity_id = ?`,
       [activityIdNum]
     );
+    const instanceIds = instances.map((row) => Number(row.id)).filter(Number.isFinite);
+    let responseIds = [];
 
-    if (instances[0].count > 0) {
-      return res.status(400).json({
-        error: `This activity cannot be deleted because it has been assigned to ${instances[0].count} group(s). Please remove those assignments before deleting the activity.`
-      });
+    if (instanceIds.length && await tableExists(conn, 'responses')) {
+      const [responses] = await conn.query(
+        `SELECT id FROM responses WHERE activity_instance_id IN (?)`,
+        [instanceIds]
+      );
+      responseIds = responses.map((row) => Number(row.id)).filter(Number.isFinite);
     }
 
-    await db.query(`DELETE FROM pogil_activities WHERE id = ?`, [activityIdNum]);
+    await deleteByInstanceIdsIfPresent(conn, 'activity_heartbeats', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'audit_log', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'event_log', 'activity_instance_id', instanceIds);
+    await deleteByResponseIdsIfPresent(conn, 'followups', 'response_id', responseIds);
+    await deleteByResponseIdsIfPresent(conn, 'feedback', 'response_id', responseIds);
+    await deleteByInstanceIdsIfPresent(conn, 'response_drafts', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'responses', 'activity_instance_id', instanceIds);
+    await deleteByInstanceIdsIfPresent(conn, 'group_members', 'activity_instance_id', instanceIds);
+
+    if (instanceIds.length) {
+      await conn.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
+    }
+
+    await conn.query(`DELETE FROM pogil_activities WHERE id = ?`, [activityIdNum]);
+    await conn.commit();
     res.json({ success: true });
 
   } catch (err) {
+    try { await conn.rollback(); } catch {}
     console.error("Error deleting activity:", err);
     res.status(500).json({ error: "Server error." });
+  } finally {
+    conn.release();
   }
 };
 
@@ -447,20 +530,7 @@ exports.createCreatorDraft = async (req, res) => {
       classDescription: classRow.description,
       activityDescription: normalizedDescription,
     });
-    const fallbackDiagnostics = generation.generation_status === 'fallback'
-      ? [
-          '',
-          '\\section{Generation Diagnostics}',
-          `Status: ${generation.generation_status}`,
-          `Error: ${generation.generation_error || 'Unknown fallback reason.'}`,
-          '',
-          generation.raw_model_output
-            ? ['Model output preview:', String(generation.raw_model_output).trim()].join('\n')
-            : 'Model output preview: (none captured; generation likely failed before a usable response was returned.)',
-        ].join('\n')
-      : '';
-
-    const contentText = generation.text + fallbackDiagnostics;
+    const contentText = generation.text;
 
     const [result] = await db.query(
       `INSERT INTO pogil_activities
@@ -580,6 +650,72 @@ exports.reviseCreatorDraft = async (req, res) => {
   } catch (err) {
     console.error('Error revising creator draft:', err);
     return res.status(500).json({ error: 'Failed to revise draft activity.' });
+  }
+};
+
+exports.reviseCreatorQuestion = async (req, res) => {
+  const classId = Number(req.params.id);
+  const activityId = Number(req.params.activityId);
+  const {
+    request,
+    question_markup,
+    selected_model = 'gpt-5-mini',
+    group_title = '',
+  } = req.body || {};
+  const revisionRequest = String(request || '').trim();
+  const questionMarkup = String(question_markup || '').trim();
+  const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
+
+  if (!classId || !activityId) {
+    return res.status(400).json({ error: 'Valid class and activity ids are required.' });
+  }
+  if (!revisionRequest || !questionMarkup) {
+    return res.status(400).json({ error: 'request and question_markup are required.' });
+  }
+  if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
+    return res.status(400).json({ error: 'selected_model is not supported.' });
+  }
+
+  try {
+    const [[classRow]] = await db.query(
+      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      [classId]
+    );
+    if (!classRow) return res.status(404).json({ error: 'Class not found' });
+
+    const [[activity]] = await db.query(
+      `SELECT id, title
+         FROM pogil_activities
+        WHERE id = ? AND class_id = ?
+        LIMIT 1`,
+      [activityId, classId]
+    );
+    if (!activity) return res.status(404).json({ error: 'Draft activity not found for this class.' });
+
+    const revision = await activityCreator.reviseQuestionDraft({
+      questionMarkup,
+      revisionRequest,
+      selectedModel: normalizedSelectedModel,
+      title: activity.title,
+      classLevel: classRow.level,
+      classTopicDomain: classRow.topic_domain,
+      classDescription: classRow.description,
+      groupTitle: String(group_title || '').trim(),
+    });
+
+    return res.json({
+      activity_id: activityId,
+      class_id: classId,
+      proposedQuestionMarkup: revision.proposedQuestionMarkup,
+      proposed_question_markup: revision.proposedQuestionMarkup,
+      summary: revision.summary || [],
+      warnings: revision.warnings || [],
+      generation_status: revision.generation_status,
+      generation_error: revision.generation_error,
+    });
+  } catch (err) {
+    console.error('Error revising creator question:', err);
+    return res.status(500).json({ error: 'Failed to revise question.' });
   }
 };
 

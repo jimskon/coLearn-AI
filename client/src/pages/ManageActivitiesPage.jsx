@@ -660,7 +660,7 @@ export default function ManageActivitiesPage() {
         }),
       });
 
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) {
         setCreateNote(data.error || 'Failed to create the draft activity.');
         return;
@@ -681,7 +681,7 @@ export default function ManageActivitiesPage() {
       navigate(`/creator/${data.id}`);
     } catch (err) {
       console.error('Create draft failed:', err);
-      setCreateNote('Failed to create the draft activity.');
+      setCreateNote(err?.message || 'Failed to create the draft activity.');
     } finally {
       setCreateBusy(false);
     }
@@ -1215,4 +1215,16 @@ export default function ManageActivitiesPage() {
 
     </Container>
   );
+}
+async function readJsonResponse(res) {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const head = raw.trim().slice(0, 120).replace(/\s+/g, ' ');
+    throw new Error(head.startsWith('<html') || head.startsWith('<!doctype')
+      ? 'Server returned HTML instead of JSON.'
+      : `Unexpected server response: ${head || 'non-JSON body'}`);
+  }
 }

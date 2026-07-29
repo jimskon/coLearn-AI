@@ -4,7 +4,7 @@ const Module = require('node:module');
 const test = require('node:test');
 
 delete process.env.AUTH_DEV_PASSWORDLESS_LOGIN;
-delete process.env.AUTH_DEV_AUTO_VERIFY;
+process.env.AUTH_DEV_AUTO_VERIFY = 'false';
 
 const bcrypt = require('bcrypt');
 const express = require('express');

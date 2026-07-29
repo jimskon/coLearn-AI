@@ -314,7 +314,16 @@ run_repo_migrations() {
   fi
 }
 
+backup_existing_env_file() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  local backup_file="${ENV_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  cp -p "$ENV_FILE" "$backup_file"
+  chmod 600 "$backup_file"
+  info "Backed up existing server environment to $backup_file"
+}
+
 write_env_files() {
+  backup_existing_env_file
   info "Writing server environment to $ENV_FILE"
   write_key_value PORT "$PORT" "$ENV_FILE"
   write_key_value NODE_ENV "production" "$ENV_FILE"
@@ -508,9 +517,11 @@ main() {
   validate_user_context
   resolve_settings
   ensure_repo
+  # Validate configured database access before changing server/.env. This avoids
+  # replacing a working runtime configuration with bad deployment credentials.
+  ensure_database_schema_if_empty
   write_env_files
   install_app_deps_and_build
-  ensure_database_schema_if_empty
   run_repo_migrations
   bootstrap_app_root
   setup_cxx_runner

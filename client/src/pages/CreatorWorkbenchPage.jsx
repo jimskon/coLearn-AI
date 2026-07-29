@@ -1119,8 +1119,9 @@ export default function CreatorWorkbenchPage() {
     }
   };
 
-  const requestRevision = async () => {
-    const requestText = revisionRequest.trim();
+  const requestRevision = async (requestOverride = null) => {
+    const isAdvancedOnlyRequest = typeof requestOverride === 'string';
+    const requestText = String(isAdvancedOnlyRequest ? requestOverride : revisionRequest).trim();
     if (!activity?.id || !effectiveClassId) {
       setError('Create a draft before requesting revisions.');
       return;
@@ -1132,7 +1133,7 @@ export default function CreatorWorkbenchPage() {
     setProposal(null);
     setRevisionBusy(true);
     setMessages((prev) => [...prev, { role: 'user', text: requestText }]);
-    setRevisionRequest('');
+    if (!isAdvancedOnlyRequest) setRevisionRequest('');
 
     try {
       const parsedNow = compileText(rawText);
@@ -2493,6 +2494,18 @@ export default function CreatorWorkbenchPage() {
           </Form.Group>
         </Modal.Body>
         <Modal.Footer>
+          {activity?.id ? (
+            <Button
+              variant="primary"
+              disabled={revisionBusy || !!proposal || !advancedPromptText}
+              onClick={() => {
+                setShowAdvanced(false);
+                requestRevision('Apply the selected advanced settings to this activity.');
+              }}
+            >
+              <Stars className="me-1" /> Apply to Draft
+            </Button>
+          ) : null}
           <Button variant="secondary" onClick={() => setShowAdvanced(false)}>Close</Button>
         </Modal.Footer>
       </Modal>

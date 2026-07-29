@@ -1924,23 +1924,15 @@ export default function CreatorWorkbenchPage() {
 
                               {questionRevisionProposal ? (
                                 <div className="mt-3">
-                                  <div className="text-muted small mb-1">Current question</div>
-                                  <Form.Control
-                                    as="textarea"
-                                    rows={5}
-                                    readOnly
-                                    value={questionRevisionProposal.currentMarkup}
-                                    className="creator-question-diff"
-                                  />
-                                  <div className="text-muted small mt-2 mb-1">Proposed question</div>
-                                  <Form.Control
-                                    as="textarea"
-                                    rows={5}
-                                    readOnly
-                                    value={questionRevisionProposal.proposedMarkup}
-                                    className="creator-question-diff"
-                                  />
-                                  <div className="text-muted small mt-2 mb-1">Rendered proposal</div>
+                                  {questionRevisionProposal.summary?.length ? (
+                                    <div className="small mb-2">
+                                      <div className="fw-semibold">Proposed changes</div>
+                                      <ul className="mb-0 ps-3">
+                                        {questionRevisionProposal.summary.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
+                                      </ul>
+                                    </div>
+                                  ) : null}
+                                  <div className="text-muted small mb-1">Proposed activity output</div>
                                   <div className="border rounded bg-light p-2 creator-question-proposal-preview">
                                     {proposedQuestionPreview}
                                   </div>

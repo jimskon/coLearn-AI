@@ -1,7 +1,20 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { normalizeGeneratedDraft, normalizeQuestionMarkup } = require('../utils/activityCreator');
+const {
+  buildQuestionRevisionInstructions,
+  normalizeGeneratedDraft,
+  normalizeQuestionMarkup,
+} = require('../utils/activityCreator');
+
+test('question revision instructions require learner-facing prompt updates when the task changes', () => {
+  const instructions = buildQuestionRevisionInstructions();
+
+  assert.match(instructions, /creator request is a required specification/i);
+  assert.match(instructions, /explicitly rewrite the learner-facing \\question\{\.\.\.\} text/i);
+  assert.match(instructions, /Do not leave that text unchanged merely because you updated starter code/i);
+  assert.match(instructions, /question prompt, code, response type, sample responses, feedback prompts, follow-up prompts/i);
+});
 
 test('normalizeQuestionMarkup accepts exactly one complete question block', () => {
   const markup = [

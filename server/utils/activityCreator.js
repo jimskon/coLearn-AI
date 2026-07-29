@@ -1006,6 +1006,22 @@ function normalizeQuestionMarkup(text) {
   return normalized;
 }
 
+function buildQuestionRevisionInstructions() {
+  return [
+    'You are an expert instructional designer revising one coLearn-AI question block.',
+    'Return only strict JSON with keys: proposedQuestionMarkup, summary, warnings.',
+    'proposedQuestionMarkup must contain exactly one complete \\question{...} ... \\endquestion block.',
+    'Do not emit \\questiongroup, \\endquestiongroup, \\section, or commentary.',
+    'Keep the surrounding activity structure unchanged because you are revising only this question.',
+    'The creator request is a required specification, not a suggestion. You may revise every part of this question block.',
+    'When the request changes what the learner must do, explicitly rewrite the learner-facing \\question{...} text. Do not leave that text unchanged merely because you updated starter code.',
+    'Keep the question prompt, code, response type, sample responses, feedback prompts, follow-up prompts, and any \\ai blocks consistent with the requested learning task. Change every dependent part that needs changing.',
+    'Keep sample responses and feedback prompts plain text.',
+    'Retain only valid coLearn-AI response-type blocks such as \\textresponse, \\python, \\pythonremote, \\pythonturtle, \\cpp, and \\ai.',
+    'In summary, briefly state the learner-facing changes you made.',
+  ].join('\n');
+}
+
 async function reviseQuestionWithOpenAI({
   questionMarkup,
   revisionRequest,
@@ -1018,15 +1034,7 @@ async function reviseQuestionWithOpenAI({
 }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const timeoutMs = getCreatorOpenAiTimeoutMs();
-  const system = [
-    'You are an expert instructional designer revising one coLearn-AI question block.',
-    'Return only strict JSON with keys: proposedQuestionMarkup, summary, warnings.',
-    'proposedQuestionMarkup must contain exactly one complete \\question{...} ... \\endquestion block.',
-    'Do not emit \\questiongroup, \\endquestiongroup, \\section, or commentary.',
-    'Keep the surrounding activity structure unchanged because you are revising only this question.',
-    'Keep sample responses and feedback prompts plain text.',
-    'Preserve or improve valid response-type blocks such as \\textresponse, \\python, and \\ai.',
-  ].join('\n');
+  const system = buildQuestionRevisionInstructions();
   const user = [
     `Activity title: ${title || 'Untitled activity'}`,
     `Question group: ${groupTitle || 'Not specified'}`,
@@ -1255,6 +1263,7 @@ module.exports = {
   generateActivityDraft,
   reviseActivityDraft,
   reviseQuestionDraft,
+  buildQuestionRevisionInstructions,
   normalizeQuestionMarkup,
   renderFallbackTemplate,
   normalizeGeneratedDraft,

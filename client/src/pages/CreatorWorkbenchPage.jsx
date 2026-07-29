@@ -242,6 +242,34 @@ function buildQuestionInspectorDraft(block) {
   };
 }
 
+function buildQuestionGroupInspectorDraft(block) {
+  return {
+    title: htmlToEditorText(block?.content || 'New Question Group'),
+    retriesRequired: Math.max(0, Number.parseInt(block?.retriesRequired, 10) || 0),
+  };
+}
+
+function applyQuestionGroupEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.groupLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  const title = String(edits.title || '').trim() || 'New Question Group';
+  const retriesRequired = Math.max(0, Number.parseInt(edits.retriesRequired, 10) || 0);
+  updateLine(lines, sourceMeta.groupLine, `\\questiongroup{${title}}`);
+
+  if (sourceMeta.retriesLine) {
+    updateLine(lines, sourceMeta.retriesLine, `\\retries{${retriesRequired}}`);
+  } else {
+    insertLinesAfterAnchors(lines, [{
+      anchorLine: sourceMeta.groupLine,
+      text: `\\retries{${retriesRequired}}`,
+    }]);
+  }
+
+  return lines.join('\n');
+}
+
 function applyAiEditsToSource(sourceText, block, edits) {
   const sourceMeta = block?.sourceMeta;
   if (!sourceMeta?.aiLine || !sourceMeta?.endAiLine) return sourceText;
@@ -368,6 +396,7 @@ export default function CreatorWorkbenchPage() {
   const [sandboxUrl, setSandboxUrl] = useState('');
   const [selectedPreviewKey, setSelectedPreviewKey] = useState('');
   const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
+  const [questionGroupInspectorDraft, setQuestionGroupInspectorDraft] = useState(null);
   const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
   const [showIssuesModal, setShowIssuesModal] = useState(false);
@@ -510,6 +539,7 @@ export default function CreatorWorkbenchPage() {
   ), [activeBlocks, selectedPreviewKey]);
 
   const selectedQuestionBlock = selectedPreviewBlock?.type === 'question' ? selectedPreviewBlock : null;
+  const selectedQuestionGroupBlock = selectedPreviewBlock?.type === 'groupIntro' ? selectedPreviewBlock : null;
   const selectedAiBlock = selectedPreviewBlock?.type === 'ai' ? selectedPreviewBlock : null;
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
@@ -626,6 +656,15 @@ export default function CreatorWorkbenchPage() {
       setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
     }
   }, [selectedQuestionBlock]);
+
+  useEffect(() => {
+    if (!selectedQuestionGroupBlock) {
+      setQuestionGroupInspectorDraft(null);
+    } else {
+      setShowPreviewInspector(true);
+      setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock));
+    }
+  }, [selectedQuestionGroupBlock]);
 
   useEffect(() => {
     if (!selectedAiBlock) {
@@ -852,6 +891,16 @@ export default function CreatorWorkbenchPage() {
     setRawText(nextText);
     compileText(nextText);
     setNotice('Updated question settings in source.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const applyQuestionGroupInspectorChanges = () => {
+    if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return;
+    const nextText = applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
+    setRawText(nextText);
+    setSandboxUrl('');
+    compileText(nextText);
+    setNotice('Updated question group settings in source.');
     setTimeout(() => setNotice(''), 1800);
   };
 
@@ -1292,7 +1341,7 @@ export default function CreatorWorkbenchPage() {
                       <aside className="creator-preview-inspector">
                         <div className="d-flex align-items-start justify-content-between gap-2 mb-2">
                           <div className="fw-semibold">
-                            {selectedAiBlock ? 'AI Panel' : 'Question Panel'}
+                            {selectedAiBlock ? 'AI Panel' : (selectedQuestionGroupBlock ? 'Question Group Panel' : 'Question Panel')}
                           </div>
                           <Button
                             size="sm"
@@ -1304,7 +1353,61 @@ export default function CreatorWorkbenchPage() {
                             <X />
                           </Button>
                         </div>
-                        {!selectedQuestionBlock ? (
+                        {selectedQuestionGroupBlock ? (
+                          <>
+                            <div className="text-muted small mb-3">
+                              Group {selectedQuestionGroupBlock.groupId}
+                            </div>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Group Title</Form.Label>
+                              <Form.Control
+                                value={questionGroupInspectorDraft?.title || ''}
+                                disabled={!questionGroupInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionGroupInspectorDraft((prev) => ({ ...(prev || {}), title: event.target.value }))}
+                              />
+                            </Form.Group>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Retries Required</Form.Label>
+                              <Form.Control
+                                type="number"
+                                min="0"
+                                value={questionGroupInspectorDraft?.retriesRequired ?? 0}
+                                disabled={!questionGroupInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionGroupInspectorDraft((prev) => ({ ...(prev || {}), retriesRequired: event.target.value }))}
+                              />
+                              {!selectedQuestionGroupBlock?.sourceMeta?.retriesLine ? (
+                                <div className="text-muted small mt-1">Applying will add a group-level `\\retries` line.</div>
+                              ) : null}
+                            </Form.Group>
+
+                            <div className="d-flex gap-2">
+                              <Button size="sm" variant="primary" disabled={!questionGroupInspectorDraft || !!proposal} onClick={applyQuestionGroupInspectorChanges}>
+                                Apply
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline-secondary"
+                                onClick={() => setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock))}
+                                disabled={!selectedQuestionGroupBlock}
+                              >
+                                Reset
+                              </Button>
+                            </div>
+
+                            <div className="border-top mt-3 pt-3">
+                              <Button
+                                size="sm"
+                                variant="outline-danger"
+                                disabled={!!proposal}
+                                onClick={() => removeQuestionGroup(selectedQuestionGroupBlock.groupId)}
+                              >
+                                <Trash className="me-1" /> Remove Question Group
+                              </Button>
+                            </div>
+                          </>
+                        ) : !selectedQuestionBlock ? (
                           !selectedAiBlock ? (
                             <div className="text-muted small">
                               Click a question or AI block in the Visual Editor to inspect and refine it without editing raw source.

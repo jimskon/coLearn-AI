@@ -1178,12 +1178,14 @@ export function parseSheetToBlocks(lines, options = {}) {
       blocks.push({
         type: 'groupIntro',
         groupId: groupNumber,
+        previewKey: `group:${groupNumber}`,
         content,
         infos: [],
         retriesRequired: currentGroupRetriesRequired, // ✅ include it
         sourceMeta: {
           groupLine: lineNo,
           endGroupLine: null,
+          retriesLine: null,
         },
       });
       currentGroupIntro = blocks.at(-1);
@@ -1249,7 +1251,10 @@ export function parseSheetToBlocks(lines, options = {}) {
 
       // patch groupIntro so render/run can see it
       const gi = [...blocks].reverse().find(b => b.type === 'groupIntro' && b.groupId === groupNumber);
-      if (gi) gi.retriesRequired = n;
+      if (gi) {
+        gi.retriesRequired = n;
+        if (gi.sourceMeta) gi.sourceMeta.retriesLine = lineNo;
+      }
 
       continue;
     }
@@ -1857,10 +1862,31 @@ export function renderBlocks(blocks, options = {}) {
 
     if (block.type === 'groupIntro') {
       const groupIntroAnchorRef = React.createRef();
+      const isSelectedPreviewGroup = runMode === 'preview' && selectedPreviewKey === block.previewKey;
       return (
         <React.Fragment key={`groupIntro-${index}`}>
           {typeof renderInsertBeforeGroup === 'function' ? renderInsertBeforeGroup(block) : null}
-          <div className="mb-2" ref={groupIntroAnchorRef}>
+          <div
+            className="mb-2"
+            ref={groupIntroAnchorRef}
+            data-preview-key={block.previewKey}
+            onClick={(event) => {
+              if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
+              if (event.target.closest('button, input, textarea, select, a')) return;
+              onSelectBlock(block);
+            }}
+            style={
+              runMode === 'preview'
+                ? {
+                  cursor: onSelectBlock ? 'pointer' : 'default',
+                  border: isSelectedPreviewGroup ? '2px solid #0d6efd' : '1px solid transparent',
+                  borderRadius: 8,
+                  padding: '0.35rem 0.5rem',
+                  background: isSelectedPreviewGroup ? 'rgba(13,110,253,0.03)' : 'transparent',
+                }
+                : undefined
+            }
+          >
             <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
             {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
             {runMode === 'preview' && renderInfoBubbles(

@@ -4,6 +4,7 @@ const test = require('node:test');
 const {
   buildQuestionRevisionInstructions,
   buildQuestionRevisionResponseFormat,
+  isOutputTokenTruncation,
   normalizeGeneratedDraft,
   normalizeQuestionMarkup,
   parseQuestionRevisionOutput,
@@ -35,6 +36,18 @@ test('question revision uses strict structured output and recovers a complete di
   const result = parseQuestionRevisionOutput(directMarkup);
   assert.equal(result.recoveredFromMarkup, true);
   assert.match(result.proposedQuestionMarkup, /count from 20 down to 0/);
+});
+
+test('question revision retries only output-token truncations', () => {
+  assert.equal(isOutputTokenTruncation({
+    status: 'incomplete',
+    incomplete_details: { reason: 'max_output_tokens' },
+  }), true);
+  assert.equal(isOutputTokenTruncation({
+    status: 'incomplete',
+    incomplete_details: { reason: 'content_filter' },
+  }), false);
+  assert.equal(isOutputTokenTruncation({ status: 'completed' }), false);
 });
 
 test('normalizeQuestionMarkup accepts exactly one complete question block', () => {

@@ -1071,6 +1071,10 @@ function buildQuestionRevisionInstructions() {
   ].join('\n');
 }
 
+function isOutputTokenTruncation(response) {
+  return response?.status === 'incomplete' && response?.incomplete_details?.reason === 'max_output_tokens';
+}
+
 async function reviseQuestionWithOpenAI({
   questionMarkup,
   revisionRequest,
@@ -1099,15 +1103,27 @@ async function reviseQuestionWithOpenAI({
     instructions: system,
     input: user,
     text: { format: buildQuestionRevisionResponseFormat() },
-    max_output_tokens: 1400,
+    max_output_tokens: 3200,
   };
   if (!String(selectedModel || '').startsWith('gpt-5')) request.temperature = 0.35;
-  const response = await withTimeout(
-    openai.responses.create(request),
+  const createResponse = (maxOutputTokens) => withTimeout(
+    openai.responses.create({ ...request, max_output_tokens: maxOutputTokens }),
     timeoutMs,
     'Creator question revision'
   );
-  return response.output_text || '';
+
+  let response = await createResponse(request.max_output_tokens);
+  if (isOutputTokenTruncation(response)) {
+    response = await createResponse(request.max_output_tokens * 2);
+  }
+  if (response?.status === 'incomplete') {
+    const reason = response?.incomplete_details?.reason || 'unknown reason';
+    throw new Error(`Question revision output was incomplete after retry (${reason}).`);
+  }
+
+  const output = String(response?.output_text || '').trim();
+  if (!output) throw new Error('Question revision returned an empty response.');
+  return output;
 }
 
 async function generateActivityDraft(input) {
@@ -1312,6 +1328,7 @@ module.exports = {
   reviseQuestionDraft,
   buildQuestionRevisionInstructions,
   buildQuestionRevisionResponseFormat,
+  isOutputTokenTruncation,
   parseQuestionRevisionOutput,
   normalizeQuestionMarkup,
   renderFallbackTemplate,

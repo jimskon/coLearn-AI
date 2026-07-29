@@ -2515,7 +2515,11 @@ export function renderBlocks(blocks, options = {}) {
                       options.onLocalCodeChange?.(rk, code);
                       return;
                     }
-                    onCodeChange && onCodeChange(rk, code, { ...meta, ...extra });
+                    onCodeChange && onCodeChange(rk, code, {
+                      ...meta,
+                      ...extra,
+                      creatorSource: { questionBlock: block, codeType: py.type },
+                    });
                   }}
                   codeFeedbackShown={codeFeedbackShown}
                   fileContents={fileContents}
@@ -2607,6 +2611,7 @@ export function renderBlocks(blocks, options = {}) {
                         hasTableResponse: !!block.hasTableResponse,
                         lang: 'cpp',
                         retriesRequired: block.retriesRequired ?? 0,
+                        creatorSource: { questionBlock: block, codeType: 'cpp' },
                       });
                   }}
                   timeLimit={cpp.timeLimit ?? 5000}

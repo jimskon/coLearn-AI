@@ -426,7 +426,7 @@ function getQuestionSource(sourceText, block) {
     .join('\n');
 }
 
-function getQuestionCodeBlock(sourceText, block) {
+function getQuestionCodeBlock(sourceText, block, requestedType = '') {
   const sourceMeta = block?.sourceMeta;
   if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return null;
   const lines = String(sourceText || '').split('\n');
@@ -442,7 +442,7 @@ function getQuestionCodeBlock(sourceText, block) {
   for (let index = startIndex; index <= endIndex; index += 1) {
     const line = lines[index]?.trim();
     const match = openingPatterns.find(([, pattern]) => pattern.test(line));
-    if (!match) continue;
+    if (!match || (requestedType && match[0] !== requestedType)) continue;
     const [type, , closingTag, label] = match;
     const closeIndex = lines.findIndex((candidate, candidateIndex) => (
       candidateIndex > index && candidateIndex <= endIndex && candidate.trim() === closingTag
@@ -590,6 +590,26 @@ export default function CreatorWorkbenchPage() {
     setTimeout(() => setNotice(''), 2400);
   }
 
+  function persistVisualCodeChange(_responseKey, code, meta = {}) {
+    if (meta.__broadcastOnly || proposal) return;
+    const sourceRef = meta.creatorSource;
+    const codeBlock = getQuestionCodeBlock(rawText, sourceRef?.questionBlock, sourceRef?.codeType);
+    if (!codeBlock) return;
+
+    const lines = String(rawText || '').split('\n');
+    lines.splice(
+      codeBlock.openLine,
+      codeBlock.closeLine - codeBlock.openLine - 1,
+      ...String(code || '').split('\n')
+    );
+    const nextText = lines.join('\n');
+    setRawText(nextText);
+    setStarterCodeDraft(String(code || ''));
+    compileText(nextText);
+    setNotice(`${codeBlock.label} starter code updated.`);
+    setTimeout(() => setNotice(''), 1800);
+  }
+
   function renderInsertionMarker(key, label, target) {
     return (
       <div key={key} className="creator-insert-slot">
@@ -621,6 +641,7 @@ export default function CreatorWorkbenchPage() {
     infoBubbleSession: infoBubbleSessionRef.current,
     runtimeFeatures,
     onSelectBlock: proposal ? null : (block) => setSelectedPreviewKey(block?.previewKey || ''),
+    onCodeChange: persistVisualCodeChange,
     selectedPreviewKey,
     renderInsertBeforeQuestion: proposal ? null : (block) => renderInsertionMarker(
       `before-question-${block.previewKey}`,

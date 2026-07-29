@@ -1942,15 +1942,12 @@ export default function CreatorWorkbenchPage() {
                                     </Alert>
                                   ) : null}
                                   {questionRevisionProposal.generationStatus !== 'generated' ? (
-                                    <details className="small text-muted mb-2">
-                                      <summary>Revision diagnostics</summary>
-                                      <div className="mt-1">
-                                        <div>Status: {questionRevisionProposal.generationStatus}</div>
-                                        {questionRevisionProposal.generationError ? (
-                                          <div className="text-break">Details: {questionRevisionProposal.generationError}</div>
-                                        ) : null}
-                                      </div>
-                                    </details>
+                                    <Alert variant="secondary" className="small py-2 mb-2">
+                                      <div><strong>Revision diagnostics</strong> — status: {questionRevisionProposal.generationStatus}</div>
+                                      {questionRevisionProposal.generationError ? (
+                                        <div className="text-break mt-1">{questionRevisionProposal.generationError}</div>
+                                      ) : null}
+                                    </Alert>
                                   ) : null}
                                   <div className="d-flex gap-2 mt-2">
                                     <Button

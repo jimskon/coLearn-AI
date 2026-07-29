@@ -363,6 +363,40 @@ const starterQuestionTemplates = {
     '\\feedbackprompt{Test the program and explain how it solves the task.}',
     '\\endquestion',
   ],
+  pythonremote: [
+    '\\question{Write and run a remote Python program that solves this task.}',
+    '\\pythonremote',
+    '# Write your remote Python code here',
+    '\\endpythonremote',
+    '\\sampleresponses{A working remote Python solution.}',
+    '\\feedbackprompt{Test the program and explain how it solves the task.}',
+    '\\endquestion',
+  ],
+  pythonturtle: [
+    '\\question{Write and run a turtle program that creates the requested drawing.}',
+    '\\pythonturtle{600x400}',
+    'import turtle',
+    '',
+    '# Write your turtle code here',
+    '\\endpythonturtle',
+    '\\sampleresponses{A working turtle program that creates the requested drawing.}',
+    '\\feedbackprompt{Run the drawing and explain how your code controls it.}',
+    '\\endquestion',
+  ],
+  cpp: [
+    '\\question{Write and run a C++ program that solves this task.}',
+    '\\cpp',
+    '#include <iostream>',
+    '',
+    'int main() {',
+    '  // Write your C++ code here',
+    '  return 0;',
+    '}',
+    '\\endcpp',
+    '\\sampleresponses{A working C++ solution.}',
+    '\\feedbackprompt{Compile the program and explain how it solves the task.}',
+    '\\endquestion',
+  ],
   ai: [
     '\\question{Use the AI coach to improve your response to this question.}',
     '\\textresponse{3}',
@@ -390,6 +424,39 @@ function getQuestionSource(sourceText, block) {
     .split('\n')
     .slice(sourceMeta.questionLine - 1, sourceMeta.endQuestionLine)
     .join('\n');
+}
+
+function getQuestionCodeBlock(sourceText, block) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return null;
+  const lines = String(sourceText || '').split('\n');
+  const startIndex = sourceMeta.questionLine - 1;
+  const endIndex = sourceMeta.endQuestionLine - 1;
+  const openingPatterns = [
+    ['pythonremote', /^\\pythonremote(?:\{[^}]*\})?\s*$/i, '\\endpythonremote', 'Python Remote'],
+    ['pythonturtle', /^\\pythonturtle(?:\{[^}]*\})?\s*$/i, '\\endpythonturtle', 'Python Turtle'],
+    ['python', /^\\python(?:\{[^}]*\})?\s*$/i, '\\endpython', 'Python'],
+    ['cpp', /^\\cpp(?:\{[^}]*\})?\s*$/i, '\\endcpp', 'C++'],
+  ];
+
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const line = lines[index]?.trim();
+    const match = openingPatterns.find(([, pattern]) => pattern.test(line));
+    if (!match) continue;
+    const [type, , closingTag, label] = match;
+    const closeIndex = lines.findIndex((candidate, candidateIndex) => (
+      candidateIndex > index && candidateIndex <= endIndex && candidate.trim() === closingTag
+    ));
+    if (closeIndex === -1) return null;
+    return {
+      type,
+      label,
+      openLine: index + 1,
+      closeLine: closeIndex + 1,
+      content: lines.slice(index + 1, closeIndex).join('\n'),
+    };
+  }
+  return null;
 }
 
 export default function CreatorWorkbenchPage() {
@@ -433,6 +500,7 @@ export default function CreatorWorkbenchPage() {
   const [questionRevisionRequest, setQuestionRevisionRequest] = useState('');
   const [questionRevisionBusy, setQuestionRevisionBusy] = useState(false);
   const [questionRevisionProposal, setQuestionRevisionProposal] = useState(null);
+  const [starterCodeDraft, setStarterCodeDraft] = useState('');
   const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
   const [showIssuesModal, setShowIssuesModal] = useState(false);
@@ -581,6 +649,9 @@ export default function CreatorWorkbenchPage() {
   ), [activeBlocks, selectedPreviewKey]);
 
   const selectedQuestionBlock = selectedPreviewBlock?.type === 'question' ? selectedPreviewBlock : null;
+  const selectedQuestionCodeBlock = useMemo(() => (
+    getQuestionCodeBlock(rawText, selectedQuestionBlock)
+  ), [rawText, selectedQuestionBlock]);
   const selectedQuestionGroupBlock = selectedPreviewBlock?.type === 'groupIntro' ? selectedPreviewBlock : null;
   const selectedAiBlock = selectedPreviewBlock?.type === 'ai' ? selectedPreviewBlock : null;
 
@@ -696,8 +767,9 @@ export default function CreatorWorkbenchPage() {
     } else {
       setShowPreviewInspector(true);
       setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
+      setStarterCodeDraft(getQuestionCodeBlock(rawText, selectedQuestionBlock)?.content || '');
     }
-  }, [selectedQuestionBlock]);
+  }, [rawText, selectedQuestionBlock]);
 
   useEffect(() => {
     if (!selectedQuestionGroupBlock) {
@@ -933,6 +1005,23 @@ export default function CreatorWorkbenchPage() {
     setRawText(nextText);
     compileText(nextText);
     setNotice('Updated question settings in source.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const applyStarterCodeChanges = () => {
+    if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return;
+    const lines = String(rawText || '').split('\n');
+    const replacementLines = String(starterCodeDraft || '').split('\n');
+    lines.splice(
+      selectedQuestionCodeBlock.openLine,
+      selectedQuestionCodeBlock.closeLine - selectedQuestionCodeBlock.openLine - 1,
+      ...replacementLines
+    );
+    const nextText = lines.join('\n');
+    setRawText(nextText);
+    setSandboxUrl('');
+    compileText(nextText);
+    setNotice(`Updated ${selectedQuestionCodeBlock.label} starter code.`);
     setTimeout(() => setNotice(''), 1800);
   };
 
@@ -1502,6 +1591,24 @@ export default function CreatorWorkbenchPage() {
                               </Button>
                             </div>
 
+                            {selectedQuestionCodeBlock ? (
+                              <div className="border-top mt-3 pt-3">
+                                <div className="fw-semibold mb-2">{selectedQuestionCodeBlock.label} Starter Code</div>
+                                <Form.Control
+                                  as="textarea"
+                                  rows={10}
+                                  value={starterCodeDraft}
+                                  spellCheck={false}
+                                  disabled={!!proposal}
+                                  className="creator-question-code-editor"
+                                  onChange={(event) => setStarterCodeDraft(event.target.value)}
+                                />
+                                <Button size="sm" className="mt-2" variant="outline-primary" disabled={!!proposal} onClick={applyStarterCodeChanges}>
+                                  Apply Starter Code
+                                </Button>
+                              </div>
+                            ) : null}
+
                             <div className="border-top mt-3 pt-3">
                               <div className="fw-semibold mb-2">AI Revise This Question</div>
                               <Form.Control
@@ -1844,7 +1951,10 @@ export default function CreatorWorkbenchPage() {
           <div className="d-grid gap-2">
             {[
               ['written', 'Written Response', 'A text-response question with sample-answer and feedback fields.'],
-              ['python', 'Python / Code Response', 'An editable Python block with code-focused guidance.'],
+              ['python', 'Python', 'An editable local Python block.'],
+              ['pythonremote', 'Python Remote', 'An editable remote Python block.'],
+              ['pythonturtle', 'Python Turtle', 'An editable turtle canvas and Python block.'],
+              ['cpp', 'C++', 'An editable C++ code block.'],
               ['ai', 'AI-Assisted Question', 'A text response paired with an inline AI coach block.'],
             ].map(([questionType, title, description]) => (
               <Button

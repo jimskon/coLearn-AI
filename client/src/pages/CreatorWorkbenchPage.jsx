@@ -13,6 +13,7 @@ import {
 } from 'react-bootstrap';
 import {
   ArrowLeft,
+  ArrowCounterclockwise,
   Check2,
   ChatDots,
   Eye,
@@ -525,6 +526,7 @@ export default function CreatorWorkbenchPage() {
   const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
   const [showIssuesModal, setShowIssuesModal] = useState(false);
+  const [visualUndoStack, setVisualUndoStack] = useState([]);
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
@@ -562,6 +564,13 @@ export default function CreatorWorkbenchPage() {
     setSelectedPreviewKey(inserted?.previewKey || '');
   }
 
+  function recordVisualEdit(label) {
+    setVisualUndoStack((previous) => ([
+      ...previous,
+      { sourceText: rawText, label },
+    ].slice(-40)));
+  }
+
   function insertStarterQuestion(block, placement, questionType = 'written') {
     const sourceMeta = block?.sourceMeta;
     if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
@@ -575,6 +584,7 @@ export default function CreatorWorkbenchPage() {
     const nextSource = nextText.join('\n');
     const parsed = compileText(nextSource);
 
+    recordVisualEdit('adding a question');
     setRawText(nextSource);
     setSandboxUrl('');
     selectInsertedQuestion(parsed, insertionIndex + 1);
@@ -604,6 +614,7 @@ export default function CreatorWorkbenchPage() {
     const nextSource = nextText.join('\n');
     const parsed = compileText(nextSource);
 
+    recordVisualEdit('adding a question group');
     setRawText(nextSource);
     setSandboxUrl('');
     selectInsertedQuestion(parsed, insertionIndex + 2);
@@ -624,6 +635,7 @@ export default function CreatorWorkbenchPage() {
       ...String(code || '').split('\n')
     );
     const nextText = lines.join('\n');
+    recordVisualEdit(`updating ${codeBlock.label} starter code`);
     setRawText(nextText);
     setStarterCodeDraft(String(code || ''));
     compileText(nextText);
@@ -735,6 +747,21 @@ export default function CreatorWorkbenchPage() {
     setFileContents(parsed.files);
     return parsed;
   }, []);
+
+  const undoVisualEdit = () => {
+    const previousEdit = visualUndoStack.at(-1);
+    if (!previousEdit || proposal) return;
+
+    const parsed = compileText(previousEdit.sourceText);
+    setRawText(previousEdit.sourceText);
+    setSandboxUrl('');
+    setSelectedPreviewKey('');
+    setQuestionRevisionProposal(null);
+    setVisualUndoStack((previous) => previous.slice(0, -1));
+    setNotice(`Undid ${previousEdit.label}.`);
+    setTimeout(() => setNotice(''), 1800);
+    return parsed;
+  };
 
   useEffect(() => {
     const loadScript = (src) =>
@@ -1064,6 +1091,8 @@ export default function CreatorWorkbenchPage() {
   const applyQuestionInspectorChanges = () => {
     if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
     const nextText = applyQuestionEditsToSource(rawText, selectedQuestionBlock, questionInspectorDraft);
+    if (nextText === rawText) return;
+    recordVisualEdit('updating question settings');
     setRawText(nextText);
     compileText(nextText);
     setNotice('Updated question settings in source.');
@@ -1080,6 +1109,8 @@ export default function CreatorWorkbenchPage() {
       ...replacementLines
     );
     const nextText = lines.join('\n');
+    if (nextText === rawText) return;
+    recordVisualEdit(`updating ${selectedQuestionCodeBlock.label} starter code`);
     setRawText(nextText);
     setSandboxUrl('');
     compileText(nextText);
@@ -1093,6 +1124,8 @@ export default function CreatorWorkbenchPage() {
       ...questionInspectorDraft,
       responseLines: '',
     });
+    if (nextText === rawText) return;
+    recordVisualEdit('removing response lines');
     setRawText(nextText);
     setSandboxUrl('');
     compileText(nextText);
@@ -1158,6 +1191,7 @@ export default function CreatorWorkbenchPage() {
     );
     const nextText = lines.join('\n');
     const parsed = compileText(nextText);
+    recordVisualEdit('applying an AI question revision');
     setRawText(nextText);
     setSandboxUrl('');
     selectInsertedQuestion(parsed, sourceMeta.questionLine);
@@ -1170,6 +1204,8 @@ export default function CreatorWorkbenchPage() {
   const applyQuestionGroupInspectorChanges = () => {
     if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return;
     const nextText = applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
+    if (nextText === rawText) return;
+    recordVisualEdit('updating question group settings');
     setRawText(nextText);
     setSandboxUrl('');
     compileText(nextText);
@@ -1180,6 +1216,8 @@ export default function CreatorWorkbenchPage() {
   const applyAiInspectorChanges = () => {
     if (!selectedAiBlock || !aiInspectorDraft || proposal) return;
     const nextText = applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft);
+    if (nextText === rawText) return;
+    recordVisualEdit('updating AI block settings');
     setRawText(nextText);
     compileText(nextText);
     setNotice('Updated AI block settings in source.');
@@ -1198,6 +1236,7 @@ export default function CreatorWorkbenchPage() {
     const lines = String(rawText || '').split('\n');
     lines.splice(startLine - 1, endLine - startLine + 1);
     const nextText = lines.join('\n');
+    recordVisualEdit('removing a question group');
     setRawText(nextText);
     setSandboxUrl('');
     setSelectedPreviewKey('');
@@ -1225,6 +1264,7 @@ export default function CreatorWorkbenchPage() {
     const lines = String(rawText || '').split('\n');
     lines.splice(sourceMeta.questionLine - 1, sourceMeta.endQuestionLine - sourceMeta.questionLine + 1);
     const nextText = lines.join('\n');
+    recordVisualEdit('removing a question');
     setRawText(nextText);
     setSandboxUrl('');
     setSelectedPreviewKey('');
@@ -1578,6 +1618,15 @@ export default function CreatorWorkbenchPage() {
                   Sandbox
                 </Button>
               </ButtonGroup>
+              <Button
+                size="sm"
+                variant="outline-secondary"
+                onClick={undoVisualEdit}
+                disabled={!visualUndoStack.length || !!proposal}
+                title={visualUndoStack.length ? `Undo ${visualUndoStack.at(-1)?.label}` : 'Nothing to undo'}
+              >
+                <ArrowCounterclockwise className="me-1" /> Undo
+              </Button>
               {proposal ? <Badge bg="warning" text="dark">Proposal</Badge> : null}
               {activeIssues.length ? <Badge bg={activeIssues.some((issue) => issue.severity === 'error') ? 'danger' : 'warning'}>{activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</Badge> : <Badge bg="success">Clean</Badge>}
             </div>
@@ -2009,6 +2058,7 @@ export default function CreatorWorkbenchPage() {
                 onChange={(event) => {
                   setRawText(event.target.value);
                   setSandboxUrl('');
+                  setVisualUndoStack([]);
                 }}
               />
             ) : null}

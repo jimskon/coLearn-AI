@@ -1114,6 +1114,8 @@ export default function CreatorWorkbenchPage() {
         proposedMarkup,
         summary: Array.isArray(data?.summary) ? data.summary : [],
         warnings: Array.isArray(data?.warnings) ? data.warnings : [],
+        generationStatus: String(data?.generation_status || 'unknown'),
+        generationError: String(data?.generation_error || '').trim(),
       });
     } catch (err) {
       setError(err?.message || String(err));
@@ -1923,8 +1925,26 @@ export default function CreatorWorkbenchPage() {
                                       {questionRevisionProposal.warnings.join(' ')}
                                     </Alert>
                                   ) : null}
+                                  {questionRevisionProposal.generationStatus !== 'generated' ? (
+                                    <details className="small text-muted mb-2">
+                                      <summary>Revision diagnostics</summary>
+                                      <div className="mt-1">
+                                        <div>Status: {questionRevisionProposal.generationStatus}</div>
+                                        {questionRevisionProposal.generationError ? (
+                                          <div className="text-break">Details: {questionRevisionProposal.generationError}</div>
+                                        ) : null}
+                                      </div>
+                                    </details>
+                                  ) : null}
                                   <div className="d-flex gap-2 mt-2">
-                                    <Button size="sm" variant="primary" onClick={applyQuestionRevision}>Apply Revision</Button>
+                                    <Button
+                                      size="sm"
+                                      variant="primary"
+                                      onClick={applyQuestionRevision}
+                                      disabled={questionRevisionProposal.proposedMarkup.trim() === questionRevisionProposal.currentMarkup.trim()}
+                                    >
+                                      Apply Revision
+                                    </Button>
                                     <Button size="sm" variant="outline-secondary" onClick={() => setQuestionRevisionProposal(null)}>Discard</Button>
                                   </div>
                                 </div>

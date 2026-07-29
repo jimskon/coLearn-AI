@@ -18,8 +18,10 @@ import {
   Eye,
   PencilSquare,
   PlayCircle,
+  PlusLg,
   Save,
   Stars,
+  Trash,
   X,
 } from 'react-bootstrap-icons';
 import { useUser } from '../context/UserContext';
@@ -141,6 +143,343 @@ function parseActivityText(text) {
   return { blocks, issues, files: collectFileContents(blocks) };
 }
 
+function htmlToEditorText(value) {
+  return String(value || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .trim();
+}
+
+function updateLine(lines, lineNumber, nextValue) {
+  if (!Number.isFinite(lineNumber) || lineNumber <= 0) return false;
+  const index = lineNumber - 1;
+  if (index < 0 || index >= lines.length) return false;
+  lines[index] = nextValue;
+  return true;
+}
+
+function insertLinesAfterAnchors(lines, insertions) {
+  const ordered = [...insertions]
+    .filter((item) => Number.isFinite(item?.anchorLine) && item.anchorLine >= 0 && item.text)
+    .sort((a, b) => a.anchorLine - b.anchorLine);
+
+  let offset = 0;
+  for (const insertion of ordered) {
+    const index = Math.max(0, Math.min(lines.length, insertion.anchorLine + offset));
+    lines.splice(index, 0, insertion.text);
+    offset += 1;
+  }
+}
+
+function applyQuestionEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  const requestedResponseLines = String(edits.responseLines ?? '').trim();
+  const responseLineCount = requestedResponseLines
+    ? Math.max(1, Number.parseInt(requestedResponseLines, 10) || 1)
+    : 0;
+  const removedResponseLine = sourceMeta.textResponseLine && responseLineCount === 0
+    ? sourceMeta.textResponseLine
+    : null;
+
+  if (removedResponseLine) lines.splice(removedResponseLine - 1, 1);
+
+  const shiftLine = (line) => (
+    !line || !removedResponseLine || line < removedResponseLine ? line : line - 1
+  );
+  const workingMeta = {
+    ...sourceMeta,
+    questionLine: shiftLine(sourceMeta.questionLine),
+    textResponseLine: removedResponseLine ? null : shiftLine(sourceMeta.textResponseLine),
+    sampleLines: sourceMeta.sampleLines?.map(shiftLine),
+    feedbackLines: sourceMeta.feedbackLines?.map(shiftLine),
+    followupLines: sourceMeta.followupLines?.map(shiftLine),
+  };
+
+  updateLine(lines, workingMeta.questionLine, `\\question{${String(edits.prompt || '').trim()}}`);
+
+  const sampleResponse = String(edits.sampleResponse || '').trim();
+  const feedbackPrompt = String(edits.feedbackPrompt || '').trim();
+  const followupPrompt = String(edits.followupPrompt || '').trim();
+  const insertions = [];
+
+  if (workingMeta.textResponseLine) {
+    updateLine(lines, workingMeta.textResponseLine, `\\textresponse{${responseLineCount}}`);
+  } else if (responseLineCount > 0) {
+    insertions.push({
+      anchorLine: workingMeta.questionLine,
+      text: `\\textresponse{${responseLineCount}}`,
+    });
+  }
+
+  if (Array.isArray(workingMeta.sampleLines) && workingMeta.sampleLines[0]) {
+    updateLine(lines, workingMeta.sampleLines[0], `\\sampleresponses{${sampleResponse}}`);
+  } else if (sampleResponse) {
+    insertions.push({
+      anchorLine: workingMeta.textResponseLine || workingMeta.questionLine,
+      text: `\\sampleresponses{${sampleResponse}}`,
+    });
+  }
+
+  if (Array.isArray(workingMeta.feedbackLines) && workingMeta.feedbackLines[0]) {
+    updateLine(lines, workingMeta.feedbackLines[0], `\\feedbackprompt{${feedbackPrompt}}`);
+  } else if (feedbackPrompt) {
+    insertions.push({
+      anchorLine:
+        workingMeta.sampleLines?.[0] ||
+        workingMeta.textResponseLine ||
+        workingMeta.questionLine,
+      text: `\\feedbackprompt{${feedbackPrompt}}`,
+    });
+  }
+
+  if (Array.isArray(workingMeta.followupLines) && workingMeta.followupLines[0]) {
+    updateLine(lines, workingMeta.followupLines[0], `\\followupprompt{${followupPrompt}}`);
+  } else if (followupPrompt) {
+    insertions.push({
+      anchorLine:
+        workingMeta.feedbackLines?.[0] ||
+        workingMeta.sampleLines?.[0] ||
+        workingMeta.textResponseLine ||
+        workingMeta.questionLine,
+      text: `\\followupprompt{${followupPrompt}}`,
+    });
+  }
+
+  insertLinesAfterAnchors(lines, insertions);
+  return lines.join('\n');
+}
+
+function buildQuestionInspectorDraft(block) {
+  return {
+    prompt: htmlToEditorText(block?.prompt),
+    responseLines: block?.hasTextResponse ? (Number(block?.responseLines) || 1) : '',
+    sampleResponse: htmlToEditorText(block?.samples?.[0]),
+    feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
+    followupPrompt: htmlToEditorText(block?.followups?.[0]),
+  };
+}
+
+function buildQuestionGroupInspectorDraft(block) {
+  return {
+    title: htmlToEditorText(block?.content || 'New Question Group'),
+    retriesRequired: Math.max(0, Number.parseInt(block?.retriesRequired, 10) || 0),
+  };
+}
+
+function applyQuestionGroupEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.groupLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  const title = String(edits.title || '').trim() || 'New Question Group';
+  const retriesRequired = Math.max(0, Number.parseInt(edits.retriesRequired, 10) || 0);
+  updateLine(lines, sourceMeta.groupLine, `\\questiongroup{${title}}`);
+
+  if (sourceMeta.retriesLine) {
+    updateLine(lines, sourceMeta.retriesLine, `\\retries{${retriesRequired}}`);
+  } else {
+    insertLinesAfterAnchors(lines, [{
+      anchorLine: sourceMeta.groupLine,
+      text: `\\retries{${retriesRequired}}`,
+    }]);
+  }
+
+  return lines.join('\n');
+}
+
+function applyAiEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.aiLine || !sourceMeta?.endAiLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  const title = String(edits.title || '').trim();
+  const prompt = String(edits.prompt || '').trim();
+  const guardrail = String(edits.guardrail || '').trim();
+  const context = Array.isArray(edits.contextSources)
+    ? edits.contextSources
+    : String(edits.contextSources || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  const inputRows = Math.max(2, Number.parseInt(edits.inputRows, 10) || 4);
+  const insertions = [];
+
+  updateLine(lines, sourceMeta.aiLine, `\\ai{${String(edits.mode || 'explain').trim().toLowerCase() || 'explain'}}`);
+
+  if (sourceMeta.titleLine) {
+    updateLine(lines, sourceMeta.titleLine, `\\aititle{${title}}`);
+  } else if (title) {
+    insertions.push({ anchorLine: sourceMeta.aiLine, text: `\\aititle{${title}}` });
+  }
+
+  if (sourceMeta.promptLine) {
+    updateLine(lines, sourceMeta.promptLine, `\\aiprompt{${prompt}}`);
+  } else if (prompt) {
+    insertions.push({ anchorLine: sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiprompt{${prompt}}` });
+  }
+
+  if (sourceMeta.guardrailLine) {
+    updateLine(lines, sourceMeta.guardrailLine, `\\aiguardrail{${guardrail}}`);
+  } else if (guardrail) {
+    insertions.push({ anchorLine: sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiguardrail{${guardrail}}` });
+  }
+
+  if (sourceMeta.contextLine) {
+    updateLine(lines, sourceMeta.contextLine, `\\aicontext{${context.join(',')}}`);
+  } else if (context.length) {
+    insertions.push({ anchorLine: sourceMeta.guardrailLine || sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aicontext{${context.join(',')}}` });
+  }
+
+  if (sourceMeta.inputLine) {
+    updateLine(lines, sourceMeta.inputLine, `\\aiinput{${inputRows}}`);
+  } else {
+    insertions.push({ anchorLine: sourceMeta.contextLine || sourceMeta.guardrailLine || sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiinput{${inputRows}}` });
+  }
+
+  insertLinesAfterAnchors(lines, insertions);
+  return lines.join('\n');
+}
+
+function buildAiInspectorDraft(block) {
+  return {
+    mode: String(block?.mode || 'explain').trim().toLowerCase() || 'explain',
+    title: htmlToEditorText(block?.title || 'AI Coach'),
+    prompt: htmlToEditorText(block?.prompt),
+    guardrail: htmlToEditorText(block?.guardrail),
+    contextSources: Array.isArray(block?.contextSources) ? block.contextSources.join(', ') : '',
+    inputRows: Number(block?.inputRows) || 4,
+  };
+}
+
+function findSelectableBlockByPreviewKey(blocks, previewKey) {
+  if (!previewKey) return null;
+  for (const block of blocks || []) {
+    if (block?.previewKey === previewKey) return block;
+    if (Array.isArray(block?.aiBlocks)) {
+      const aiMatch = block.aiBlocks.find((aiBlock) => aiBlock?.previewKey === previewKey);
+      if (aiMatch) return aiMatch;
+    }
+  }
+  return null;
+}
+
+const starterQuestionTemplates = {
+  written: [
+  '\\question{New question prompt.}',
+  '\\textresponse{3}',
+  '\\sampleresponses{Example response.}',
+  '\\feedbackprompt{Explain what a strong answer includes.}',
+  '\\endquestion',
+  ],
+  python: [
+    '\\question{Write and run a Python program that solves this task.}',
+    '\\python',
+    '# Write your Python code here',
+    '\\endpython',
+    '\\sampleresponses{A working Python solution.}',
+    '\\feedbackprompt{Test the program and explain how it solves the task.}',
+    '\\endquestion',
+  ],
+  pythonremote: [
+    '\\question{Write and run a remote Python program that solves this task.}',
+    '\\pythonremote',
+    '# Write your remote Python code here',
+    '\\endpythonremote',
+    '\\sampleresponses{A working remote Python solution.}',
+    '\\feedbackprompt{Test the program and explain how it solves the task.}',
+    '\\endquestion',
+  ],
+  pythonturtle: [
+    '\\question{Write and run a turtle program that creates the requested drawing.}',
+    '\\pythonturtle{600x400}',
+    'import turtle',
+    '',
+    '# Write your turtle code here',
+    '\\endpythonturtle',
+    '\\sampleresponses{A working turtle program that creates the requested drawing.}',
+    '\\feedbackprompt{Run the drawing and explain how your code controls it.}',
+    '\\endquestion',
+  ],
+  cpp: [
+    '\\question{Write and run a C++ program that solves this task.}',
+    '\\cpp',
+    '#include <iostream>',
+    '',
+    'int main() {',
+    '  // Write your C++ code here',
+    '  return 0;',
+    '}',
+    '\\endcpp',
+    '\\sampleresponses{A working C++ solution.}',
+    '\\feedbackprompt{Compile the program and explain how it solves the task.}',
+    '\\endquestion',
+  ],
+  ai: [
+    '\\question{Use the AI coach to improve your response to this question.}',
+    '\\textresponse{3}',
+    '\\ai{explain}',
+    '\\aititle{AI Coach}',
+    '\\aiprompt{Help the student reason about the current question without giving away the answer.}',
+    '\\aiguardrail{Ask guiding questions and keep the discussion focused on this activity.}',
+    '\\aicontext{current-question,student-response}',
+    '\\aiinput{4}',
+    '\\endai',
+    '\\sampleresponses{A thoughtful response that uses the AI feedback.}',
+    '\\feedbackprompt{Explain the reasoning in your own words.}',
+    '\\endquestion',
+  ],
+};
+
+function getStarterQuestionLines(questionType) {
+  return starterQuestionTemplates[questionType] || starterQuestionTemplates.written;
+}
+
+function getQuestionSource(sourceText, block) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return '';
+  return String(sourceText || '')
+    .split('\n')
+    .slice(sourceMeta.questionLine - 1, sourceMeta.endQuestionLine)
+    .join('\n');
+}
+
+function getQuestionCodeBlock(sourceText, block, requestedType = '') {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return null;
+  const lines = String(sourceText || '').split('\n');
+  const startIndex = sourceMeta.questionLine - 1;
+  const endIndex = sourceMeta.endQuestionLine - 1;
+  const openingPatterns = [
+    ['pythonremote', /^\\pythonremote(?:\{[^}]*\})?\s*$/i, '\\endpythonremote', 'Python Remote'],
+    ['pythonturtle', /^\\pythonturtle(?:\{[^}]*\})?\s*$/i, '\\endpythonturtle', 'Python Turtle'],
+    ['python', /^\\python(?:\{[^}]*\})?\s*$/i, '\\endpython', 'Python'],
+    ['cpp', /^\\cpp(?:\{[^}]*\})?\s*$/i, '\\endcpp', 'C++'],
+  ];
+
+  for (let index = startIndex; index <= endIndex; index += 1) {
+    const line = lines[index]?.trim();
+    const match = openingPatterns.find(([, pattern]) => pattern.test(line));
+    if (!match || (requestedType && match[0] !== requestedType)) continue;
+    const [type, , closingTag, label] = match;
+    const closeIndex = lines.findIndex((candidate, candidateIndex) => (
+      candidateIndex > index && candidateIndex <= endIndex && candidate.trim() === closingTag
+    ));
+    if (closeIndex === -1) return null;
+    return {
+      type,
+      label,
+      openLine: index + 1,
+      closeLine: closeIndex + 1,
+      content: lines.slice(index + 1, closeIndex).join('\n'),
+    };
+  }
+  return null;
+}
+
 export default function CreatorWorkbenchPage() {
   const { classId, activityId } = useParams();
   const navigate = useNavigate();
@@ -175,6 +514,17 @@ export default function CreatorWorkbenchPage() {
   const [messages, setMessages] = useState([]);
   const [proposal, setProposal] = useState(null);
   const [sandboxUrl, setSandboxUrl] = useState('');
+  const [selectedPreviewKey, setSelectedPreviewKey] = useState('');
+  const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
+  const [questionGroupInspectorDraft, setQuestionGroupInspectorDraft] = useState(null);
+  const [insertTarget, setInsertTarget] = useState(null);
+  const [questionRevisionRequest, setQuestionRevisionRequest] = useState('');
+  const [questionRevisionBusy, setQuestionRevisionBusy] = useState(false);
+  const [questionRevisionProposal, setQuestionRevisionProposal] = useState(null);
+  const [starterCodeDraft, setStarterCodeDraft] = useState('');
+  const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
+  const [showPreviewInspector, setShowPreviewInspector] = useState(true);
+  const [showIssuesModal, setShowIssuesModal] = useState(false);
 
   const autoTimerRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
@@ -205,6 +555,103 @@ export default function CreatorWorkbenchPage() {
       : creatorModelOptions
   ), [isDemoCreator]);
 
+  function selectInsertedQuestion(parsed, questionLine) {
+    const inserted = parsed.blocks.find((block) => (
+      block?.type === 'question' && block?.sourceMeta?.questionLine === questionLine
+    ));
+    setSelectedPreviewKey(inserted?.previewKey || '');
+  }
+
+  function insertStarterQuestion(block, placement, questionType = 'written') {
+    const sourceMeta = block?.sourceMeta;
+    if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
+
+    const lines = String(rawText || '').split('\n');
+    const insertionIndex = placement === 'before'
+      ? sourceMeta.questionLine - 1
+      : sourceMeta.endQuestionLine;
+    const nextText = [...lines];
+    nextText.splice(insertionIndex, 0, ...getStarterQuestionLines(questionType));
+    const nextSource = nextText.join('\n');
+    const parsed = compileText(nextSource);
+
+    setRawText(nextSource);
+    setSandboxUrl('');
+    selectInsertedQuestion(parsed, insertionIndex + 1);
+    setNotice('Added a new question. Use the Question Panel to edit it.');
+    setTimeout(() => setNotice(''), 2400);
+  }
+
+  function insertStarterQuestionGroup(block, placement, questionType = 'written') {
+    const sourceMeta = block?.sourceMeta;
+    const groupLine = sourceMeta?.groupLine;
+    const endGroupLine = sourceMeta?.endGroupLine;
+    const insertionIndex = placement === 'before'
+      ? groupLine - 1
+      : endGroupLine;
+
+    if (!Number.isFinite(insertionIndex) || insertionIndex < 0) return;
+
+    const lines = String(rawText || '').split('\n');
+    const nextText = [...lines];
+    nextText.splice(
+      insertionIndex,
+      0,
+      '\\questiongroup{New Question Group}',
+      ...getStarterQuestionLines(questionType),
+      '\\endquestiongroup'
+    );
+    const nextSource = nextText.join('\n');
+    const parsed = compileText(nextSource);
+
+    setRawText(nextSource);
+    setSandboxUrl('');
+    selectInsertedQuestion(parsed, insertionIndex + 2);
+    setNotice('Added a new question group. Use the Question Panel to edit its starter question.');
+    setTimeout(() => setNotice(''), 2400);
+  }
+
+  function persistVisualCodeChange(_responseKey, code, meta = {}) {
+    if (meta.__broadcastOnly || proposal) return;
+    const sourceRef = meta.creatorSource;
+    const codeBlock = getQuestionCodeBlock(rawText, sourceRef?.questionBlock, sourceRef?.codeType);
+    if (!codeBlock) return;
+
+    const lines = String(rawText || '').split('\n');
+    lines.splice(
+      codeBlock.openLine,
+      codeBlock.closeLine - codeBlock.openLine - 1,
+      ...String(code || '').split('\n')
+    );
+    const nextText = lines.join('\n');
+    setRawText(nextText);
+    setStarterCodeDraft(String(code || ''));
+    compileText(nextText);
+    setNotice(`${codeBlock.label} starter code updated.`);
+    setTimeout(() => setNotice(''), 1800);
+  }
+
+  function renderInsertionMarker(key, label, target) {
+    return (
+      <div key={key} className="creator-insert-slot">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline-primary"
+          className="creator-insert-button"
+          aria-label={label}
+          title={label}
+          onClick={(event) => {
+            event.stopPropagation();
+            setInsertTarget(target);
+          }}
+        >
+          <PlusLg />
+        </Button>
+      </div>
+    );
+  }
+
   const renderedActivity = useMemo(() => renderBlocks(activeBlocks, {
     mode: 'preview',
     editable: true,
@@ -214,7 +661,61 @@ export default function CreatorWorkbenchPage() {
     setFileContents: updateFileContents,
     infoBubbleSession: infoBubbleSessionRef.current,
     runtimeFeatures,
-  }), [activeBlocks, fileContents, updateFileContents, infoBubbleSessionRef, runtimeFeatures]);
+    onSelectBlock: proposal ? null : (block) => setSelectedPreviewKey(block?.previewKey || ''),
+    onCodeChange: persistVisualCodeChange,
+    selectedPreviewKey,
+    renderInsertBeforeQuestion: proposal ? null : (block) => renderInsertionMarker(
+      `before-question-${block.previewKey}`,
+      'Add question before',
+      { kind: 'question', block, placement: 'before' }
+    ),
+    renderInsertAfterQuestion: proposal ? null : (block) => renderInsertionMarker(
+      `after-question-${block.previewKey}`,
+      'Add question after',
+      { kind: 'question', block, placement: 'after' }
+    ),
+    renderInsertBeforeGroup: proposal ? null : (block) => renderInsertionMarker(
+      `before-group-${block.groupId}`,
+      'Add question group before',
+      { kind: 'group', block, placement: 'before' }
+    ),
+    renderInsertAfterGroup: proposal ? null : (block) => renderInsertionMarker(
+      `after-group-${block.groupId}`,
+      'Add question group after',
+      { kind: 'group', block, placement: 'after' }
+    ),
+  }), [activeBlocks, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures, insertStarterQuestion, insertStarterQuestionGroup]);
+
+  const selectedPreviewBlock = useMemo(() => (
+    findSelectableBlockByPreviewKey(activeBlocks, selectedPreviewKey)
+  ), [activeBlocks, selectedPreviewKey]);
+
+  const selectedQuestionBlock = selectedPreviewBlock?.type === 'question' ? selectedPreviewBlock : null;
+  const selectedQuestionCodeBlock = useMemo(() => (
+    getQuestionCodeBlock(rawText, selectedQuestionBlock)
+  ), [rawText, selectedQuestionBlock]);
+  const selectedQuestionGroupBlock = selectedPreviewBlock?.type === 'groupIntro' ? selectedPreviewBlock : null;
+  const selectedAiBlock = selectedPreviewBlock?.type === 'ai' ? selectedPreviewBlock : null;
+  const proposedQuestionPreview = useMemo(() => {
+    const markup = questionRevisionProposal?.proposedMarkup;
+    if (!markup) return null;
+
+    // Questions are only valid inside a group in the activity markup. Wrap the
+    // proposal for parsing, then render just the question in this read-only preview.
+    const parsed = parseActivityText([
+      '\\questiongroup{Proposed question preview}',
+      markup,
+      '\\endquestiongroup',
+    ].join('\n'));
+    const questionBlocks = parsed.blocks.filter((block) => block?.type === 'question');
+    return renderBlocks(questionBlocks, {
+      mode: 'preview',
+      editable: false,
+      isInstructor: true,
+      fileContents: parsed.files,
+      runtimeFeatures,
+    });
+  }, [questionRevisionProposal?.proposedMarkup, runtimeFeatures]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
 
@@ -322,6 +823,39 @@ export default function CreatorWorkbenchPage() {
     return () => clearTimeout(autoTimerRef.current);
   }, [compileText, proposal, rawText, skulptLoaded]);
 
+  useEffect(() => {
+    if (!selectedQuestionBlock) {
+      setQuestionInspectorDraft(null);
+    } else {
+      setShowPreviewInspector(true);
+      setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
+      setStarterCodeDraft(getQuestionCodeBlock(rawText, selectedQuestionBlock)?.content || '');
+    }
+  }, [rawText, selectedQuestionBlock]);
+
+  useEffect(() => {
+    if (!selectedQuestionGroupBlock) {
+      setQuestionGroupInspectorDraft(null);
+    } else {
+      setShowPreviewInspector(true);
+      setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock));
+    }
+  }, [selectedQuestionGroupBlock]);
+
+  useEffect(() => {
+    if (!selectedAiBlock) {
+      setAiInspectorDraft(null);
+    } else {
+      setShowPreviewInspector(true);
+      setAiInspectorDraft(buildAiInspectorDraft(selectedAiBlock));
+    }
+  }, [selectedAiBlock]);
+
+  useEffect(() => {
+    if (!proposal) return;
+    setSelectedPreviewKey('');
+  }, [proposal]);
+
   const handleDraftChange = (field, value) => {
     setDraft((prev) => {
       if (field === 'mode') {
@@ -379,7 +913,7 @@ export default function CreatorWorkbenchPage() {
           createdBy: user?.id,
         }),
       });
-      const data = await res.json();
+      const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Failed to create draft.');
 
       setActivity(data);
@@ -527,6 +1061,178 @@ export default function CreatorWorkbenchPage() {
     setRightMode(mode);
   };
 
+  const applyQuestionInspectorChanges = () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
+    const nextText = applyQuestionEditsToSource(rawText, selectedQuestionBlock, questionInspectorDraft);
+    setRawText(nextText);
+    compileText(nextText);
+    setNotice('Updated question settings in source.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const applyStarterCodeChanges = () => {
+    if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return;
+    const lines = String(rawText || '').split('\n');
+    const replacementLines = String(starterCodeDraft || '').split('\n');
+    lines.splice(
+      selectedQuestionCodeBlock.openLine,
+      selectedQuestionCodeBlock.closeLine - selectedQuestionCodeBlock.openLine - 1,
+      ...replacementLines
+    );
+    const nextText = lines.join('\n');
+    setRawText(nextText);
+    setSandboxUrl('');
+    compileText(nextText);
+    setNotice(`Updated ${selectedQuestionCodeBlock.label} starter code.`);
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const removeResponseLines = () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
+    const nextText = applyQuestionEditsToSource(rawText, selectedQuestionBlock, {
+      ...questionInspectorDraft,
+      responseLines: '',
+    });
+    setRawText(nextText);
+    setSandboxUrl('');
+    compileText(nextText);
+    setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: '' }));
+    setNotice('Removed written response lines from this question.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const requestQuestionRevision = async () => {
+    const revisionRequest = questionRevisionRequest.trim();
+    const questionMarkup = getQuestionSource(rawText, selectedQuestionBlock);
+    if (!revisionRequest || !questionMarkup || !activity?.id || !effectiveClassId || proposal) return;
+
+    setQuestionRevisionBusy(true);
+    setQuestionRevisionProposal(null);
+    setError('');
+    try {
+      const group = blocks.find((block) => (
+        block?.type === 'groupIntro' && block?.groupId === selectedQuestionBlock.groupId
+      ));
+      const res = await fetch(`${API_BASE_URL}/api/classes/${effectiveClassId}/creator-draft/${activity.id}/revise-question`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          request: questionRevisionRequest,
+          question_markup: questionMarkup,
+          selected_model: draft.selected_model,
+          group_title: htmlToEditorText(group?.content || ''),
+        }),
+      });
+      const data = await readJsonResponse(res);
+      if (!res.ok) throw new Error(data?.error || 'Question revision failed.');
+
+      const proposedMarkup = String(data?.proposedQuestionMarkup || data?.proposed_question_markup || '').trim();
+      if (!proposedMarkup) throw new Error('Question revision returned an empty proposal.');
+      setQuestionRevisionProposal({
+        currentMarkup: questionMarkup,
+        proposedMarkup,
+        summary: Array.isArray(data?.summary) ? data.summary : [],
+        warnings: Array.isArray(data?.warnings) ? data.warnings : [],
+        generationStatus: String(data?.generation_status || 'unknown'),
+        generationError: String(data?.generation_error || '').trim(),
+      });
+    } catch (err) {
+      setError(err?.message || String(err));
+    } finally {
+      setQuestionRevisionBusy(false);
+    }
+  };
+
+  const applyQuestionRevision = () => {
+    if (!selectedQuestionBlock || !questionRevisionProposal?.proposedMarkup || proposal) return;
+    const sourceMeta = selectedQuestionBlock.sourceMeta;
+    if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
+
+    const lines = String(rawText || '').split('\n');
+    const proposedLines = questionRevisionProposal.proposedMarkup.split('\n');
+    lines.splice(
+      sourceMeta.questionLine - 1,
+      sourceMeta.endQuestionLine - sourceMeta.questionLine + 1,
+      ...proposedLines
+    );
+    const nextText = lines.join('\n');
+    const parsed = compileText(nextText);
+    setRawText(nextText);
+    setSandboxUrl('');
+    selectInsertedQuestion(parsed, sourceMeta.questionLine);
+    setQuestionRevisionProposal(null);
+    setQuestionRevisionRequest('');
+    setNotice('Applied AI revision to this question.');
+    setTimeout(() => setNotice(''), 2400);
+  };
+
+  const applyQuestionGroupInspectorChanges = () => {
+    if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return;
+    const nextText = applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
+    setRawText(nextText);
+    setSandboxUrl('');
+    compileText(nextText);
+    setNotice('Updated question group settings in source.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const applyAiInspectorChanges = () => {
+    if (!selectedAiBlock || !aiInspectorDraft || proposal) return;
+    const nextText = applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft);
+    setRawText(nextText);
+    compileText(nextText);
+    setNotice('Updated AI block settings in source.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const removeQuestionGroup = (groupId, { skipConfirmation = false } = {}) => {
+    if (proposal) return;
+    const group = blocks.find((block) => block?.type === 'groupIntro' && block?.groupId === groupId);
+    const startLine = group?.sourceMeta?.groupLine;
+    const endLine = group?.sourceMeta?.endGroupLine;
+    if (!startLine || !endLine) return;
+
+    if (!skipConfirmation && !window.confirm('Remove this question group and every question in it?')) return;
+
+    const lines = String(rawText || '').split('\n');
+    lines.splice(startLine - 1, endLine - startLine + 1);
+    const nextText = lines.join('\n');
+    setRawText(nextText);
+    setSandboxUrl('');
+    setSelectedPreviewKey('');
+    compileText(nextText);
+    setNotice('Removed question group.');
+    setTimeout(() => setNotice(''), 2400);
+  };
+
+  const removeSelectedQuestion = () => {
+    if (!selectedQuestionBlock || proposal) return;
+    const sourceMeta = selectedQuestionBlock.sourceMeta;
+    if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
+
+    const questionsInGroup = blocks.filter((block) => (
+      block?.type === 'question' && block?.groupId === selectedQuestionBlock.groupId
+    ));
+    if (questionsInGroup.length <= 1) {
+      if (!window.confirm('This is the only question in its group. Remove the entire question group?')) return;
+      removeQuestionGroup(selectedQuestionBlock.groupId, { skipConfirmation: true });
+      return;
+    }
+
+    if (!window.confirm('Remove this question?')) return;
+
+    const lines = String(rawText || '').split('\n');
+    lines.splice(sourceMeta.questionLine - 1, sourceMeta.endQuestionLine - sourceMeta.questionLine + 1);
+    const nextText = lines.join('\n');
+    setRawText(nextText);
+    setSandboxUrl('');
+    setSelectedPreviewKey('');
+    compileText(nextText);
+    setNotice('Removed question.');
+    setTimeout(() => setNotice(''), 2400);
+  };
+
   return (
     <Container fluid className="creator-workbench px-3">
       <style>{`
@@ -589,11 +1295,80 @@ export default function CreatorWorkbenchPage() {
           max-width: 980px;
           margin: 0 auto;
         }
+        .creator-insert-slot {
+          height: 14px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          position: relative;
+        }
+        .creator-insert-slot::before {
+          content: '';
+          width: 100%;
+          border-top: 1px dashed #c8d3df;
+        }
+        .creator-insert-button {
+          position: absolute;
+          z-index: 1;
+          width: 24px;
+          height: 24px;
+          padding: 0;
+          border-radius: 50%;
+          background: #fff;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          opacity: 0;
+          transform: scale(0.85);
+          transition: opacity 120ms ease, transform 120ms ease;
+        }
+        .creator-insert-slot:hover .creator-insert-button,
+        .creator-insert-slot:focus-within .creator-insert-button {
+          opacity: 1;
+          transform: scale(1);
+        }
+        .creator-preview-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr);
+          gap: 12px;
+          align-items: start;
+        }
+        .creator-preview-toolbar {
+          display: flex;
+          justify-content: flex-end;
+          margin-bottom: 0.75rem;
+        }
+        .creator-preview-inspector {
+          border: 1px solid #d9dee3;
+          border-radius: 10px;
+          background: #fafbfc;
+          padding: 0.9rem;
+          position: sticky;
+          top: 0;
+          max-height: calc(100vh - 120px);
+          overflow-y: auto;
+        }
+        @media (min-width: 1180px) {
+          .creator-preview-layout {
+            grid-template-columns: minmax(0, 1fr) 320px;
+          }
+        }
         .creator-sandbox-frame {
           width: 100%;
           height: 100%;
           border: 0;
           background: #fff;
+        }
+        .creator-issues-bar {
+          border-top: 1px solid #d9dee3;
+          background: #fffaf2;
+        }
+        .creator-issues-bar[data-severity="error"] {
+          background: #fff6f6;
+        }
+        .creator-issue-item {
+          white-space: pre-wrap;
+          word-break: break-word;
         }
         @media (max-width: 900px) {
           .creator-shell {
@@ -789,10 +1564,10 @@ export default function CreatorWorkbenchPage() {
             <div className="d-flex align-items-center gap-2">
               <ButtonGroup size="sm">
                 <Button variant={rightMode === 'preview' ? 'primary' : 'outline-primary'} onClick={() => selectRightMode('preview')}>
-                  <Eye className="me-1" /> Preview
+                  <Eye className="me-1" /> Visual Editor
                 </Button>
                 <Button variant={rightMode === 'edit' ? 'primary' : 'outline-primary'} onClick={() => selectRightMode('edit')}>
-                  <PencilSquare className="me-1" /> Edit
+                  <PencilSquare className="me-1" /> Source
                 </Button>
                 <Button
                   ref={tutorialRefs.sandbox}
@@ -821,9 +1596,405 @@ export default function CreatorWorkbenchPage() {
             {rightMode === 'preview' ? (
               <div className="p-3">
                 {!activity?.id && !activeText ? (
-                  <Alert variant="secondary" className="mb-0">Create a draft to preview it here.</Alert>
+                  <Alert variant="secondary" className="mb-0">Create a draft to edit it visually here.</Alert>
                 ) : (
-                  <div className="creator-preview-surface">{renderedActivity}</div>
+                  <>
+                    <div className="creator-preview-toolbar">
+                      <Button
+                        size="sm"
+                        variant={showPreviewInspector ? 'outline-secondary' : 'outline-primary'}
+                        onClick={() => setShowPreviewInspector((prev) => !prev)}
+                      >
+                        {showPreviewInspector ? 'Hide Panel' : 'Show Panel'}
+                      </Button>
+                    </div>
+                    <div className="creator-preview-layout">
+                    <div className="creator-preview-surface">{renderedActivity}</div>
+                    {showPreviewInspector ? (
+                      <aside className="creator-preview-inspector">
+                        <div className="d-flex align-items-start justify-content-between gap-2 mb-2">
+                          <div className="fw-semibold">
+                            {selectedAiBlock ? 'AI Panel' : (selectedQuestionGroupBlock ? 'Question Group Panel' : 'Question Panel')}
+                          </div>
+                          <Button
+                            size="sm"
+                            variant="link"
+                            className="p-0 text-muted"
+                            onClick={() => setShowPreviewInspector(false)}
+                            aria-label="Hide question panel"
+                          >
+                            <X />
+                          </Button>
+                        </div>
+                        {selectedQuestionGroupBlock ? (
+                          <>
+                            <div className="text-muted small mb-3">
+                              Group {selectedQuestionGroupBlock.groupId}
+                            </div>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Group Title</Form.Label>
+                              <Form.Control
+                                value={questionGroupInspectorDraft?.title || ''}
+                                disabled={!questionGroupInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionGroupInspectorDraft((prev) => ({ ...(prev || {}), title: event.target.value }))}
+                              />
+                            </Form.Group>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Retries Required</Form.Label>
+                              <Form.Control
+                                type="number"
+                                min="0"
+                                value={questionGroupInspectorDraft?.retriesRequired ?? 0}
+                                disabled={!questionGroupInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionGroupInspectorDraft((prev) => ({ ...(prev || {}), retriesRequired: event.target.value }))}
+                              />
+                              {!selectedQuestionGroupBlock?.sourceMeta?.retriesLine ? (
+                                <div className="text-muted small mt-1">Applying will add a group-level `\\retries` line.</div>
+                              ) : null}
+                            </Form.Group>
+
+                            <div className="d-flex gap-2">
+                              <Button size="sm" variant="primary" disabled={!questionGroupInspectorDraft || !!proposal} onClick={applyQuestionGroupInspectorChanges}>
+                                Apply
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline-secondary"
+                                onClick={() => setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock))}
+                                disabled={!selectedQuestionGroupBlock}
+                              >
+                                Reset
+                              </Button>
+                            </div>
+
+                            {selectedQuestionCodeBlock ? (
+                              <div className="border-top mt-3 pt-3">
+                                <div className="fw-semibold mb-2">{selectedQuestionCodeBlock.label} Starter Code</div>
+                                <Form.Control
+                                  as="textarea"
+                                  rows={10}
+                                  value={starterCodeDraft}
+                                  spellCheck={false}
+                                  disabled={!!proposal}
+                                  className="creator-question-code-editor"
+                                  onChange={(event) => setStarterCodeDraft(event.target.value)}
+                                />
+                                <Button size="sm" className="mt-2" variant="outline-primary" disabled={!!proposal} onClick={applyStarterCodeChanges}>
+                                  Apply Starter Code
+                                </Button>
+                              </div>
+                            ) : null}
+
+                            <div className="border-top mt-3 pt-3">
+                              <Button
+                                size="sm"
+                                variant="outline-danger"
+                                disabled={!!proposal}
+                                onClick={() => removeQuestionGroup(selectedQuestionGroupBlock.groupId)}
+                              >
+                                <Trash className="me-1" /> Remove Question Group
+                              </Button>
+                            </div>
+                          </>
+                        ) : !selectedQuestionBlock ? (
+                          !selectedAiBlock ? (
+                            <div className="text-muted small">
+                              Click a question or AI block in the Visual Editor to inspect and refine it without editing raw source.
+                            </div>
+                          ) : (
+                            <>
+                              <div className="text-muted small mb-3">
+                                AI block · group {selectedAiBlock.groupId} · question {selectedAiBlock.parentQuestionId}
+                              </div>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Mode</Form.Label>
+                                <Form.Select
+                                  value={aiInspectorDraft?.mode || 'explain'}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), mode: event.target.value }))}
+                                >
+                                  <option value="explain">Explain</option>
+                                  <option value="critique">Critique</option>
+                                  <option value="testgen">Testgen</option>
+                                  <option value="generate">Generate</option>
+                                </Form.Select>
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Title</Form.Label>
+                                <Form.Control
+                                  value={aiInspectorDraft?.title || ''}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), title: event.target.value }))}
+                                />
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Student Prompt</Form.Label>
+                                <Form.Control
+                                  as="textarea"
+                                  rows={4}
+                                  value={aiInspectorDraft?.prompt || ''}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), prompt: event.target.value }))}
+                                />
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Guardrail</Form.Label>
+                                <Form.Control
+                                  as="textarea"
+                                  rows={4}
+                                  value={aiInspectorDraft?.guardrail || ''}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), guardrail: event.target.value }))}
+                                />
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Context Sources</Form.Label>
+                                <Form.Control
+                                  value={aiInspectorDraft?.contextSources || ''}
+                                  placeholder="current-question,current-code,student-response"
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), contextSources: event.target.value }))}
+                                />
+                                {!selectedAiBlock?.sourceMeta?.contextLine ? (
+                                  <div className="text-muted small mt-1">Applying will add a new `\\aicontext` line to this AI block.</div>
+                                ) : null}
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>Input Rows</Form.Label>
+                                <Form.Control
+                                  type="number"
+                                  min="2"
+                                  value={aiInspectorDraft?.inputRows || 4}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), inputRows: event.target.value }))}
+                                />
+                              </Form.Group>
+
+                              <div className="d-flex gap-2">
+                                <Button size="sm" variant="primary" disabled={!aiInspectorDraft || !!proposal} onClick={applyAiInspectorChanges}>
+                                  Apply
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline-secondary"
+                                  onClick={() => setAiInspectorDraft(buildAiInspectorDraft(selectedAiBlock))}
+                                  disabled={!selectedAiBlock}
+                                >
+                                  Reset
+                                </Button>
+                              </div>
+
+                              <div className="text-muted small mt-3">
+                                This phase adds the authoring shell for `\\ai` blocks in the Visual Editor. Live AI execution comes next.
+                              </div>
+                            </>
+                          )
+                        ) : (
+                          <>
+                            <div className="text-muted small mb-3">
+                              {selectedQuestionBlock.label} · group {selectedQuestionBlock.groupId}
+                            </div>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Question Text</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={4}
+                                value={questionInspectorDraft?.prompt || ''}
+                                disabled={!questionInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), prompt: event.target.value }))}
+                              />
+                            </Form.Group>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Sample Answer</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                value={questionInspectorDraft?.sampleResponse || ''}
+                                disabled={!questionInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), sampleResponse: event.target.value }))}
+                              />
+                              {!selectedQuestionBlock?.sourceMeta?.sampleLines?.[0] ? (
+                                <div className="text-muted small mt-1">Applying will add a new `\\sampleresponses` line to this question.</div>
+                              ) : null}
+                            </Form.Group>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Feedback Guidance</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                value={questionInspectorDraft?.feedbackPrompt || ''}
+                                disabled={!questionInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), feedbackPrompt: event.target.value }))}
+                              />
+                              {!selectedQuestionBlock?.sourceMeta?.feedbackLines?.[0] ? (
+                                <div className="text-muted small mt-1">Applying will add a new `\\feedbackprompt` line to this question.</div>
+                              ) : null}
+                            </Form.Group>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Follow-up Prompt</Form.Label>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                value={questionInspectorDraft?.followupPrompt || ''}
+                                disabled={!questionInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), followupPrompt: event.target.value }))}
+                              />
+                              {!selectedQuestionBlock?.sourceMeta?.followupLines?.[0] ? (
+                                <div className="text-muted small mt-1">Applying will add a new `\\followupprompt` line to this question.</div>
+                              ) : null}
+                            </Form.Group>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Response Lines</Form.Label>
+                              <Form.Control
+                                type="number"
+                                min="1"
+                                placeholder="No written response"
+                                value={questionInspectorDraft?.responseLines ?? ''}
+                                disabled={!questionInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: event.target.value }))}
+                              />
+                              <div className="d-flex gap-2 mt-2">
+                                {selectedQuestionBlock?.sourceMeta?.textResponseLine ? (
+                                  <Button size="sm" variant="outline-danger" disabled={!!proposal} onClick={removeResponseLines}>
+                                    Remove Response Lines
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    variant="outline-secondary"
+                                    disabled={!questionInspectorDraft || !!proposal}
+                                    onClick={() => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: prev?.responseLines || 3 }))}
+                                  >
+                                    Add Response Lines
+                                  </Button>
+                                )}
+                              </div>
+                              <div className="text-muted small mt-1">
+                                Written responses are optional for code questions. Leave this blank to omit them; use Apply to set or change the count.
+                              </div>
+                            </Form.Group>
+
+                            <div className="d-flex gap-2">
+                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal} onClick={applyQuestionInspectorChanges}>
+                                Apply
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline-secondary"
+                                onClick={() => setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock))}
+                                disabled={!selectedQuestionBlock}
+                              >
+                                Reset
+                              </Button>
+                            </div>
+
+                            <div className="border-top mt-3 pt-3">
+                              <div className="fw-semibold mb-2">AI Revise This Question</div>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                placeholder="Describe the change you want—for example, make the prompt more concrete or add a misconception check."
+                                value={questionRevisionRequest}
+                                disabled={questionRevisionBusy || !!proposal}
+                                onChange={(event) => setQuestionRevisionRequest(event.target.value)}
+                              />
+                              <Button
+                                size="sm"
+                                className="mt-2"
+                                variant="outline-primary"
+                                disabled={!questionRevisionRequest.trim() || questionRevisionBusy || !!proposal}
+                                onClick={requestQuestionRevision}
+                              >
+                                {questionRevisionBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Stars className="me-1" />}
+                                Propose Revision
+                              </Button>
+
+                              {questionRevisionProposal ? (
+                                <div className="mt-3">
+                                  {questionRevisionProposal.summary?.length ? (
+                                    <div className="small mb-2">
+                                      <div className="fw-semibold">Proposed changes</div>
+                                      <ul className="mb-0 ps-3">
+                                        {questionRevisionProposal.summary.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
+                                      </ul>
+                                    </div>
+                                  ) : null}
+                                  <div className="text-muted small mb-1">Proposed activity output</div>
+                                  <div className="border rounded bg-light p-2 creator-question-proposal-preview">
+                                    {proposedQuestionPreview}
+                                  </div>
+                                  {questionRevisionProposal.warnings?.length ? (
+                                    <Alert variant="warning" className="py-2 mt-2 mb-2">
+                                      {questionRevisionProposal.warnings.join(' ')}
+                                    </Alert>
+                                  ) : null}
+                                  {questionRevisionProposal.generationStatus !== 'generated' ? (
+                                    <Alert variant="secondary" className="small py-2 mb-2">
+                                      <div><strong>Revision diagnostics</strong> — status: {questionRevisionProposal.generationStatus}</div>
+                                      {questionRevisionProposal.generationError ? (
+                                        <div className="text-break mt-1">{questionRevisionProposal.generationError}</div>
+                                      ) : null}
+                                    </Alert>
+                                  ) : null}
+                                  <div className="d-flex gap-2 mt-2">
+                                    <Button
+                                      size="sm"
+                                      variant="primary"
+                                      onClick={applyQuestionRevision}
+                                      disabled={questionRevisionProposal.proposedMarkup.trim() === questionRevisionProposal.currentMarkup.trim()}
+                                    >
+                                      Apply Revision
+                                    </Button>
+                                    <Button size="sm" variant="outline-secondary" onClick={() => setQuestionRevisionProposal(null)}>Discard</Button>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="border-top mt-3 pt-3">
+                              <div className="text-muted small mb-2">Remove</div>
+                              <div className="d-flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline-danger"
+                                  disabled={!!proposal}
+                                  onClick={removeSelectedQuestion}
+                                >
+                                  <Trash className="me-1" /> Remove Question
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline-danger"
+                                  disabled={!!proposal}
+                                  onClick={() => removeQuestionGroup(selectedQuestionBlock.groupId)}
+                                >
+                                  <Trash className="me-1" /> Remove Question Group
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className="text-muted small mt-3">
+                              This phase can now edit existing question metadata and add the common missing question lines when needed.
+                            </div>
+                          </>
+                        )}
+                      </aside>
+                    ) : null}
+                    </div>
+                  </>
                 )}
               </div>
             ) : null}
@@ -852,21 +2023,66 @@ export default function CreatorWorkbenchPage() {
           </div>
 
           {activeIssues.length ? (
-            <div className="border-top p-2" style={{ maxHeight: 180, overflow: 'auto' }}>
-              {activeIssues.map((issue, index) => (
-                <Alert
-                  key={`creator-issue-${index}`}
-                  variant={issue.severity === 'error' ? 'danger' : 'warning'}
-                  className="py-1 px-2 mb-1 small"
-                >
-                  <strong>{String(issue.severity || '').toUpperCase()}</strong>
-                  {typeof issue.line === 'number' ? ` line ${issue.line}` : ''}: {issue.message}
-                </Alert>
-              ))}
+            <div
+              className="creator-issues-bar px-2 py-2 d-flex align-items-center justify-content-between gap-2"
+              data-severity={activeIssues.some((issue) => issue.severity === 'error') ? 'error' : 'warning'}
+            >
+              <div className="small text-truncate">
+                <strong>{activeIssues.some((issue) => issue.severity === 'error') ? 'Parser errors' : 'Parser warnings'}</strong>
+                <span className="text-muted"> · {activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</span>
+                <span className="ms-2">
+                  {typeof activeIssues[0]?.line === 'number' ? `Line ${activeIssues[0].line}: ` : ''}
+                  {activeIssues[0]?.message}
+                </span>
+              </div>
+              <div className="d-flex gap-2 flex-shrink-0">
+                <Button size="sm" variant="outline-secondary" onClick={() => setRightMode('edit')}>
+                  Open Source
+                </Button>
+                <Button size="sm" variant="outline-secondary" onClick={() => setShowIssuesModal(true)}>
+                  View All
+                </Button>
+              </div>
             </div>
           ) : null}
         </section>
       </div>
+
+      <Modal show={!!insertTarget} onHide={() => setInsertTarget(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Add {insertTarget?.kind === 'group' ? 'Question Group' : 'Question'}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="text-muted small">Choose the kind of starter question to insert.</p>
+          <div className="d-grid gap-2">
+            {[
+              ['written', 'Written Response', 'A text-response question with sample-answer and feedback fields.'],
+              ['python', 'Python', 'An editable local Python block.'],
+              ['pythonremote', 'Python Remote', 'An editable remote Python block.'],
+              ['pythonturtle', 'Python Turtle', 'An editable turtle canvas and Python block.'],
+              ['cpp', 'C++', 'An editable C++ code block.'],
+              ['ai', 'AI-Assisted Question', 'A text response paired with an inline AI coach block.'],
+            ].map(([questionType, title, description]) => (
+              <Button
+                key={questionType}
+                variant="outline-primary"
+                className="text-start"
+                onClick={() => {
+                  if (insertTarget?.kind === 'group') {
+                    insertStarterQuestionGroup(insertTarget.block, insertTarget.placement, questionType);
+                  } else {
+                    insertStarterQuestion(insertTarget?.block, insertTarget?.placement, questionType);
+                  }
+                  setInsertTarget(null);
+                }}
+              >
+                <div className="fw-semibold">{title}</div>
+                <div className="small text-muted">{description}</div>
+              </Button>
+            ))}
+          </div>
+        </Modal.Body>
+      </Modal>
 
       <Modal show={showAdvanced} onHide={() => setShowAdvanced(false)} centered>
         <Modal.Header closeButton>
@@ -929,6 +2145,33 @@ export default function CreatorWorkbenchPage() {
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowAdvanced(false)}>Close</Button>
         </Modal.Footer>
+      </Modal>
+      <Modal show={showIssuesModal} onHide={() => setShowIssuesModal(false)} size="lg" centered scrollable>
+        <Modal.Header closeButton>
+          <Modal.Title>
+            {activeIssues.some((issue) => issue.severity === 'error') ? 'Parser Errors' : 'Parser Warnings'}
+          </Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div className="d-flex justify-content-end mb-3">
+            <Button size="sm" variant="outline-secondary" onClick={() => {
+              setShowIssuesModal(false);
+              setRightMode('edit');
+            }}>
+              Open Source
+            </Button>
+          </div>
+          {activeIssues.map((issue, index) => (
+            <Alert
+              key={`creator-issue-modal-${index}`}
+              variant={issue.severity === 'error' ? 'danger' : 'warning'}
+              className="creator-issue-item py-2 px-3 mb-2"
+            >
+              <strong>{String(issue.severity || '').toUpperCase()}</strong>
+              {typeof issue.line === 'number' ? ` line ${issue.line}` : ''}: {issue.message}
+            </Alert>
+          ))}
+        </Modal.Body>
       </Modal>
       <CreatorTutorialOverlay
         phase={creatorTutorial.phase}

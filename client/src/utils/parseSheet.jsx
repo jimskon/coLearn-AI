@@ -9,8 +9,9 @@ import ActivityRemotePythonBlock from '../components/activity/ActivityRemotePyth
 import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { makeResponseAttrs } from './responseDom';
+import { API_BASE_URL } from '../config';
 
-import { Form } from 'react-bootstrap';
+import { Form, Button, Spinner } from 'react-bootstrap';
 
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
@@ -118,6 +119,113 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
         />
       )}
     </figure>
+  );
+}
+
+function InlineAiAssistBlock({
+  aiBlock,
+  questionBlock,
+  runMode,
+  selectedPreviewKey,
+  onSelectBlock,
+}) {
+  const [inputValue, setInputValue] = useState('');
+  const [responseValue, setResponseValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const aiSelected = runMode === 'preview' && selectedPreviewKey === aiBlock.previewKey;
+
+  const submitPrompt = async () => {
+    const trimmed = inputValue.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/ai/assist`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          mode: aiBlock.mode,
+          title: aiBlock.title || 'AI Assistant',
+          assistantPrompt: aiBlock.prompt || '',
+          guardrail: aiBlock.guardrail || '',
+          contextSources: aiBlock.contextSources || [],
+          questionText: questionBlock?.prompt || '',
+          sampleResponse: questionBlock?.samples?.[0] || '',
+          studentCode: Array.isArray(questionBlock?.pythonBlocks)
+            ? questionBlock.pythonBlocks.map((block) => block.content || '').join('\n\n').trim()
+            : '',
+          studentInput: trimmed,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'AI help failed.');
+      setResponseValue(String(data?.response || '').trim());
+    } catch (err) {
+      setError(err?.message || 'AI help failed.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="border rounded p-3 my-3"
+      data-preview-key={aiBlock.previewKey}
+      onClick={(event) => {
+        if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
+        if (event.target.closest('textarea, input, button, select, a')) return;
+        event.stopPropagation();
+        onSelectBlock(aiBlock);
+      }}
+      style={
+        runMode === 'preview'
+          ? {
+            cursor: onSelectBlock ? 'pointer' : 'default',
+            borderColor: aiSelected ? '#0d6efd' : '#d9dee3',
+            boxShadow: aiSelected ? '0 0 0 3px rgba(13,110,253,0.12)' : 'none',
+            background: aiSelected ? 'rgba(13,110,253,0.04)' : '#fcfcfd',
+          }
+          : {
+            background: '#fcfcfd',
+          }
+      }
+    >
+      <Form.Group>
+        <Form.Label className="small text-muted mb-1">Query</Form.Label>
+        <Form.Control
+          as="textarea"
+          rows={Math.max(aiBlock.inputRows || 4, 2)}
+          value={inputValue}
+          onChange={(event) => setInputValue(event.target.value)}
+          placeholder="Type your AI query here..."
+        />
+      </Form.Group>
+
+      <div className="d-flex justify-content-end mt-2">
+        <Button size="sm" variant="primary" disabled={busy || !inputValue.trim()} onClick={submitPrompt}>
+          {busy ? <Spinner animation="border" size="sm" className="me-2" /> : null}
+          Ask AI
+        </Button>
+      </div>
+
+      {error ? (
+        <div className="alert alert-danger mt-2 mb-0 py-2 small">{error}</div>
+      ) : null}
+
+      <Form.Group className="mt-2 mb-0">
+        <Form.Label className="small text-muted mb-1">Response</Form.Label>
+        <Form.Control
+          as="textarea"
+          rows={Math.max(Math.min((responseValue.split('\n').length || 1) + 1, 8), 3)}
+          readOnly
+          value={responseValue}
+          placeholder="The AI response will appear here."
+        />
+      </Form.Group>
+    </div>
   );
 }
 
@@ -399,6 +507,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let inGroup = false;
   let currentGroupIntro = null;
   let pendingIncludeFiles = null;
+  let currentAiBlock = null;
 
   // track some structural state to report missing closures
   let openGroupLine = null;
@@ -406,6 +515,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let openFileLine = null;
   let openScoreLine = null;
   let openListLine = null;
+  let openAiLine = null;
 
 
   const flushCurrentBlock = () => {
@@ -1068,9 +1178,15 @@ export function parseSheetToBlocks(lines, options = {}) {
       blocks.push({
         type: 'groupIntro',
         groupId: groupNumber,
+        previewKey: `group:${groupNumber}`,
         content,
         infos: [],
         retriesRequired: currentGroupRetriesRequired, // ✅ include it
+        sourceMeta: {
+          groupLine: lineNo,
+          endGroupLine: null,
+          retriesLine: null,
+        },
       });
       currentGroupIntro = blocks.at(-1);
       meta.groupRetries[groupNumber] = currentGroupRetriesRequired;
@@ -1081,10 +1197,24 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (!inGroup) {
         pushIssue('error', lineNo, '\\endquestiongroup without a matching \\questiongroup', line);
       }
+      if (currentAiBlock && currentQuestion) {
+        pushIssue('error', lineNo, 'Closing group while an \\ai block is still open. Missing \\endai before \\endquestiongroup.', line);
+        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
+        currentQuestion.aiBlocks.push(currentAiBlock);
+        currentAiBlock = null;
+        openAiLine = null;
+      }
       if (currentQuestion) {
         pushIssue('error', lineNo, 'Closing group while a \\question is still open. Missing \\endquestion before \\endquestiongroup.', line);
       }
-      blocks.push({ type: 'endGroup' });
+      if (currentGroupIntro?.sourceMeta) {
+        currentGroupIntro.sourceMeta.endGroupLine = lineNo;
+      }
+      blocks.push({
+        type: 'endGroup',
+        groupId: groupNumber,
+        sourceMeta: { endGroupLine: lineNo },
+      });
       inGroup = false;
       openGroupLine = null;
       currentGroupIntro = null;
@@ -1121,7 +1251,10 @@ export function parseSheetToBlocks(lines, options = {}) {
 
       // patch groupIntro so render/run can see it
       const gi = [...blocks].reverse().find(b => b.type === 'groupIntro' && b.groupId === groupNumber);
-      if (gi) gi.retriesRequired = n;
+      if (gi) {
+        gi.retriesRequired = n;
+        if (gi.sourceMeta) gi.sourceMeta.retriesLine = lineNo;
+      }
 
       continue;
     }
@@ -1146,6 +1279,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         type: 'question',
         id,
         groupId: groupNumber,
+        previewKey: `question:${groupNumber}:${id}`,
         label: `${id}.`,
         responseId: responseId++,
         prompt: format(rawClean),
@@ -1153,10 +1287,19 @@ export function parseSheetToBlocks(lines, options = {}) {
         samples: [],
         feedback: [],
         followups: [],
+        aiBlocks: [],
         infos: [],
         codeBlocks: [],
         scores: {},
         retriesRequired: currentGroupRetriesRequired,
+        sourceMeta: {
+          questionLine: lineNo,
+          textResponseLine: null,
+          sampleLines: [],
+          feedbackLines: [],
+          followupLines: [],
+          endQuestionLine: null,
+        },
       };
 
       openQuestionLine = lineNo;
@@ -1167,6 +1310,14 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (!currentQuestion) {
         pushIssue('error', lineNo, '\\endquestion without a matching \\question{...}', line);
         continue;
+      }
+
+      if (currentAiBlock) {
+        pushIssue('error', lineNo, 'Closing question while an \\ai block is still open. Missing \\endai before \\endquestion.', line);
+        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
+        currentQuestion.aiBlocks.push(currentAiBlock);
+        currentAiBlock = null;
+        openAiLine = null;
       }
 
       // finalize as you already do
@@ -1180,6 +1331,9 @@ export function parseSheetToBlocks(lines, options = {}) {
       currentQuestion.hasCpp = !!(currentQuestion.cppBlocks && currentQuestion.cppBlocks.length);
       currentQuestion.hasPythonOnly = currentQuestion.hasPython && !currentQuestion.hasTextResponse;
       currentQuestion.hasCodeOnly = hasAnyCode && !currentQuestion.hasTextResponse && !hasTable;
+      if (currentQuestion.sourceMeta) {
+        currentQuestion.sourceMeta.endQuestionLine = lineNo;
+      }
 
       currentQuestion._initialCode =
         (currentQuestion.codeBlocks?.map(cb => cb.content || '') || []).filter(x => x !== undefined);
@@ -1187,6 +1341,104 @@ export function parseSheetToBlocks(lines, options = {}) {
       blocks.push(currentQuestion);
       currentQuestion = null;
       openQuestionLine = null;
+      continue;
+    }
+
+    if (trimmed.startsWith('\\ai{')) {
+      if (!currentQuestion) {
+        pushIssue('error', lineNo, '\\ai found outside of a \\question. AI blocks are currently only supported inside questions.', line);
+        continue;
+      }
+
+      if (currentAiBlock) {
+        pushIssue('error', lineNo, 'New \\ai block started before the previous \\ai block was closed. Missing \\endai.', line);
+        currentQuestion.aiBlocks.push(currentAiBlock);
+      }
+
+      const match = trimmed.match(/^\\ai\{([\s\S]*?)\}\s*$/);
+      const mode = String(match?.[1] || 'explain').trim().toLowerCase() || 'explain';
+      const aiIndex = (currentQuestion.aiBlocks?.length || 0) + 1;
+
+      currentAiBlock = {
+        type: 'ai',
+        parentQuestionId: currentQuestion.id,
+        groupId: currentQuestion.groupId,
+        previewKey: `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`,
+        mode,
+        title: format('AI Coach'),
+        prompt: '',
+        guardrail: '',
+        contextSources: [],
+        inputRows: 4,
+        sourceMeta: {
+          aiLine: lineNo,
+          titleLine: null,
+          promptLine: null,
+          guardrailLine: null,
+          contextLine: null,
+          inputLine: null,
+          endAiLine: null,
+        },
+      };
+      openAiLine = lineNo;
+      continue;
+    }
+
+    if (trimmed === '\\endai') {
+      if (!currentAiBlock || !currentQuestion) {
+        pushIssue('error', lineNo, '\\endai without a matching \\ai{...}', line);
+        continue;
+      }
+
+      currentAiBlock.sourceMeta.endAiLine = lineNo;
+      currentQuestion.aiBlocks.push(currentAiBlock);
+      currentAiBlock = null;
+      openAiLine = null;
+      continue;
+    }
+
+    if (currentAiBlock) {
+      const titleMatch = trimmed.match(/^\\aititle\{([\s\S]*?)\}\s*$/);
+      if (titleMatch) {
+        currentAiBlock.title = format(titleMatch[1] || '');
+        currentAiBlock.sourceMeta.titleLine = lineNo;
+        continue;
+      }
+
+      const promptMatch = trimmed.match(/^\\aiprompt\{([\s\S]*?)\}\s*$/);
+      if (promptMatch) {
+        currentAiBlock.prompt = format(promptMatch[1] || '');
+        currentAiBlock.sourceMeta.promptLine = lineNo;
+        continue;
+      }
+
+      const guardrailMatch = trimmed.match(/^\\aiguardrail\{([\s\S]*?)\}\s*$/);
+      if (guardrailMatch) {
+        currentAiBlock.guardrail = format(guardrailMatch[1] || '');
+        currentAiBlock.sourceMeta.guardrailLine = lineNo;
+        continue;
+      }
+
+      const contextMatch = trimmed.match(/^\\aicontext\{([\s\S]*?)\}\s*$/);
+      if (contextMatch) {
+        currentAiBlock.contextSources = String(contextMatch[1] || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean);
+        currentAiBlock.sourceMeta.contextLine = lineNo;
+        continue;
+      }
+
+      const inputMatch = trimmed.match(/^\\aiinput\{(\d+)\}\s*$/);
+      if (inputMatch) {
+        currentAiBlock.inputRows = Math.max(2, parseInt(inputMatch[1], 10) || 4);
+        currentAiBlock.sourceMeta.inputLine = lineNo;
+        continue;
+      }
+
+      if (trimmed) {
+        pushIssue('warn', lineNo, `Unrecognized content inside \\ai block ignored: ${trimmed}`, line);
+      }
       continue;
     }
 
@@ -1221,25 +1473,37 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (match && currentQuestion) {
         currentQuestion.responseLines = parseInt(match[1]);
         currentQuestion.hasTextResponse = true;
+        if (currentQuestion.sourceMeta) {
+          currentQuestion.sourceMeta.textResponseLine = lineNo;
+        }
       }
       continue;
     }
 
     if (trimmed.startsWith('\\sampleresponses{')) {
       const m = trimmed.match(/\\sampleresponses\{([\s\S]+?)\}/);
-      if (m && currentQuestion) currentQuestion.samples.push(format(m[1]));
+      if (m && currentQuestion) {
+        currentQuestion.samples.push(format(m[1]));
+        currentQuestion.sourceMeta?.sampleLines.push(lineNo);
+      }
       continue;
     }
     if (trimmed.startsWith('\\feedbackprompt{')) {
       const m = trimmed.match(/\\feedbackprompt\{([\s\S]+?)\}/);
-      if (m && currentQuestion) currentQuestion.feedback.push(format(m[1]));
+      if (m && currentQuestion) {
+        currentQuestion.feedback.push(format(m[1]));
+        currentQuestion.sourceMeta?.feedbackLines.push(lineNo);
+      }
       continue;
     }
     if (trimmed.startsWith('\\followupprompt{')) {
       const m = trimmed.match(/\\followupprompt\{([\s\S]+?)\}/);
       if (m && currentQuestion) {
         const raw = (m[1] || '').trim();
-        if (raw) currentQuestion.followups.push(format(raw));
+        if (raw) {
+          currentQuestion.followups.push(format(raw));
+          currentQuestion.sourceMeta?.followupLines.push(lineNo);
+        }
       }
       continue;
     }
@@ -1366,6 +1630,9 @@ export function parseSheetToBlocks(lines, options = {}) {
   if (inScoreBlock) {
     pushIssue('error', openScoreLine ?? null, 'Unclosed \\score block: missing \\endscore at end of document.', null);
   }
+  if (currentAiBlock) {
+    pushIssue('error', openAiLine ?? null, 'Unclosed \\ai block: missing \\endai at end of document.', null);
+  }
   if (inList) {
     pushIssue('error', openListLine ?? null, 'Unclosed list: missing \\end{itemize} or \\end{enumerate}.', null);
   }
@@ -1429,6 +1696,12 @@ export function renderBlocks(blocks, options = {}) {
     onFileChange = null,
     infoBubbleSession = null,
     runtimeFeatures = {},
+    onSelectBlock = null,
+    selectedPreviewKey = null,
+    renderInsertBeforeQuestion = null,
+    renderInsertAfterQuestion = null,
+    renderInsertBeforeGroup = null,
+    renderInsertAfterGroup = null,
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -1465,7 +1738,12 @@ export function renderBlocks(blocks, options = {}) {
 
   return blocks.map((block, index) => {
     if (hiddenTypes.includes(block.type) && runMode !== 'preview') return null;
-    if (block.type === 'endGroup') return null;
+    if (block.type === 'endGroup') {
+      const nextBlock = blocks[index + 1];
+      return nextBlock?.type === 'groupIntro' || typeof renderInsertAfterGroup !== 'function'
+        ? null
+        : renderInsertAfterGroup(block);
+    }
 
     // 🔹 Render headers (title/name/activitycontext/studentlevel) inline where they appear
     if (block.type === 'header') {
@@ -1584,17 +1862,41 @@ export function renderBlocks(blocks, options = {}) {
 
     if (block.type === 'groupIntro') {
       const groupIntroAnchorRef = React.createRef();
+      const isSelectedPreviewGroup = runMode === 'preview' && selectedPreviewKey === block.previewKey;
       return (
-        <div key={`groupIntro-${index}`} className="mb-2" ref={groupIntroAnchorRef}>
-          <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
-          {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
-          {runMode === 'preview' && renderInfoBubbles(
-            block,
-            'submitbutton',
-            `groupIntro-submit-${index}`,
-            groupIntroAnchorRef
-          )}
-        </div>
+        <React.Fragment key={`groupIntro-${index}`}>
+          {typeof renderInsertBeforeGroup === 'function' ? renderInsertBeforeGroup(block) : null}
+          <div
+            className="mb-2"
+            ref={groupIntroAnchorRef}
+            data-preview-key={block.previewKey}
+            onClick={(event) => {
+              if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
+              if (event.target.closest('button, input, textarea, select, a')) return;
+              onSelectBlock(block);
+            }}
+            style={
+              runMode === 'preview'
+                ? {
+                  cursor: onSelectBlock ? 'pointer' : 'default',
+                  border: isSelectedPreviewGroup ? '2px solid #0d6efd' : '1px solid transparent',
+                  borderRadius: 8,
+                  padding: '0.35rem 0.5rem',
+                  background: isSelectedPreviewGroup ? 'rgba(13,110,253,0.03)' : 'transparent',
+                }
+                : undefined
+            }
+          >
+            <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
+            {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
+            {runMode === 'preview' && renderInfoBubbles(
+              block,
+              'submitbutton',
+              `groupIntro-submit-${index}`,
+              groupIntroAnchorRef
+            )}
+          </div>
+        </React.Fragment>
 
       );
     }
@@ -2078,11 +2380,35 @@ export function renderBlocks(blocks, options = {}) {
         }
       }
 
+      const isSelectedPreviewBlock = runMode === 'preview' && selectedPreviewKey === block.previewKey;
+
       return (
-        <div
+        <React.Fragment key={`q-wrap-${block.groupId}-${block.id}`}>
+          {typeof renderInsertBeforeQuestion === 'function' && blocks[index - 1]?.type !== 'question'
+            ? renderInsertBeforeQuestion(block)
+            : null}
+          <div
           key={`q-${block.groupId}-${block.id}`}  // ✅ unique per question
           className="mb-4"
           ref={questionAnchorRef}
+          data-preview-key={block.previewKey}
+          onClick={(event) => {
+            if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
+            if (event.target.closest('textarea, input, button, select, a')) return;
+            onSelectBlock(block);
+          }}
+          style={
+            runMode === 'preview'
+              ? {
+                cursor: onSelectBlock ? 'pointer' : 'default',
+                border: isSelectedPreviewBlock ? '2px solid #0d6efd' : '1px solid transparent',
+                borderRadius: 10,
+                padding: '0.75rem',
+                boxShadow: isSelectedPreviewBlock ? '0 0 0 3px rgba(13,110,253,0.12)' : 'none',
+                background: isSelectedPreviewBlock ? 'rgba(13,110,253,0.03)' : 'transparent',
+              }
+              : undefined
+          }
         >
           <p>
             <strong>{block.label}</strong>{' '}
@@ -2189,7 +2515,11 @@ export function renderBlocks(blocks, options = {}) {
                       options.onLocalCodeChange?.(rk, code);
                       return;
                     }
-                    onCodeChange && onCodeChange(rk, code, { ...meta, ...extra });
+                    onCodeChange && onCodeChange(rk, code, {
+                      ...meta,
+                      ...extra,
+                      creatorSource: { questionBlock: block, codeType: py.type },
+                    });
                   }}
                   codeFeedbackShown={codeFeedbackShown}
                   fileContents={fileContents}
@@ -2281,6 +2611,7 @@ export function renderBlocks(blocks, options = {}) {
                         hasTableResponse: !!block.hasTableResponse,
                         lang: 'cpp',
                         retriesRequired: block.retriesRequired ?? 0,
+                        creatorSource: { questionBlock: block, codeType: 'cpp' },
                       });
                   }}
                   timeLimit={cpp.timeLimit ?? 5000}
@@ -2334,6 +2665,19 @@ export function renderBlocks(blocks, options = {}) {
               </table>
             </div>
           ))}
+
+          {block.aiBlocks?.map((aiBlock, i) => {
+            return (
+              <InlineAiAssistBlock
+                key={`q-ai-${block.groupId}-${block.id}-${i}`}
+                aiBlock={aiBlock}
+                questionBlock={block}
+                runMode={runMode}
+                selectedPreviewKey={selectedPreviewKey}
+                onSelectBlock={onSelectBlock}
+              />
+            );
+          })}
 
           {showTextArea ? (
             (() => {
@@ -2509,7 +2853,9 @@ export function renderBlocks(blocks, options = {}) {
 
 
 
-        </div>
+          </div>
+          {typeof renderInsertAfterQuestion === 'function' ? renderInsertAfterQuestion(block) : null}
+        </React.Fragment>
       );
     }
 

@@ -7,6 +7,7 @@ const {
   evaluateCode,
   gradeTestQuestionHttp,
   evaluateCppCode,
+  assistInlineActivity,
 } = require('./controller');
 
 const code = require('./code');
@@ -43,6 +44,7 @@ router.post('/evaluate-cpp-code', evaluateCppCode);
 
 // ✅ Test-mode grading – calls into controller.js
 router.post('/grade-test-question', gradeTestQuestionHttp);
+router.post('/assist', assistInlineActivity);
 
 router.post('/code/repair-markup', code.repairMarkup);
 

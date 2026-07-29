@@ -63,3 +63,5 @@ bootstrap-summary.txt
 
 test-results/
 playwright-report/
+
+.pnpm-store/

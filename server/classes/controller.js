@@ -653,6 +653,72 @@ exports.reviseCreatorDraft = async (req, res) => {
   }
 };
 
+exports.reviseCreatorQuestion = async (req, res) => {
+  const classId = Number(req.params.id);
+  const activityId = Number(req.params.activityId);
+  const {
+    request,
+    question_markup,
+    selected_model = 'gpt-5-mini',
+    group_title = '',
+  } = req.body || {};
+  const revisionRequest = String(request || '').trim();
+  const questionMarkup = String(question_markup || '').trim();
+  const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
+
+  if (!classId || !activityId) {
+    return res.status(400).json({ error: 'Valid class and activity ids are required.' });
+  }
+  if (!revisionRequest || !questionMarkup) {
+    return res.status(400).json({ error: 'request and question_markup are required.' });
+  }
+  if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
+    return res.status(400).json({ error: 'selected_model is not supported.' });
+  }
+
+  try {
+    const [[classRow]] = await db.query(
+      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      [classId]
+    );
+    if (!classRow) return res.status(404).json({ error: 'Class not found' });
+
+    const [[activity]] = await db.query(
+      `SELECT id, title
+         FROM pogil_activities
+        WHERE id = ? AND class_id = ?
+        LIMIT 1`,
+      [activityId, classId]
+    );
+    if (!activity) return res.status(404).json({ error: 'Draft activity not found for this class.' });
+
+    const revision = await activityCreator.reviseQuestionDraft({
+      questionMarkup,
+      revisionRequest,
+      selectedModel: normalizedSelectedModel,
+      title: activity.title,
+      classLevel: classRow.level,
+      classTopicDomain: classRow.topic_domain,
+      classDescription: classRow.description,
+      groupTitle: String(group_title || '').trim(),
+    });
+
+    return res.json({
+      activity_id: activityId,
+      class_id: classId,
+      proposedQuestionMarkup: revision.proposedQuestionMarkup,
+      proposed_question_markup: revision.proposedQuestionMarkup,
+      summary: revision.summary || [],
+      warnings: revision.warnings || [],
+      generation_status: revision.generation_status,
+      generation_error: revision.generation_error,
+    });
+  } catch (err) {
+    console.error('Error revising creator question:', err);
+    return res.status(500).json({ error: 'Failed to revise question.' });
+  }
+};
+
 async function insertImportedActivity({
   classId,
   createdBy,

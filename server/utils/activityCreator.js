@@ -995,6 +995,64 @@ async function reviseWithOpenAI({
   return response.output_text || '';
 }
 
+function normalizeQuestionMarkup(text) {
+  const normalized = stripCodeFences(String(text || '')).trim();
+  if (!normalized || !/^\\question\{[\s\S]*\}/.test(normalized) || !/\\endquestion\s*$/.test(normalized)) {
+    return null;
+  }
+  if (/\\(?:questiongroup|endquestiongroup|section)\b/.test(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+async function reviseQuestionWithOpenAI({
+  questionMarkup,
+  revisionRequest,
+  selectedModel,
+  title,
+  classLevel,
+  classTopicDomain,
+  classDescription,
+  groupTitle,
+}) {
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const timeoutMs = getCreatorOpenAiTimeoutMs();
+  const system = [
+    'You are an expert instructional designer revising one coLearn-AI question block.',
+    'Return only strict JSON with keys: proposedQuestionMarkup, summary, warnings.',
+    'proposedQuestionMarkup must contain exactly one complete \\question{...} ... \\endquestion block.',
+    'Do not emit \\questiongroup, \\endquestiongroup, \\section, or commentary.',
+    'Keep the surrounding activity structure unchanged because you are revising only this question.',
+    'Keep sample responses and feedback prompts plain text.',
+    'Preserve or improve valid response-type blocks such as \\textresponse, \\python, and \\ai.',
+  ].join('\n');
+  const user = [
+    `Activity title: ${title || 'Untitled activity'}`,
+    `Question group: ${groupTitle || 'Not specified'}`,
+    `Class level: ${classLevel || 'Not specified'}`,
+    `Topic/domain: ${classTopicDomain || 'Not specified'}`,
+    `Class description:\n${classDescription || 'Not specified.'}`,
+    `Creator request:\n${revisionRequest}`,
+    'Current question markup:',
+    questionMarkup,
+  ].join('\n\n');
+  const request = {
+    model: selectedModel,
+    instructions: system,
+    input: user,
+    text: { format: { type: 'text' } },
+    max_output_tokens: 1400,
+  };
+  if (!String(selectedModel || '').startsWith('gpt-5')) request.temperature = 0.35;
+  const response = await withTimeout(
+    openai.responses.create(request),
+    timeoutMs,
+    'Creator question revision'
+  );
+  return response.output_text || '';
+}
+
 async function generateActivityDraft(input) {
   const fallbackInput = {
     title: input.title,
@@ -1121,9 +1179,83 @@ async function reviseActivityDraft(input) {
   }
 }
 
+async function reviseQuestionDraft(input) {
+  const questionMarkup = normalizeQuestionMarkup(input.questionMarkup);
+  const revisionRequest = String(input.revisionRequest || '').trim();
+  if (!questionMarkup || !revisionRequest) {
+    return {
+      proposedQuestionMarkup: questionMarkup || String(input.questionMarkup || '').trim(),
+      summary: [],
+      warnings: ['A complete question block and revision request are required.'],
+      generation_status: 'fallback',
+      generation_error: 'Missing or invalid question revision input.',
+      raw_model_output: null,
+    };
+  }
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || apiKey === 'test-key') {
+    return {
+      proposedQuestionMarkup: questionMarkup,
+      summary: [],
+      warnings: ['OPENAI_API_KEY is not configured for live revision. The current question was returned unchanged.'],
+      generation_status: 'fallback',
+      generation_error: 'OPENAI_API_KEY is not configured for live revision.',
+      raw_model_output: null,
+    };
+  }
+
+  try {
+    const raw = await reviseQuestionWithOpenAI({
+      questionMarkup,
+      revisionRequest,
+      selectedModel: input.selectedModel || 'gpt-5-mini',
+      title: input.title,
+      classLevel: input.classLevel,
+      classTopicDomain: input.classTopicDomain,
+      classDescription: input.classDescription,
+      groupTitle: input.groupTitle,
+    });
+    const parsed = extractJsonObject(raw);
+    const proposedQuestionMarkup = normalizeQuestionMarkup(
+      parsed.proposedQuestionMarkup || parsed.proposed_question_markup || parsed.markup
+    );
+    if (!proposedQuestionMarkup) {
+      return {
+        proposedQuestionMarkup: questionMarkup,
+        summary: [],
+        warnings: ['The model response was not one complete question block, so the current question was returned unchanged.'],
+        generation_status: 'fallback',
+        generation_error: 'Model output did not pass question markup validation.',
+        raw_model_output: raw,
+      };
+    }
+    return {
+      proposedQuestionMarkup,
+      summary: normalizeStringList(parsed.summary),
+      warnings: normalizeStringList(parsed.warnings),
+      generation_status: 'generated',
+      generation_error: null,
+      raw_model_output: raw,
+    };
+  } catch (err) {
+    console.error('Question revision failed:', err);
+    return {
+      proposedQuestionMarkup: questionMarkup,
+      summary: [],
+      warnings: ['Question revision failed; the current question was returned unchanged.'],
+      generation_status: 'fallback',
+      generation_error: err?.message || 'Question revision failed.',
+      raw_model_output: null,
+    };
+  }
+}
+
 module.exports = {
   generateActivityDraft,
   reviseActivityDraft,
+  reviseQuestionDraft,
+  normalizeQuestionMarkup,
   renderFallbackTemplate,
   normalizeGeneratedDraft,
   normalizeTimedSections,

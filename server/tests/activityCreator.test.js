@@ -1,7 +1,19 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { normalizeGeneratedDraft } = require('../utils/activityCreator');
+const { normalizeGeneratedDraft, normalizeQuestionMarkup } = require('../utils/activityCreator');
+
+test('normalizeQuestionMarkup accepts exactly one complete question block', () => {
+  const markup = [
+    '\\question{Explain what the program prints.}',
+    '\\textresponse{3}',
+    '\\endquestion',
+  ].join('\n');
+
+  assert.equal(normalizeQuestionMarkup(markup), markup);
+  assert.equal(normalizeQuestionMarkup(`${markup}\n\\questiongroup{Not allowed}`), null);
+  assert.equal(normalizeQuestionMarkup('\\question{Unclosed}'), null);
+});
 
 test('normalizeGeneratedDraft salvages structured plain-text activity output into markup', () => {
   const raw = [

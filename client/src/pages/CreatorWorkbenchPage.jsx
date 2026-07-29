@@ -346,19 +346,51 @@ function findSelectableBlockByPreviewKey(blocks, previewKey) {
   return null;
 }
 
-const starterQuestionLines = [
+const starterQuestionTemplates = {
+  written: [
   '\\question{New question prompt.}',
   '\\textresponse{3}',
   '\\sampleresponses{Example response.}',
   '\\feedbackprompt{Explain what a strong answer includes.}',
   '\\endquestion',
-];
+  ],
+  python: [
+    '\\question{Write and run a Python program that solves this task.}',
+    '\\python',
+    '# Write your Python code here',
+    '\\endpython',
+    '\\sampleresponses{A working Python solution.}',
+    '\\feedbackprompt{Test the program and explain how it solves the task.}',
+    '\\endquestion',
+  ],
+  ai: [
+    '\\question{Use the AI coach to improve your response to this question.}',
+    '\\textresponse{3}',
+    '\\ai{explain}',
+    '\\aititle{AI Coach}',
+    '\\aiprompt{Help the student reason about the current question without giving away the answer.}',
+    '\\aiguardrail{Ask guiding questions and keep the discussion focused on this activity.}',
+    '\\aicontext{current-question,student-response}',
+    '\\aiinput{4}',
+    '\\endai',
+    '\\sampleresponses{A thoughtful response that uses the AI feedback.}',
+    '\\feedbackprompt{Explain the reasoning in your own words.}',
+    '\\endquestion',
+  ],
+};
 
-const starterQuestionGroupLines = [
-  '\\questiongroup{New Question Group}',
-  ...starterQuestionLines,
-  '\\endquestiongroup',
-];
+function getStarterQuestionLines(questionType) {
+  return starterQuestionTemplates[questionType] || starterQuestionTemplates.written;
+}
+
+function getQuestionSource(sourceText, block) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return '';
+  return String(sourceText || '')
+    .split('\n')
+    .slice(sourceMeta.questionLine - 1, sourceMeta.endQuestionLine)
+    .join('\n');
+}
 
 export default function CreatorWorkbenchPage() {
   const { classId, activityId } = useParams();
@@ -397,6 +429,10 @@ export default function CreatorWorkbenchPage() {
   const [selectedPreviewKey, setSelectedPreviewKey] = useState('');
   const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
   const [questionGroupInspectorDraft, setQuestionGroupInspectorDraft] = useState(null);
+  const [insertTarget, setInsertTarget] = useState(null);
+  const [questionRevisionRequest, setQuestionRevisionRequest] = useState('');
+  const [questionRevisionBusy, setQuestionRevisionBusy] = useState(false);
+  const [questionRevisionProposal, setQuestionRevisionProposal] = useState(null);
   const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
   const [showIssuesModal, setShowIssuesModal] = useState(false);
@@ -437,7 +473,7 @@ export default function CreatorWorkbenchPage() {
     setSelectedPreviewKey(inserted?.previewKey || '');
   }
 
-  function insertStarterQuestion(block, placement) {
+  function insertStarterQuestion(block, placement, questionType = 'written') {
     const sourceMeta = block?.sourceMeta;
     if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
 
@@ -446,7 +482,7 @@ export default function CreatorWorkbenchPage() {
       ? sourceMeta.questionLine - 1
       : sourceMeta.endQuestionLine;
     const nextText = [...lines];
-    nextText.splice(insertionIndex, 0, ...starterQuestionLines);
+    nextText.splice(insertionIndex, 0, ...getStarterQuestionLines(questionType));
     const nextSource = nextText.join('\n');
     const parsed = compileText(nextSource);
 
@@ -457,7 +493,7 @@ export default function CreatorWorkbenchPage() {
     setTimeout(() => setNotice(''), 2400);
   }
 
-  function insertStarterQuestionGroup(block, placement) {
+  function insertStarterQuestionGroup(block, placement, questionType = 'written') {
     const sourceMeta = block?.sourceMeta;
     const groupLine = sourceMeta?.groupLine;
     const endGroupLine = sourceMeta?.endGroupLine;
@@ -469,7 +505,13 @@ export default function CreatorWorkbenchPage() {
 
     const lines = String(rawText || '').split('\n');
     const nextText = [...lines];
-    nextText.splice(insertionIndex, 0, ...starterQuestionGroupLines);
+    nextText.splice(
+      insertionIndex,
+      0,
+      '\\questiongroup{New Question Group}',
+      ...getStarterQuestionLines(questionType),
+      '\\endquestiongroup'
+    );
     const nextSource = nextText.join('\n');
     const parsed = compileText(nextSource);
 
@@ -480,7 +522,7 @@ export default function CreatorWorkbenchPage() {
     setTimeout(() => setNotice(''), 2400);
   }
 
-  function renderInsertionMarker(key, label, onClick) {
+  function renderInsertionMarker(key, label, target) {
     return (
       <div key={key} className="creator-insert-slot">
         <Button
@@ -492,7 +534,7 @@ export default function CreatorWorkbenchPage() {
           title={label}
           onClick={(event) => {
             event.stopPropagation();
-            onClick();
+            setInsertTarget(target);
           }}
         >
           <PlusLg />
@@ -515,22 +557,22 @@ export default function CreatorWorkbenchPage() {
     renderInsertBeforeQuestion: proposal ? null : (block) => renderInsertionMarker(
       `before-question-${block.previewKey}`,
       'Add question before',
-      () => insertStarterQuestion(block, 'before')
+      { kind: 'question', block, placement: 'before' }
     ),
     renderInsertAfterQuestion: proposal ? null : (block) => renderInsertionMarker(
       `after-question-${block.previewKey}`,
       'Add question after',
-      () => insertStarterQuestion(block, 'after')
+      { kind: 'question', block, placement: 'after' }
     ),
     renderInsertBeforeGroup: proposal ? null : (block) => renderInsertionMarker(
       `before-group-${block.groupId}`,
       'Add question group before',
-      () => insertStarterQuestionGroup(block, 'before')
+      { kind: 'group', block, placement: 'before' }
     ),
     renderInsertAfterGroup: proposal ? null : (block) => renderInsertionMarker(
       `after-group-${block.groupId}`,
       'Add question group after',
-      () => insertStarterQuestionGroup(block, 'after')
+      { kind: 'group', block, placement: 'after' }
     ),
   }), [activeBlocks, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures, insertStarterQuestion, insertStarterQuestionGroup]);
 
@@ -892,6 +934,70 @@ export default function CreatorWorkbenchPage() {
     compileText(nextText);
     setNotice('Updated question settings in source.');
     setTimeout(() => setNotice(''), 1800);
+  };
+
+  const requestQuestionRevision = async () => {
+    const revisionRequest = questionRevisionRequest.trim();
+    const questionMarkup = getQuestionSource(rawText, selectedQuestionBlock);
+    if (!revisionRequest || !questionMarkup || !activity?.id || !effectiveClassId || proposal) return;
+
+    setQuestionRevisionBusy(true);
+    setQuestionRevisionProposal(null);
+    setError('');
+    try {
+      const group = blocks.find((block) => (
+        block?.type === 'groupIntro' && block?.groupId === selectedQuestionBlock.groupId
+      ));
+      const res = await fetch(`${API_BASE_URL}/api/classes/${effectiveClassId}/creator-draft/${activity.id}/revise-question`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          request: questionRevisionRequest,
+          question_markup: questionMarkup,
+          selected_model: draft.selected_model,
+          group_title: htmlToEditorText(group?.content || ''),
+        }),
+      });
+      const data = await readJsonResponse(res);
+      if (!res.ok) throw new Error(data?.error || 'Question revision failed.');
+
+      const proposedMarkup = String(data?.proposedQuestionMarkup || data?.proposed_question_markup || '').trim();
+      if (!proposedMarkup) throw new Error('Question revision returned an empty proposal.');
+      setQuestionRevisionProposal({
+        currentMarkup: questionMarkup,
+        proposedMarkup,
+        summary: Array.isArray(data?.summary) ? data.summary : [],
+        warnings: Array.isArray(data?.warnings) ? data.warnings : [],
+      });
+    } catch (err) {
+      setError(err?.message || String(err));
+    } finally {
+      setQuestionRevisionBusy(false);
+    }
+  };
+
+  const applyQuestionRevision = () => {
+    if (!selectedQuestionBlock || !questionRevisionProposal?.proposedMarkup || proposal) return;
+    const sourceMeta = selectedQuestionBlock.sourceMeta;
+    if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
+
+    const lines = String(rawText || '').split('\n');
+    const proposedLines = questionRevisionProposal.proposedMarkup.split('\n');
+    lines.splice(
+      sourceMeta.questionLine - 1,
+      sourceMeta.endQuestionLine - sourceMeta.questionLine + 1,
+      ...proposedLines
+    );
+    const nextText = lines.join('\n');
+    const parsed = compileText(nextText);
+    setRawText(nextText);
+    setSandboxUrl('');
+    selectInsertedQuestion(parsed, sourceMeta.questionLine);
+    setQuestionRevisionProposal(null);
+    setQuestionRevisionRequest('');
+    setNotice('Applied AI revision to this question.');
+    setTimeout(() => setNotice(''), 2400);
   };
 
   const applyQuestionGroupInspectorChanges = () => {
@@ -1397,6 +1503,58 @@ export default function CreatorWorkbenchPage() {
                             </div>
 
                             <div className="border-top mt-3 pt-3">
+                              <div className="fw-semibold mb-2">AI Revise This Question</div>
+                              <Form.Control
+                                as="textarea"
+                                rows={3}
+                                placeholder="Describe the change you want—for example, make the prompt more concrete or add a misconception check."
+                                value={questionRevisionRequest}
+                                disabled={questionRevisionBusy || !!proposal}
+                                onChange={(event) => setQuestionRevisionRequest(event.target.value)}
+                              />
+                              <Button
+                                size="sm"
+                                className="mt-2"
+                                variant="outline-primary"
+                                disabled={!questionRevisionRequest.trim() || questionRevisionBusy || !!proposal}
+                                onClick={requestQuestionRevision}
+                              >
+                                {questionRevisionBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Stars className="me-1" />}
+                                Propose Revision
+                              </Button>
+
+                              {questionRevisionProposal ? (
+                                <div className="mt-3">
+                                  <div className="text-muted small mb-1">Current question</div>
+                                  <Form.Control
+                                    as="textarea"
+                                    rows={5}
+                                    readOnly
+                                    value={questionRevisionProposal.currentMarkup}
+                                    className="creator-question-diff"
+                                  />
+                                  <div className="text-muted small mt-2 mb-1">Proposed question</div>
+                                  <Form.Control
+                                    as="textarea"
+                                    rows={5}
+                                    readOnly
+                                    value={questionRevisionProposal.proposedMarkup}
+                                    className="creator-question-diff"
+                                  />
+                                  {questionRevisionProposal.warnings?.length ? (
+                                    <Alert variant="warning" className="py-2 mt-2 mb-2">
+                                      {questionRevisionProposal.warnings.join(' ')}
+                                    </Alert>
+                                  ) : null}
+                                  <div className="d-flex gap-2 mt-2">
+                                    <Button size="sm" variant="primary" onClick={applyQuestionRevision}>Apply Revision</Button>
+                                    <Button size="sm" variant="outline-secondary" onClick={() => setQuestionRevisionProposal(null)}>Discard</Button>
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="border-top mt-3 pt-3">
                               <Button
                                 size="sm"
                                 variant="outline-danger"
@@ -1676,6 +1834,39 @@ export default function CreatorWorkbenchPage() {
           ) : null}
         </section>
       </div>
+
+      <Modal show={!!insertTarget} onHide={() => setInsertTarget(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Add {insertTarget?.kind === 'group' ? 'Question Group' : 'Question'}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="text-muted small">Choose the kind of starter question to insert.</p>
+          <div className="d-grid gap-2">
+            {[
+              ['written', 'Written Response', 'A text-response question with sample-answer and feedback fields.'],
+              ['python', 'Python / Code Response', 'An editable Python block with code-focused guidance.'],
+              ['ai', 'AI-Assisted Question', 'A text response paired with an inline AI coach block.'],
+            ].map(([questionType, title, description]) => (
+              <Button
+                key={questionType}
+                variant="outline-primary"
+                className="text-start"
+                onClick={() => {
+                  if (insertTarget?.kind === 'group') {
+                    insertStarterQuestionGroup(insertTarget.block, insertTarget.placement, questionType);
+                  } else {
+                    insertStarterQuestion(insertTarget?.block, insertTarget?.placement, questionType);
+                  }
+                  setInsertTarget(null);
+                }}
+              >
+                <div className="fw-semibold">{title}</div>
+                <div className="small text-muted">{description}</div>
+              </Button>
+            ))}
+          </div>
+        </Modal.Body>
+      </Modal>
 
       <Modal show={showAdvanced} onHide={() => setShowAdvanced(false)} centered>
         <Modal.Header closeButton>

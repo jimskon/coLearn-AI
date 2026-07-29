@@ -25,6 +25,7 @@ router.get('/:id/activities', classController.getActivitiesByClass);
 router.post('/:id/activities', classController.createActivityForClass);
 router.post('/:id/creator-draft', classController.createCreatorDraft);
 router.post('/:id/creator-draft/:activityId/revise', classController.reviseCreatorDraft);
+router.post('/:id/creator-draft/:activityId/revise-question', classController.reviseCreatorQuestion);
 router.put('/:id/activities/:activityName', classController.updateActivityForClass);
 router.delete('/:classId/activities/:activityId', classController.deleteActivityFromClass);
 

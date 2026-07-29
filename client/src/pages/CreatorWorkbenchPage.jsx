@@ -281,10 +281,31 @@ function buildQuestionInspectorDraft(block) {
   };
 }
 
-function buildQuestionGroupInspectorDraft(block) {
+function findSectionCommandBeforeLine(sourceText, lineNumber) {
+  const lines = String(sourceText || '').split('\n');
+  const end = Math.max(0, Math.min(lines.length, Number(lineNumber) - 1));
+
+  for (let index = end - 1; index >= 0; index -= 1) {
+    const match = lines[index].match(/^\s*\\section\{([^{}]+)\}(?:\{(\d+)\})?\s*$/);
+    if (match) {
+      return {
+        line: index + 1,
+        title: match[1].trim(),
+        minutes: match[2] ? Number.parseInt(match[2], 10) : null,
+      };
+    }
+  }
+  return null;
+}
+
+function buildQuestionGroupInspectorDraft(block, sourceText) {
+  const section = findSectionCommandBeforeLine(sourceText, block?.sourceMeta?.groupLine);
   return {
     title: htmlToEditorText(block?.content || 'New Question Group'),
     retriesRequired: Math.max(0, Number.parseInt(block?.retriesRequired, 10) || 0),
+    sectionTitle: section?.title || '',
+    sectionTimerEnabled: Number.isFinite(section?.minutes),
+    sectionMinutes: Number.isFinite(section?.minutes) ? String(section.minutes) : '',
   };
 }
 
@@ -303,6 +324,24 @@ function applyQuestionGroupEditsToSource(sourceText, block, edits) {
     insertLinesAfterAnchors(lines, [{
       anchorLine: sourceMeta.groupLine,
       text: `\\retries{${retriesRequired}}`,
+    }]);
+  }
+
+  const section = findSectionCommandBeforeLine(sourceText, sourceMeta.groupLine);
+  const timerEnabled = edits.sectionTimerEnabled === true;
+  const sectionMinutes = Number.parseInt(edits.sectionMinutes, 10);
+  if (timerEnabled && (!Number.isFinite(sectionMinutes) || sectionMinutes <= 0)) return sourceText;
+
+  if (section) {
+    updateLine(
+      lines,
+      section.line,
+      timerEnabled ? `\\section{${section.title}}{${sectionMinutes}}` : `\\section{${section.title}}`
+    );
+  } else if (timerEnabled) {
+    insertLinesAfterAnchors(lines, [{
+      anchorLine: sourceMeta.groupLine - 1,
+      text: `\\section{${title}}{${sectionMinutes}}`,
     }]);
   }
 
@@ -912,9 +951,9 @@ export default function CreatorWorkbenchPage() {
       setQuestionGroupInspectorDraft(null);
     } else {
       setShowPreviewInspector(true);
-      setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock));
+      setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
     }
-  }, [selectedQuestionGroupBlock]);
+  }, [rawText, selectedQuestionGroupBlock]);
 
   useEffect(() => {
     if (!selectedAiBlock) {
@@ -1661,6 +1700,53 @@ export default function CreatorWorkbenchPage() {
                   </div>
                 </Form.Group>
 
+                <div className="border rounded p-2 mb-3">
+                  <Form.Check
+                    type="checkbox"
+                    id="creator-add-section-timers"
+                    label="Add timers to sections"
+                    checked={advancedDraft.include_timing}
+                    onChange={(event) => setAdvancedDraft((prev) => ({
+                      ...prev,
+                      include_timing: event.target.checked,
+                      timed_section_minutes: event.target.checked
+                        ? allocateTimedSectionMinutes(draft.major_sections, draft.duration_minutes)
+                        : prev.timed_section_minutes,
+                    }))}
+                  />
+                  <div className="text-muted small mt-1">
+                    Each timer is shared by the question groups in its section.
+                  </div>
+                  {advancedDraft.include_timing ? (
+                    <div className="d-grid gap-2 mt-2">
+                      {draft.major_sections.map((sectionName) => (
+                        <div className="d-flex align-items-center gap-2" key={sectionName}>
+                          <Form.Label className="mb-0 flex-grow-1" htmlFor={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}>
+                            {sectionName}
+                          </Form.Label>
+                          <Form.Control
+                            id={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                            type="number"
+                            min="1"
+                            step="1"
+                            aria-label={`${sectionName} minutes`}
+                            style={{ width: '5.5rem' }}
+                            value={advancedDraft.timed_section_minutes?.[sectionName] || ''}
+                            onChange={(event) => setAdvancedDraft((prev) => ({
+                              ...prev,
+                              timed_section_minutes: {
+                                ...prev.timed_section_minutes,
+                                [sectionName]: event.target.value,
+                              },
+                            }))}
+                          />
+                          <span className="text-muted small">min</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
                 <Form.Group className="mb-3" ref={tutorialRefs.brief}>
                   <Form.Label>Activity Description</Form.Label>
                   <Form.Control
@@ -1851,6 +1937,38 @@ export default function CreatorWorkbenchPage() {
                               ) : null}
                             </Form.Group>
 
+                            <div className="border-top pt-3 mb-3">
+                              <Form.Check
+                                className="mb-2"
+                                type="checkbox"
+                                id="question-group-section-timer"
+                                label="Add a section timer"
+                                checked={questionGroupInspectorDraft?.sectionTimerEnabled === true}
+                                disabled={!questionGroupInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionGroupInspectorDraft((prev) => ({
+                                  ...(prev || {}),
+                                  sectionTimerEnabled: event.target.checked,
+                                  sectionMinutes: event.target.checked && !prev?.sectionMinutes ? '10' : prev?.sectionMinutes,
+                                }))}
+                              />
+                              {questionGroupInspectorDraft?.sectionTimerEnabled ? (
+                                <Form.Group>
+                                  <Form.Label className="small">Section timer (minutes)</Form.Label>
+                                  <Form.Control
+                                    type="number"
+                                    min="1"
+                                    step="1"
+                                    value={questionGroupInspectorDraft?.sectionMinutes || ''}
+                                    disabled={!questionGroupInspectorDraft || !!proposal}
+                                    onChange={(event) => setQuestionGroupInspectorDraft((prev) => ({ ...(prev || {}), sectionMinutes: event.target.value }))}
+                                  />
+                                </Form.Group>
+                              ) : null}
+                              <div className="text-muted small mt-2">
+                                This timer belongs to the section. Groups under the same section share it; Apply writes the timer into the activity markup.
+                              </div>
+                            </div>
+
                             <div className="d-flex gap-2">
                               <Button size="sm" variant="primary" disabled={!questionGroupInspectorDraft || !!proposal} onClick={applyQuestionGroupInspectorChanges}>
                                 Apply
@@ -1858,7 +1976,7 @@ export default function CreatorWorkbenchPage() {
                               <Button
                                 size="sm"
                                 variant="outline-secondary"
-                                onClick={() => setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock))}
+                                onClick={() => setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText))}
                                 disabled={!selectedQuestionGroupBlock}
                               >
                                 Reset
@@ -2331,7 +2449,7 @@ export default function CreatorWorkbenchPage() {
         </Modal.Header>
         <Modal.Body>
           <p className="text-muted small mb-3">
-            These settings guide this draft. Section timers are included in the generated activity markup.
+            These settings guide this draft. Section timers are set in the main Create Activity form.
           </p>
 
           <Form.Group className="mb-3">
@@ -2342,56 +2460,6 @@ export default function CreatorWorkbenchPage() {
               placeholder="English"
             />
           </Form.Group>
-
-          <Form.Check
-            className="mb-3"
-            type="checkbox"
-            id="advanced-include-timing"
-            label="Add a shared timer for each selected section"
-            checked={advancedDraft.include_timing}
-            onChange={(event) => setAdvancedDraft((prev) => ({
-              ...prev,
-              include_timing: event.target.checked,
-              timed_section_minutes: event.target.checked
-                ? allocateTimedSectionMinutes(draft.major_sections, draft.duration_minutes)
-                : prev.timed_section_minutes,
-            }))}
-          />
-
-          {advancedDraft.include_timing && (
-            <Form.Group className="mb-3">
-              <Form.Label>Minutes by section</Form.Label>
-              <div className="small text-muted mb-2">
-                Each timer applies to all question groups in that section. The section totals must equal the activity duration.
-              </div>
-              <div className="d-grid gap-2">
-                {draft.major_sections.map((sectionName) => (
-                  <div className="d-flex align-items-center gap-2" key={sectionName}>
-                    <Form.Label className="mb-0 flex-grow-1" htmlFor={`timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}>
-                      {sectionName}
-                    </Form.Label>
-                    <Form.Control
-                      id={`timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
-                      type="number"
-                      min="1"
-                      step="1"
-                      aria-label={`${sectionName} minutes`}
-                      style={{ width: '6rem' }}
-                      value={advancedDraft.timed_section_minutes?.[sectionName] || ''}
-                      onChange={(event) => setAdvancedDraft((prev) => ({
-                        ...prev,
-                        timed_section_minutes: {
-                          ...prev.timed_section_minutes,
-                          [sectionName]: event.target.value,
-                        },
-                      }))}
-                    />
-                    <span className="text-muted small">min</span>
-                  </div>
-                ))}
-              </div>
-            </Form.Group>
-          )}
 
           <Form.Group className="mb-3">
             <Form.Label>Submit Retries</Form.Label>

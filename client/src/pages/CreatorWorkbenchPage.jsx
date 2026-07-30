@@ -33,6 +33,7 @@ import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 import { getSectionKeyAtLine, swapSourceRanges } from '../utils/creatorVisualEdits';
+import { validateMultipleChoice } from '../utils/multipleChoice';
 
 const emptyDraft = {
   title: '',
@@ -271,13 +272,55 @@ function applyQuestionEditsToSource(sourceText, block, edits) {
   return lines.join('\n');
 }
 
+function applyMultipleChoiceEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  const existing = block?.multipleChoice?.sourceMeta;
+  const enabled = !!edits.multipleChoiceEnabled;
+
+  if (!enabled) {
+    if (!existing?.multipleChoiceLine || !existing?.endMultipleChoiceLine) return sourceText;
+    lines.splice(
+      existing.multipleChoiceLine - 1,
+      existing.endMultipleChoiceLine - existing.multipleChoiceLine + 1,
+    );
+    return lines.join('\n');
+  }
+
+  const correctAnswer = String(edits.multipleChoiceAnswer || '').trim();
+  const choices = (edits.multipleChoiceChoices || [])
+    .map((choice) => String(choice || '').trim());
+  const markup = [
+    `\\multiplechoice{${correctAnswer}}`,
+    ...choices.map((choice) => `\\choice{${choice}}`),
+    '\\endmultiplechoice',
+  ];
+
+  if (existing?.multipleChoiceLine && existing?.endMultipleChoiceLine) {
+    lines.splice(
+      existing.multipleChoiceLine - 1,
+      existing.endMultipleChoiceLine - existing.multipleChoiceLine + 1,
+      ...markup,
+    );
+  } else {
+    lines.splice(sourceMeta.questionLine, 0, ...markup);
+  }
+  return lines.join('\n');
+}
+
 function buildQuestionInspectorDraft(block) {
+  const multipleChoice = block?.multipleChoice;
   return {
     prompt: htmlToEditorText(block?.prompt),
-    responseLines: block?.hasTextResponse ? (Number(block?.responseLines) || 1) : '',
+    responseLines: multipleChoice ? '' : (block?.hasTextResponse ? (Number(block?.responseLines) || 1) : ''),
     sampleResponse: htmlToEditorText(block?.samples?.[0]),
     feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
     followupPrompt: htmlToEditorText(block?.followups?.[0]),
+    multipleChoiceEnabled: !!multipleChoice,
+    multipleChoiceAnswer: multipleChoice?.correctAnswer || 'First option',
+    multipleChoiceChoices: multipleChoice?.choices?.map((choice) => choice.value) || ['First option', 'Second option'],
   };
 }
 
@@ -431,6 +474,16 @@ const starterQuestionTemplates = {
   '\\sampleresponses{Example response.}',
   '\\feedbackprompt{Explain what a strong answer includes.}',
   '\\endquestion',
+  ],
+  multiplechoice: [
+    '\\question{Choose the best answer.}',
+    '\\multiplechoice{First option}',
+    '\\choice{First option}',
+    '\\choice{Second option}',
+    '\\endmultiplechoice',
+    '\\sampleresponses{First option}',
+    '\\feedbackprompt{Review the choices and explain why the selected answer is correct.}',
+    '\\endquestion',
   ],
   python: [
     '\\question{Write and run a Python program that solves this task.}',
@@ -602,6 +655,13 @@ export default function CreatorWorkbenchPage() {
   const activeText = proposal?.text || rawText;
   const hasProposalErrors = !!proposal?.issues?.some((issue) => issue.severity === 'error');
   const advancedPromptText = useMemo(() => buildAdvancedPromptText(advancedDraft), [advancedDraft]);
+  const multipleChoiceValidation = useMemo(() => {
+    if (!questionInspectorDraft?.multipleChoiceEnabled) return { errors: [] };
+    return validateMultipleChoice(
+      questionInspectorDraft.multipleChoiceAnswer,
+      questionInspectorDraft.multipleChoiceChoices,
+    );
+  }, [questionInspectorDraft]);
 
   const updateFileContents = useCallback((updaterFn) => {
     setFileContents((prev) => updaterFn(prev));
@@ -1229,7 +1289,22 @@ export default function CreatorWorkbenchPage() {
 
   const applyQuestionInspectorChanges = () => {
     if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
-    const nextText = applyQuestionEditsToSource(rawText, selectedQuestionBlock, questionInspectorDraft);
+    if (multipleChoiceValidation.errors.length) return;
+
+    const nextTextWithQuestionEdits = applyQuestionEditsToSource(
+      rawText,
+      selectedQuestionBlock,
+      questionInspectorDraft,
+    );
+    const refreshedQuestion = parseActivityText(nextTextWithQuestionEdits).blocks.find((block) => (
+      block?.type === 'question'
+      && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
+    ));
+    const nextText = applyMultipleChoiceEditsToSource(
+      nextTextWithQuestionEdits,
+      refreshedQuestion || selectedQuestionBlock,
+      questionInspectorDraft,
+    );
     if (nextText === rawText) return;
     recordVisualEdit('updating question settings');
     setRawText(nextText);
@@ -2194,6 +2269,84 @@ export default function CreatorWorkbenchPage() {
                             </Form.Group>
 
                             <Form.Group className="mb-3">
+                              <Form.Check
+                                type="switch"
+                                id="question-multiple-choice"
+                                label="Multiple-choice response"
+                                checked={!!questionInspectorDraft?.multipleChoiceEnabled}
+                                disabled={!questionInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({
+                                  ...(prev || {}),
+                                  multipleChoiceEnabled: event.target.checked,
+                                  responseLines: event.target.checked ? '' : prev?.responseLines,
+                                }))}
+                              />
+                              <div className="text-muted small mt-1">
+                                Students select one answer; the stored response is the choice text, not a letter.
+                              </div>
+                            </Form.Group>
+
+                            {questionInspectorDraft?.multipleChoiceEnabled ? (
+                              <div className="border rounded p-2 mb-3 bg-light">
+                                <Form.Group className="mb-2">
+                                  <Form.Label>Correct Answer</Form.Label>
+                                  <Form.Control
+                                    value={questionInspectorDraft?.multipleChoiceAnswer || ''}
+                                    disabled={!!proposal}
+                                    onChange={(event) => setQuestionInspectorDraft((prev) => ({
+                                      ...(prev || {}),
+                                      multipleChoiceAnswer: event.target.value,
+                                    }))}
+                                  />
+                                </Form.Group>
+                                <Form.Label className="mb-1">Choices</Form.Label>
+                                {(questionInspectorDraft?.multipleChoiceChoices || []).map((choice, index) => (
+                                  <div className="d-flex gap-2 mb-2" key={`multiple-choice-option-${index}`}>
+                                    <Form.Control
+                                      value={choice}
+                                      aria-label={`Choice ${index + 1}`}
+                                      disabled={!!proposal}
+                                      onChange={(event) => setQuestionInspectorDraft((prev) => {
+                                        const choices = [...(prev?.multipleChoiceChoices || [])];
+                                        choices[index] = event.target.value;
+                                        return { ...(prev || {}), multipleChoiceChoices: choices };
+                                      })}
+                                    />
+                                    <Button
+                                      size="sm"
+                                      variant="outline-danger"
+                                      disabled={!!proposal || (questionInspectorDraft?.multipleChoiceChoices?.length || 0) <= 2}
+                                      onClick={() => setQuestionInspectorDraft((prev) => ({
+                                        ...(prev || {}),
+                                        multipleChoiceChoices: (prev?.multipleChoiceChoices || []).filter((_, choiceIndex) => choiceIndex !== index),
+                                      }))}
+                                      aria-label={`Remove choice ${index + 1}`}
+                                    >
+                                      <Trash />
+                                    </Button>
+                                  </div>
+                                ))}
+                                <Button
+                                  size="sm"
+                                  variant="outline-secondary"
+                                  disabled={!!proposal}
+                                  onClick={() => setQuestionInspectorDraft((prev) => ({
+                                    ...(prev || {}),
+                                    multipleChoiceChoices: [...(prev?.multipleChoiceChoices || []), `Option ${(prev?.multipleChoiceChoices?.length || 0) + 1}`],
+                                  }))}
+                                >
+                                  <PlusLg className="me-1" /> Add Choice
+                                </Button>
+                                {multipleChoiceValidation.errors.length ? (
+                                  <div className="text-danger small mt-2">
+                                    {multipleChoiceValidation.errors.map((message) => <div key={message}>{message}</div>)}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
+
+                            {!questionInspectorDraft?.multipleChoiceEnabled ? (
+                            <Form.Group className="mb-3">
                               <Form.Label>Response Lines</Form.Label>
                               <Form.Control
                                 type="number"
@@ -2223,9 +2376,10 @@ export default function CreatorWorkbenchPage() {
                                 Written responses are optional for code questions. Leave this blank to omit them; use Apply to set or change the count.
                               </div>
                             </Form.Group>
+                            ) : null}
 
                             <div className="d-flex gap-2">
-                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal} onClick={applyQuestionInspectorChanges}>
+                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal || multipleChoiceValidation.errors.length > 0} onClick={applyQuestionInspectorChanges}>
                                 Apply
                               </Button>
                               <Button
@@ -2417,6 +2571,7 @@ export default function CreatorWorkbenchPage() {
           <div className="d-grid gap-2">
             {[
               ['written', 'Written Response', 'A text-response question with sample-answer and feedback fields.'],
+              ['multiplechoice', 'Multiple Choice', 'A single-answer question with editable answer choices.'],
               ['python', 'Python', 'An editable local Python block.'],
               ['pythonremote', 'Python Remote', 'An editable remote Python block.'],
               ['pythonturtle', 'Python Turtle', 'An editable turtle canvas and Python block.'],

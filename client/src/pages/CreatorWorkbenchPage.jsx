@@ -1931,10 +1931,14 @@ export default function CreatorWorkbenchPage() {
                   <Form.Control
                     as="textarea"
                     rows={5}
+                    placeholder="Ask for a specific change to one question, question group, or section. Smaller, targeted requests are much less likely to time out."
                     value={revisionRequest}
                     onChange={(event) => setRevisionRequest(event.target.value)}
                     disabled={revisionBusy || !!proposal}
                   />
+                  <div className="text-muted small mt-1">
+                    For best results, focus on one question, one group, or one section at a time. Very broad draft-wide changes are more likely to time out.
+                  </div>
                 </Form.Group>
                 <Button variant="primary" onClick={requestRevision} disabled={revisionBusy || !!proposal || !revisionRequest.trim()}>
                   {revisionBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <Stars className="me-2" />}

@@ -319,7 +319,7 @@ function buildQuestionInspectorDraft(block) {
     feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
     followupPrompt: htmlToEditorText(block?.followups?.[0]),
     multipleChoiceEnabled: !!multipleChoice,
-    multipleChoiceAnswer: multipleChoice?.correctAnswer || 'First option',
+    multipleChoiceAnswer: multipleChoice?.correctAnswer ?? 'First option',
     multipleChoiceChoices: multipleChoice?.choices?.map((choice) => choice.value) || ['First option', 'Second option'],
   };
 }

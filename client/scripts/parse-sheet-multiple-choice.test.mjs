@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { validateMultipleChoice } from '../src/utils/multipleChoice.js';
+import { isSurveyMultipleChoice, validateMultipleChoice } from '../src/utils/multipleChoice.js';
 
 test('accepts canonical actual answer values', () => {
   const result = validateMultipleChoice(' Ottawa ', ['Toronto', 'Ottawa', 'Montreal']);
@@ -30,4 +30,13 @@ test('rejects a blank choice', () => {
   const result = validateMultipleChoice('', ['Correct', '']);
   const messages = result.errors.join('\n');
   assert.match(messages, /non-empty/i);
+});
+
+test('identifies a blank-answer choice block as a survey', () => {
+  assert.equal(isSurveyMultipleChoice({
+    multipleChoice: { correctAnswer: '', choices: [{ value: 'Often' }, { value: 'Never' }] },
+  }), true);
+  assert.equal(isSurveyMultipleChoice({
+    multipleChoice: { correctAnswer: 'Often', choices: [{ value: 'Often' }, { value: 'Never' }] },
+  }), false);
 });

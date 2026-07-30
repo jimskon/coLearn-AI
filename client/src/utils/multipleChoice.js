@@ -22,3 +22,9 @@ export function validateMultipleChoice(correctAnswerRaw, choicesRaw) {
 
   return { correctAnswer, errors };
 }
+
+export function isSurveyMultipleChoice(questionBlock) {
+  return Array.isArray(questionBlock?.multipleChoice?.choices)
+    && questionBlock.multipleChoice.choices.length >= 2
+    && !String(questionBlock.multipleChoice.correctAnswer || '').trim();
+}

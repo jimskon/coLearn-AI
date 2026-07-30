@@ -20,9 +20,14 @@ test('rejects duplicate choices and a declared answer that is not a choice', () 
   assert.match(messages, /must exactly match/i);
 });
 
-test('rejects a blank choice or blank answer', () => {
+test('accepts a blank answer for survey multiple-choice questions', () => {
+  const result = validateMultipleChoice('', ['Often', 'Sometimes', 'Never']);
+  assert.equal(result.correctAnswer, '');
+  assert.deepEqual(result.errors, []);
+});
+
+test('rejects a blank choice', () => {
   const result = validateMultipleChoice('', ['Correct', '']);
   const messages = result.errors.join('\n');
-  assert.match(messages, /correct answer value/i);
   assert.match(messages, /non-empty/i);
 });

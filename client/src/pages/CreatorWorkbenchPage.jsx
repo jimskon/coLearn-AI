@@ -2289,7 +2289,7 @@ export default function CreatorWorkbenchPage() {
                             {questionInspectorDraft?.multipleChoiceEnabled ? (
                               <div className="border rounded p-2 mb-3 bg-light">
                                 <Form.Group className="mb-2">
-                                  <Form.Label>Correct Answer</Form.Label>
+                                  <Form.Label>Correct Answer <span className="text-muted small">(optional for a survey)</span></Form.Label>
                                   <Form.Control
                                     value={questionInspectorDraft?.multipleChoiceAnswer || ''}
                                     disabled={!!proposal}

@@ -11,7 +11,6 @@ export function validateMultipleChoice(correctAnswerRaw, choicesRaw) {
   }
 
   const errors = [];
-  if (!correctAnswer) errors.push('\\multiplechoice{answer} requires a correct answer value.');
   if (values.length < 2) errors.push('A \\multiplechoice block requires at least two \\choice entries.');
   if (values.some((value) => !value)) errors.push('\\choice{value} requires a non-empty value.');
   for (const duplicate of duplicateChoices) {

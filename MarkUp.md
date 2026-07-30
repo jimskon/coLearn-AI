@@ -130,7 +130,7 @@ Every `\question` must explicitly end with `\endquestion`.
 
 | Syntax | Description |
 |--------|-------------|
-| `\multiplechoice{answer}` | Starts a single-answer multiple-choice response. `answer` is the correct answer's actual stored value. |
+| `\multiplechoice{answer}` | Starts a single-answer multiple-choice response. `answer` is the correct answer's actual stored value; leave it empty (`\multiplechoice{}`) for a survey question with no correct answer. |
 | `\choice{value}` | Adds one selectable answer choice. |
 | `\endmultiplechoice` | Ends the choice list. |
 
@@ -138,7 +138,7 @@ Rules:
 
 - A multiple-choice block belongs inside a `\question` and must contain at least two `\choice` entries.
 - Choice values must be unique after trimming whitespace.
-- The value in `\multiplechoice{answer}` must exactly match one choice value after trimming whitespace.
+- When supplied, the value in `\multiplechoice{answer}` must exactly match one choice value after trimming whitespace. Leave it blank for a survey question with no correct answer.
 - The selected response is stored as its actual value, such as `Ottawa`, never as an option position such as `B` or `2`.
 - Use the existing `\score{points,response}` block when a test question should receive deterministic response points. In a normal activity, the choice is simply saved and submitted like other responses.
 - For test delivery, the correct answer is author-only data and must not be included in the student-facing activity payload.

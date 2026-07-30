@@ -1795,7 +1795,7 @@ export function renderBlocks(blocks, options = {}) {
           {block.title}
           {block.minutes ? (
             <small className="text-muted ms-2 fw-normal">
-              ({block.minutes} minute{block.minutes === 1 ? '' : 's'})
+              (Section timer: {block.minutes} minute{block.minutes === 1 ? '' : 's'})
             </small>
           ) : null}
         </h2>

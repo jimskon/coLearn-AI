@@ -273,7 +273,7 @@ function applyTimedSectionDirectives(text, timedSections) {
   let nextText = String(text || '');
 
   for (const section of normalizeTimedSections(timedSections)) {
-    const pattern = new RegExp(`^\\section\{${escapeRegExp(section.title)}\}(?:\{\d+\})?$`, 'm');
+    const pattern = new RegExp(`^\\\\section\\{${escapeRegExp(section.title)}\\}(?:\\{\\d+\\})?$`, 'm');
     if (pattern.test(nextText)) {
       nextText = nextText.replace(pattern, `\\section{${section.title}}{${section.minutes}}`);
     }

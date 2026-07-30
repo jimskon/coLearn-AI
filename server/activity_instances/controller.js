@@ -47,6 +47,125 @@ function countQuestionGroups(lines = []) {
   return count > 0 ? count : 1;
 }
 
+function parseTestQuestionsFromLines(lines) {
+  const questions = [];
+  let currentQuestion = null;
+  let currentMultipleChoice = null;
+
+  const finishMultipleChoice = () => {
+    if (!currentQuestion || !currentMultipleChoice) return;
+    const correctAnswer = String(currentMultipleChoice.correctAnswer || '').trim();
+    const choices = Array.isArray(currentMultipleChoice.choices)
+      ? currentMultipleChoice.choices
+          .map((choice) => ({
+            value: String(choice?.value ?? '').trim(),
+            content: String(choice?.content ?? '').trim(),
+          }))
+          .filter((choice) => !!choice.value)
+      : [];
+
+    currentQuestion.multipleChoice = {
+      correctAnswer,
+      choices,
+    };
+    currentMultipleChoice = null;
+  };
+
+  const finishQuestion = () => {
+    if (!currentQuestion) return;
+    if (currentMultipleChoice) finishMultipleChoice();
+    currentQuestion.questionText = String(currentQuestion.questionText || '').trim();
+    questions.push(currentQuestion);
+    currentQuestion = null;
+  };
+
+  for (const rawLine of Array.isArray(lines) ? lines : []) {
+    const raw = String(rawLine ?? '');
+    const trimmed = raw.trim();
+
+    if (!trimmed) {
+      if (currentQuestion && !currentMultipleChoice) {
+        currentQuestion.questionText = currentQuestion.questionText
+          ? `${currentQuestion.questionText}\n`
+          : '';
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith('\\question{')) {
+      finishQuestion();
+      const match = trimmed.match(/^\\question\{([\s\S]*?)\}\s*$/);
+      currentQuestion = {
+        questionText: String(match?.[1] || '').trim(),
+        scores: {},
+        multipleChoice: null,
+      };
+      continue;
+    }
+
+    if (!currentQuestion) {
+      continue;
+    }
+
+    if (currentMultipleChoice) {
+      if (trimmed === '\\endmultiplechoice') {
+        finishMultipleChoice();
+        continue;
+      }
+
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}\s*$/);
+      if (choiceMatch) {
+        currentMultipleChoice.choices.push({
+          value: String(choiceMatch[1] || '').trim(),
+          content: String(choiceMatch[1] || '').trim(),
+        });
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith('\\multiplechoice')) {
+      const match = trimmed.match(/^\\multiplechoice\{([\s\S]*?)\}\s*$/);
+      currentMultipleChoice = {
+        correctAnswer: String(match?.[1] || '').trim(),
+        choices: [],
+      };
+      continue;
+    }
+
+    const scoreMatch = trimmed.match(/^\\score\{([^}]*)\}/i);
+    if (scoreMatch) {
+      currentQuestion.scores = parseScoreSpec(scoreMatch[1]);
+      continue;
+    }
+
+    if (trimmed === '\\endquestion') {
+      finishQuestion();
+      continue;
+    }
+
+    if (trimmed.startsWith('\\questiongroup{') || trimmed.startsWith('\\endquestiongroup')) {
+      continue;
+    }
+
+    if (!trimmed.startsWith('\\end')) {
+      currentQuestion.questionText = currentQuestion.questionText
+        ? `${currentQuestion.questionText} ${trimmed}`
+        : trimmed;
+    }
+  }
+
+  finishQuestion();
+  return questions;
+}
+
+function redactMultipleChoiceAnswers(lines) {
+  return (Array.isArray(lines) ? lines : []).map((line) => {
+    const raw = String(line ?? '');
+    if (!raw.trim().startsWith('\\multiplechoice{')) return raw;
+    return raw.replace(/^(\s*\\multiplechoice\{)[\s\S]*?(\}\s*)$/, '$1$2');
+  });
+}
+
 async function syncTotalGroupsFromSource(conn, instanceId, activitySource, fallbackTotalGroups) {
   const storedTotalGroups = Number(fallbackTotalGroups) || 0;
 
@@ -370,7 +489,7 @@ async function getParsedActivityDoc(req, res) {
   const { instanceId } = req.params;
   try {
     const [rows] = await db.query(`
-      SELECT a.id, a.sheet_url, a.source_type, a.content_text
+      SELECT a.id, a.sheet_url, a.source_type, a.content_text, a.is_test
       FROM activity_instances ai
       JOIN pogil_activities a ON ai.activity_id = a.id
       WHERE ai.id = ?
@@ -380,7 +499,14 @@ async function getParsedActivityDoc(req, res) {
       return res.status(404).json({ error: 'Activity source not found' });
     }
 
-    const lines = await loadActivitySourceLines(rows[0]);
+    const activity = rows[0];
+    let lines = await loadActivitySourceLines(activity);
+    const elevatedRole = ['creator', 'instructor', 'root'].includes(
+      String(req.user?.role || '').toLowerCase()
+    );
+    if (Number(activity?.is_test) === 1 && !elevatedRole) {
+      lines = redactMultipleChoiceAnswers(lines);
+    }
 
     res.json({ lines });
   } catch (err) {
@@ -2269,12 +2395,22 @@ async function submitTest(req, res) {
       }
     }
 
+    const [[sourceRow]] = await conn.query(
+      `SELECT a.sheet_url, a.source_type, a.content_text, a.is_test
+         FROM activity_instances ai
+         JOIN pogil_activities a ON ai.activity_id = a.id
+        WHERE ai.id = ?`,
+      [instanceId]
+    );
+    const sourceLines = sourceRow ? await loadActivitySourceLines(sourceRow) : [];
+    const parsedQuestions = parseTestQuestionsFromLines(sourceLines);
+
     let totalEarnedPoints = 0;
     let totalMaxPoints = 0;
     const questionResults = [];
 
     // -------- grade each question --------
-    for (const q of questions) {
+    for (const [index, q] of questions.entries()) {
       // Your client sends {qid, questionText, ...}
       const baseId = q.qid || q.id;
       if (!baseId) {
@@ -2284,6 +2420,9 @@ async function submitTest(req, res) {
 
       const text = q.questionText || q.text || '';
       const scores = q.scores || {};
+      const sourceQuestion = parsedQuestions[index] || {};
+      const multipleChoice = sourceQuestion.multipleChoice || null;
+      const isMultipleChoice = Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
 
       const bucketPoints = (bucket) => {
         if (!bucket) return 0;
@@ -2362,28 +2501,64 @@ async function submitTest(req, res) {
         maxRespPts,
       });
 
-      // Skip grading if no points
-      if (maxCodePts <= 0 && maxRunPts <= 0 && maxRespPts <= 0) {
-        console.log('[SUBMIT_TEST] skip grading (no points configured)', baseId);
-        continue;
+      const selectedChoice = String(answers[baseId] || '').trim();
+
+      let codeScore = 0;
+      let codeFeedback = '';
+      let runScore = 0;
+      let runFeedback = '';
+      let responseScore = 0;
+      let responseFeedback = '';
+
+      const shouldUseAiGrader =
+        maxCodePts > 0 ||
+        maxRunPts > 0 ||
+        (!isMultipleChoice && maxRespPts > 0);
+
+      if (shouldUseAiGrader) {
+        const gradingScores = isMultipleChoice
+          ? {
+              ...scores,
+              response: {
+                ...(scores.response || {}),
+                points: 0,
+              },
+            }
+          : scores;
+
+        const graded = await gradeTestQuestion({
+          questionText: text,
+          scores: gradingScores,
+          responseText: written,
+          codeCells,
+          outputText,
+          rubric: gradingScores,
+        });
+
+        codeScore = graded.codeScore || 0;
+        codeFeedback = graded.codeFeedback || '';
+        runScore = graded.runScore || 0;
+        runFeedback = graded.runFeedback || '';
+        responseScore = graded.responseScore || 0;
+        responseFeedback = graded.responseFeedback || '';
       }
 
-      // Grade
-      const {
-        codeScore,
-        codeFeedback,
-        runScore,
-        runFeedback,
-        responseScore,
-        responseFeedback,
-      } = await gradeTestQuestion({
-        questionText: text,
-        scores,
-        responseText: written,
-        codeCells,
-        outputText,
-        rubric: scores,
-      });
+      if (isMultipleChoice) {
+        if (maxRespPts > 0) {
+          const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+          if (!correctAnswer) {
+            responseScore = selectedChoice ? maxRespPts : 0;
+            responseFeedback = '';
+          } else {
+            const isCorrect = selectedChoice === correctAnswer;
+            responseScore = isCorrect ? maxRespPts : 0;
+            responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+          }
+        } else {
+          responseScore = 0;
+          responseFeedback = '';
+        }
+      }
 
       const earned =
         (codeScore || 0) + (runScore || 0) + (responseScore || 0);

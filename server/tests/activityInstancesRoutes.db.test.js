@@ -235,14 +235,16 @@ async function createCourse({ instructorId, classId, code = uniqueValue('AI').to
   return remember('courses', result.insertId);
 }
 
-async function createActivity({ classId, createdBy }) {
+async function createActivity({ classId, createdBy, sourceType = 'remote', contentText = null }) {
   const [result] = await db.query(
-    `INSERT INTO pogil_activities (name, title, sheet_url, class_id, order_index, created_by, is_test)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO pogil_activities (name, title, sheet_url, source_type, content_text, class_id, order_index, created_by, is_test)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       uniqueValue('activity').toLowerCase(),
       uniqueValue('Activity Title'),
       'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit',
+      sourceType,
+      contentText,
       classId,
       1,
       createdBy ?? null,
@@ -1428,4 +1430,107 @@ test('reopen rejects already-submitted timed tests so instructors must clear ans
     [instanceId]
   );
   assert.equal(instance.test_reopen_until, null);
+});
+
+test('preview-doc redacts multiple-choice answers for students in tests', async () => {
+  const creator = await createUser('creator');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: creator.id, classId });
+  const sourceText = [
+    '\\mode{test}',
+    '\\questiongroup{Trivia}',
+    '\\question{What is the capital of Canada?}',
+    '\\multiplechoice{Ottawa}',
+    '\\choice{Toronto}',
+    '\\choice{Ottawa}',
+    '\\choice{Montreal}',
+    '\\endmultiplechoice',
+    '\\score{2,response}',
+    '\\endscore',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const activityId = await createActivity({
+    classId,
+    createdBy: creator.id,
+    sourceType: 'local',
+    contentText: sourceText,
+  });
+  await db.query(`UPDATE pogil_activities SET is_test = 1 WHERE id = ?`, [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+
+  const studentResponse = await requestJson(student, `/api/activity-instances/${instanceId}/preview-doc`);
+  assert.equal(studentResponse.status, 200);
+  assert.ok(Array.isArray(studentResponse.body.lines));
+  assert.ok(studentResponse.body.lines.includes('\\multiplechoice{}'));
+  assert.ok(!studentResponse.body.lines.includes('\\multiplechoice{Ottawa}'));
+
+  const creatorResponse = await requestJson(creator, `/api/activity-instances/${instanceId}/preview-doc`);
+  assert.equal(creatorResponse.status, 200);
+  assert.ok(creatorResponse.body.lines.includes('\\multiplechoice{Ottawa}'));
+});
+
+test('submit-test grades multiple-choice answers deterministically on the server', async () => {
+  const creator = await createUser('creator');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: creator.id, classId });
+  const sourceText = [
+    '\\mode{test}',
+    '\\questiongroup{Trivia}',
+    '\\question{What is the capital of Canada?}',
+    '\\multiplechoice{Ottawa}',
+    '\\choice{Toronto}',
+    '\\choice{Ottawa}',
+    '\\choice{Montreal}',
+    '\\endmultiplechoice',
+    '\\score{2,response}',
+    '\\endscore',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const activityId = await createActivity({
+    classId,
+    createdBy: creator.id,
+    sourceType: 'local',
+    contentText: sourceText,
+  });
+  await db.query(`UPDATE pogil_activities SET is_test = 1 WHERE id = ?`, [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+
+  const response = await requestJson(student, `/api/activity-instances/${instanceId}/submit-test`, {
+    method: 'POST',
+    body: {
+      studentId: student.id,
+      answers: {
+        '1a': 'Ottawa',
+      },
+      questions: [
+        {
+          qid: '1a',
+          questionText: 'What is the capital of Canada?',
+          scores: { response: { points: 2 } },
+        },
+      ],
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.earned, 2);
+  assert.equal(response.body.max, 2);
+  assert.equal(response.body.questions[0].responseScore, 2);
+
+  const [rows] = await db.query(
+    `SELECT response
+       FROM responses
+      WHERE activity_instance_id = ? AND question_id = ?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [instanceId, '1a']
+  );
+  assert.equal(rows[0]?.response, 'Ottawa');
 });

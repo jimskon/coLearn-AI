@@ -638,6 +638,8 @@ export default function CreatorWorkbenchPage() {
   const [visualUndoStack, setVisualUndoStack] = useState([]);
 
   const autoTimerRef = useRef(null);
+  const sourceTextareaRef = useRef(null);
+  const sourceGutterRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
   const creatorTutorial = useCreatorTutorial({ demoMode: isDemoCreator });
 
@@ -653,6 +655,10 @@ export default function CreatorWorkbenchPage() {
   const activeBlocks = proposal?.blocks || blocks;
   const activeIssues = proposal?.issues || parseIssues;
   const activeText = proposal?.text || rawText;
+  const sourceLineCount = useMemo(
+    () => Math.max(1, String(activeText || '').split('\n').length),
+    [activeText],
+  );
   const hasProposalErrors = !!proposal?.issues?.some((issue) => issue.severity === 'error');
   const advancedPromptText = useMemo(() => buildAdvancedPromptText(advancedDraft), [advancedDraft]);
   const multipleChoiceValidation = useMemo(() => {
@@ -672,6 +678,12 @@ export default function CreatorWorkbenchPage() {
       ? creatorModelOptions.filter((option) => ['gpt-5-mini', 'gpt-4o-mini'].includes(option.value))
       : creatorModelOptions
   ), [isDemoCreator]);
+
+  useEffect(() => {
+    if (sourceGutterRef.current && sourceTextareaRef.current) {
+      sourceGutterRef.current.scrollTop = sourceTextareaRef.current.scrollTop;
+    }
+  }, [activeText, rightMode]);
 
   function selectInsertedQuestion(parsed, questionLine) {
     const inserted = parsed.blocks.find((block) => (
@@ -1583,6 +1595,7 @@ export default function CreatorWorkbenchPage() {
         .creator-chat-message:last-child { border-bottom: 0; }
         .creator-markup-editor {
           display: block;
+          flex: 1 1 auto;
           width: 100%;
           height: 100%;
           font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -1592,6 +1605,30 @@ export default function CreatorWorkbenchPage() {
           border-radius: 0;
           line-height: 1.4;
           overflow: auto;
+        }
+        .creator-source-editor-wrap {
+          display: flex;
+          width: 100%;
+          height: 100%;
+          min-height: 0;
+          overflow: hidden;
+        }
+        .creator-source-line-gutter {
+          user-select: none;
+          flex: 0 0 auto;
+          padding: 0.5rem 0.5rem;
+          background: #f3f3f3;
+          border-right: 1px solid #ddd;
+          color: #666;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+          font-size: 0.9rem;
+          line-height: 1.4;
+          text-align: right;
+          overflow: hidden;
+          min-width: 3.25rem;
+        }
+        .creator-source-line-gutter div {
+          height: 1.4em;
         }
         .creator-preview-surface {
           max-width: 980px;
@@ -2513,18 +2550,31 @@ export default function CreatorWorkbenchPage() {
             ) : null}
 
             {rightMode === 'edit' ? (
-              <Form.Control
-                as="textarea"
-                className="creator-markup-editor"
-                value={activeText}
-                readOnly={!!proposal}
-                spellCheck={false}
-                onChange={(event) => {
-                  setRawText(event.target.value);
-                  setSandboxUrl('');
-                  setVisualUndoStack([]);
-                }}
-              />
+              <div className="creator-source-editor-wrap">
+                <div className="creator-source-line-gutter" ref={sourceGutterRef} aria-hidden="true">
+                  {Array.from({ length: sourceLineCount }, (_, index) => (
+                    <div key={index}>{index + 1}</div>
+                  ))}
+                </div>
+                <Form.Control
+                  as="textarea"
+                  className="creator-markup-editor"
+                  value={activeText}
+                  readOnly={!!proposal}
+                  spellCheck={false}
+                  ref={sourceTextareaRef}
+                  onScroll={() => {
+                    if (sourceGutterRef.current && sourceTextareaRef.current) {
+                      sourceGutterRef.current.scrollTop = sourceTextareaRef.current.scrollTop;
+                    }
+                  }}
+                  onChange={(event) => {
+                    setRawText(event.target.value);
+                    setSandboxUrl('');
+                    setVisualUndoStack([]);
+                  }}
+                />
+              </div>
             ) : null}
 
             {rightMode === 'sandbox' ? (

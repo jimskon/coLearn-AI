@@ -2449,12 +2449,15 @@ export function renderBlocks(blocks, options = {}) {
 
       const hasPython = (block.pythonBlocks?.length || 0) > 0;
       const hasCpp = (block.cppBlocks?.length || 0) > 0;
+      const hasMultipleChoice = (block.multipleChoice?.choices?.length || 0) > 0;
       const isCodeOnly =
         (hasPython || hasCpp) && !block.hasTextResponse && !block.hasTableResponse;
 
-      // Show a free-text box only if explicitly requested OR (no code & no table)
+      // A multiple-choice response replaces the default free-text response. Authors can
+      // still add code, tables, or other response elements to the same question.
       const showTextArea =
-        block.hasTextResponse || (!hasPython && !hasCpp && !block.hasTableResponse);
+        !hasMultipleChoice &&
+        (block.hasTextResponse || (!hasPython && !hasCpp && !block.hasTableResponse));
 
       const lockMainResponse =
         runMode === 'preview'
@@ -2783,6 +2786,37 @@ export function renderBlocks(blocks, options = {}) {
               />
             );
           })}
+
+          {hasMultipleChoice ? (
+            <fieldset className="mt-3" aria-label="Choose one answer">
+              <legend className="fs-6 mb-2">Choose one answer</legend>
+              {block.multipleChoice.choices.map((choice, choiceIndex) => {
+                const choiceId = `multiple-choice-${responseKey}-${choiceIndex}`;
+                return (
+                  <Form.Check
+                    key={choiceId}
+                    id={choiceId}
+                    type="radio"
+                    name={`multiple-choice-${responseKey}`}
+                    value={choice.value}
+                    checked={(prefill?.[responseKey]?.response || '') === choice.value}
+                    disabled={!editable || lockMainResponse}
+                    className="mb-2"
+                    label={<span dangerouslySetInnerHTML={{ __html: choice.content || choice.value }} />}
+                    onChange={() => {
+                      options.onTextChange?.(responseKey, choice.value, {
+                        questionText: stripHtml(block.prompt || ''),
+                        sampleResponse: stripHtml(block.samples?.[0] || ''),
+                        feedbackPrompt: stripHtml(block.feedback?.[0] || ''),
+                        hasMultipleChoice: true,
+                        retriesRequired: block.retriesRequired ?? 0,
+                      });
+                    }}
+                  />
+                );
+              })}
+            </fieldset>
+          ) : null}
 
           {showTextArea ? (
             (() => {

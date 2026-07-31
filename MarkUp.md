@@ -113,6 +113,55 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 
 Every `\question` must explicitly end with `\endquestion`.
 
+### Multiple Choice (authoring contract; implementation in progress)
+
+```text
+\question{What is the capital of Canada?}
+\multiplechoice{Ottawa}
+\choice{Toronto}
+\choice{Ottawa}
+\choice{Montreal}
+\choice{Vancouver}
+\endmultiplechoice
+\score{2,response}
+\endscore
+\endquestion
+```
+
+| Syntax | Description |
+|--------|-------------|
+| `\multiplechoice{answer}` | Starts a single-answer multiple-choice response. `answer` is the correct answer's actual stored value; leave it empty (`\multiplechoice{}`) for a survey question with no correct answer. |
+| `\choice{value}` | Adds one selectable answer choice. |
+| `\endmultiplechoice` | Ends the choice list. |
+
+Rules:
+
+- A multiple-choice block belongs inside a `\question` and must contain at least two `\choice` entries.
+- Choice values must be unique after trimming whitespace.
+- When supplied, the value in `\multiplechoice{answer}` must exactly match one choice value after trimming whitespace. Leave it blank for a survey question with no correct answer.
+- The selected response is stored as its actual value, such as `Ottawa`, never as an option position such as `B` or `2`.
+- Use the existing `\score{points,response}` block when a test question should receive deterministic response points. In a normal activity, the choice is simply saved and submitted like other responses.
+- For test delivery, the correct answer is author-only data and must not be included in the student-facing activity payload.
+
+Invalid examples:
+
+```text
+\multiplechoice{Ottawa}
+\choice{Toronto}
+\endmultiplechoice
+```
+
+Only one choice is invalid.
+
+```text
+\multiplechoice{Ottawa}
+\choice{Toronto}
+\choice{Montreal}
+\endmultiplechoice
+```
+
+The declared answer does not match a choice and is invalid.
+
 ---
 
 ## 3A. Inline AI Help Blocks

@@ -8,6 +8,7 @@ import ActivityPythonBlock from '../components/activity/ActivityPythonBlock';
 import ActivityRemotePythonBlock from '../components/activity/ActivityRemotePythonBlock';
 import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
+import { validateMultipleChoice } from './multipleChoice';
 import { makeResponseAttrs } from './responseDom';
 import { API_BASE_URL } from '../config';
 
@@ -233,7 +234,7 @@ function InlineAiAssistBlock({
 // Keeps everything else as-is. Works for any \SomeTag{ ... } (including section*, link, image, etc.)
 function collapseBracedCommands(rawLines) {
   const startsTag = (s) =>
-    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
+    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|multiplechoice|choice|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
   const out = [];
   let buf = null;
   let depth = 0;
@@ -508,6 +509,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let currentGroupIntro = null;
   let pendingIncludeFiles = null;
   let currentAiBlock = null;
+  let currentMultipleChoice = null;
 
   // track some structural state to report missing closures
   let openGroupLine = null;
@@ -516,6 +518,26 @@ export function parseSheetToBlocks(lines, options = {}) {
   let openScoreLine = null;
   let openListLine = null;
   let openAiLine = null;
+  let openMultipleChoiceLine = null;
+
+  const finalizeMultipleChoice = (closingLine) => {
+    if (!currentMultipleChoice || !currentQuestion) return;
+
+    const choices = currentMultipleChoice.choices;
+    const validation = validateMultipleChoice(currentMultipleChoice.correctAnswer, choices);
+    for (const message of validation.errors) {
+      pushIssue('error', currentMultipleChoice.sourceMeta.multipleChoiceLine, message, null);
+    }
+
+    currentMultipleChoice.sourceMeta.endMultipleChoiceLine = closingLine;
+    currentQuestion.multipleChoice = {
+      correctAnswer: validation.correctAnswer,
+      choices,
+      sourceMeta: currentMultipleChoice.sourceMeta,
+    };
+    currentMultipleChoice = null;
+    openMultipleChoiceLine = null;
+  };
 
 
   const flushCurrentBlock = () => {
@@ -1207,6 +1229,10 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (currentQuestion) {
         pushIssue('error', lineNo, 'Closing group while a \\question is still open. Missing \\endquestion before \\endquestiongroup.', line);
       }
+      if (currentMultipleChoice) {
+        pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice before \\endquestiongroup.', null);
+        finalizeMultipleChoice(lineNo - 1);
+      }
       if (currentGroupIntro?.sourceMeta) {
         currentGroupIntro.sourceMeta.endGroupLine = lineNo;
       }
@@ -1306,6 +1332,76 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
+    if (currentMultipleChoice) {
+      if (trimmed === '\\endmultiplechoice') {
+        finalizeMultipleChoice(lineNo);
+        continue;
+      }
+
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}\s*$/);
+      if (choiceMatch) {
+        const value = String(choiceMatch[1] || '').trim();
+        if (!value) {
+          pushIssue('error', lineNo, '\\choice{value} requires a non-empty value.', line);
+        } else {
+          currentMultipleChoice.choices.push({
+            value,
+            content: format(value),
+            line: lineNo,
+          });
+          currentMultipleChoice.sourceMeta.choiceLines.push(lineNo);
+        }
+        continue;
+      }
+
+      if (trimmed === '\\endquestion' || trimmed === '\\endquestiongroup') {
+        pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice.', null);
+        finalizeMultipleChoice(lineNo - 1);
+      } else {
+        pushIssue('error', lineNo, 'Only \\choice{value} or \\endmultiplechoice is allowed inside a \\multiplechoice block.', line);
+        continue;
+      }
+    }
+
+    if (trimmed.startsWith('\\multiplechoice')) {
+      if (!currentQuestion) {
+        pushIssue('error', lineNo, '\\multiplechoice found outside of a \\question.', line);
+        continue;
+      }
+      if (currentMultipleChoice || currentQuestion.multipleChoice) {
+        pushIssue('error', lineNo, 'A question can contain only one \\multiplechoice block.', line);
+        continue;
+      }
+
+      const match = trimmed.match(/^\\multiplechoice\{([\s\S]*?)\}\s*$/);
+      if (!match) {
+        pushIssue('error', lineNo, 'Malformed \\multiplechoice. Use \\multiplechoice{correct answer}.', line);
+        continue;
+      }
+
+      currentMultipleChoice = {
+        correctAnswer: String(match[1] || '').trim(),
+        choices: [],
+        sourceMeta: {
+          multipleChoiceLine: lineNo,
+          choiceLines: [],
+          endMultipleChoiceLine: null,
+        },
+      };
+      openMultipleChoiceLine = lineNo;
+      continue;
+    }
+
+    if (trimmed === '\\endmultiplechoice') {
+      pushIssue('error', lineNo, '\\endmultiplechoice without a matching \\multiplechoice{...}.', line);
+      continue;
+    }
+
+    if (trimmed.startsWith('\\choice')) {
+      pushIssue('error', lineNo, '\\choice{value} found outside of a \\multiplechoice block.', line);
+      continue;
+    }
+
     if (trimmed === '\\endquestion') {
       if (!currentQuestion) {
         pushIssue('error', lineNo, '\\endquestion without a matching \\question{...}', line);
@@ -1318,6 +1414,11 @@ export function parseSheetToBlocks(lines, options = {}) {
         currentQuestion.aiBlocks.push(currentAiBlock);
         currentAiBlock = null;
         openAiLine = null;
+      }
+
+      if (currentMultipleChoice) {
+        pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice before \\endquestion.', null);
+        finalizeMultipleChoice(lineNo - 1);
       }
 
       // finalize as you already do
@@ -1618,6 +1719,10 @@ export function parseSheetToBlocks(lines, options = {}) {
   flushCurrentBlock();
 
   // ✅ report any unclosed structures
+  if (currentMultipleChoice) {
+    pushIssue('error', openMultipleChoiceLine ?? null, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice at end of document.', null);
+    finalizeMultipleChoice(lines.length);
+  }
   if (currentQuestion) {
     pushIssue('error', openQuestionLine ?? null, 'Unclosed \\question: missing \\endquestion at end of document.', null);
   }
@@ -2344,12 +2449,15 @@ export function renderBlocks(blocks, options = {}) {
 
       const hasPython = (block.pythonBlocks?.length || 0) > 0;
       const hasCpp = (block.cppBlocks?.length || 0) > 0;
+      const hasMultipleChoice = (block.multipleChoice?.choices?.length || 0) > 0;
       const isCodeOnly =
         (hasPython || hasCpp) && !block.hasTextResponse && !block.hasTableResponse;
 
-      // Show a free-text box only if explicitly requested OR (no code & no table)
+      // A multiple-choice response replaces the default free-text response. Authors can
+      // still add code, tables, or other response elements to the same question.
       const showTextArea =
-        block.hasTextResponse || (!hasPython && !hasCpp && !block.hasTableResponse);
+        !hasMultipleChoice &&
+        (block.hasTextResponse || (!hasPython && !hasCpp && !block.hasTableResponse));
 
       const lockMainResponse =
         runMode === 'preview'
@@ -2678,6 +2786,37 @@ export function renderBlocks(blocks, options = {}) {
               />
             );
           })}
+
+          {hasMultipleChoice ? (
+            <fieldset className="mt-3" aria-label="Choose one answer">
+              <legend className="fs-6 mb-2">Choose one answer</legend>
+              {block.multipleChoice.choices.map((choice, choiceIndex) => {
+                const choiceId = `multiple-choice-${responseKey}-${choiceIndex}`;
+                return (
+                  <Form.Check
+                    key={choiceId}
+                    id={choiceId}
+                    type="radio"
+                    name={`multiple-choice-${responseKey}`}
+                    value={choice.value}
+                    checked={(prefill?.[responseKey]?.response || '') === choice.value}
+                    disabled={!editable || lockMainResponse}
+                    className="mb-2"
+                    label={<span dangerouslySetInnerHTML={{ __html: choice.content || choice.value }} />}
+                    onChange={() => {
+                      options.onTextChange?.(responseKey, choice.value, {
+                        questionText: stripHtml(block.prompt || ''),
+                        sampleResponse: stripHtml(block.samples?.[0] || ''),
+                        feedbackPrompt: stripHtml(block.feedback?.[0] || ''),
+                        hasMultipleChoice: true,
+                        retriesRequired: block.retriesRequired ?? 0,
+                      });
+                    }}
+                  />
+                );
+              })}
+            </fieldset>
+          ) : null}
 
           {showTextArea ? (
             (() => {

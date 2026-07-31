@@ -8,6 +8,7 @@ import 'prismjs/components/prism-python';
 
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
+import { isSurveyMultipleChoice } from '../utils/multipleChoice';
 import { renderBlocks } from '../utils/parseSheet';
 import { parseUtcDbDatetime } from '../utils/time';
 import { normalizeRunActivityMode } from './run-activity/modes';
@@ -1364,7 +1365,7 @@ export default function RunActivityPage({
     return generic || detectLanguageFromCode(studentCode) || 'python';
   }
 
-  function buildTestSubmissionPayload(blocks, container) {
+  function buildTestSubmissionPayload(blocks, container, existingAnswers) {
     const answers = {};
     const questions = [];
 
@@ -1376,8 +1377,15 @@ export default function RunActivityPage({
 
       // 1) Base written/text response (if any)
       const textEl = container.querySelector(`textarea[data-response-key="${qid}"]`);
+      const checkedChoice = container.querySelector(
+        `input[name="multiple-choice-${qid}"]:checked`
+      );
 
-      const baseAnswer = textEl?.value?.trim() || '';
+      const baseAnswer =
+        textEl?.value?.trim() ||
+        checkedChoice?.value?.trim() ||
+        existingAnswers?.[qid]?.response?.trim?.() ||
+        '';
 
       // 2) Table inputs (if any)
       let tableHasInput = false;
@@ -1683,7 +1691,8 @@ export default function RunActivityPage({
       try {
         const { answers, questions } = buildTestSubmissionPayload(
           blocks,
-          container
+          container,
+          existingAnswers
         );
         console.log('[TEST SUBMIT payload]', {
           answersCount: Object.keys(answers).length,
@@ -2236,6 +2245,19 @@ export default function RunActivityPage({
 
       // Only clear the visible feedback box before re-eval
       emitTextAIState(socket, qid, { f1: '' });
+      if (isSurveyMultipleChoice(block)) {
+        // A blank \multiplechoice{} is a survey: store the selected value and
+        // mark it complete without asking the AI to judge or coach the student.
+        answers[`${qid}S`] = 'complete';
+        answers[`${qid}AF`] = 'resolved';
+        answers[`${qid}FM`] = 'accepted';
+        emitTextAIState(socket, qid, {
+          af: answers[`${qid}AF`],
+          f1: '',
+          fm: answers[`${qid}FM`],
+        });
+        continue;
+      }
       if (!looksCodeOnlyNow && !isTestMode) {
         const dbgInput = String(aiInput ?? '').trim();
         /*console.log('[EVALDBG]', {

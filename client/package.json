@@ -6,7 +6,8 @@
         "dev": "vite",
         "start": "vite",
         "build": "vite build",
-        "test:ci": "npm run build"
+        "test:ci": "npm run build",
+        "test:parser": "node --test scripts/parse-sheet-multiple-choice.test.mjs"
     },
     "dependencies": {
         "bootstrap": "^5.3.6",

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Button, Spinner } from 'react-bootstrap';
+import { Alert, Badge, Button, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
 import { collectInfosForTarget } from '../../utils/parseSheet';
@@ -183,6 +183,11 @@ export default function RunActivityWorkspace({
 
               <p ref={questionGroupAnchorRef}>
                 <strong>{index + 1}.</strong> {group.intro.content}
+                {Number.isFinite(Number(group?.intro?.retriesRequired)) ? (
+                  <Badge bg="light" text="dark" className="border ms-2 align-middle">
+                    Retries: {Math.max(0, Number(group.intro.retriesRequired))}
+                  </Badge>
+                ) : null}
               </p>
               {renderInfoStack(
                 collectGroupInfos(group, 'questiongroup'),

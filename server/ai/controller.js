@@ -1172,7 +1172,6 @@ function derivePolicyFromGuidance(guidanceText = "") {
       followupGate: "none",
       requirementsOnly: false,
       ignoreSpacing: false,
-      forbidFStrings: false,
       failOpen: false,
       noExtras: false,
     };
@@ -1185,7 +1184,6 @@ function derivePolicyFromGuidance(guidanceText = "") {
   const noFollowupFlag = /do not ask a follow up/.test(g);
   const requirementsOnly = /requirements-only/.test(g);
   const ignoreSpacing = /ignore spacing/.test(g);
-  const forbidFStrings = /f-strings.*(unavailable|do not|don't)/.test(g);
   const failOpen =
     /fail[- ]open/.test(g) || /doesn'?t have to be perfect/.test(g);
   const noExtras = /do not require extra features|do not require extras/.test(g);
@@ -1200,7 +1198,6 @@ function derivePolicyFromGuidance(guidanceText = "") {
     followupGate,
     requirementsOnly,
     ignoreSpacing,
-    forbidFStrings,
     failOpen,
     noExtras,
   };
@@ -1238,7 +1235,6 @@ function getEffectivePolicy(activityGuide, questionGuide) {
     followupGate,
     requirementsOnly: pick("requirementsOnly", "requirements-only"),
     ignoreSpacing: pick("ignoreSpacing", "ignore spacing"),
-    forbidFStrings: pick("forbidFStrings", "f-strings"),
     failOpen: pick("failOpen", "fail[- ]open|doesn'?t have to be perfect"),
     noExtras: pick(
       "noExtras",
@@ -1756,7 +1752,6 @@ async function evaluateCode({
   const rules = [
     policy.requirementsOnly && "- Judge ONLY whether it meets the stated task; no extras.",
     policy.ignoreSpacing && "- Ignore whitespace/formatting; never mention spacing.",
-    policy.forbidFStrings && "- Do NOT suggest or use f-strings (environment may not support them).",
     policy.noExtras && "- Do NOT ask for additional features beyond the prompt.",
     policy.failOpen && "- If minor issues but functionally OK, treat as acceptable.",
     "- Write feedback in the same language as the activity/question language. Do not switch to the student's answer language if it differs.",

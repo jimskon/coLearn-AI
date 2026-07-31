@@ -733,31 +733,8 @@ function buildLocalClarifyingHint(questionText = "", questionAsked = "", student
   return "Think about the part of the question that still feels unclear and connect it to the code or output.";
 }
 
-function buildRequirementsOnlyHint({
-  questionText = "",
-  studentAnswer = "",
-  feedbackPrompt = "",
-  sampleResponse = "",
-}) {
-  const hay = `${questionText} ${studentAnswer} ${feedbackPrompt} ${sampleResponse}`.toLowerCase();
-
-  if (/\bboolean\b|\btrue\b|\bfalse\b|\band\b|\bor\b|\bnot\b/.test(hay)) {
-    return "Try the expression one piece at a time and decide whether each part becomes True or False.";
-  }
-
-  if (/\bcomparison\b|\boperator\b|<=|>=|!=|==|<|>/.test(hay)) {
-    return "Compare the two sides carefully and focus on what relationship the symbol is asking about.";
-  }
-
-  if (/\bloop\b|\brepeat\b|\bsequence\b|\bselection\b/.test(hay)) {
-    return "Match the description to the structure it is asking about, then explain your reasoning briefly.";
-  }
-
-  if (/\bstring\b|\bnumber\b|\bvariable\b|\bvalue\b/.test(hay)) {
-    return "Check what type of value each side has and then test the expression step by step.";
-  }
-
-  return "Try again with a short hint from the question, then refine your answer.";
+function buildRequirementsOnlyHint() {
+  return "Try again by focusing on the exact requirement in the prompt and adding one concrete detail.";
 }
 
 function classifyPromptMode({
@@ -1511,22 +1488,12 @@ async function evaluateStudentResponse(req, res) {
 
     if (!accepted && !feedback) {
       feedback = policy.requirementsOnly
-        ? buildRequirementsOnlyHint({
-            questionText,
-            studentAnswer: answerRaw,
-            feedbackPrompt,
-            sampleResponse,
-          })
+        ? buildRequirementsOnlyHint()
         : "Add one more concrete detail that directly answers the prompt.";
     }
 
     if (policy.requirementsOnly && !accepted) {
-      feedback = buildRequirementsOnlyHint({
-        questionText,
-        studentAnswer: answerRaw,
-        feedbackPrompt,
-        sampleResponse,
-      });
+      feedback = buildRequirementsOnlyHint();
     }
 
     if (accepted && !positiveEnabled) {
@@ -1547,12 +1514,7 @@ async function evaluateStudentResponse(req, res) {
 
     accepted = false;
     feedback = policy.requirementsOnly
-      ? buildRequirementsOnlyHint({
-          questionText,
-          studentAnswer: answerRaw,
-          feedbackPrompt,
-          sampleResponse,
-        })
+      ? buildRequirementsOnlyHint()
       : "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
     return await applyGateAndSend();
   }

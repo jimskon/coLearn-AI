@@ -539,6 +539,7 @@ async function buildStudentResponsePrompt({
     "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
     "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
     "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
+    "When rejecting, base the hint on the exact question text and the current answer. Mention what part of the prompt they should revisit or what relationship/definition they should check.",
     requirementsOnly
       ? "This question uses requirements-only grading. If you reject the answer, give a short hint that helps the group try again; do not reveal the final answer."
       : "",
@@ -574,7 +575,7 @@ async function buildStudentResponsePrompt({
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
     requirementsOnly
-      ? "Requirements-only rule: if you reject, give only a short hint that invites a retry; do not provide the final answer verbatim."
+      ? "Requirements-only rule: if you reject, give only a short hint that invites a retry; anchor that hint to the exact question text rather than using a generic message."
       : "",
     "",
     schema,
@@ -733,8 +734,45 @@ function buildLocalClarifyingHint(questionText = "", questionAsked = "", student
   return "Think about the part of the question that still feels unclear and connect it to the code or output.";
 }
 
-function buildRequirementsOnlyHint() {
-  return "Try again by focusing on the exact requirement in the prompt and adding one concrete detail.";
+function compactQuestionExcerpt(questionText = "") {
+  const text = stripHtml(String(questionText || ""))
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return "";
+  if (text.length <= 110) return text;
+  return text.slice(0, 107).replace(/\s+\S*$/, "") + "...";
+}
+
+function buildQuestionAnchoredHint(questionText = "", studentAnswer = "") {
+  const q = compactQuestionExcerpt(questionText);
+  const answer = String(studentAnswer || "").trim();
+
+  if (q && answer) {
+    return `Re-read “${q}” and check whether ${answer.slice(0, 80)} actually matches what the prompt asks for.`;
+  }
+
+  if (q) {
+    return `Re-read “${q}” and answer that exact request more directly.`;
+  }
+
+  return "Re-read the prompt and answer the exact request more directly.";
+}
+
+function isGenericRequirementsFeedback(text = "") {
+  const t = String(text || "").toLowerCase().trim();
+  if (!t) return true;
+  return [
+    /focus on the exact requirement/,
+    /add one concrete detail/,
+    /try again/,
+    /think about the part/,
+    /short hint/,
+    /next step/,
+    /more detail/,
+    /conceptual nudge/,
+    /generic/,
+  ].some((pattern) => pattern.test(t));
 }
 
 function classifyPromptMode({
@@ -1473,8 +1511,9 @@ async function evaluateStudentResponse(req, res) {
       obj = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(raw);
     } catch {
       accepted = false;
-      feedback =
-        "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
+      feedback = policy.requirementsOnly
+        ? buildQuestionAnchoredHint(questionText, answerRaw)
+        : "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
       return await applyGateAndSend();
     }
 
@@ -1486,14 +1525,10 @@ async function evaluateStudentResponse(req, res) {
       feedback = null;
     }
 
-    if (!accepted && !feedback) {
+    if (!accepted && (!feedback || isGenericRequirementsFeedback(feedback))) {
       feedback = policy.requirementsOnly
-        ? buildRequirementsOnlyHint()
+        ? buildQuestionAnchoredHint(questionText, answerRaw)
         : "Add one more concrete detail that directly answers the prompt.";
-    }
-
-    if (policy.requirementsOnly && !accepted) {
-      feedback = buildRequirementsOnlyHint();
     }
 
     if (accepted && !positiveEnabled) {
@@ -1514,7 +1549,7 @@ async function evaluateStudentResponse(req, res) {
 
     accepted = false;
     feedback = policy.requirementsOnly
-      ? buildRequirementsOnlyHint()
+      ? buildQuestionAnchoredHint(questionText, answerRaw)
       : "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
     return await applyGateAndSend();
   }

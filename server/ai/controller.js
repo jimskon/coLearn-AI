@@ -749,14 +749,14 @@ function buildQuestionAnchoredHint(questionText = "", studentAnswer = "") {
   const answer = String(studentAnswer || "").trim();
 
   if (q && answer) {
-    return `Re-read “${q}” and check whether ${answer.slice(0, 80)} actually matches what the prompt asks for.`;
+    return `Re-read “${q}” and check whether your answer actually responds to what the question asks for.`;
   }
 
   if (q) {
-    return `Re-read “${q}” and answer that exact request more directly.`;
+    return `Re-read “${q}” and make sure your response answers that exact request.`;
   }
 
-  return "Re-read the prompt and answer the exact request more directly.";
+  return "Re-read the prompt and make sure your response answers the exact request.";
 }
 
 function isGenericRequirementsFeedback(text = "") {

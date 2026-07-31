@@ -42,8 +42,7 @@ All interactive content must appear inside a `\questiongroup`.
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
 | `\mode{demo}` | In-class demonstration mode. All question groups are visible, there is no submit button, and each student edits their own saved sandbox. | `\mode{demo}` |
 | `\test` | Marks activity as graded assessment | `\test` |
-| `\section{...}` | Structural heading (non-interactive, no timer) | `\section{Introduction}` |
-| `\section{...}{minutes}` | Structural heading with a shared section timer | `\section{Exploration}{12}` |
+| `\section{...}` | Structural heading (non-interactive) | `\section{Introduction}` |
 
 Notes:
 
@@ -52,28 +51,7 @@ Notes:
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
 - `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
-- `\section{Title}` is structural only.
-- `\section{Title}{minutes}` starts a shared countdown timer, in whole minutes, for the question groups in that section. `minutes` must be a positive integer.
-- A section applies to every following question group until the next `\section` command. Put the section command immediately before its first question group.
-- The timer belongs to the section, not to each individual question group. To give different groups separate timers, place each group under its own timed section.
-
-Example:
-
-```text
-\section{Exploration}{12}
-\questiongroup{Observe the pattern}
-...
-\endquestiongroup
-
-\questiongroup{Explain the pattern}
-...
-\endquestiongroup
-
-\section{Application}{8}
-\questiongroup{Apply the rule}
-...
-\endquestiongroup
-```
+- `\section` is structural only.
 
 ---
 
@@ -106,6 +84,8 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 |--------|-------------|---------|
 | `\question{...}` | Begins a question | `\question{Explain Dijkstra’s algorithm.}` |
 | `\endquestion` | Ends the question (required) | `\endquestion` |
+| `\responsemode{answer}` | Declares a normal answer question; optional because `answer` is the default | `\responsemode{answer}` |
+| `\responsemode{questions}` | Declares a question-writing task where the student should submit questions instead of answers | `\responsemode{questions}` |
 | `\textresponse{n}` | Student response box (n lines tall) | `\textresponse{5}` |
 | `\sampleresponses{...}` | Sample instructor solution (hidden) | `\sampleresponses{Chooses a local optimum.}` |
 | `\feedbackprompt{...}` | AI grading guidance | `\feedbackprompt{Encourage elaboration.}` |
@@ -113,54 +93,10 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 
 Every `\question` must explicitly end with `\endquestion`.
 
-### Multiple Choice (authoring contract; implementation in progress)
+Notes:
 
-```text
-\question{What is the capital of Canada?}
-\multiplechoice{Ottawa}
-\choice{Toronto}
-\choice{Ottawa}
-\choice{Montreal}
-\choice{Vancouver}
-\endmultiplechoice
-\score{2,response}
-\endscore
-\endquestion
-```
-
-| Syntax | Description |
-|--------|-------------|
-| `\multiplechoice{answer}` | Starts a single-answer multiple-choice response. `answer` is the correct answer's actual stored value; leave it empty (`\multiplechoice{}`) for a survey question with no correct answer. |
-| `\choice{value}` | Adds one selectable answer choice. |
-| `\endmultiplechoice` | Ends the choice list. |
-
-Rules:
-
-- A multiple-choice block belongs inside a `\question` and must contain at least two `\choice` entries.
-- Choice values must be unique after trimming whitespace.
-- When supplied, the value in `\multiplechoice{answer}` must exactly match one choice value after trimming whitespace. Leave it blank for a survey question with no correct answer.
-- The selected response is stored as its actual value, such as `Ottawa`, never as an option position such as `B` or `2`.
-- Use the existing `\score{points,response}` block when a test question should receive deterministic response points. In a normal activity, the choice is simply saved and submitted like other responses.
-- For test delivery, the correct answer is author-only data and must not be included in the student-facing activity payload.
-
-Invalid examples:
-
-```text
-\multiplechoice{Ottawa}
-\choice{Toronto}
-\endmultiplechoice
-```
-
-Only one choice is invalid.
-
-```text
-\multiplechoice{Ottawa}
-\choice{Toronto}
-\choice{Montreal}
-\endmultiplechoice
-```
-
-The declared answer does not match a choice and is invalid.
+- If `\responsemode{...}` is omitted, the default is `answer`.
+- Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
 
 ---
 
@@ -176,7 +112,7 @@ The declared answer does not match a choice and is invalid.
 \endai
 ```
 
-`\ai` blocks are currently supported only inside a `\question`.
+`\\ai` blocks are currently supported only inside a `\\question`.
 
 | Syntax | Description | Example |
 |--------|-------------|---------|

@@ -12,6 +12,8 @@ const CREATOR_HOUSE_STYLE_SUMMARY = [
   '- Use \\section{Title} or \\section{Title}{minutes} for each requested section.',
   '- Put interactive work inside \\questiongroup{...} ... \\endquestiongroup.',
   '- Put each prompt inside \\question{...} ... \\endquestion.',
+  '- Use \\responsemode{answer} for ordinary questions and \\responsemode{questions} for prompts that ask students to write questions.',
+  '- Treat \\responsemode{answer} as the default for legacy content, but include it explicitly in new questions when practical.',
   '- Use \\textresponse{n} for short written answers.',
   '- Use \\multiplechoice{answer} for single-answer multiple-choice questions, and use \\multiplechoice{} for survey questions with no correct answer.',
   '- Never invent a fake correct answer just to satisfy the parser when a multiple-choice question is intended to be a survey.',
@@ -882,6 +884,7 @@ async function generateWithOpenAI({
     'If you do use an \\ai block, keep it tightly scoped and include a guardrail.',
     'Use the compact house-style rules below as syntax guidance.',
     'For mode=group, use collaborative prompts and progression.',
+    'Use \\responsemode{answer} for ordinary questions and \\responsemode{questions} for prompts that ask students to write questions.',
     'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
     'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
     'Make the activity reflect the creator brief, not generic filler.',
@@ -1070,8 +1073,9 @@ function buildQuestionRevisionInstructions() {
     'When the request changes what the learner must do, explicitly rewrite the learner-facing \\question{...} text. Do not leave that text unchanged merely because you updated starter code.',
     'Keep the question prompt, code, response type, sample responses, feedback prompts, follow-up prompts, and any \\ai blocks consistent with the requested learning task. Change every dependent part that needs changing.',
     'For multiple-choice questions, preserve the author’s intent: use \\multiplechoice{answer} only for questions that truly have a correct answer, and keep \\multiplechoice{} blank for survey or opinion questions. Never invent a placeholder answer to satisfy the parser.',
+    'For new questions, explicitly include \\responsemode{answer} unless the student should write questions, in which case use \\responsemode{questions}.',
     'Keep sample responses and feedback prompts plain text.',
-    'Retain only valid coLearn-AI response-type blocks such as \\textresponse, \\python, \\pythonremote, \\pythonturtle, \\cpp, and \\ai.',
+    'Retain only valid coLearn-AI response-type blocks such as \\textresponse, \\python, \\pythonremote, \\pythonturtle, \\cpp, \\ai, and \\responsemode.',
     'In summary, briefly state the learner-facing changes you made.',
   ].join('\n');
 }

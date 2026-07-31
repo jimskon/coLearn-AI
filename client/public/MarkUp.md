@@ -84,12 +84,19 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 |--------|-------------|---------|
 | `\question{...}` | Begins a question | `\question{Explain Dijkstra’s algorithm.}` |
 | `\endquestion` | Ends the question (required) | `\endquestion` |
+| `\responsemode{answer}` | Declares a normal answer question; optional because `answer` is the default | `\responsemode{answer}` |
+| `\responsemode{questions}` | Declares a question-writing task where the student should submit questions instead of answers | `\responsemode{questions}` |
 | `\textresponse{n}` | Student response box (n lines tall) | `\textresponse{5}` |
 | `\sampleresponses{...}` | Sample instructor solution (hidden) | `\sampleresponses{Chooses a local optimum.}` |
 | `\feedbackprompt{...}` | AI grading guidance | `\feedbackprompt{Encourage elaboration.}` |
 | `\followupprompt{...}` | Optional AI follow-up hint | `\followupprompt{Why might greedy fail?}` |
 
 Every `\question` must explicitly end with `\endquestion`.
+
+Notes:
+
+- If `\responsemode{...}` is omitted, the default is `answer`.
+- Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
 
 ---
 

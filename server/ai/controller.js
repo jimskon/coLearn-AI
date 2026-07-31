@@ -728,7 +728,12 @@ function classifyPromptMode({
   feedbackPrompt = "",
   sampleResponse = "",
   guidance = "",
+  responseMode = "",
 }) {
+  const explicitMode = String(responseMode || "").trim().toLowerCase();
+  if (explicitMode === 'questions') return 'questions';
+  if (explicitMode === 'answer') return 'answer';
+
   const hay = [
     questionText,
     feedbackPrompt,
@@ -1331,6 +1336,7 @@ async function evaluateStudentResponse(req, res) {
     feedbackPrompt,
     sampleResponse,
     guidance,
+    responseMode: req.body?.responseMode || '',
   });
 
   if (promptMode === "questions") {

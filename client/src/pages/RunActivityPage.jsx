@@ -1137,6 +1137,7 @@ export default function RunActivityPage({
     const body = {
       qid,
       questionText: qText,
+      responseMode: questionBlock.responseMode || 'answer',
       studentAnswer,
       sampleResponse: questionBlock.samples?.[0] || '',
       feedbackPrompt: questionBlock.feedback?.[0] || '',

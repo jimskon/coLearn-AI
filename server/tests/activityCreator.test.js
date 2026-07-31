@@ -17,8 +17,8 @@ test('question revision instructions require learner-facing prompt updates when 
   assert.match(instructions, /explicitly rewrite the learner-facing \\question\{\.\.\.\} text/i);
   assert.match(instructions, /Do not leave that text unchanged merely because you updated starter code/i);
   assert.match(instructions, /question prompt, code, response type, sample responses, feedback prompts, follow-up prompts/i);
-  assert.match(instructions, /\\\\responsemode\\{answer\\}/i);
-  assert.match(instructions, /\\\\responsemode\\{questions\\}/i);
+  assert.match(instructions, /\\responsemode\{answer\}/i);
+  assert.match(instructions, /\\responsemode\{questions\}/i);
   assert.match(instructions, /\\multiplechoice\{\} blank for survey or opinion questions/i);
   assert.match(instructions, /Never invent a placeholder answer to satisfy the parser/i);
 });

@@ -306,6 +306,9 @@ export default function FileBlock({
     fileContents && Object.prototype.hasOwnProperty.call(fileContents, filename)
       ? fileContents[filename]
       : initialContent;
+  const lineCount = Math.max(1, String(effective || '').split('\n').length);
+  const visibleRows = Math.max(4, Math.min(lineCount, 30));
+  const shouldScroll = lineCount > 30;
 
   const [localValue, setLocalValue] = useState(effective);
 
@@ -444,9 +447,10 @@ export default function FileBlock({
         value={localValue}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        rows={Math.max(4, localValue.split('\n').length)}
+        rows={visibleRows}
         readOnly={!editable}
         className="font-monospace bg-light mt-1"
+        style={{ overflowY: shouldScroll ? 'auto' : 'hidden' }}
         ref={textareaRef}
       />
     </div>

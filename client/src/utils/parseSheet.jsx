@@ -1995,6 +1995,9 @@ export function renderBlocks(blocks, options = {}) {
     if (block.type === 'groupIntro') {
       const groupIntroAnchorRef = React.createRef();
       const isSelectedPreviewGroup = runMode === 'preview' && selectedPreviewKey === block.previewKey;
+      const retriesRequired = Number.isFinite(Number(block.retriesRequired))
+        ? Math.max(0, Number(block.retriesRequired))
+        : null;
       return (
         <React.Fragment key={`groupIntro-${index}`}>
           {typeof renderInsertBeforeGroup === 'function' ? renderInsertBeforeGroup(block) : null}
@@ -2020,6 +2023,11 @@ export function renderBlocks(blocks, options = {}) {
             }
           >
             <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
+            {retriesRequired != null ? (
+              <span className="ms-2 badge bg-light text-dark border">
+                Retries: {retriesRequired}
+              </span>
+            ) : null}
             {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
             {runMode === 'preview' && renderInfoBubbles(
               block,

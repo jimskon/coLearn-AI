@@ -500,6 +500,7 @@ async function buildStudentResponsePrompt({
   instanceId,
   qid,
   historyLimit = 5,
+  requirementsOnly = false,
 }) {
   const activityGuide = stripHtml(guidance || "");
   const questionGuide = stripHtml(feedbackPrompt || "");
@@ -538,6 +539,12 @@ async function buildStudentResponsePrompt({
     "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
     "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
     "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
+    requirementsOnly
+      ? "This question uses requirements-only grading. If you reject the answer, give a short hint that helps the group try again; do not reveal the final answer."
+      : "",
+    requirementsOnly
+      ? "Prefer a conceptual nudge or next-step hint over a direct correction."
+      : "",
     "Do NOT mention grading, points, rubrics, or scoring.",
   ].join("\n");
 
@@ -566,6 +573,9 @@ async function buildStudentResponsePrompt({
     "Acceptance rule: as attempts increase, weaken the requirements and let a good-enough answer move on.",
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
+    requirementsOnly
+      ? "Requirements-only rule: if you reject, give only a short hint that invites a retry; do not provide the final answer verbatim."
+      : "",
     "",
     schema,
     "If reasonable, prefer {\"accepted\":true}",
@@ -721,6 +731,33 @@ function buildLocalClarifyingHint(questionText = "", questionAsked = "", student
   }
 
   return "Think about the part of the question that still feels unclear and connect it to the code or output.";
+}
+
+function buildRequirementsOnlyHint({
+  questionText = "",
+  studentAnswer = "",
+  feedbackPrompt = "",
+  sampleResponse = "",
+}) {
+  const hay = `${questionText} ${studentAnswer} ${feedbackPrompt} ${sampleResponse}`.toLowerCase();
+
+  if (/\bboolean\b|\btrue\b|\bfalse\b|\band\b|\bor\b|\bnot\b/.test(hay)) {
+    return "Try the expression one piece at a time and decide whether each part becomes True or False.";
+  }
+
+  if (/\bcomparison\b|\boperator\b|<=|>=|!=|==|<|>/.test(hay)) {
+    return "Compare the two sides carefully and focus on what relationship the symbol is asking about.";
+  }
+
+  if (/\bloop\b|\brepeat\b|\bsequence\b|\bselection\b/.test(hay)) {
+    return "Match the description to the structure it is asking about, then explain your reasoning briefly.";
+  }
+
+  if (/\bstring\b|\bnumber\b|\bvariable\b|\bvalue\b/.test(hay)) {
+    return "Check what type of value each side has and then test the expression step by step.";
+  }
+
+  return "Try again with a short hint from the question, then refine your answer.";
 }
 
 function classifyPromptMode({
@@ -1406,6 +1443,7 @@ async function evaluateStudentResponse(req, res) {
     instanceId,
     qid: qid || req.body?.questionId || req.body?.codeVersion || "",
     historyLimit: 5,
+    requirementsOnly: policy.requirementsOnly,
   });
   const {
     sys,
@@ -1472,8 +1510,23 @@ async function evaluateStudentResponse(req, res) {
     }
 
     if (!accepted && !feedback) {
-      feedback =
-        "Add one more concrete detail that directly answers the prompt.";
+      feedback = policy.requirementsOnly
+        ? buildRequirementsOnlyHint({
+            questionText,
+            studentAnswer: answerRaw,
+            feedbackPrompt,
+            sampleResponse,
+          })
+        : "Add one more concrete detail that directly answers the prompt.";
+    }
+
+    if (policy.requirementsOnly && !accepted) {
+      feedback = buildRequirementsOnlyHint({
+        questionText,
+        studentAnswer: answerRaw,
+        feedbackPrompt,
+        sampleResponse,
+      });
     }
 
     if (accepted && !positiveEnabled) {
@@ -1484,7 +1537,7 @@ async function evaluateStudentResponse(req, res) {
       feedback = followupRaw;
     }
 
-    if (isNone(feedbackPrompt)) {
+    if (isNone(feedbackPrompt) && !policy.requirementsOnly) {
       feedback = null;
     }
 
@@ -1493,8 +1546,14 @@ async function evaluateStudentResponse(req, res) {
     console.error("❌ OpenAI evaluateStudentResponse failed:", err);
 
     accepted = false;
-    feedback =
-      "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
+    feedback = policy.requirementsOnly
+      ? buildRequirementsOnlyHint({
+          questionText,
+          studentAnswer: answerRaw,
+          feedbackPrompt,
+          sampleResponse,
+        })
+      : "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
     return await applyGateAndSend();
   }
 }// <-- closes evaluateStudentResponse

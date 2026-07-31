@@ -234,7 +234,7 @@ function InlineAiAssistBlock({
 // Keeps everything else as-is. Works for any \SomeTag{ ... } (including section*, link, image, etc.)
 function collapseBracedCommands(rawLines) {
   const startsTag = (s) =>
-    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|multiplechoice|choice|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
+    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|responsemode|multiplechoice|choice|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
   const out = [];
   let buf = null;
   let depth = 0;
@@ -306,6 +306,9 @@ export default function FileBlock({
     fileContents && Object.prototype.hasOwnProperty.call(fileContents, filename)
       ? fileContents[filename]
       : initialContent;
+  const lineCount = Math.max(1, String(effective || '').split('\n').length);
+  const visibleRows = Math.max(4, Math.min(lineCount, 30));
+  const shouldScroll = lineCount > 30;
 
   const [localValue, setLocalValue] = useState(effective);
 
@@ -444,9 +447,10 @@ export default function FileBlock({
         value={localValue}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        rows={Math.max(4, localValue.split('\n').length)}
+        rows={visibleRows}
         readOnly={!editable}
         className="font-monospace bg-light mt-1"
+        style={{ overflowY: shouldScroll ? 'auto' : 'hidden' }}
         ref={textareaRef}
       />
     </div>
@@ -1313,6 +1317,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         samples: [],
         feedback: [],
         followups: [],
+        responseMode: 'answer',
         aiBlocks: [],
         infos: [],
         codeBlocks: [],
@@ -1320,6 +1325,8 @@ export function parseSheetToBlocks(lines, options = {}) {
         retriesRequired: currentGroupRetriesRequired,
         sourceMeta: {
           questionLine: lineNo,
+          responseModeLine: null,
+          responseMode: 'answer',
           textResponseLine: null,
           sampleLines: [],
           feedbackLines: [],
@@ -1442,6 +1449,30 @@ export function parseSheetToBlocks(lines, options = {}) {
       blocks.push(currentQuestion);
       currentQuestion = null;
       openQuestionLine = null;
+      continue;
+    }
+
+    if (trimmed.startsWith('\\responsemode{')) {
+      if (!currentQuestion) {
+        pushIssue('error', lineNo, '\\responsemode found outside of a \\question.', line);
+        continue;
+      }
+
+      const match = trimmed.match(/^\\responsemode\{([\s\S]*?)\}\s*$/);
+      const responseMode = String(match?.[1] || '').trim().toLowerCase();
+      if (!responseMode) {
+        pushIssue('error', lineNo, '\\responsemode must be \\responsemode{answer} or \\responsemode{questions}.', line);
+        continue;
+      }
+
+      if (!['answer', 'questions'].includes(responseMode)) {
+        pushIssue('error', lineNo, `Unsupported \\responsemode{${responseMode}}. Use \\responsemode{answer} or \\responsemode{questions}.`, line);
+        continue;
+      }
+
+      currentQuestion.responseMode = responseMode;
+      currentQuestion.sourceMeta.responseMode = responseMode;
+      currentQuestion.sourceMeta.responseModeLine = lineNo;
       continue;
     }
 
@@ -1968,6 +1999,9 @@ export function renderBlocks(blocks, options = {}) {
     if (block.type === 'groupIntro') {
       const groupIntroAnchorRef = React.createRef();
       const isSelectedPreviewGroup = runMode === 'preview' && selectedPreviewKey === block.previewKey;
+      const retriesRequired = Number.isFinite(Number(block.retriesRequired))
+        ? Math.max(0, Number(block.retriesRequired))
+        : null;
       return (
         <React.Fragment key={`groupIntro-${index}`}>
           {typeof renderInsertBeforeGroup === 'function' ? renderInsertBeforeGroup(block) : null}
@@ -1993,6 +2027,11 @@ export function renderBlocks(blocks, options = {}) {
             }
           >
             <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
+            {retriesRequired != null ? (
+              <span className="ms-2 badge bg-light text-dark border">
+                Retries: {retriesRequired}
+              </span>
+            ) : null}
             {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
             {runMode === 'preview' && renderInfoBubbles(
               block,

@@ -2027,8 +2027,11 @@ export default function CreatorWorkbenchPage() {
                         </div>
                         {selectedQuestionGroupBlock ? (
                           <>
-                            <div className="text-muted small mb-3">
-                              Group {selectedQuestionGroupBlock.groupId}
+                            <div className="text-muted small mb-3 d-flex flex-wrap align-items-center gap-2">
+                              <span>Group {selectedQuestionGroupBlock.groupId}</span>
+                              <Badge bg="light" text="dark" className="border">
+                                Retries: {Math.max(0, Number.parseInt(questionGroupInspectorDraft?.retriesRequired, 10) || 0)}
+                              </Badge>
                             </div>
 
                             <Form.Group className="mb-3">

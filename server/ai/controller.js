@@ -500,6 +500,7 @@ async function buildStudentResponsePrompt({
   instanceId,
   qid,
   historyLimit = 5,
+  requirementsOnly = false,
 }) {
   const activityGuide = stripHtml(guidance || "");
   const questionGuide = stripHtml(feedbackPrompt || "");
@@ -538,6 +539,13 @@ async function buildStudentResponsePrompt({
     "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
     "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
     "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
+    "When rejecting, base the hint on the exact question text and the current answer. Mention what part of the prompt they should revisit or what relationship/definition they should check.",
+    requirementsOnly
+      ? "This question uses requirements-only grading. If you reject the answer, give a short hint that helps the group try again; do not reveal the final answer."
+      : "",
+    requirementsOnly
+      ? "Prefer a conceptual nudge or next-step hint over a direct correction."
+      : "",
     "Do NOT mention grading, points, rubrics, or scoring.",
   ].join("\n");
 
@@ -566,6 +574,9 @@ async function buildStudentResponsePrompt({
     "Acceptance rule: as attempts increase, weaken the requirements and let a good-enough answer move on.",
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
+    requirementsOnly
+      ? "Requirements-only rule: if you reject, give only a short hint that invites a retry; anchor that hint to the exact question text rather than using a generic message."
+      : "",
     "",
     schema,
     "If reasonable, prefer {\"accepted\":true}",
@@ -723,12 +734,58 @@ function buildLocalClarifyingHint(questionText = "", questionAsked = "", student
   return "Think about the part of the question that still feels unclear and connect it to the code or output.";
 }
 
+function compactQuestionExcerpt(questionText = "") {
+  const text = stripHtml(String(questionText || ""))
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return "";
+  if (text.length <= 110) return text;
+  return text.slice(0, 107).replace(/\s+\S*$/, "") + "...";
+}
+
+function buildQuestionAnchoredHint(questionText = "", studentAnswer = "") {
+  const q = compactQuestionExcerpt(questionText);
+  const answer = String(studentAnswer || "").trim();
+
+  if (q && answer) {
+    return `Re-read “${q}” and check whether your answer actually responds to what the question asks for.`;
+  }
+
+  if (q) {
+    return `Re-read “${q}” and make sure your response answers that exact request.`;
+  }
+
+  return "Re-read the prompt and make sure your response answers the exact request.";
+}
+
+function isGenericRequirementsFeedback(text = "") {
+  const t = String(text || "").toLowerCase().trim();
+  if (!t) return true;
+  return [
+    /focus on the exact requirement/,
+    /add one concrete detail/,
+    /try again/,
+    /think about the part/,
+    /short hint/,
+    /next step/,
+    /more detail/,
+    /conceptual nudge/,
+    /generic/,
+  ].some((pattern) => pattern.test(t));
+}
+
 function classifyPromptMode({
   questionText = "",
   feedbackPrompt = "",
   sampleResponse = "",
   guidance = "",
+  responseMode = "",
 }) {
+  const explicitMode = String(responseMode || "").trim().toLowerCase();
+  if (explicitMode === 'questions') return 'questions';
+  if (explicitMode === 'answer') return 'answer';
+
   const hay = [
     questionText,
     feedbackPrompt,
@@ -1331,6 +1388,7 @@ async function evaluateStudentResponse(req, res) {
     feedbackPrompt,
     sampleResponse,
     guidance,
+    responseMode: req.body?.responseMode || '',
   });
 
   if (promptMode === "questions") {
@@ -1400,6 +1458,7 @@ async function evaluateStudentResponse(req, res) {
     instanceId,
     qid: qid || req.body?.questionId || req.body?.codeVersion || "",
     historyLimit: 5,
+    requirementsOnly: policy.requirementsOnly,
   });
   const {
     sys,
@@ -1452,8 +1511,9 @@ async function evaluateStudentResponse(req, res) {
       obj = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(raw);
     } catch {
       accepted = false;
-      feedback =
-        "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
+      feedback = policy.requirementsOnly
+        ? buildQuestionAnchoredHint(questionText, answerRaw)
+        : "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
       return await applyGateAndSend();
     }
 
@@ -1465,9 +1525,10 @@ async function evaluateStudentResponse(req, res) {
       feedback = null;
     }
 
-    if (!accepted && !feedback) {
-      feedback =
-        "Add one more concrete detail that directly answers the prompt.";
+    if (!accepted && (!feedback || isGenericRequirementsFeedback(feedback))) {
+      feedback = policy.requirementsOnly
+        ? buildQuestionAnchoredHint(questionText, answerRaw)
+        : "Add one more concrete detail that directly answers the prompt.";
     }
 
     if (accepted && !positiveEnabled) {
@@ -1478,7 +1539,7 @@ async function evaluateStudentResponse(req, res) {
       feedback = followupRaw;
     }
 
-    if (isNone(feedbackPrompt)) {
+    if (isNone(feedbackPrompt) && !policy.requirementsOnly) {
       feedback = null;
     }
 
@@ -1487,8 +1548,9 @@ async function evaluateStudentResponse(req, res) {
     console.error("❌ OpenAI evaluateStudentResponse failed:", err);
 
     accepted = false;
-    feedback =
-      "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
+    feedback = policy.requirementsOnly
+      ? buildQuestionAnchoredHint(questionText, answerRaw)
+      : "I couldn't interpret that response. Please answer the question with one concrete detail tied to the code or output.";
     return await applyGateAndSend();
   }
 }// <-- closes evaluateStudentResponse

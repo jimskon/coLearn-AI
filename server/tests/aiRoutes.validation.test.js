@@ -439,6 +439,48 @@ test('response evaluation accepts a well-formed question list without an extra a
   }
 });
 
+
+test('explicit responsemode questions routes to the question-list scorer', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    if (url.includes('api.openai.com')) {
+      throw new Error('OpenAI should not be called when responseMode is questions');
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const answerLines = [
+      'What symptoms should we ask about?',
+      'How long has this been going on?',
+      'What makes it better or worse?',
+      'Have you taken any medicine?',
+      'Have you had this before?',
+    ];
+
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Interview prep task',
+      responseMode: 'questions',
+      studentAnswer: answerLines.join('\n'),
+      sampleResponse: '',
+      feedbackPrompt: 'Ask clear and relevant questions.',
+      guidance: 'Follow-ups: default',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: answerLines.join('\n'),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
 test('response evaluation short-circuits when the question is already accepted', async () => {
   const originalQuery = db.query;
   const originalFetch = global.fetch;

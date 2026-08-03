@@ -57,12 +57,16 @@ export default function RunActivityWorkspace({
   baseQidFromResponseKey,
   isObserver,
   isSandbox,
+  isCreatorSandbox,
   allowFreeNavigation,
   canEditAnswers,
   canSubmitGroup,
   canSubmitTest,
   canRegradeTests,
   canSaveInstructorScores,
+  canGradeQuestionPreview,
+  canGradeAllQuestions,
+  gradingAllQuestions,
   codeViewMode,
   localCode,
   handleTextChange,
@@ -79,6 +83,7 @@ export default function RunActivityWorkspace({
   questionGradePreviews,
   gradingQuestionQid,
   handleGradeSingleQuestion,
+  handleGradeAllQuestions,
   clearQuestionGradePreview,
   infoBubbleSession,
   suppressStudentTestFeedbackUi = false,
@@ -112,8 +117,23 @@ export default function RunActivityWorkspace({
       >
         {isSandbox && (
           <Alert variant="secondary" className="mb-3">
-            Sandbox mode is using the shared activity workspace with local edits only.
+            {isCreatorSandbox ? 'Creator sandbox' : 'Sandbox'} mode is using the shared activity workspace with local edits only. Creator tools can grade one question at a time or run the whole set of questions.
           </Alert>
+        )}
+
+        {isSandbox && canGradeAllQuestions && (
+          <div className="d-flex flex-wrap gap-2 align-items-center mb-3">
+            <Button
+              size="sm"
+              variant="outline-primary"
+              onClick={handleGradeAllQuestions}
+              disabled={gradingAllQuestions || !!gradingQuestionQid}
+            >
+              {gradingAllQuestions ? <Spinner animation="border" size="sm" className="me-1" /> : null}
+              {gradingAllQuestions ? 'Grading All Questions…' : 'Grade All Questions'}
+            </Button>
+            <span className="text-muted small">Use the per-question button to preview just one item.</span>
+          </div>
         )}
 
         {renderBlocks(preamble, {
@@ -272,8 +292,7 @@ export default function RunActivityWorkspace({
                   isTestMode &&
                   isInstructor &&
                   isSubmitted;
-                const canGradeQuestionPreview =
-                  isTestMode && !isSandbox && (isCreatorTestRun || isInstructor);
+                const canGradeQuestionPreviewForBlock = canGradeQuestionPreview;
                 const questionGradePreview = questionGradePreviews?.[qid];
                 const isGradingThisQuestion = gradingQuestionQid === qid;
                 const displayNumber = nonLegacyForUI ? qid : globalQuestionCounter;
@@ -282,7 +301,7 @@ export default function RunActivityWorkspace({
                   <div key={`group-${index}-block-${bIndex}`} className="mb-2">
                     {renderedBlock}
 
-                    {canGradeQuestionPreview && (
+                    {canGradeQuestionPreviewForBlock && (
                       <div className="mt-2 d-flex flex-wrap gap-2 align-items-center">
                         <Button
                           size="sm"
@@ -305,7 +324,7 @@ export default function RunActivityWorkspace({
                       </div>
                     )}
 
-                    {questionGradePreview?.status === 'ready' && canGradeQuestionPreview && (
+                    {questionGradePreview?.status === 'ready' && canGradeQuestionPreviewForBlock && (
                       <Alert variant="info" className="mt-2 mb-0">
                         <div className="fw-semibold mb-1">
                           Question preview grade: {questionGradePreview.earnedTotal}/{questionGradePreview.maxTotal}
@@ -342,7 +361,7 @@ export default function RunActivityWorkspace({
                       </Alert>
                     )}
 
-                    {questionGradePreview?.status === 'error' && canGradeQuestionPreview && (
+                    {questionGradePreview?.status === 'error' && canGradeQuestionPreviewForBlock && (
                       <Alert variant="warning" className="mt-2 mb-0">
                         <strong>Could not grade this question preview.</strong>{' '}
                         {questionGradePreview.error || 'Please try again.'}

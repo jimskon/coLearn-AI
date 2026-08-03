@@ -342,6 +342,7 @@ export default function RunActivityPage({
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
   const [gradingQuestionQid, setGradingQuestionQid] = useState(null);
+  const [gradingAllQuestions, setGradingAllQuestions] = useState(false);
   const [questionGradePreviews, setQuestionGradePreviews] = useState({});
 
   const [groups, setGroups] = useState([]);
@@ -567,6 +568,7 @@ export default function RunActivityPage({
   const runMode = normalizeRunActivityMode(requestedMode, { user });
   const {
     isSandbox,
+    isCreatorSandbox,
     isCreatorTestRun,
     isInstructor,
     isStudent,
@@ -586,6 +588,8 @@ export default function RunActivityPage({
     canPersistAIResults,
     canRegradeTests,
     canSaveInstructorScores,
+    canGradeQuestionPreview,
+    canGradeAllQuestions,
     canRefreshInstanceMetadata,
     loadPersistedResponses,
   } = useRunModePolicy({
@@ -851,6 +855,46 @@ export default function RunActivityPage({
       }
     }
     return null;
+  }
+
+  async function fetchQuestionGradePreview(block) {
+    const qid = `${block.groupId}${block.id}`;
+    const payloadContainer = document;
+    const { questions } = buildTestSubmissionPayload([block], payloadContainer, existingAnswers);
+    const payload = questions?.[0];
+    if (!payload) return null;
+
+    const res = await fetch(`${API_BASE_URL}/api/ai/grade-test-question`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        questionText: payload.questionText,
+        scores: payload.scores || block.scores || {},
+        responseText: payload.responseText || '',
+        codeCells: payload.codeCells || [],
+        outputText: payload.outputText || '',
+        rubric: payload.scores || block.scores || {},
+      }),
+    });
+
+    const raw = await res.text();
+    if (!res.ok) {
+      throw new Error(raw || `Question grading failed (${res.status})`);
+    }
+
+    let parsed;
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (err) {
+      throw new Error('Question grading returned invalid JSON.');
+    }
+
+    return normalizeQuestionGradeResult({
+      block,
+      payload,
+      result: parsed,
+    });
   }
 
   const socket = useRunActivitySync({
@@ -2740,51 +2784,17 @@ export default function RunActivityPage({
   }
 
   async function handleGradeSingleQuestion(qid) {
-    if (gradingQuestionQid) return;
-    if (!isTestMode) return;
+    if (gradingQuestionQid || gradingAllQuestions) return;
+    if (!isTestMode && !isSandbox) return;
 
     const block = findQuestionBlockByQid(qid);
     if (!block) return;
 
-    const payloadContainer = document;
-    const { questions } = buildTestSubmissionPayload([block], payloadContainer, existingAnswers);
-    const payload = questions?.[0];
-    if (!payload) return;
-
     setGradingQuestionQid(qid);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/ai/grade-test-question`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          questionText: payload.questionText,
-          scores: payload.scores || block.scores || {},
-          responseText: payload.responseText || '',
-          codeCells: payload.codeCells || [],
-          outputText: payload.outputText || '',
-          rubric: payload.scores || block.scores || {},
-        }),
-      });
-
-      const raw = await res.text();
-      if (!res.ok) {
-        throw new Error(raw || `Question grading failed (${res.status})`);
-      }
-
-      let parsed;
-      try {
-        parsed = raw ? JSON.parse(raw) : {};
-      } catch (err) {
-        throw new Error('Question grading returned invalid JSON.');
-      }
-
-      const preview = normalizeQuestionGradeResult({
-        block,
-        payload,
-        result: parsed,
-      });
+      const preview = await fetchQuestionGradePreview(block);
+      if (!preview) return;
 
       setQuestionGradePreviews((prev) => ({
         ...prev,
@@ -2797,13 +2807,52 @@ export default function RunActivityPage({
         [qid]: {
           status: 'error',
           qid,
-          questionText: payload?.questionText || '',
+          questionText: getQuestionText(block, qid),
           error: err?.message || 'Question grading failed.',
           gradedAt: new Date().toISOString(),
         },
       }));
     } finally {
       setGradingQuestionQid(null);
+    }
+  }
+
+  async function handleGradeAllQuestions() {
+    if (gradingQuestionQid || gradingAllQuestions) return;
+    if (!isTestMode && !isSandbox) return;
+
+    const blocksToGrade = groups.flatMap((group) => [group.intro, ...(group.content || [])])
+      .filter((block) => block?.type === 'question');
+    if (!blocksToGrade.length) return;
+
+    setGradingAllQuestions(true);
+    try {
+      const nextPreviews = {};
+      for (const block of blocksToGrade) {
+        const qid = `${block.groupId}${block.id}`;
+        try {
+          const preview = await fetchQuestionGradePreview(block);
+          if (preview) {
+            nextPreviews[qid] = preview;
+          }
+        } catch (err) {
+          console.error('Question grading failed:', err);
+          nextPreviews[qid] = {
+            status: 'error',
+            qid,
+            questionText: getQuestionText(block, qid),
+            error: err?.message || 'Question grading failed.',
+            gradedAt: new Date().toISOString(),
+          };
+        }
+      }
+
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        ...nextPreviews,
+      }));
+    } finally {
+      setGradingAllQuestions(false);
     }
   }
 
@@ -3063,6 +3112,11 @@ export default function RunActivityPage({
             canSubmitTest={canSubmitTest}
             canRegradeTests={canRegradeTests}
             canSaveInstructorScores={canSaveInstructorScores}
+            canGradeQuestionPreview={canGradeQuestionPreview}
+            canGradeAllQuestions={canGradeAllQuestions}
+            gradingAllQuestions={gradingAllQuestions}
+            isCreatorSandbox={isCreatorSandbox}
+            handleGradeAllQuestions={handleGradeAllQuestions}
             sandboxGroupIndex={sandboxGroupIndex}
             setSandboxGroupIndex={setSandboxGroupIndex}
             codeViewMode={codeViewMode}

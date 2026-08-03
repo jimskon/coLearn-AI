@@ -2461,9 +2461,34 @@ export default function CreatorWorkbenchPage() {
                                 onClick={openCreatorTestRun}
                               >
                                 {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
-                                Try in Test Run
+                                Open Test Run
                               </Button>
                             </div>
+                            <div className="text-muted small mb-3">
+                              Opens a creator-only test run for this question so you can check grading behavior and refine the rubric below.
+                            </div>
+
+                            {selectedQuestionBlock?.scores ? (
+                              <div className="border rounded bg-light p-2 mb-3">
+                                <div className="fw-semibold small mb-1">Current scoring</div>
+                                <div className="d-flex flex-wrap gap-2 small">
+                                  {[
+                                    ['response', 'Written'],
+                                    ['code', 'Code'],
+                                    ['output', 'Output'],
+                                  ].map(([key, label]) => {
+                                    const score = selectedQuestionBlock?.scores?.[key];
+                                    if (!score || !Number.isFinite(Number(score.points))) return null;
+                                    const points = Number(score.points);
+                                    return (
+                                      <span key={`score-summary-${key}`} className="badge bg-light text-muted border">
+                                        {label}: {points} pt{points !== 1 ? 's' : ''}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : null}
 
                             <Form.Group className="mb-3">
                               <Form.Label>Question Text</Form.Label>
@@ -2521,7 +2546,7 @@ export default function CreatorWorkbenchPage() {
                             <div className="border-top mt-3 pt-3 mb-3">
                               <div className="fw-semibold mb-2">Scoring Rubric</div>
                               <div className="text-muted small mb-3">
-                                These score bands are used when the question is graded in test mode. Leave points blank or set them to 0 to remove a band.
+                                These score bands are used when the question is graded in test mode. Edit them here to tune the grading for this question. Leave points blank or set them to 0 to remove a band.
                               </div>
 
                               {[

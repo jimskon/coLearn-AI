@@ -70,6 +70,8 @@ test('sandbox mode is always active and allows free navigation without real prog
   assert.equal(policy.canEditAnswers, true);
   assert.equal(policy.canSubmitGroup, true);
   assert.equal(policy.canRunAI, true);
+  assert.equal(policy.canGradeQuestionPreview, true);
+  assert.equal(policy.canGradeAllQuestions, true);
   assert.equal(policy.canUseLiveSync, false);
   assert.equal(policy.persistResponses, false);
   assert.equal(policy.canPersistDrafts, false);
@@ -168,6 +170,8 @@ test('creator test run behaves like a test-taking mode for creators', () => {
   assert.equal(policy.canSubmitTest, true);
   assert.equal(policy.canSubmitGroup, false);
   assert.equal(policy.canRunAI, false);
+  assert.equal(policy.canGradeQuestionPreview, true);
+  assert.equal(policy.canGradeAllQuestions, true);
   assert.equal(policy.canPersistDrafts, true);
   assert.equal(policy.canPersistSubmissions, true);
   assert.equal(policy.loadPersistedResponses, true);

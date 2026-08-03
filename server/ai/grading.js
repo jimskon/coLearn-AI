@@ -11,6 +11,16 @@ function stripHtml(s = "") {
     .replace(/<\/?[A-Za-z!][^>]*>/g, "");
 }
 
+function normalizeScoreBands(scores = {}, rubric = {}) {
+  const source = (obj, key) => obj && Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined;
+  const response = source(scores, 'response') ?? source(scores, 'choice') ?? source(rubric, 'response') ?? source(rubric, 'choice') ?? null;
+  return {
+    code: source(scores, 'code') ?? source(rubric, 'code') ?? null,
+    output: source(scores, 'output') ?? source(rubric, 'output') ?? null,
+    response,
+  };
+}
+
 // ---------------------- TEST-MODE: gradeTestQuestion ----------------------
 async function gradeTestQuestion({
   questionText,
@@ -30,9 +40,10 @@ async function gradeTestQuestion({
     return 0;
   };
 
-  const codeBucket = scores.code || rubric.code || {};
-  const runBucket = scores.output || rubric.output || {};
-  const respBucket = scores.response || rubric.response || {};
+  const normalizedScores = normalizeScoreBands(scores, rubric);
+  const codeBucket = normalizedScores.code || {};
+  const runBucket = normalizedScores.output || {};
+  const respBucket = normalizedScores.response || {};
 
   const maxCodePts = bucketPoints(codeBucket);
   const maxRunPts = bucketPoints(runBucket);

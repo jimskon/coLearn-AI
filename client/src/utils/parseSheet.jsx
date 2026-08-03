@@ -1576,11 +1576,12 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // --- scoring blocks: \score{n,type} ... \endscore ---
-    // type is one of: response, code, output
-    const scoreMatch = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
+    // type is one of: response, code, output, choice
+    const scoreMatch = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output|choice)\}/i);
     if (scoreMatch && currentQuestion) {
       const points = parseInt(scoreMatch[1], 10);
-      const scoreType = scoreMatch[2].toLowerCase();
+      const scoreTypeRaw = scoreMatch[2].toLowerCase();
+      const scoreType = scoreTypeRaw === 'choice' ? 'response' : scoreTypeRaw;
 
       inScoreBlock = true;
       openScoreLine = lineNo;
@@ -2517,6 +2518,7 @@ export function renderBlocks(blocks, options = {}) {
       if (block.scores) {
         const scoreEntries = [
           ['response', 'Response'],
+          ['choice', 'Choice'],
           ['code', 'Code'],
           ['output', 'Output'],
         ];

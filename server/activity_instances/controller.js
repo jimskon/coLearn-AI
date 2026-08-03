@@ -38,6 +38,14 @@ function normalizeActiveRotationMode(raw) {
   return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
 }
 
+function normalizeScoreBands(scores = {}) {
+  return {
+    code: scores.code || null,
+    output: scores.output || null,
+    response: scores.response || scores.choice || null,
+  };
+}
+
 const PRESENCE_WINDOW_SEC = 120;
 
 function countQuestionGroups(lines = []) {
@@ -2204,7 +2212,7 @@ function parseScoreSpec(specRaw) {
 
       if (k === 'code' || k === 'codes') out.code = v;
       else if (k === 'output' || k === 'run') out.output = v;
-      else if (k === 'response') out.response = v;
+      else if (k === 'response' || k === 'choice') out.response = v;
     }
     return out;
   }
@@ -2219,7 +2227,7 @@ function parseScoreSpec(specRaw) {
     if (Number.isFinite(pts)) {
       if (bucket === 'code') out.code = pts;
       else if (bucket === 'output' || bucket === 'run') out.output = pts;
-      else if (bucket === 'response') out.response = pts;
+      else if (bucket === 'response' || bucket === 'choice') out.response = pts;
     }
   }
 
@@ -2419,7 +2427,7 @@ async function submitTest(req, res) {
       }
 
       const text = q.questionText || q.text || '';
-      const scores = q.scores || {};
+      const scores = normalizeScoreBands(q.scores || {});
       const sourceQuestion = parsedQuestions[index] || {};
       const multipleChoice = sourceQuestion.multipleChoice || null;
       const isMultipleChoice = Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
@@ -2938,4 +2946,5 @@ module.exports = {
   updateTestSettings,
   recomputeTestTotals,
   getInstanceResponseHistory,
+  parseScoreSpec,
 };

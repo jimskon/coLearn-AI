@@ -1601,8 +1601,16 @@ export default function RunActivityPage({
     return 0;
   }
 
+  function normalizeScoreBands(scores = {}) {
+    return {
+      response: scores.response || scores.choice || null,
+      code: scores.code || null,
+      output: scores.output || null,
+    };
+  }
+
   function normalizeQuestionGradeResult({ block, payload, result }) {
-    const scores = block?.scores || {};
+    const scores = normalizeScoreBands(block?.scores || {});
     const maxCodePts = bucketPoints(scores.code);
     const maxRunPts = bucketPoints(scores.output);
     const maxRespPts = bucketPoints(scores.response);

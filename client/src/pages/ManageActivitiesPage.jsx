@@ -112,6 +112,25 @@ function SourceBadge({ sourceType }) {
   );
 }
 
+function ModeBadge({ activity }) {
+  const normalizedMode = String(
+    activity?.mode || (Number(activity?.is_test) === 1 ? 'test' : '')
+  ).trim().toLowerCase();
+
+  const label = normalizedMode === 'test'
+    ? 'Test'
+    : normalizedMode === 'demo'
+      ? 'Demo'
+      : 'Group';
+  const variant = normalizedMode === 'test'
+    ? 'danger'
+    : normalizedMode === 'demo'
+      ? 'info'
+      : 'secondary';
+
+  return <Badge bg={variant}>{label}</Badge>;
+}
+
 function cloneActivityDefaults(activity) {
   const sourceType = String(activity?.source_type || 'remote').toLowerCase();
   return {
@@ -222,12 +241,16 @@ export default function ManageActivitiesPage() {
       }
 
       if (name === 'mode') {
+        const nextMode = String(value || '').trim().toLowerCase();
         const nextMajorSections = [...majorSectionOptions];
         return {
           ...prev,
-          mode: value,
-          major_sections: nextMajorSections,
-          section_minutes: distributeMinutes(prev.duration_minutes, nextMajorSections),
+          mode: nextMode,
+          major_sections: nextMode === 'test' ? [] : nextMajorSections,
+          use_timed_sections: nextMode === 'test' ? false : prev.use_timed_sections,
+          section_minutes: nextMode === 'test'
+            ? {}
+            : distributeMinutes(prev.duration_minutes, nextMajorSections),
         };
       }
 
@@ -242,6 +265,8 @@ export default function ManageActivitiesPage() {
       return { ...prev, [name]: value };
     });
   };
+
+  const isCreateDraftTestMode = String(createDraft.mode || '').trim().toLowerCase() === 'test';
 
   const handleSectionMinutesChange = (sectionName, value) => {
     setCreateDraft((prev) => ({
@@ -616,13 +641,13 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    if (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length) {
+    if (!isCreateDraftTestMode && (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length)) {
       setCreateNote('Select at least one major section for the draft structure.');
       return;
     }
 
     let timedSections = [];
-    if (createDraft.use_timed_sections) {
+    if (!isCreateDraftTestMode && createDraft.use_timed_sections) {
       timedSections = createDraft.major_sections.map((sectionName) => ({
         title: sectionName,
         minutes: parseInt(createDraft.section_minutes?.[sectionName], 10),
@@ -651,9 +676,9 @@ export default function ManageActivitiesPage() {
           duration_minutes: durationMinutes,
           mode: createDraft.mode,
           selected_model: createDraft.selected_model,
-          major_sections: createDraft.major_sections,
-          use_timed_sections: createDraft.use_timed_sections,
-          timed_sections: timedSections,
+          major_sections: isCreateDraftTestMode ? [] : createDraft.major_sections,
+          use_timed_sections: isCreateDraftTestMode ? false : createDraft.use_timed_sections,
+          timed_sections: isCreateDraftTestMode ? [] : timedSections,
           retries_required: retriesRequired,
           description: createDraft.description,
           createdBy: user?.id,
@@ -710,6 +735,7 @@ export default function ManageActivitiesPage() {
             <th>Name</th>
             <th>Title</th>
             <th>Source</th>
+            <th>Mode</th>
             <th>Sheet URL</th>
             <th>Order</th>
             <th style={{ width: '30%' }}>Actions</th>
@@ -729,6 +755,9 @@ export default function ManageActivitiesPage() {
               </td>
               <td className="align-middle text-center">
                 <SourceBadge sourceType={activity.source_type} />
+              </td>
+              <td className="align-middle text-center">
+                <ModeBadge activity={activity} />
               </td>
               <td>
                 <Form.Control
@@ -838,7 +867,7 @@ export default function ManageActivitiesPage() {
             </div>
             <div className="col-md-8">
               <Form.Group>
-                <Form.Label>Activity Type</Form.Label>
+                <Form.Label>Mode</Form.Label>
                 <Form.Select
                   name="mode"
                   value={createDraft.mode}
@@ -907,27 +936,29 @@ export default function ManageActivitiesPage() {
             />
           </Form.Group>
 
-          <Form.Group className="mt-3">
-            <Form.Label>Major Sections</Form.Label>
-            <div className="row g-2">
-              {majorSectionOptions.map((sectionName) => (
-                <div className="col-md-6" key={sectionName}>
-                  <Form.Check
-                    type="checkbox"
-                    id={`major-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
-                    label={sectionName}
-                    checked={createDraft.major_sections.includes(sectionName)}
-                    onChange={() => handleMajorSectionToggle(sectionName)}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="text-muted small mt-2">
-              We will use these as the high-level structure for the first draft.
-            </div>
-          </Form.Group>
+          {!isCreateDraftTestMode ? (
+            <Form.Group className="mt-3">
+              <Form.Label>Major Sections</Form.Label>
+              <div className="row g-2">
+                {majorSectionOptions.map((sectionName) => (
+                  <div className="col-md-6" key={sectionName}>
+                    <Form.Check
+                      type="checkbox"
+                      id={`major-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                      label={sectionName}
+                      checked={createDraft.major_sections.includes(sectionName)}
+                      onChange={() => handleMajorSectionToggle(sectionName)}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="text-muted small mt-2">
+                We will use these as the high-level structure for the first draft.
+              </div>
+            </Form.Group>
+          ) : null}
 
-          {createDraft.use_timed_sections ? (
+          {!isCreateDraftTestMode && createDraft.use_timed_sections ? (
             <Form.Group className="mt-3">
               <Form.Label>Section Timing</Form.Label>
               <div className="row g-2">
@@ -947,6 +978,12 @@ export default function ManageActivitiesPage() {
                 Total selected minutes: {selectedSectionMinuteTotal} / {createDraft.duration_minutes || 0}
               </div>
             </Form.Group>
+          ) : null}
+
+          {isCreateDraftTestMode ? (
+            <Alert variant="info" className="mt-3">
+              Test drafts are generated as one continuous exam, so section structure is hidden.
+            </Alert>
           ) : null}
 
           <div className="text-muted small mt-3">

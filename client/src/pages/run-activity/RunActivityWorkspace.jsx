@@ -76,6 +76,8 @@ export default function RunActivityWorkspace({
   handleRegradeTest,
   overallTestTotals,
   infoBubbleSession,
+  suppressStudentTestFeedbackUi = false,
+  hideStudentTestSections = false,
 }) {
   const { features: runtimeFeatures } = useRuntimeFeatures();
   let globalQuestionCounter = 0;
@@ -112,6 +114,7 @@ export default function RunActivityWorkspace({
           editable: false,
           isActive: false,
           mode: 'run',
+          isTestMode,
           codeFeedbackShown,
           unansweredShown,
           isInstructor,
@@ -127,6 +130,8 @@ export default function RunActivityWorkspace({
           onFileChange: handleFileChange,
           infoBubbleSession,
           runtimeFeatures,
+          suppressStudentTestFeedbackUi,
+          hideStudentTestSections,
         })}
 
         {groups.map((group, index) => {
@@ -173,12 +178,15 @@ export default function RunActivityWorkspace({
                   editable: false,
                   isActive: false,
                   mode: 'run',
+                  isTestMode,
                   prefill: existingAnswers,
                   currentGroupIndex: index,
                   codeFeedbackShown,
                   unansweredShown,
                   infoBubbleSession,
                   runtimeFeatures,
+                  suppressStudentTestFeedbackUi,
+                  hideStudentTestSections,
                 })}
 
               <p ref={questionGroupAnchorRef}>
@@ -232,6 +240,9 @@ export default function RunActivityWorkspace({
                     }),
                   infoBubbleSession,
                   runtimeFeatures,
+                  isTestMode,
+                  suppressStudentTestFeedbackUi,
+                  hideStudentTestSections,
                 });
 
                 if (!isTestMode || block.type !== 'question') {
@@ -253,7 +264,8 @@ export default function RunActivityWorkspace({
                   isSubmitted;
                 const showScorePanel =
                   isTestMode &&
-                  (isInstructor || isSubmitted);
+                  isInstructor &&
+                  isSubmitted;
                 const displayNumber = nonLegacyForUI ? qid : globalQuestionCounter;
 
                 return (

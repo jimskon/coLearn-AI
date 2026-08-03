@@ -12,6 +12,10 @@ import { isSurveyMultipleChoice } from '../utils/multipleChoice';
 import { renderBlocks } from '../utils/parseSheet';
 import { parseUtcDbDatetime } from '../utils/time';
 import { normalizeRunActivityMode } from './run-activity/modes';
+import {
+  shouldHideStudentTestSections,
+  shouldSuppressStudentTestFeedbackUi,
+} from './run-activity/testModeUi';
 import useRunModePolicy from './run-activity/useRunModePolicy';
 import useRunActivityData from './run-activity/useRunActivityData';
 import useRunActivitySync from './run-activity/useRunActivitySync';
@@ -382,6 +386,15 @@ export default function RunActivityPage({
   const isLockedFU = (qid) => qidsNoFURef.current?.has(qid);
 
   const currentTimedSection = useMemo(() => {
+    const isTestStyleActivity =
+      activityMode === 'test' ||
+      Number(activity?.is_test) === 1 ||
+      (
+        activity?.test_start_at &&
+        Number(activity?.test_duration_minutes) > 0
+      );
+
+    if (isTestStyleActivity) return null;
     if (!Array.isArray(groups) || currentGroupIndex >= groups.length) return null;
 
     const group = groups[currentGroupIndex];
@@ -392,7 +405,7 @@ export default function RunActivityPage({
       key: section.key,
       minutes: Number(section.minutes),
     };
-  }, [groups, currentGroupIndex]);
+  }, [activity?.is_test, activity?.test_duration_minutes, activity?.test_start_at, activityMode, groups, currentGroupIndex]);
 
   const sectionTimer = useMemo(() => {
     const startedAt = activity?.section_timer_started_at
@@ -652,6 +665,7 @@ export default function RunActivityPage({
     loadingRef,
     stripHtml,
     isNoAI,
+    isTestMode,
   });
 
   useEffect(() => {
@@ -1933,6 +1947,16 @@ export default function RunActivityPage({
           continue;
         }
 
+        if (isTestMode) {
+          answers[`${qid}CodeFeedback`] = '';
+          answers[`${qid}CodeAccepted`] = 'true';
+          answers[`${qid}CodeCanContinue`] = 'false';
+          answers[`${qid}CodeRetryCount`] = '';
+          answers[`${qid}CodeRetriesRequired`] = '';
+          answers[`${qid}CodeSubmissionString`] = groupSubmissionString;
+          continue;
+        }
+
         // ✅ collect observed output for this question
         const outputEls = container.querySelectorAll(
           `[data-output-key^="${qid}output"]`
@@ -2901,6 +2925,16 @@ export default function RunActivityPage({
             handleRegradeTest={handleRegradeTest}
             overallTestTotals={overallTestTotals}
             infoBubbleSession={infoBubbleSessionRef.current}
+            suppressStudentTestFeedbackUi={shouldSuppressStudentTestFeedbackUi({
+              isTestMode,
+              isStudent,
+              runMode,
+            })}
+            hideStudentTestSections={shouldHideStudentTestSections({
+              isTestMode,
+              isStudent,
+              runMode,
+            })}
           />
         )}
       </Container>

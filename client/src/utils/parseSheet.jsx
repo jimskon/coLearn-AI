@@ -1816,6 +1816,7 @@ export function renderBlocks(blocks, options = {}) {
     isActive = false,
     isObserver = false,
     isInstructor = false,
+    isTestMode = false,
     allowLocalToggle = true,
     prefill = {},
     mode: runMode = 'preview',
@@ -1838,6 +1839,8 @@ export function renderBlocks(blocks, options = {}) {
     renderInsertAfterQuestion = null,
     renderInsertBeforeGroup = null,
     renderInsertAfterGroup = null,
+    suppressStudentTestFeedbackUi = false,
+    hideStudentTestSections = false,
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -1849,6 +1852,7 @@ export function renderBlocks(blocks, options = {}) {
       : (editable && isActive);   // only active student edits in RUN
 
   const renderInfoBubbles = (block, target, keyPrefix, anchorRef, bubbleOptions = {}) => {
+    if (suppressStudentTestFeedbackUi && !isInstructor) return null;
     const bubbleSession = bubbleOptions.infoBubbleSession || infoBubbleSession;
     const bubbleKey = `${keyPrefix}-${target}`;
     const infos = getInfosForTarget(block, target);
@@ -1926,6 +1930,9 @@ export function renderBlocks(blocks, options = {}) {
     }
 
     if (block.type === 'section') {
+      if (hideStudentTestSections && runMode !== 'preview' && !isInstructor) {
+        return null;
+      }
       return (
         <h2 key={`section-${index}`} className="my-3">
           {block.title}
@@ -2032,8 +2039,8 @@ export function renderBlocks(blocks, options = {}) {
                 Retries: {retriesRequired}
               </span>
             ) : null}
-            {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
-            {runMode === 'preview' && renderInfoBubbles(
+            {!suppressStudentTestFeedbackUi && renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
+            {runMode === 'preview' && !suppressStudentTestFeedbackUi && renderInfoBubbles(
               block,
               'submitbutton',
               `groupIntro-submit-${index}`,
@@ -2622,7 +2629,7 @@ export function renderBlocks(blocks, options = {}) {
 
             return (
               <div key={`q-${block.groupId}-${block.id}-py-${i}`} ref={codeAnchorRef}>
-                {renderInfoBubbles(
+                {!suppressStudentTestFeedbackUi && renderInfoBubbles(
                   block,
                   'coderesponse',
                   `question-${block.groupId}-${block.id}-py-${i}`,
@@ -2704,7 +2711,7 @@ export function renderBlocks(blocks, options = {}) {
 
             return (
               <div key={`q-${block.groupId}-${block.id}-cpp-${i}`} ref={codeAnchorRef}>
-                {renderInfoBubbles(
+                {!suppressStudentTestFeedbackUi && renderInfoBubbles(
                   block,
                   'coderesponse',
                   `question-${block.groupId}-${block.id}-cpp-${i}`,
@@ -2813,7 +2820,7 @@ export function renderBlocks(blocks, options = {}) {
             </div>
           ))}
 
-          {block.aiBlocks?.map((aiBlock, i) => {
+          {(!suppressStudentTestFeedbackUi || isInstructor) && block.aiBlocks?.map((aiBlock, i) => {
             return (
               <InlineAiAssistBlock
                 key={`q-ai-${block.groupId}-${block.id}-${i}`}
@@ -2905,6 +2912,7 @@ export function renderBlocks(blocks, options = {}) {
 
 
           {(() => {
+            if (suppressStudentTestFeedbackUi && !isInstructor) return null;
             const aiFeedbackVisible =
               Boolean(textFeedbackShown?.[responseKey]) ||
               (runMode === 'preview' &&
@@ -2947,7 +2955,7 @@ export function renderBlocks(blocks, options = {}) {
             );
           })()}
 
-          {unansweredMessage && (
+          {unansweredMessage && !suppressStudentTestFeedbackUi && (
             <Alert
               variant="warning"
               className="mt-2 border border-warning"
@@ -2958,7 +2966,7 @@ export function renderBlocks(blocks, options = {}) {
             </Alert>
           )}
 
-          {runMode === 'preview' &&
+          {runMode === 'preview' && !suppressStudentTestFeedbackUi &&
             renderInfoBubbles(
               block,
               'submitbutton',
@@ -2970,7 +2978,7 @@ export function renderBlocks(blocks, options = {}) {
 
 
           {/* Follow-up UI */}
-          {followupsShown?.[responseKey] && (
+          {followupsShown?.[responseKey] && !suppressStudentTestFeedbackUi && (
             !showTextArea && hasPython ? (
               <div className="mt-3 alert alert-warning py-2">
                 <strong>Follow-up:</strong> {followupsShown[responseKey]}

@@ -341,6 +341,8 @@ export default function RunActivityPage({
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
+  const [gradingQuestionQid, setGradingQuestionQid] = useState(null);
+  const [questionGradePreviews, setQuestionGradePreviews] = useState({});
 
   const [groups, setGroups] = useState([]);
   const [activeStudentName, setActiveStudentName] = useState('');
@@ -1506,6 +1508,75 @@ export default function RunActivityPage({
     return { answers, questions };
   }
 
+  function bucketPoints(bucket) {
+    if (bucket == null) return 0;
+    if (typeof bucket === 'number') return bucket;
+    if (typeof bucket === 'object' && typeof bucket.points === 'number') return bucket.points;
+    return 0;
+  }
+
+  function normalizeQuestionGradeResult({ block, payload, result }) {
+    const scores = block?.scores || {};
+    const maxCodePts = bucketPoints(scores.code);
+    const maxRunPts = bucketPoints(scores.output);
+    const maxRespPts = bucketPoints(scores.response);
+
+    const multipleChoice = block?.multipleChoice || null;
+    const isMultipleChoice =
+      Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
+
+    const responseText = String(payload?.responseText || '').trim();
+    const selectedChoice = responseText;
+
+    let codeScore = Number(result?.codeScore ?? 0);
+    let runScore = Number(result?.runScore ?? 0);
+    let responseScore = Number(result?.responseScore ?? 0);
+    let codeFeedback = String(result?.codeFeedback ?? '').trim();
+    let runFeedback = String(result?.runFeedback ?? '').trim();
+    let responseFeedback = String(result?.responseFeedback ?? '').trim();
+
+    if (isMultipleChoice && maxRespPts > 0) {
+      const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+      if (!correctAnswer) {
+        responseScore = selectedChoice ? maxRespPts : 0;
+        responseFeedback = '';
+      } else {
+        const isCorrect = selectedChoice === correctAnswer;
+        responseScore = isCorrect ? maxRespPts : 0;
+        responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+      }
+    }
+
+    codeScore = Math.max(0, Math.min(maxCodePts, Number.isFinite(codeScore) ? codeScore : 0));
+    runScore = Math.max(0, Math.min(maxRunPts, Number.isFinite(runScore) ? runScore : 0));
+    responseScore = Math.max(
+      0,
+      Math.min(maxRespPts, Number.isFinite(responseScore) ? responseScore : 0)
+    );
+
+    const earnedTotal = codeScore + runScore + responseScore;
+    const maxTotal = maxCodePts + maxRunPts + maxRespPts;
+
+    return {
+      status: 'ready',
+      qid: payload?.qid || null,
+      questionText: payload?.questionText || '',
+      selectedChoice,
+      codeScore,
+      runScore,
+      responseScore,
+      codeFeedback,
+      runFeedback,
+      responseFeedback,
+      maxCode: maxCodePts,
+      maxRun: maxRunPts,
+      maxResp: maxRespPts,
+      earnedTotal,
+      maxTotal,
+      gradedAt: new Date().toISOString(),
+    };
+  }
+
 
   function isGroupCodeOnlyQuestion(block) {
     const hasTextOrTable = !!block?.hasTextResponse || !!block?.hasTableResponse;
@@ -2667,6 +2738,87 @@ export default function RunActivityPage({
       console.log('[REGRD] done');
     }
   }
+
+  async function handleGradeSingleQuestion(qid) {
+    if (gradingQuestionQid) return;
+    if (!isTestMode) return;
+
+    const block = findQuestionBlockByQid(qid);
+    if (!block) return;
+
+    const payloadContainer = document;
+    const { questions } = buildTestSubmissionPayload([block], payloadContainer, existingAnswers);
+    const payload = questions?.[0];
+    if (!payload) return;
+
+    setGradingQuestionQid(qid);
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/ai/grade-test-question`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          questionText: payload.questionText,
+          scores: payload.scores || block.scores || {},
+          responseText: payload.responseText || '',
+          codeCells: payload.codeCells || [],
+          outputText: payload.outputText || '',
+          rubric: payload.scores || block.scores || {},
+        }),
+      });
+
+      const raw = await res.text();
+      if (!res.ok) {
+        throw new Error(raw || `Question grading failed (${res.status})`);
+      }
+
+      let parsed;
+      try {
+        parsed = raw ? JSON.parse(raw) : {};
+      } catch (err) {
+        throw new Error('Question grading returned invalid JSON.');
+      }
+
+      const preview = normalizeQuestionGradeResult({
+        block,
+        payload,
+        result: parsed,
+      });
+
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        [qid]: preview,
+      }));
+    } catch (err) {
+      console.error('Single-question grading failed:', err);
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        [qid]: {
+          status: 'error',
+          qid,
+          questionText: payload?.questionText || '',
+          error: err?.message || 'Question grading failed.',
+          gradedAt: new Date().toISOString(),
+        },
+      }));
+    } finally {
+      setGradingQuestionQid(null);
+    }
+  }
+
+  function clearQuestionGradePreview(qid) {
+    setQuestionGradePreviews((prev) => {
+      const next = { ...prev };
+      delete next[qid];
+      return next;
+    });
+  }
+
+  function clearQuestionGradePreviewForResponseKey(responseKey) {
+    const qid = baseQidFromResponseKey(responseKey);
+    if (qid) clearQuestionGradePreview(qid);
+  }
   // Instructor override: save edited per-question scores & feedback
   async function handleSaveQuestionScores(qid, local) {
     if (!activity || !instanceId || !user?.id) return;
@@ -2901,7 +3053,6 @@ export default function RunActivityPage({
             socket={socket}
             instanceId={instanceId}
             user={user}
-            handleCodeChange={handleCodeChange}
             baseQidFromResponseKey={baseQidFromResponseKey}
             isObserver={isObserver}
             isSandbox={isSandbox}
@@ -2916,7 +3067,6 @@ export default function RunActivityPage({
             setSandboxGroupIndex={setSandboxGroupIndex}
             codeViewMode={codeViewMode}
             localCode={localCode}
-            handleTextChange={handleTextChange}
             textFeedbackShown={textFeedbackShown}
             nonLegacyForUI={nonLegacyForUI}
             getQuestionScores={getQuestionScores}
@@ -2926,7 +3076,19 @@ export default function RunActivityPage({
             isPlaygroundMode={isPlaygroundMode}
             canBypassGroups={canBypassGroups}
             handleRegradeTest={handleRegradeTest}
+            handleTextChange={(responseKey, value, extra) => {
+              clearQuestionGradePreviewForResponseKey(responseKey);
+              return handleTextChange(responseKey, value, extra);
+            }}
+            handleCodeChange={(responseKey, code, extra) => {
+              clearQuestionGradePreviewForResponseKey(responseKey);
+              return handleCodeChange(responseKey, code, extra);
+            }}
             overallTestTotals={overallTestTotals}
+            questionGradePreviews={questionGradePreviews}
+            gradingQuestionQid={gradingQuestionQid}
+            handleGradeSingleQuestion={handleGradeSingleQuestion}
+            clearQuestionGradePreview={clearQuestionGradePreview}
             infoBubbleSession={infoBubbleSessionRef.current}
             suppressStudentTestFeedbackUi={shouldSuppressStudentTestFeedbackUi({
               isTestMode,

@@ -76,6 +76,10 @@ export default function RunActivityWorkspace({
   canBypassGroups,
   handleRegradeTest,
   overallTestTotals,
+  questionGradePreviews,
+  gradingQuestionQid,
+  handleGradeSingleQuestion,
+  clearQuestionGradePreview,
   infoBubbleSession,
   suppressStudentTestFeedbackUi = false,
   hideStudentTestSections = false,
@@ -268,11 +272,82 @@ export default function RunActivityWorkspace({
                   isTestMode &&
                   isInstructor &&
                   isSubmitted;
+                const canGradeQuestionPreview =
+                  isTestMode && !isSandbox && (isCreatorTestRun || isInstructor);
+                const questionGradePreview = questionGradePreviews?.[qid];
+                const isGradingThisQuestion = gradingQuestionQid === qid;
                 const displayNumber = nonLegacyForUI ? qid : globalQuestionCounter;
 
                 return (
                   <div key={`group-${index}-block-${bIndex}`} className="mb-2">
                     {renderedBlock}
+
+                    {canGradeQuestionPreview && (
+                      <div className="mt-2 d-flex flex-wrap gap-2 align-items-center">
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          onClick={() => handleGradeSingleQuestion(qid)}
+                          disabled={isGradingThisQuestion}
+                        >
+                          {isGradingThisQuestion ? 'Grading…' : questionGradePreview ? 'Re-grade Question' : 'Grade This Question'}
+                        </Button>
+                        {questionGradePreview && (
+                          <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={() => clearQuestionGradePreview(qid)}
+                            disabled={isGradingThisQuestion}
+                          >
+                            Clear Preview
+                          </Button>
+                        )}
+                      </div>
+                    )}
+
+                    {questionGradePreview?.status === 'ready' && canGradeQuestionPreview && (
+                      <Alert variant="info" className="mt-2 mb-0">
+                        <div className="fw-semibold mb-1">
+                          Question preview grade: {questionGradePreview.earnedTotal}/{questionGradePreview.maxTotal}
+                        </div>
+                        <div className="small text-muted mb-2">
+                          Preview only — this does not save anything to the test attempt.
+                        </div>
+                        <div className="mb-1">
+                          {questionGradePreview.maxResp > 0 && (
+                            <div>
+                              <strong>Written:</strong> {questionGradePreview.responseScore}/{questionGradePreview.maxResp}
+                              {questionGradePreview.responseFeedback ? (
+                                <div className="small mt-1">{questionGradePreview.responseFeedback}</div>
+                              ) : null}
+                            </div>
+                          )}
+                          {questionGradePreview.maxRun > 0 && (
+                            <div className="mt-1">
+                              <strong>Run/output:</strong> {questionGradePreview.runScore}/{questionGradePreview.maxRun}
+                              {questionGradePreview.runFeedback ? (
+                                <div className="small mt-1">{questionGradePreview.runFeedback}</div>
+                              ) : null}
+                            </div>
+                          )}
+                          {questionGradePreview.maxCode > 0 && (
+                            <div className="mt-1">
+                              <strong>Code:</strong> {questionGradePreview.codeScore}/{questionGradePreview.maxCode}
+                              {questionGradePreview.codeFeedback ? (
+                                <div className="small mt-1">{questionGradePreview.codeFeedback}</div>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      </Alert>
+                    )}
+
+                    {questionGradePreview?.status === 'error' && canGradeQuestionPreview && (
+                      <Alert variant="warning" className="mt-2 mb-0">
+                        <strong>Could not grade this question preview.</strong>{' '}
+                        {questionGradePreview.error || 'Please try again.'}
+                      </Alert>
+                    )}
 
                     {showScorePanel && (
                       <QuestionScorePanel

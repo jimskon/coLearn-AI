@@ -129,6 +129,10 @@ export default function TestSetupPage() {
     <Container className="mt-4">
       <h2>Test Setup</h2>
       {courseName && <div className="text-muted mb-2">Instance: {courseName}</div>}
+      <Alert variant="info" className="mt-3">
+        <strong>Professor setup only.</strong> This page makes the test available to selected students.
+        Students will see the exam view with one final submit, no live feedback, and automatic grading on submit.
+      </Alert>
 
       {loading ? (
         <Spinner animation="border" />
@@ -140,7 +144,7 @@ export default function TestSetupPage() {
             <Card.Body>
               <Row className="g-3">
                 <Col md={4}>
-                  <Form.Label>Test start date &amp; time</Form.Label>
+                  <Form.Label>Release date &amp; time</Form.Label>
                   <Form.Control
                     type="datetime-local"
                     value={testStartAt}
@@ -148,7 +152,7 @@ export default function TestSetupPage() {
                   />
                 </Col>
                 <Col md={3}>
-                  <Form.Label>Time limit (minutes)</Form.Label>
+                  <Form.Label>Exam window (minutes)</Form.Label>
                   <Form.Control
                     type="number"
                     min={1}
@@ -178,7 +182,7 @@ export default function TestSetupPage() {
             </Card.Body>
           </Card>
 
-          <h5>Select students allowed to take this test:</h5>
+          <h5>Select students allowed to take this exam:</h5>
           <Row>
             {students.filter((s) => s.role === 'student').length > 0 ? (
               students
@@ -200,10 +204,10 @@ export default function TestSetupPage() {
 
           <div className="mt-3 d-flex gap-2">
             <Button variant="secondary" onClick={prepareAttempts}>
-              Prepare Test Attempts
+              Prepare Exam Roster
             </Button>
             <Button variant="primary" onClick={handleSave} disabled={attempts.length === 0}>
-              Save Test Setup
+              Save Exam Setup
             </Button>
             <Button
               variant="outline-secondary"
@@ -215,7 +219,7 @@ export default function TestSetupPage() {
 
           {attempts.length > 0 && (
             <Alert variant="info" className="mt-3">
-              Prepared {attempts.length} attempt{attempts.length === 1 ? '' : 's'}.
+              Prepared {attempts.length} exam attempt{attempts.length === 1 ? '' : 's'}.
             </Alert>
           )}
         </>

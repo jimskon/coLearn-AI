@@ -193,12 +193,16 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
   return (
     <Container className="mt-4">
       <h2>
-        {activityTitle ? `Tests: ${activityTitle}` : 'Tests'}
+        {activityTitle ? `Exam roster: ${activityTitle}` : 'Exam roster'}
         <Badge bg="warning" text="dark" className="ms-2">
-          Test
+          Professor-managed
         </Badge>
       </h2>
       {courseName && <h4 className="text-muted">{courseName}</h4>}
+      <Alert variant="info" className="mt-3">
+        This page shows the instructor-managed exam attempts. Students only see the exam workspace;
+        this roster is for scheduling, reopening, reviewing, and clearing submissions.
+      </Alert>
 
       {loading ? (
         <Spinner animation="border" />
@@ -212,8 +216,8 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
             <tr>
               <th>Student</th>
               <th>Status</th>
-              <th>Start</th>
-              <th>Duration</th>
+              <th>Release</th>
+              <th>Window</th>
               <th>Reopen until</th>
               <th>Submitted</th>
               <th>Score</th>

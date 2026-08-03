@@ -18,6 +18,22 @@ import { useUser } from '../context/UserContext';
 import { FaUserCheck, FaLaptop, FaRandom } from 'react-icons/fa';
 import { parseUtcDbDatetime } from '../utils/time';
 
+const STATUS_LABELS = {
+  active_thinking: 'Active thinking',
+  needs_check_in: 'Needs check-in',
+  stuck_after_feedback: 'Stuck',
+  completed: 'Completed',
+  pending: 'Pending',
+};
+
+const STATUS_VARIANTS = {
+  active_thinking: 'success',
+  needs_check_in: 'warning',
+  stuck_after_feedback: 'danger',
+  completed: 'primary',
+  pending: 'secondary',
+};
+
 function progressLabelFromInstanceRow(g) {
   const tg = Number(g.total_groups || 0);
   const cg = Number(g.completed_groups || 0);
@@ -28,6 +44,14 @@ function progressLabelFromInstanceRow(g) {
 
   if (tg > 0) return `Question Group ${Math.min(cg + 1, tg)} of ${tg}`;
   return 'In progress';
+}
+
+function progressStatusLabel(value) {
+  return STATUS_LABELS[String(value || "").toLowerCase()] || "Pending";
+}
+
+function progressStatusVariant(value) {
+  return STATUS_VARIANTS[String(value || "").toLowerCase()] || "secondary";
 }
 
 function isCompleteFromInstanceRow(g) {
@@ -211,6 +235,7 @@ export default function ViewGroupsPage() {
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const [isDemoClass, setIsDemoClass] = useState(false);
   const [clearingDemoRoster, setClearingDemoRoster] = useState(false);
+  const [liveProgressRows, setLiveProgressRows] = useState([]);
   const isDemoInstructor = user?.demo_mode === 'instructor';
 
   const fetchGroups = async ({ quiet = false } = {}) => {
@@ -252,8 +277,36 @@ export default function ViewGroupsPage() {
     fetchGroups({ quiet: false });
     const interval = setInterval(() => {
       fetchGroups({ quiet: true });
-    }, 5000);
+    }, 10000);
     return () => clearInterval(interval);
+  }, [courseId, activityId]);
+
+  useEffect(() => {
+    if (!courseId || !activityId) return undefined;
+
+    let cancelled = false;
+    const loadLiveProgress = async () => {
+      try {
+        const res = await fetch(
+          API_BASE_URL + '/api/progress-monitor/statuses?courseId=' + courseId + '&activityId=' + activityId,
+          { credentials: 'include' }
+        );
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || cancelled) return;
+        setLiveProgressRows(Array.isArray(json.rows) ? json.rows : []);
+      } catch (err) {
+        if (!cancelled) {
+          console.error('❌ Error loading live progress statuses:', err);
+        }
+      }
+    };
+
+    loadLiveProgress();
+    const interval = setInterval(loadLiveProgress, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, [courseId, activityId]);
 
   const refreshStudents = async () => {
@@ -619,14 +672,21 @@ export default function ViewGroupsPage() {
             const connectedMembers = getConnectedMembers(group);
             const activeMember = getActiveMember(group);
             const canRotateActive = !isComplete && connectedMembers.length > 1;
+            const liveStatusRow = liveProgressRows.find((row) => Number(row.activityInstanceId) === instanceId);
+            const liveStatus = String(liveStatusRow?.currentStatus || "pending").toLowerCase();
 
             return (
               <Col lg={4} md={6} sm={12} key={group.instance_id}>
                 <Card className="mb-3">
                   <Card.Header className="d-flex justify-content-between align-items-center flex-wrap">
                     <div>
-                      Group {group.group_number} —{' '}
-                      <strong className="ms-2">{progressLabelFromInstanceRow(group)}</strong>
+                      <div className="d-flex align-items-center gap-2 flex-wrap">
+                        <span>Group {group.group_number}</span>
+                        <Badge bg={progressStatusVariant(liveStatus)}>
+                          {progressStatusLabel(liveStatus)}
+                        </Badge>
+                      </div>
+                      <div className="small text-muted">{progressLabelFromInstanceRow(group)}</div>
                     </div>
 
                     <div className="d-flex gap-2 mt-2 mt-sm-0 flex-wrap align-items-center">

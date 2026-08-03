@@ -12,7 +12,6 @@ import ManageClassesPage from '../pages/ManageClassesPage';
 import ActivityPreview from '../pages/ActivityPreview';
 import AdminUsersPage from '../pages/AdminUsersPage';
 import AuditLogPage from '../pages/AuditLogPage';
-import ProgressMonitorPage from '../pages/ProgressMonitorPage';
 import ManageCoursesPage from '../pages/ManageCoursesPage';
 import CourseActivitiesPage from '../pages/CourseActivitiesPage';
 import RunActivityPage from '../pages/RunActivityPage';
@@ -88,7 +87,7 @@ function AppRoutes() {
         <Route path="/preview/:activityId" element={<ActivityPreview />} />
         <Route path="/admin/users" element={<AdminUsersPage />} />
         <Route path="/admin/logs" element={<AuditLogPage />} />
-        <Route path="/progress-monitor" element={<ProgressMonitorPage />} />
+        <Route path="/progress-monitor" element={<Navigate to="/manage-courses" replace />} />
         <Route path="/courses/:courseId/activities" element={<CourseActivitiesPage />} />
         <Route
           path="/run/:instanceId"

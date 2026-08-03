@@ -312,16 +312,6 @@ export default function CourseActivitiesPage() {
                                 {viewLabel}
                               </Button>
 
-                              <Button
-                                variant="info"
-                                onClick={() =>
-                                  navigate(`/progress-monitor?courseId=${courseId}&activityId=${activity.activity_id}`, {
-                                    state: { courseName },
-                                  })
-                                }
-                              >
-                                Progress
-                              </Button>
 
                               {/* 🔒 Hide only if groups exist */}
                               <Button

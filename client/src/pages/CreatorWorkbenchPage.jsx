@@ -900,6 +900,14 @@ export default function CreatorWorkbenchPage() {
     }
   }, [draft.selected_model, isDemoCreator]);
 
+  useEffect(() => {
+    if (isTestDraft && rightMode === 'sandbox') {
+      setRightMode('preview');
+    } else if (!isTestDraft && rightMode === 'test-run') {
+      setRightMode('preview');
+    }
+  }, [isTestDraft, rightMode]);
+
   const compileText = useCallback((sourceText) => {
     const parsed = parseActivityText(sourceText);
     setBlocks(parsed.blocks);
@@ -2005,22 +2013,27 @@ export default function CreatorWorkbenchPage() {
                 <Button variant={rightMode === 'edit' ? 'primary' : 'outline-primary'} onClick={() => selectRightMode('edit')}>
                   <PencilSquare className="me-1" /> Source
                 </Button>
-                <Button
-                  ref={tutorialRefs.sandbox}
-                  variant={rightMode === 'sandbox' ? 'primary' : 'outline-primary'}
-                  onClick={() => selectRightMode('sandbox')}
-                  disabled={!activity?.id || !!proposal || sandboxBusy}
-                >                  {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
-                  Sandbox
-                </Button>
-                <Button
-                  variant={rightMode === 'test-run' ? 'primary' : 'outline-primary'}
-                  onClick={() => selectRightMode('test-run')}
-                  disabled={!activity?.id || !!proposal || sandboxBusy}
-                >
-                  {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
-                  Test Run
-                </Button>
+                {!isTestDraft ? (
+                  <Button
+                    ref={tutorialRefs.sandbox}
+                    variant={rightMode === 'sandbox' ? 'primary' : 'outline-primary'}
+                    onClick={() => selectRightMode('sandbox')}
+                    disabled={!activity?.id || !!proposal || sandboxBusy}
+                  >
+                    {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
+                    Sandbox
+                  </Button>
+                ) : null}
+                {isTestDraft ? (
+                  <Button
+                    variant={rightMode === 'test-run' ? 'primary' : 'outline-primary'}
+                    onClick={() => selectRightMode('test-run')}
+                    disabled={!activity?.id || !!proposal || sandboxBusy}
+                  >
+                    {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
+                    Test Run
+                  </Button>
+                ) : null}
               </ButtonGroup>
               <Button
                 size="sm"

@@ -10,6 +10,37 @@ import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 
+function normalizeAuthoredMode(rawMode) {
+  const mode = String(rawMode || '').trim().toLowerCase();
+  if (mode === 'test') return 'test';
+  if (mode === 'demo' || mode === 'playground') return mode;
+  if (mode === 'group' || mode === 'normal') return 'group';
+  return null;
+}
+
+function inferAuthoredModeFromLines(lines = [], fallbackIsTest = false) {
+  let sawLegacyTest = false;
+
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const trimmed = String(line || '').trim();
+    if (!trimmed) continue;
+
+    if (trimmed === '\\test') {
+      sawLegacyTest = true;
+      continue;
+    }
+
+    const modeMatch = trimmed.match(/^\\mode\{([\s\S]*?)\}$/i);
+    if (modeMatch) {
+      const normalized = normalizeAuthoredMode(modeMatch[1]);
+      if (normalized) return normalized;
+    }
+  }
+
+  if (sawLegacyTest || fallbackIsTest) return 'test';
+  return 'group';
+}
+
 export default function ActivityPreview() {
 
   const { activityId } = useParams();
@@ -22,6 +53,7 @@ export default function ActivityPreview() {
 
   const [activity, setActivity] = useState(null);
   const [blocks, setBlocks] = useState([]);
+  const [sourceLines, setSourceLines] = useState([]);
   const [fileContents, setFileContents] = useState({});
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
@@ -161,6 +193,7 @@ export default function ActivityPreview() {
         const parsedRes = parseSheetToBlocks(lines, { returnIssues: true });
         const parsed = parsedRes.blocks;
         setParseMeta(parsedRes.meta);
+        setSourceLines(lines);
 
         const computedIsTest = parsedRes?.meta?.isTest ? 1 : 0;
 
@@ -214,7 +247,7 @@ export default function ActivityPreview() {
 
   const modeValue = parseMeta?.isTest
     ? 'test'
-    : (parseMeta?.mode || '').trim() || 'group';
+    : inferAuthoredModeFromLines(sourceLines, Boolean(parseMeta?.isTest));
 
   const formattedGuidance = stripHtml(headerValue('aicodeguidance')).trim();
   const formattedContext = stripHtml(headerValue('activitycontext')).trim();
@@ -290,7 +323,7 @@ export default function ActivityPreview() {
             <Col md={6}>
               <div className="small text-muted mb-1">Mode</div>
               <div>
-                <Badge bg={modeValue === 'test' ? 'danger' : 'secondary'} className="text-uppercase">
+                <Badge bg={modeValue === 'test' ? 'danger' : modeValue === 'playground' ? 'info' : 'secondary'} className="text-uppercase">
                   {modeValue}
                 </Badge>
                 {parseMeta?.isTest && (

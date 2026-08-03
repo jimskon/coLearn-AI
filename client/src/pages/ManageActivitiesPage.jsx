@@ -21,6 +21,12 @@ const emptyUploadActivity = {
   order_index: '',
 };
 
+const emptyBlankActivity = {
+  name: '',
+  title: '',
+  order_index: '',
+};
+
 const emptyCloneActivity = {
   name: '',
   title: '',
@@ -119,11 +125,15 @@ function ModeBadge({ activity }) {
 
   const label = normalizedMode === 'test'
     ? 'Test'
+    : normalizedMode === 'playground'
+      ? 'Playground'
     : normalizedMode === 'demo'
       ? 'Demo'
       : 'Group';
   const variant = normalizedMode === 'test'
     ? 'danger'
+    : normalizedMode === 'playground'
+      ? 'info'
     : normalizedMode === 'demo'
       ? 'info'
       : 'secondary';
@@ -158,6 +168,7 @@ export default function ManageActivitiesPage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showBlankModal, setShowBlankModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
 
   const [downloadSelection, setDownloadSelection] = useState({});
@@ -169,6 +180,9 @@ export default function ManageActivitiesPage() {
   const [createDraft, setCreateDraft] = useState(emptyCreateDraft);
   const [createNote, setCreateNote] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
+  const [blankActivity, setBlankActivity] = useState(emptyBlankActivity);
+  const [blankBusy, setBlankBusy] = useState(false);
+  const [blankNote, setBlankNote] = useState('');
   const [cloneSourceActivity, setCloneSourceActivity] = useState(null);
   const [cloneDraft, setCloneDraft] = useState(emptyCloneActivity);
   const [cloneNote, setCloneNote] = useState('');
@@ -472,6 +486,12 @@ export default function ManageActivitiesPage() {
     navigate(`/class/${classId}/create`);
   };
 
+  const openBlankActivityModal = () => {
+    setBlankActivity(emptyBlankActivity);
+    setBlankNote('');
+    setShowBlankModal(true);
+  };
+
   const openDownloadPlaceholder = () => {
     setShowDownloadModal(true);
   };
@@ -486,6 +506,11 @@ export default function ManageActivitiesPage() {
   const handleCloneFieldChange = (e) => {
     const { name, value } = e.target;
     setCloneDraft((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleBlankFieldChange = (e) => {
+    const { name, value } = e.target;
+    setBlankActivity((prev) => ({ ...prev, [name]: value }));
   };
 
   const triggerBrowserDownload = (filename, text, mimeType = 'text/plain;charset=utf-8') => {
@@ -618,6 +643,61 @@ export default function ManageActivitiesPage() {
       setCloneNote(err?.message || 'Failed to clone activity.');
     } finally {
       setCloneBusy(false);
+    }
+  };
+
+  const handleCreateBlankActivity = async () => {
+    setBlankNote('');
+
+    if (!blankActivity.title.trim()) {
+      setBlankNote('Enter a title for the blank activity.');
+      return;
+    }
+
+    const normalizedName = slugifyActivityName(blankActivity.name.trim() || blankActivity.title.trim());
+    if (!normalizedName) {
+      setBlankNote('Enter a valid activity ID or title.');
+      return;
+    }
+
+    const parsedOrderIndex = blankActivity.order_index === ''
+      ? 0
+      : parseInt(blankActivity.order_index, 10);
+    if (!Number.isFinite(parsedOrderIndex) || parsedOrderIndex < 0) {
+      setBlankNote('Enter a valid order number.');
+      return;
+    }
+
+    setBlankBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: normalizedName,
+          title: blankActivity.title.trim(),
+          source_type: 'local',
+          content_text: '',
+          order_index: parsedOrderIndex,
+          createdBy: user?.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to create the blank activity.');
+      }
+
+      setShowBlankModal(false);
+      setBlankActivity(emptyBlankActivity);
+      await refreshActivities();
+      navigate(`/creator/${data.id}?blank=1`);
+    } catch (err) {
+      console.error('Blank activity creation failed:', err);
+      setBlankNote(err?.message || 'Failed to create the blank activity.');
+    } finally {
+      setBlankBusy(false);
     }
   };
 
@@ -822,6 +902,9 @@ export default function ManageActivitiesPage() {
         <Button variant="success" onClick={openCreateWorkbench}>
           Create
         </Button>
+        <Button variant="outline-primary" onClick={openBlankActivityModal}>
+          Blank Activity
+        </Button>
         <Button variant="primary" onClick={() => setShowUploadModal(true)}>
           Upload
         </Button>
@@ -1002,6 +1085,67 @@ export default function ManageActivitiesPage() {
           </Button>
           <Button variant="success" onClick={handleCreateDraft} disabled={createBusy}>
             Create Draft
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={showBlankModal} onHide={() => !blankBusy && setShowBlankModal(false)}>
+        <Modal.Header closeButton={!blankBusy}>
+          <Modal.Title>Create Blank Activity</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>Activity ID</Form.Label>
+            <Form.Control
+              name="name"
+              value={blankActivity.name}
+              onChange={handleBlankFieldChange}
+              placeholder="optional_slug_id"
+            />
+            <div className="text-muted small mt-2">
+              If you leave this blank, we’ll generate one from the title.
+            </div>
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Title</Form.Label>
+            <Form.Control
+              name="title"
+              value={blankActivity.title}
+              onChange={handleBlankFieldChange}
+              placeholder="Untitled Activity"
+              autoFocus
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Order</Form.Label>
+            <Form.Control
+              type="number"
+              min="0"
+              name="order_index"
+              value={blankActivity.order_index}
+              onChange={handleBlankFieldChange}
+              placeholder="0"
+            />
+          </Form.Group>
+
+          <Alert variant="info" className="mb-0">
+            This creates an empty local activity with no AI draft. You can paste or type source directly and save it.
+          </Alert>
+
+          {blankNote ? (
+            <Alert variant="warning" className="mt-3 mb-0">
+              {blankNote}
+            </Alert>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowBlankModal(false)} disabled={blankBusy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleCreateBlankActivity} disabled={blankBusy}>
+            Create Blank Activity
           </Button>
         </Modal.Footer>
       </Modal>

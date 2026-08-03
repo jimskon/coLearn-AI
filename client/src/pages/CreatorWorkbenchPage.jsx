@@ -596,6 +596,7 @@ export default function CreatorWorkbenchPage() {
   const location = useLocation();
   const { user } = useUser();
   const isDemoCreator = new URLSearchParams(location.search).get('demo') === '1';
+  const isBlankCreate = new URLSearchParams(location.search).get('blank') === '1';
 
   const [classInfo, setClassInfo] = useState(null);
   const [activity, setActivity] = useState(null);
@@ -1017,6 +1018,14 @@ export default function CreatorWorkbenchPage() {
     autoTimerRef.current = setTimeout(() => compileText(rawText), 250);
     return () => clearTimeout(autoTimerRef.current);
   }, [compileText, proposal, rawText, skulptLoaded]);
+
+  useEffect(() => {
+    if (!activity?.id || proposal) return;
+    if (rightMode !== 'preview') return;
+    if (isBlankCreate || !String(rawText || '').trim()) {
+      setRightMode('edit');
+    }
+  }, [activity?.id, isBlankCreate, proposal, rawText, rightMode]);
 
   useEffect(() => {
     if (!selectedQuestionBlock) {

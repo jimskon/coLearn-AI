@@ -1,6 +1,6 @@
 // /courses/controller.js
 const db = require("../db");
-const { inferActivityTypeFromActivity } = require('../utils/activityType');
+const { inferActivityTypeFromActivity, inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
 
 // GET all courses
@@ -284,6 +284,7 @@ async function getCourseActivities(req, res) {
 
     const activities = await Promise.all(rows.map(async (row) => {
       const activityType = await inferActivityTypeFromActivity(row);
+      const authoredMode = await inferAuthoredModeFromActivity(row);
       const isTest = activityType === 'test';
       const is_test = row.is_test; // 1 / 0 / null
       const status = (row.progress_status || '').toLowerCase();
@@ -309,6 +310,7 @@ async function getCourseActivities(req, res) {
 
         is_test,
         activity_type: activityType,
+        authored_mode: authoredMode,
         isTest,
         isTestKnown: true,
 

@@ -9,12 +9,14 @@ const TYPE_LABELS = {
   group: 'Group',
   test: 'Test',
   demo: 'Demo',
+  playground: 'Playground',
 };
 
 const TYPE_BADGE_VARIANTS = {
   group: 'secondary',
   test: 'warning',
   demo: 'info',
+  playground: 'info',
 };
 
 
@@ -220,13 +222,14 @@ export default function CourseActivitiesPage() {
               const title = activity.title || activity.activity_name || 'Untitled Activity';
               const activityType =
                 activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
+              const displayType = activity.authored_mode || activityType;
               const isTest = activityType === 'test';
               const isDemo = activityType === 'demo';
               const isDemoClassGroup = isDemoClass && !isTest && !isDemo;
               const setupLabel = isDemo ? 'Open Demo' : isDemoClassGroup ? 'Live Groups' : 'Setup Groups';
               const viewLabel = isDemo ? 'View Demo' : 'View Groups';
-              const typeLabel = TYPE_LABELS[activityType] || 'Group';
-              const typeVariant = TYPE_BADGE_VARIANTS[activityType] || 'secondary';
+              const typeLabel = TYPE_LABELS[displayType] || TYPE_LABELS[activityType] || 'Group';
+              const typeVariant = TYPE_BADGE_VARIANTS[displayType] || TYPE_BADGE_VARIANTS[activityType] || 'secondary';
 
               return (
                 <tr key={activity.activity_id}>

@@ -366,6 +366,41 @@ test('class activity routes can create a local stored activity', async () => {
   assert.equal(row.sheet_url, null);
 });
 
+test('class activity routes can create an empty local activity shell', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const activityName = uniqueName('blank-activity').toLowerCase();
+
+  const create = await requestJson(`/api/classes/${classId}/activities`, {
+    method: 'POST',
+    body: {
+      name: activityName,
+      title: 'Blank Activity',
+      source_type: 'local',
+      content_text: '',
+      order_index: 2,
+      createdBy: creatorId,
+    },
+  });
+
+  assert.equal(create.status, 201);
+  assert.equal(create.body.name, activityName);
+  assert.equal(create.body.title, 'Blank Activity');
+  assert.equal(create.body.source_type, 'local');
+  assert.equal(create.body.content_text, '');
+  remember('activities', create.body.id);
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text
+       FROM pogil_activities
+      WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(row.source_type, 'local');
+  assert.equal(row.content_text, '');
+});
+
 test('creator draft route creates a local draft from the template and class metadata', async () => {
   await ensureSchema();
   const creatorId = await createUser('creator');

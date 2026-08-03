@@ -3,6 +3,7 @@ const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
 const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
 const activityCreator = require('../utils/activityCreator');
+const { inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
 const { recordAuditEvent } = require('../utils/auditLogger');
 
@@ -161,7 +162,14 @@ exports.getActivitiesByClass = async (req, res) => {
       'SELECT * FROM pogil_activities WHERE class_id = ? ORDER BY order_index',
       [id]
     );
-    res.json(rows.map(r => ({ ...r })));
+    const enriched = await Promise.all(rows.map(async (row) => {
+      const mode = await inferAuthoredModeFromActivity(row);
+      return {
+        ...row,
+        mode,
+      };
+    }));
+    res.json(enriched.map(r => ({ ...r })));
   } catch (err) {
     console.error('Error fetching class activities:', err);
     res.status(500).json({ error: 'Failed to retrieve activities for class.' });
@@ -195,7 +203,7 @@ exports.createActivityForClass = async (req, res) => {
     return res.status(400).json({ error: 'Remote activities require a Google Sheet or Doc URL.' });
   }
 
-  if (normalizedSourceType === 'local' && (content_text == null || String(content_text) === '')) {
+  if (normalizedSourceType === 'local' && content_text == null) {
     return res.status(400).json({ error: 'Local activities require content_text.' });
   }
 

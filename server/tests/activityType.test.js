@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   normalizeActivityType,
   inferActivityTypeFromLines,
+  inferAuthoredModeFromLines,
 } = require('../utils/activityType');
 
 test('normalizeActivityType maps supported authored modes to canonical types', () => {
@@ -44,6 +45,17 @@ test('inferActivityTypeFromLines supports explicit group and demo modes', () => 
   );
   assert.equal(
     inferActivityTypeFromLines(['\\mode{playground}', '\\questiongroup{One}']),
+    'demo'
+  );
+});
+
+test('inferAuthoredModeFromLines preserves playground as authored mode', () => {
+  assert.equal(
+    inferAuthoredModeFromLines(['\\mode{playground}', '\\questiongroup{One}']),
+    'playground'
+  );
+  assert.equal(
+    inferAuthoredModeFromLines(['\\mode{demo}', '\\questiongroup{One}']),
     'demo'
   );
 });

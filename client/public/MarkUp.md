@@ -97,6 +97,7 @@ Notes:
 
 - If `\responsemode{...}` is omitted, the default is `answer`.
 - Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
+- In test mode, include an explicit `\score{points,type}` rubric block for every question so grading is unambiguous.
 
 ---
 

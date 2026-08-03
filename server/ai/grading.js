@@ -82,7 +82,7 @@ async function gradeTestQuestion({
     "- RUN (program output, tests, harness behavior)",
     "- RESPONSE (written explanation or short answer).",
     "Use the rubric text exactly; partial credit is allowed.",
-    "If a band has full credit, feedback for that band should be null.",
+    "Always provide concise, concrete feedback for every band you score, even when the work earns full credit.",
     "Return ONLY JSON, no commentary.",
   ].join("\n");
 
@@ -122,13 +122,13 @@ async function gradeTestQuestion({
 
   userLines.push(
     `Return strict JSON only in this form:\n` +
-      `{"codeScore": number, "codeFeedback": string|null, ` +
-      `"runScore": number, "runFeedback": string|null, ` +
-      `"responseScore": number, "responseFeedback": string|null}\n` +
+      `{"codeScore": number, "codeFeedback": string, ` +
+      `"runScore": number, "runFeedback": string, ` +
+      `"responseScore": number, "responseFeedback": string}\n` +
       `- codeScore must be between 0 and ${maxCodePts}.\n` +
       `- runScore must be between 0 and ${maxRunPts}.\n` +
       `- responseScore must be between 0 and ${maxRespPts}.\n` +
-      `- For any band with full credit, feedback for that band MUST be null.\n` +
+      `- Feedback should always be present, even for full-credit work.\n` +
       `- DO NOT mention grading, points, rubrics, or scores.\n`
   );
 

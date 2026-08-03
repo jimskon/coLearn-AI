@@ -857,6 +857,43 @@ export default function RunActivityPage({
     return null;
   }
 
+  function buildPreviewRubric(block, payload) {
+    const hasExplicitRubric = block?.scores && Object.keys(block.scores).length > 0;
+    if (hasExplicitRubric) {
+      return { scores: block.scores, inferred: false };
+    }
+
+    const scores = {};
+    const addBand = (key, points, instructionsRaw) => {
+      scores[key] = {
+        points,
+        instructionsRaw,
+        instructionsHtml: instructionsRaw,
+      };
+    };
+
+    const responseText = String(payload?.responseText || '').trim();
+    const outputText = String(payload?.outputText || '').trim();
+    const hasCode = Array.isArray(payload?.codeCells) && payload.codeCells.length > 0;
+    const hasWrittenResponse = !!block?.hasTextResponse || responseText.length > 0 || !!block?.multipleChoice;
+
+    if (hasCode) {
+      addBand('code', 1, 'Judge whether the submitted code solves the task correctly. Give brief, concrete feedback about what works and what still needs attention.');
+    }
+    if (hasCode || outputText) {
+      addBand('output', 1, 'Judge whether the program output or test behavior matches the requested task. Give brief, concrete feedback about any mismatch or success.');
+    }
+    if (hasWrittenResponse) {
+      addBand('response', 1, 'Judge whether the written response answers the question directly and clearly. Give brief, concrete feedback about the quality of the explanation.');
+    }
+
+    if (!Object.keys(scores).length) {
+      addBand('response', 1, 'Judge whether the student response addresses the question. Give brief, concrete feedback.');
+    }
+
+    return { scores, inferred: true };
+  }
+
   async function fetchQuestionGradePreview(block) {
     const qid = `${block.groupId}${block.id}`;
     const payloadContainer = document;
@@ -864,17 +901,19 @@ export default function RunActivityPage({
     const payload = questions?.[0];
     if (!payload) return null;
 
+    const rubric = buildPreviewRubric(block, payload);
+
     const res = await fetch(`${API_BASE_URL}/api/ai/grade-test-question`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
         questionText: payload.questionText,
-        scores: payload.scores || block.scores || {},
+        scores: rubric.scores || payload.scores || block.scores || {},
         responseText: payload.responseText || '',
         codeCells: payload.codeCells || [],
         outputText: payload.outputText || '',
-        rubric: payload.scores || block.scores || {},
+        rubric: rubric.scores || payload.scores || block.scores || {},
       }),
     });
 
@@ -890,11 +929,14 @@ export default function RunActivityPage({
       throw new Error('Question grading returned invalid JSON.');
     }
 
-    return normalizeQuestionGradeResult({
-      block,
-      payload,
-      result: parsed,
-    });
+    return {
+      ...normalizeQuestionGradeResult({
+        block,
+        payload,
+        result: parsed,
+      }),
+      rubricSource: rubric.inferred ? 'inferred' : 'explicit',
+    };
   }
 
   const socket = useRunActivitySync({

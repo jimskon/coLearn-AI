@@ -2521,17 +2521,27 @@ export function renderBlocks(blocks, options = {}) {
         ];
         for (const [key, label] of scoreEntries) {
           const s = block.scores[key];
-          if (s && typeof s.points === 'number') {
+          if (s && Number.isFinite(Number(s.points))) {
+            const points = Number(s.points);
             scoreBadges.push(
               <span
                 key={`score-${responseKey}-${key}`}
                 className="badge bg-light text-muted border ms-2"
               >
-                {s.points} pt{s.points !== 1 ? 's' : ''} {label}
+                {points} pt{points !== 1 ? 's' : ''} {label}
               </span>
             );
           }
         }
+      } else if (runMode === 'preview' && isInstructor) {
+        scoreBadges.push(
+          <span
+            key={`score-${responseKey}-missing`}
+            className="badge bg-warning text-dark border ms-2"
+          >
+            No rubric yet
+          </span>
+        );
       }
 
       const isSelectedPreviewBlock = runMode === 'preview' && selectedPreviewKey === block.previewKey;

@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  buildActivityGenerationInstructions,
   buildQuestionRevisionInstructions,
   buildQuestionRevisionResponseFormat,
   isOutputTokenTruncation,
@@ -25,6 +26,15 @@ test('question revision instructions require learner-facing prompt updates when 
   assert.match(instructions, /never use A\/B\/C letter labels/i);
   assert.match(instructions, /keep \\multiplechoice\{\} blank for survey or opinion questions/i);
   assert.match(instructions, /Never invent a placeholder answer to satisfy the parser/i);
+  assert.match(instructions, /\\score\{points,type\}/i);
+});
+
+test('test-mode activity generation instructions require explicit scoring rubrics', () => {
+  const instructions = buildActivityGenerationInstructions(true);
+
+  assert.match(instructions, /mode=test/i);
+  assert.match(instructions, /no \\section commands and no section timers/i);
+  assert.match(instructions, /every question must include an explicit \\score\{points,type\} rubric block/i);
 });
 
 test('question revision uses strict structured output and recovers a complete direct-markup response', () => {

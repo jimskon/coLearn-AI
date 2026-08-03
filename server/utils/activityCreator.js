@@ -15,6 +15,7 @@ const CREATOR_HOUSE_STYLE_SUMMARY = [
   '- Put \\responsemode{answer} or \\responsemode{questions} on its own line immediately after \\question{...}; never attach it to the question header.',
   '- Use \\responsemode{answer} for ordinary questions and \\responsemode{questions} for prompts that ask students to write questions.',
   '- Treat \\responsemode{answer} as the default for legacy content, but include it explicitly in new questions when practical.',
+  '- For mode=test, include an explicit \\score{points,type} rubric block for every question so grading is unambiguous.',
   '- Use \\textresponse{n} for short written answers.',
   '- For multiple-choice questions, use \\multiplechoice{exact correct choice text} followed by one \\choice{...} line per choice, then \\endmultiplechoice.',
   '- Never use A/B/C letter labels or other abbreviations inside \\multiplechoice{...}; the answer text must exactly match one \\choice{...} value.',
@@ -25,6 +26,52 @@ const CREATOR_HOUSE_STYLE_SUMMARY = [
   '- Use \\ai{mode} ... \\endai only when it clearly supports the pedagogy.',
   '- Do not include Markdown fences, prose before the activity, or diagnostics.',
 ].join('\n');
+
+function buildActivityGenerationInstructions(isTestMode) {
+  return [
+    'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
+    'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
+    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
+    'Only include \\info blocks if the creator explicitly asks for them.',
+    'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
+    isTestMode
+      ? 'For mode=test, create one continuous assessment with no \\section commands and no section timers. Every question must include an explicit \\score{points,type} rubric block that matches how it will be graded.'
+      : 'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
+    'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
+    'Keep each question concise. Keep sample responses and feedback prompts short.',
+    'Do not echo the creator brief, requested sections, diagnostics, or planning notes into the activity body.',
+    'It is better to finish a complete compact activity than to begin a longer activity and stop halfway through.',
+    isTestMode
+      ? 'Do not use section headings or section timers for test drafts.'
+      : 'Treat Learning Objectives as a structural section, not as an interactive activity, unless the creator explicitly asks otherwise.',
+    !isTestMode && 'If a timed section plan is provided, use the exact section titles and emit them as \\section{Title}{minutes}.',
+    'If the activity uses turtle graphics, always wrap the turtle code in \\pythonturtle ... \\endpythonturtle.',
+    'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
+    'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
+    'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp, \\python ... \\endpython, or \\pythonremote ... \\endpythonremote. Never paste raw code directly into question text.',
+    'Only use a runnable \\python block when students must write or modify executable Python code.',
+    'If students are asked to modify existing code, repeat the current code in a new editable \\python block so they can run and test the changed version.',
+    'Use \\textresponse for prose tasks such as objectives, predictions, explanations, prompt-writing, reflections, lists, and short written answers.',
+    'Do not ask multiple students to type separate answers into one shared text box.',
+    'Do not ask for unsupported response formats such as "one per line", per-student rosters, tables-in-a-textbox, or "each group member writes ..." inside a single \\textresponse.',
+    'If you need multiple contributions, ask for one concise group summary or split the work into separate questions.',
+    'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
+    'If you include multiple-choice questions, use \\multiplechoice{answer} only for questions with a real correct answer. For survey or opinion questions, keep \\multiplechoice{} blank and never invent a placeholder answer to satisfy validation.',
+    'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
+    'If you do use an \\ai block, keep it tightly scoped and include a guardrail.',
+    'Use the compact house-style rules below as syntax guidance.',
+    'For mode=group, use collaborative prompts and progression.',
+    'Use \\responsemode{answer} for ordinary questions and \\responsemode{questions} for prompts that ask students to write questions.',
+    'For multiple-choice questions, write the answer as the exact text of one choice: \\multiplechoice{exact answer text}. Then add one \\choice{...} line for each option and close with \\endmultiplechoice.',
+    'Do not use A/B/C/D letters or numeric labels inside \\multiplechoice{...}; the parser compares the exact answer text against the \\choice{...} lines.',
+    'If a multiple-choice question is a survey or opinion item, keep \\multiplechoice{} blank and still provide the choices with \\choice{...}.',
+    'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
+    'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
+    'Make the activity reflect the creator brief, not generic filler.',
+    '',
+    CREATOR_HOUSE_STYLE_SUMMARY,
+  ].filter(Boolean).join('\n');
+}
 
 function sanitizeHeaderValue(value, fallback = '') {
   return String(value == null ? fallback : value)
@@ -879,49 +926,7 @@ async function generateWithOpenAI({
   const isTestMode = normalizedMode === 'test';
   const timeoutMs = getCreatorOpenAiTimeoutMs();
 
-  const system = [
-    'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
-    'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
-    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
-    'Only include \\info blocks if the creator explicitly asks for them.',
-    'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
-    isTestMode
-      ? 'For mode=test, create one continuous assessment with no \\section commands and no section timers.'
-      : 'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
-    'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
-    'Keep each question concise. Keep sample responses and feedback prompts short.',
-    'Do not echo the creator brief, requested sections, diagnostics, or planning notes into the activity body.',
-    'It is better to finish a complete compact activity than to begin a longer activity and stop halfway through.',
-    isTestMode
-      ? 'Do not use section headings or section timers for test drafts.'
-      : 'Treat Learning Objectives as a structural section, not as an interactive activity, unless the creator explicitly asks otherwise.',
-    !isTestMode && 'If a timed section plan is provided, use the exact section titles and emit them as \\section{Title}{minutes}.',
-    'If the activity uses turtle graphics, always wrap the turtle code in \\pythonturtle ... \\endpythonturtle.',
-    'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
-    'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
-    'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp, \\python ... \\endpython, or \\pythonremote ... \\endpythonremote. Never paste raw code directly into question text.',
-    'Only use a runnable \\python block when students must write or modify executable Python code.',
-    'If students are asked to modify existing code, repeat the current code in a new editable \\python block so they can run and test the changed version.',
-    'Use \\textresponse for prose tasks such as objectives, predictions, explanations, prompt-writing, reflections, lists, and short written answers.',
-    'Do not ask multiple students to type separate answers into one shared text box.',
-    'Do not ask for unsupported response formats such as "one per line", per-student rosters, tables-in-a-textbox, or "each group member writes ..." inside a single \\textresponse.',
-    'If you need multiple contributions, ask for one concise group summary or split the work into separate questions.',
-    'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
-    'If you include multiple-choice questions, use \\multiplechoice{answer} only for questions with a real correct answer. For survey or opinion questions, keep \\multiplechoice{} blank and never invent a placeholder answer to satisfy validation.',
-    'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
-    'If you do use an \\ai block, keep it tightly scoped and include a guardrail.',
-    'Use the compact house-style rules below as syntax guidance.',
-    'For mode=group, use collaborative prompts and progression.',
-    'Use \\responsemode{answer} for ordinary questions and \\responsemode{questions} for prompts that ask students to write questions.',
-    'For multiple-choice questions, write the answer as the exact text of one choice: \\multiplechoice{exact answer text}. Then add one \\choice{...} line for each option and close with \\endmultiplechoice.',
-    'Do not use A/B/C/D letters or numeric labels inside \\multiplechoice{...}; the parser compares the exact answer text against the \\choice{...} lines.',
-    'If a multiple-choice question is a survey or opinion item, keep \\multiplechoice{} blank and still provide the choices with \\choice{...}.',
-    'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
-    'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
-    'Make the activity reflect the creator brief, not generic filler.',
-    '',
-    CREATOR_HOUSE_STYLE_SUMMARY,
-  ].filter(Boolean).join('\n');
+  const system = buildActivityGenerationInstructions(isTestMode);
 
   const user = [
     `Activity title: ${title}`,
@@ -1110,6 +1115,7 @@ function buildQuestionRevisionInstructions() {
     'For multiple-choice questions, preserve the author’s intent: use \\multiplechoice{exact correct choice text} only for questions that truly have a correct answer, then list one \\choice{...} line for each option and close with \\endmultiplechoice. Keep \\multiplechoice{} blank for survey or opinion questions and still list the choices. Never invent a placeholder answer to satisfy the parser.',
     'Never use A/B/C letter labels or numeric labels inside \\multiplechoice{...}; the answer text must exactly match one \\choice{...} value.',
     'For new questions, explicitly include \\responsemode{answer} unless the student should write questions, in which case use \\responsemode{questions}.',
+    'If the question is graded, preserve or add an explicit \\score{points,type} rubric block that matches the revised task.',
     'Keep sample responses and feedback prompts plain text.',
     'Retain only valid coLearn-AI response-type blocks such as \\textresponse, \\python, \\pythonremote, \\pythonturtle, \\cpp, \\ai, and \\responsemode.',
     'In summary, briefly state the learner-facing changes you made.',
@@ -1371,6 +1377,7 @@ module.exports = {
   generateActivityDraft,
   reviseActivityDraft,
   reviseQuestionDraft,
+  buildActivityGenerationInstructions,
   buildQuestionRevisionInstructions,
   buildQuestionRevisionResponseFormat,
   isOutputTokenTruncation,

@@ -332,6 +332,11 @@ export default function RunActivityWorkspace({
                         <div className="small text-muted mb-2">
                           Preview only — this does not save anything to the test attempt.
                         </div>
+                        {questionGradePreview.rubricSource === 'inferred' ? (
+                          <div className="small text-info mb-2">
+                            No explicit score bands were found for this question, so the sandbox used a small inferred preview rubric to show a real grading result.
+                          </div>
+                        ) : null}
                         <div className="mb-1">
                           {questionGradePreview.maxResp > 0 && (
                             <div>

@@ -563,6 +563,75 @@ test('creator draft route creates a test draft without section requirements', as
   }
 });
 
+test('creator draft route creates an assignment draft without section requirements', async () => {
+  await ensureSchema();
+  const creatorId = await createUser('creator');
+  const className = uniqueName('CreatorAssignmentClass');
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, level, topic_domain, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+    [className, 'This class focuses on lab assignments.', 'First-year college', 'Computer Science', creatorId]
+  );
+  const classId = remember('classes', classResult.insertId);
+
+  const originalGenerator = activityCreator.generateActivityDraft;
+  let capturedInput = null;
+  activityCreator.generateActivityDraft = async (input) => {
+    capturedInput = input;
+    return {
+      text: [
+        '\\title{Lab Project}',
+        '\\mode{assignment}',
+        '\\studentlevel{First-year college}',
+        '\\activitycontext{Computer Science}',
+        '\\retries{2}',
+        '\\questiongroup{Project Goal}',
+        '\\question{Describe the first milestone you will complete.}',
+        '\\textresponse{3}',
+        '\\sampleresponses{Describe a concrete first step.}',
+        '\\feedbackprompt{Keep the answer tied to an actual project milestone.}',
+        '\\endquestion',
+        '\\endquestiongroup',
+      ].join('\n'),
+      generation_status: 'generated',
+      generation_error: null,
+    };
+  };
+
+  try {
+    const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
+      method: 'POST',
+      body: {
+        title: 'Lab Project',
+        duration_minutes: 90,
+        mode: 'assignment',
+        description: 'Create a project-style lab assignment.',
+        selected_model: 'gpt-5-mini',
+        major_sections: [],
+        use_timed_sections: false,
+        timed_sections: [],
+        retries_required: 2,
+        createdBy: creatorId,
+      },
+    });
+
+    assert.equal(create.status, 201);
+    assert.equal(create.body.title, 'Lab Project');
+    assert.equal(create.body.mode, 'assignment');
+    assert.deepEqual(create.body.major_sections, []);
+    assert.equal(create.body.use_timed_sections, false);
+    assert.deepEqual(create.body.timed_sections, []);
+    assert.equal(create.body.retries_required, 2);
+    assert.deepEqual(capturedInput?.majorSections, []);
+    assert.deepEqual(capturedInput?.timedSections, []);
+    assert.match(create.body.content_text, /\\mode\{assignment\}/);
+    assert.doesNotMatch(create.body.content_text, /\\section\{/);
+    remember('activities', create.body.id);
+  } finally {
+    activityCreator.generateActivityDraft = originalGenerator;
+  }
+});
+
 test('activity creation rejects missing required fields before database insert', async () => {
   await ensureSchema();
   const classId = await createClassRecord();

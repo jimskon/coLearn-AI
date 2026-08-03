@@ -466,12 +466,13 @@ exports.createCreatorDraft = async (req, res) => {
   const durationMinutes = Number(duration_minutes);
   const normalizedMode = String(mode || 'group').trim().toLowerCase();
   const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
-  const normalizedMajorSections = normalizedMode === 'test'
+  const normalizedSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const normalizedMajorSections = normalizedSectionlessMode
     ? []
     : Array.isArray(major_sections)
       ? CREATOR_MAJOR_SECTION_OPTIONS.filter((sectionName) => major_sections.includes(sectionName))
       : [];
-  const normalizedUseTimedSections = normalizedMode === 'test' ? false : use_timed_sections === true;
+  const normalizedUseTimedSections = normalizedSectionlessMode ? false : use_timed_sections === true;
   const normalizedRetriesRequired = Math.max(0, Math.round(Number(retries_required) || 0));
   const normalizedTimedSections = normalizedUseTimedSections
     ? normalizedMajorSections.map((sectionName) => {
@@ -491,15 +492,15 @@ exports.createCreatorDraft = async (req, res) => {
     });
   }
 
-  if (!['group', 'demo', 'test'].includes(normalizedMode)) {
-    return res.status(400).json({ error: 'mode must be group, demo, or test.' });
+  if (!['group', 'demo', 'test', 'assignment'].includes(normalizedMode)) {
+    return res.status(400).json({ error: 'mode must be group, demo, assignment, or test.' });
   }
 
   if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
     return res.status(400).json({ error: 'selected_model is not supported.' });
   }
 
-  if (normalizedMode !== 'test' && !normalizedMajorSections.length) {
+  if (!normalizedSectionlessMode && !normalizedMajorSections.length) {
     return res.status(400).json({ error: 'major_sections must include at least one supported section.' });
   }
 

@@ -37,6 +37,15 @@ test('test-mode activity generation instructions require explicit scoring rubric
   assert.match(instructions, /every question must include an explicit \\score\{points,type\} rubric block/i);
 });
 
+test('assignment-mode activity generation instructions describe a project-style lab draft', () => {
+  const instructions = buildActivityGenerationInstructions('assignment');
+
+  assert.match(instructions, /mode=assignment/i);
+  assert.match(instructions, /project-style lab assignment/i);
+  assert.match(instructions, /milestone/i);
+  assert.match(instructions, /do not use section headings or section timers/i);
+});
+
 test('question revision uses strict structured output and recovers a complete direct-markup response', () => {
   const format = buildQuestionRevisionResponseFormat();
   assert.equal(format.type, 'json_schema');
@@ -149,6 +158,30 @@ test('renderFallbackTemplate omits section markup for test drafts', () => {
   assert.match(text, /\\mode\{test\}/);
   assert.doesNotMatch(text, /\\section\{/);
   assert.doesNotMatch(text, /Learning Objectives: 20 minutes/);
+  assert.match(text, /\\questiongroup\{Question Group 1\}/);
+});
+
+test('renderFallbackTemplate omits section markup for assignment drafts', () => {
+  const text = renderFallbackTemplate({
+    title: 'Lab Project',
+    mode: 'assignment',
+    durationMinutes: 90,
+    selectedModel: 'gpt-5-mini',
+    majorSections: ['Learning Objectives', 'Exploration'],
+    timedSections: [
+      { title: 'Learning Objectives', minutes: 30 },
+      { title: 'Exploration', minutes: 60 },
+    ],
+    retriesRequired: 0,
+    classLevel: 'First Year College',
+    classTopicDomain: 'Programming',
+    classDescription: 'A project-style lab assignment.',
+    activityDescription: 'A lab assignment draft.',
+  });
+
+  assert.match(text, /\\mode\{assignment\}/);
+  assert.doesNotMatch(text, /\\section\{/);
+  assert.doesNotMatch(text, /Learning Objectives: 30 minutes/);
   assert.match(text, /\\questiongroup\{Question Group 1\}/);
 });
 

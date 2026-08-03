@@ -477,6 +477,7 @@ export function parseSheetToBlocks(lines, options = {}) {
 
     if (mode === 'test') return 'test';
     if (mode === 'demo' || mode === 'playground') return 'demo';
+    if (mode === 'assignment') return 'assignment';
     if (mode === 'group' || mode === 'normal') return 'group';
 
     return 'group';

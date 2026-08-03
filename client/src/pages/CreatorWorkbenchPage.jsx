@@ -720,6 +720,7 @@ export default function CreatorWorkbenchPage() {
   const [advancedDraft, setAdvancedDraft] = useState(() => cloneEmptyAdvancedDraft());
   const normalizedDraftMode = String(draft.mode || '').trim().toLowerCase();
   const isTestDraft = normalizedDraftMode === 'test';
+  const isSectionlessDraft = normalizedDraftMode === 'test' || normalizedDraftMode === 'assignment';
   const [rawText, setRawText] = useState('');
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
@@ -1177,10 +1178,11 @@ export default function CreatorWorkbenchPage() {
     setDraft((prev) => {
       if (field === 'mode') {
         const nextMode = String(value || '').trim().toLowerCase();
+        const nextIsSectionless = nextMode === 'test' || nextMode === 'assignment';
         return {
           ...prev,
           mode: nextMode,
-          major_sections: nextMode === 'test' ? [] : [...majorSectionOptions],
+          major_sections: nextIsSectionless ? [] : [...majorSectionOptions],
         };
       }
       return { ...prev, [field]: value };
@@ -1188,7 +1190,7 @@ export default function CreatorWorkbenchPage() {
 
     if (field === 'duration_minutes' || field === 'mode') {
       setAdvancedDraft((prev) => {
-        if (field === 'mode' && String(value || '').trim().toLowerCase() === 'test') {
+        if (field === 'mode' && (String(value || '').trim().toLowerCase() === 'test' || String(value || '').trim().toLowerCase() === 'assignment')) {
           return {
             ...prev,
             include_timing: false,
@@ -1208,7 +1210,7 @@ export default function CreatorWorkbenchPage() {
   };
 
   const toggleMajorSection = (sectionName) => {
-    if (isTestDraft) return;
+    if (isSectionlessDraft) return;
     const selected = new Set(draft.major_sections || []);
     if (selected.has(sectionName)) selected.delete(sectionName);
     else selected.add(sectionName);
@@ -1243,7 +1245,7 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
-    if (normalizedDraftMode !== 'test' && !draft.major_sections?.length) {
+    if (!isSectionlessDraft && !draft.major_sections?.length) {
       setError('Select at least one section.');
       return;
     }
@@ -1254,7 +1256,7 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
-    const useTimedSections = normalizedDraftMode === 'test' ? false : advancedDraft.include_timing;
+    const useTimedSections = isSectionlessDraft ? false : advancedDraft.include_timing;
     const timedSections = useTimedSections
       ? draft.major_sections.map((title) => ({
         title,
@@ -1288,9 +1290,9 @@ export default function CreatorWorkbenchPage() {
           duration_minutes: durationMinutes,
           mode: draft.mode,
           selected_model: draft.selected_model,
-          major_sections: normalizedDraftMode === 'test' ? [] : draft.major_sections,
+          major_sections: isSectionlessDraft ? [] : draft.major_sections,
           use_timed_sections: useTimedSections,
-          timed_sections: normalizedDraftMode === 'test' ? [] : timedSections,
+          timed_sections: isSectionlessDraft ? [] : timedSections,
           retries_required: retriesRequired,
           description: appendAdvancedPrompt(draft.description, advancedPromptText),
           createdBy: user?.id,
@@ -1960,7 +1962,11 @@ export default function CreatorWorkbenchPage() {
                         <option value="group">Group</option>
                         <option value="demo">Demo</option>
                         <option value="test">Test</option>
+                        <option value="assignment">Assignment</option>
                       </Form.Select>
+                      <div className="text-muted small mt-1">
+                        Assignment mode is for project-style labs and does not require section structure.
+                      </div>
                     </Form.Group>
                   </div>
                 </div>
@@ -1974,7 +1980,7 @@ export default function CreatorWorkbenchPage() {
                   </Form.Select>
                 </Form.Group>
 
-                {!isTestDraft ? (
+                {!isSectionlessDraft ? (
                   <>
                     <Form.Group className="mb-3">
                       <Form.Label>Sections</Form.Label>

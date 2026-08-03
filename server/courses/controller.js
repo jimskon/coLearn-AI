@@ -332,7 +332,10 @@ async function getCourseActivities(req, res) {
       ? activities.filter(
           (activity) =>
             !activity.hidden &&
-            (activity.activity_type === 'demo' || activity.has_groups || activity.class_demo_mode)
+            (activity.activity_type === 'demo'
+              || activity.activity_type === 'assignment'
+              || activity.has_groups
+              || activity.class_demo_mode)
         )
       : activities;
 

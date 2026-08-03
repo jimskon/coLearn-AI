@@ -14,6 +14,7 @@ function normalizeAuthoredMode(rawMode) {
   const mode = String(rawMode || '').trim().toLowerCase();
   if (mode === 'test') return 'test';
   if (mode === 'demo' || mode === 'playground') return mode;
+  if (mode === 'assignment') return 'assignment';
   if (mode === 'group' || mode === 'normal') return 'group';
   return null;
 }
@@ -323,7 +324,16 @@ export default function ActivityPreview() {
             <Col md={6}>
               <div className="small text-muted mb-1">Mode</div>
               <div>
-                <Badge bg={modeValue === 'test' ? 'danger' : modeValue === 'playground' ? 'info' : 'secondary'} className="text-uppercase">
+                <Badge
+                  bg={
+                    modeValue === 'test'
+                      ? 'danger'
+                      : modeValue === 'playground' || modeValue === 'assignment'
+                        ? 'info'
+                        : 'secondary'
+                  }
+                  className="text-uppercase"
+                >
                   {modeValue}
                 </Badge>
                 {parseMeta?.isTest && (

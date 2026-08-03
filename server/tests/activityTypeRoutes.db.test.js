@@ -370,6 +370,7 @@ test('course activities returns canonical activity_type values inferred from sou
   const demoDocId = 'demoDoc12345678901234567890';
   const testDocId = 'testDoc12345678901234567890';
   const groupDocId = 'groupDoc1234567890123456789';
+  const assignmentDocId = 'assignmentDoc123456789012345';
 
   await createActivity({
     classId,
@@ -392,6 +393,13 @@ test('course activities returns canonical activity_type values inferred from sou
     isTest: 1,
     orderIndex: 3,
   });
+  await createActivity({
+    classId,
+    title: 'Assignment Activity',
+    sheetUrl: `https://docs.google.com/document/d/${assignmentDocId}/edit`,
+    isTest: 0,
+    orderIndex: 4,
+  });
 
   const response = await requestJson(instructor, `/api/courses/${courseId}/activities`, {
     overrides: {
@@ -399,6 +407,7 @@ test('course activities returns canonical activity_type values inferred from sou
         [demoDocId]: ['\\title{Demo}', '\\mode{demo}', '\\questiongroup{One}'],
         [testDocId]: ['\\title{Test}', '\\mode{test}', '\\questiongroup{One}'],
         [groupDocId]: ['\\title{Group}', '\\mode{group}', '\\questiongroup{One}'],
+        [assignmentDocId]: ['\\title{Assignment}', '\\mode{assignment}', '\\questiongroup{One}'],
       },
     },
   });
@@ -408,6 +417,7 @@ test('course activities returns canonical activity_type values inferred from sou
   assert.equal(byTitle.get('Demo Activity')?.activity_type, 'demo');
   assert.equal(byTitle.get('Test Activity')?.activity_type, 'test');
   assert.equal(byTitle.get('Group Activity')?.activity_type, 'group');
+  assert.equal(byTitle.get('Assignment Activity')?.activity_type, 'assignment');
 });
 
 test('student course activities include demos without groups and classify them as demo', async () => {
@@ -421,6 +431,7 @@ test('student course activities include demos without groups and classify them a
 
   const demoDocId = 'studentVisibleDemo12345678901234';
   const groupDocId = 'studentVisibleGroup1234567890123';
+  const assignmentDocId = 'studentVisibleAssignment1234567';
 
   await createActivity({
     classId,
@@ -436,12 +447,20 @@ test('student course activities include demos without groups and classify them a
     isTest: 0,
     orderIndex: 2,
   });
+  await createActivity({
+    classId,
+    title: 'Student Assignment Visible',
+    sheetUrl: `https://docs.google.com/document/d/${assignmentDocId}/edit`,
+    isTest: 0,
+    orderIndex: 3,
+  });
 
   const response = await requestJson(student, `/api/courses/${courseId}/activities`, {
     overrides: {
       docsById: {
         [demoDocId]: ['\\title{Student Demo Visible}', '\\mode{demo}', '\\questiongroup{One}'],
         [groupDocId]: ['\\title{Student Group Hidden Without Groups}', '\\mode{group}', '\\questiongroup{One}'],
+        [assignmentDocId]: ['\\title{Student Assignment Visible}', '\\mode{assignment}', '\\questiongroup{One}'],
       },
     },
   });
@@ -451,6 +470,7 @@ test('student course activities include demos without groups and classify them a
   assert.equal(byTitle.get('Student Demo Visible')?.activity_type, 'demo');
   assert.equal(byTitle.get('Student Demo Visible')?.has_groups, false);
   assert.equal(byTitle.has('Student Group Hidden Without Groups'), false);
+  assert.equal(byTitle.get('Student Assignment Visible')?.activity_type, 'assignment');
 
   const openDemo = await requestJson(
     student,

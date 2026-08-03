@@ -13,6 +13,7 @@ test('normalizeActivityType maps supported authored modes to canonical types', (
   assert.equal(normalizeActivityType('test'), 'test');
   assert.equal(normalizeActivityType('demo'), 'demo');
   assert.equal(normalizeActivityType('playground'), 'demo');
+  assert.equal(normalizeActivityType('assignment'), 'assignment');
   assert.equal(normalizeActivityType('weird-mode'), null);
 });
 
@@ -47,6 +48,10 @@ test('inferActivityTypeFromLines supports explicit group and demo modes', () => 
     inferActivityTypeFromLines(['\\mode{playground}', '\\questiongroup{One}']),
     'demo'
   );
+  assert.equal(
+    inferActivityTypeFromLines(['\\mode{assignment}', '\\questiongroup{One}']),
+    'assignment'
+  );
 });
 
 test('inferAuthoredModeFromLines preserves playground as authored mode', () => {
@@ -57,6 +62,10 @@ test('inferAuthoredModeFromLines preserves playground as authored mode', () => {
   assert.equal(
     inferAuthoredModeFromLines(['\\mode{demo}', '\\questiongroup{One}']),
     'demo'
+  );
+  assert.equal(
+    inferAuthoredModeFromLines(['\\mode{assignment}', '\\questiongroup{One}']),
+    'assignment'
   );
 });
 

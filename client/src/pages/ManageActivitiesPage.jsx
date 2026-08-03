@@ -129,16 +129,20 @@ function ModeBadge({ activity }) {
     ? 'Test'
     : normalizedMode === 'playground'
       ? 'Playground'
-    : normalizedMode === 'demo'
-      ? 'Demo'
-      : 'Group';
+      : normalizedMode === 'demo'
+        ? 'Demo'
+        : normalizedMode === 'assignment'
+          ? 'Assignment'
+          : 'Group';
   const variant = normalizedMode === 'test'
     ? 'danger'
     : normalizedMode === 'playground'
       ? 'info'
-    : normalizedMode === 'demo'
-      ? 'info'
-      : 'secondary';
+      : normalizedMode === 'demo'
+        ? 'info'
+        : normalizedMode === 'assignment'
+          ? 'success'
+          : 'secondary';
 
   return <Badge bg={variant}>{label}</Badge>;
 }
@@ -258,13 +262,14 @@ export default function ManageActivitiesPage() {
 
       if (name === 'mode') {
         const nextMode = String(value || '').trim().toLowerCase();
+        const nextIsSectionlessMode = nextMode === 'test' || nextMode === 'assignment';
         const nextMajorSections = [...majorSectionOptions];
         return {
           ...prev,
           mode: nextMode,
-          major_sections: nextMode === 'test' ? [] : nextMajorSections,
-          use_timed_sections: nextMode === 'test' ? false : prev.use_timed_sections,
-          section_minutes: nextMode === 'test'
+          major_sections: nextIsSectionlessMode ? [] : nextMajorSections,
+          use_timed_sections: nextIsSectionlessMode ? false : prev.use_timed_sections,
+          section_minutes: nextIsSectionlessMode
             ? {}
             : distributeMinutes(prev.duration_minutes, nextMajorSections),
         };
@@ -282,7 +287,8 @@ export default function ManageActivitiesPage() {
     });
   };
 
-  const isCreateDraftTestMode = String(createDraft.mode || '').trim().toLowerCase() === 'test';
+  const createDraftMode = String(createDraft.mode || '').trim().toLowerCase();
+  const isCreateDraftSectionlessMode = createDraftMode === 'test' || createDraftMode === 'assignment';
 
   const handleSectionMinutesChange = (sectionName, value) => {
     setCreateDraft((prev) => ({
@@ -723,13 +729,13 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    if (!isCreateDraftTestMode && (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length)) {
+    if (!isCreateDraftSectionlessMode && (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length)) {
       setCreateNote('Select at least one major section for the draft structure.');
       return;
     }
 
     let timedSections = [];
-    if (!isCreateDraftTestMode && createDraft.use_timed_sections) {
+    if (!isCreateDraftSectionlessMode && createDraft.use_timed_sections) {
       timedSections = createDraft.major_sections.map((sectionName) => ({
         title: sectionName,
         minutes: parseInt(createDraft.section_minutes?.[sectionName], 10),
@@ -758,9 +764,9 @@ export default function ManageActivitiesPage() {
           duration_minutes: durationMinutes,
           mode: createDraft.mode,
           selected_model: createDraft.selected_model,
-          major_sections: isCreateDraftTestMode ? [] : createDraft.major_sections,
-          use_timed_sections: isCreateDraftTestMode ? false : createDraft.use_timed_sections,
-          timed_sections: isCreateDraftTestMode ? [] : timedSections,
+          major_sections: isCreateDraftSectionlessMode ? [] : createDraft.major_sections,
+          use_timed_sections: isCreateDraftSectionlessMode ? false : createDraft.use_timed_sections,
+          timed_sections: isCreateDraftSectionlessMode ? [] : timedSections,
           retries_required: retriesRequired,
           description: createDraft.description,
           createdBy: user?.id,
@@ -961,7 +967,11 @@ export default function ManageActivitiesPage() {
                   <option value="group">Group</option>
                   <option value="demo">Demo</option>
                   <option value="test">Test</option>
+                  <option value="assignment">Assignment</option>
                 </Form.Select>
+                <div className="text-muted small mt-2">
+                  Assignment mode is best for project-style labs and does not require section structure.
+                </div>
               </Form.Group>
             </div>
           </div>
@@ -1021,7 +1031,7 @@ export default function ManageActivitiesPage() {
             />
           </Form.Group>
 
-          {!isCreateDraftTestMode ? (
+          {!isCreateDraftSectionlessMode ? (
             <Form.Group className="mt-3">
               <Form.Label>Major Sections</Form.Label>
               <div className="row g-2">
@@ -1043,7 +1053,7 @@ export default function ManageActivitiesPage() {
             </Form.Group>
           ) : null}
 
-          {!isCreateDraftTestMode && createDraft.use_timed_sections ? (
+          {!isCreateDraftSectionlessMode && createDraft.use_timed_sections ? (
             <Form.Group className="mt-3">
               <Form.Label>Section Timing</Form.Label>
               <div className="row g-2">
@@ -1065,9 +1075,9 @@ export default function ManageActivitiesPage() {
             </Form.Group>
           ) : null}
 
-          {isCreateDraftTestMode ? (
+          {isCreateDraftSectionlessMode ? (
             <Alert variant="info" className="mt-3">
-              Test drafts are generated as one continuous exam, so section structure is hidden.
+              This mode is generated without section structure or section timing.
             </Alert>
           ) : null}
 

@@ -5,6 +5,7 @@ function normalizeActivityType(rawMode) {
 
   if (mode === 'test') return 'test';
   if (mode === 'demo' || mode === 'playground') return 'demo';
+  if (mode === 'assignment') return 'assignment';
   if (mode === 'group' || mode === 'normal') return 'group';
 
   return null;
@@ -15,6 +16,7 @@ function normalizeAuthoredMode(rawMode) {
 
   if (mode === 'test') return 'test';
   if (mode === 'demo' || mode === 'playground') return mode;
+  if (mode === 'assignment') return 'assignment';
   if (mode === 'group' || mode === 'normal') return 'group';
 
   return null;

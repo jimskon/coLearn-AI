@@ -10,6 +10,7 @@ const TYPE_LABELS = {
   test: 'Test',
   demo: 'Demo',
   playground: 'Playground',
+  assignment: 'Assignment',
 };
 
 const TYPE_BADGE_VARIANTS = {
@@ -17,6 +18,7 @@ const TYPE_BADGE_VARIANTS = {
   test: 'warning',
   demo: 'info',
   playground: 'info',
+  assignment: 'success',
 };
 
 
@@ -84,7 +86,10 @@ export default function CourseActivitiesPage() {
 
   const handleDoActivity = async (activity, isInstructor = false) => {
     const activityId = activity.activity_id;
-    const activityType = activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
+    const activityType =
+      activity.activity_type
+      || activity.authored_mode
+      || (activity.is_test === 1 ? 'test' : 'group');
     const isTest = activityType === 'test';
     const isDemo = activityType === 'demo';
     const isDemoClassGroup = isDemoClass && !isTest && !isDemo;
@@ -221,7 +226,9 @@ export default function CourseActivitiesPage() {
             {activities.map((activity) => {
               const title = activity.title || activity.activity_name || 'Untitled Activity';
               const activityType =
-                activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
+                activity.activity_type
+                || activity.authored_mode
+                || (activity.is_test === 1 ? 'test' : 'group');
               const displayType = activity.authored_mode || activityType;
               const isTest = activityType === 'test';
               const isDemo = activityType === 'demo';

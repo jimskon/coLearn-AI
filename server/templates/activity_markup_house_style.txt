@@ -40,6 +40,7 @@ Rules illustrated above:
 - If you include multiple-choice questions, use \multiplechoice{answer} only for questions with a correct answer, and use \multiplechoice{} for survey/opinion questions with no correct answer.
 - Use \responsemode{answer} for ordinary questions and \responsemode{questions} when the student should write questions instead of answers.
 - `\responsemode{answer}` is the default for legacy content, but include it explicitly in new questions when practical.
+- For `\mode{assignment}`, create a project-style lab assignment with milestone steps and a final assembled solution. Assignment drafts are usually sectionless unless the creator explicitly asks for sections.
 - In test mode, include an explicit \score{points,type} rubric block for every question so grading is unambiguous.
 - Never invent a fake answer value for a survey multiple-choice question just to satisfy the parser.
 - Do not paste raw code directly into question text.

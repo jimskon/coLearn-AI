@@ -458,10 +458,12 @@ exports.createCreatorDraft = async (req, res) => {
   const durationMinutes = Number(duration_minutes);
   const normalizedMode = String(mode || 'group').trim().toLowerCase();
   const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
-  const normalizedMajorSections = Array.isArray(major_sections)
-    ? CREATOR_MAJOR_SECTION_OPTIONS.filter((sectionName) => major_sections.includes(sectionName))
-    : [];
-  const normalizedUseTimedSections = use_timed_sections === true;
+  const normalizedMajorSections = normalizedMode === 'test'
+    ? []
+    : Array.isArray(major_sections)
+      ? CREATOR_MAJOR_SECTION_OPTIONS.filter((sectionName) => major_sections.includes(sectionName))
+      : [];
+  const normalizedUseTimedSections = normalizedMode === 'test' ? false : use_timed_sections === true;
   const normalizedRetriesRequired = Math.max(0, Math.round(Number(retries_required) || 0));
   const normalizedTimedSections = normalizedUseTimedSections
     ? normalizedMajorSections.map((sectionName) => {
@@ -489,7 +491,7 @@ exports.createCreatorDraft = async (req, res) => {
     return res.status(400).json({ error: 'selected_model is not supported.' });
   }
 
-  if (!normalizedMajorSections.length) {
+  if (normalizedMode !== 'test' && !normalizedMajorSections.length) {
     return res.status(400).json({ error: 'major_sections must include at least one supported section.' });
   }
 

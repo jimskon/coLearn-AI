@@ -604,6 +604,7 @@ export default function CreatorWorkbenchPage() {
     selected_model: isDemoCreator ? 'gpt-5-mini' : emptyDraft.selected_model,
   }));
   const [advancedDraft, setAdvancedDraft] = useState(() => cloneEmptyAdvancedDraft());
+  const isTestDraft = draft.mode === 'test';
   const [rawText, setRawText] = useState('');
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
@@ -1044,25 +1045,39 @@ export default function CreatorWorkbenchPage() {
   const handleDraftChange = (field, value) => {
     setDraft((prev) => {
       if (field === 'mode') {
-        return { ...prev, mode: value, major_sections: [...majorSectionOptions] };
+        const nextMode = String(value || '').trim().toLowerCase();
+        return {
+          ...prev,
+          mode: nextMode,
+          major_sections: nextMode === 'test' ? [] : [...majorSectionOptions],
+        };
       }
       return { ...prev, [field]: value };
     });
 
     if (field === 'duration_minutes' || field === 'mode') {
-      setAdvancedDraft((prev) => prev.include_timing
-        ? {
-          ...prev,
-          timed_section_minutes: allocateTimedSectionMinutes(
-            field === 'mode' ? majorSectionOptions : draft.major_sections,
-            field === 'duration_minutes' ? value : draft.duration_minutes
-          ),
+      setAdvancedDraft((prev) => {
+        if (field === 'mode' && String(value || '').trim().toLowerCase() === 'test') {
+          return {
+            ...prev,
+            include_timing: false,
+          };
         }
-        : prev);
+        return prev.include_timing
+          ? {
+            ...prev,
+            timed_section_minutes: allocateTimedSectionMinutes(
+              field === 'mode' ? majorSectionOptions : draft.major_sections,
+              field === 'duration_minutes' ? value : draft.duration_minutes
+            ),
+          }
+          : prev;
+      });
     }
   };
 
   const toggleMajorSection = (sectionName) => {
+    if (isTestDraft) return;
     const selected = new Set(draft.major_sections || []);
     if (selected.has(sectionName)) selected.delete(sectionName);
     else selected.add(sectionName);
@@ -1097,7 +1112,7 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
-    if (!draft.major_sections?.length) {
+    if (draft.mode !== 'test' && !draft.major_sections?.length) {
       setError('Select at least one section.');
       return;
     }
@@ -1108,7 +1123,7 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
-    const useTimedSections = advancedDraft.include_timing;
+    const useTimedSections = draft.mode === 'test' ? false : advancedDraft.include_timing;
     const timedSections = useTimedSections
       ? draft.major_sections.map((title) => ({
         title,
@@ -1142,9 +1157,9 @@ export default function CreatorWorkbenchPage() {
           duration_minutes: durationMinutes,
           mode: draft.mode,
           selected_model: draft.selected_model,
-          major_sections: draft.major_sections,
+          major_sections: draft.mode === 'test' ? [] : draft.major_sections,
           use_timed_sections: useTimedSections,
-          timed_sections: timedSections,
+          timed_sections: draft.mode === 'test' ? [] : timedSections,
           retries_required: retriesRequired,
           description: appendAdvancedPrompt(draft.description, advancedPromptText),
           createdBy: user?.id,
@@ -1823,68 +1838,72 @@ export default function CreatorWorkbenchPage() {
                   </Form.Select>
                 </Form.Group>
 
-                <Form.Group className="mb-3">
-                  <Form.Label>Sections</Form.Label>
-                  <div className="d-grid gap-1">
-                    {majorSectionOptions.map((sectionName) => (
-                      <Form.Check
-                        key={sectionName}
-                        type="checkbox"
-                        id={`creator-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
-                        label={sectionName}
-                        checked={draft.major_sections.includes(sectionName)}
-                        onChange={() => toggleMajorSection(sectionName)}
-                      />
-                    ))}
-                  </div>
-                </Form.Group>
-
-                <div className="border rounded p-2 mb-3">
-                  <Form.Check
-                    type="checkbox"
-                    id="creator-add-section-timers"
-                    label="Add timers to sections"
-                    checked={advancedDraft.include_timing}
-                    onChange={(event) => setAdvancedDraft((prev) => ({
-                      ...prev,
-                      include_timing: event.target.checked,
-                      timed_section_minutes: event.target.checked
-                        ? allocateTimedSectionMinutes(draft.major_sections, draft.duration_minutes)
-                        : prev.timed_section_minutes,
-                    }))}
-                  />
-                  <div className="text-muted small mt-1">
-                    Each timer is shared by the question groups in its section.
-                  </div>
-                  {advancedDraft.include_timing ? (
-                    <div className="d-grid gap-2 mt-2">
-                      {draft.major_sections.map((sectionName) => (
-                        <div className="d-flex align-items-center gap-2" key={sectionName}>
-                          <Form.Label className="mb-0 flex-grow-1" htmlFor={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}>
-                            {sectionName}
-                          </Form.Label>
-                          <Form.Control
-                            id={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
-                            type="number"
-                            min="1"
-                            step="1"
-                            aria-label={`${sectionName} minutes`}
-                            style={{ width: '5.5rem' }}
-                            value={advancedDraft.timed_section_minutes?.[sectionName] || ''}
-                            onChange={(event) => setAdvancedDraft((prev) => ({
-                              ...prev,
-                              timed_section_minutes: {
-                                ...prev.timed_section_minutes,
-                                [sectionName]: event.target.value,
-                              },
-                            }))}
+                {!isTestDraft ? (
+                  <>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Sections</Form.Label>
+                      <div className="d-grid gap-1">
+                        {majorSectionOptions.map((sectionName) => (
+                          <Form.Check
+                            key={sectionName}
+                            type="checkbox"
+                            id={`creator-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                            label={sectionName}
+                            checked={draft.major_sections.includes(sectionName)}
+                            onChange={() => toggleMajorSection(sectionName)}
                           />
-                          <span className="text-muted small">min</span>
+                        ))}
+                      </div>
+                    </Form.Group>
+
+                    <div className="border rounded p-2 mb-3">
+                      <Form.Check
+                        type="checkbox"
+                        id="creator-add-section-timers"
+                        label="Add timers to sections"
+                        checked={advancedDraft.include_timing}
+                        onChange={(event) => setAdvancedDraft((prev) => ({
+                          ...prev,
+                          include_timing: event.target.checked,
+                          timed_section_minutes: event.target.checked
+                            ? allocateTimedSectionMinutes(draft.major_sections, draft.duration_minutes)
+                            : prev.timed_section_minutes,
+                        }))}
+                      />
+                      <div className="text-muted small mt-1">
+                        Each timer is shared by the question groups in its section.
+                      </div>
+                      {advancedDraft.include_timing ? (
+                        <div className="d-grid gap-2 mt-2">
+                          {draft.major_sections.map((sectionName) => (
+                            <div className="d-flex align-items-center gap-2" key={sectionName}>
+                              <Form.Label className="mb-0 flex-grow-1" htmlFor={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}>
+                                {sectionName}
+                              </Form.Label>
+                              <Form.Control
+                                id={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                                type="number"
+                                min="1"
+                                step="1"
+                                aria-label={`${sectionName} minutes`}
+                                style={{ width: '5.5rem' }}
+                                value={advancedDraft.timed_section_minutes?.[sectionName] || ''}
+                                onChange={(event) => setAdvancedDraft((prev) => ({
+                                  ...prev,
+                                  timed_section_minutes: {
+                                    ...prev.timed_section_minutes,
+                                    [sectionName]: event.target.value,
+                                  },
+                                }))}
+                              />
+                              <span className="text-muted small">min</span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      ) : null}
                     </div>
-                  ) : null}
-                </div>
+                  </>
+                ) : null}
 
                 <Form.Group className="mb-3" ref={tutorialRefs.brief}>
                   <Form.Label>Activity Description</Form.Label>

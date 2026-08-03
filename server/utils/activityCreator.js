@@ -86,6 +86,9 @@ function renderFallbackTemplate({
   activityDescription,
 }) {
   const template = fs.readFileSync(CREATOR_TEMPLATE_PATH, 'utf8');
+  const isTestMode = String(mode || '').trim().toLowerCase() === 'test';
+  const renderedMajorSections = isTestMode ? [] : (majorSections || []);
+  const renderedTimedSections = isTestMode ? [] : timedSections;
 
   return template
     .replace('__TITLE__', sanitizeHeaderValue(title, 'New Activity'))
@@ -95,12 +98,12 @@ function renderFallbackTemplate({
     .replace('__DURATION_MINUTES__', String(durationMinutes))
     .replace('__SELECTED_MODEL__', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
     .replace('__RETRIES_REQUIRED__', String(Math.max(0, Math.round(Number(retriesRequired) || 0))))
-    .replace('__MAJOR_SECTIONS_BLOCK__', normalizeTextBlock((majorSections || []).join(', '), 'Not specified.'))
+    .replace('__MAJOR_SECTIONS_BLOCK__', normalizeTextBlock(renderedMajorSections.join(', '), isTestMode ? 'No sections requested.' : 'Not specified.'))
     .replace('__TIMED_SECTIONS_BLOCK__', normalizeTextBlock(
-      normalizeTimedSections(timedSections).map((section) => `${section.title}: ${section.minutes} minutes`).join('\n'),
-      'No section timers requested.'
+      normalizeTimedSections(renderedTimedSections).map((section) => `${section.title}: ${section.minutes} minutes`).join('\n'),
+      isTestMode ? 'No section timers are used for test drafts.' : 'No section timers requested.'
     ))
-    .replace('__REQUESTED_SECTION_MARKUP__', renderRequestedSectionMarkup(majorSections, timedSections))
+    .replace('__REQUESTED_SECTION_MARKUP__', isTestMode ? '' : renderRequestedSectionMarkup(majorSections, timedSections))
     .replace('__CLASS_DESCRIPTION_BLOCK__', normalizeTextBlock(classDescription))
     .replace('__ACTIVITY_DESCRIPTION_BLOCK__', normalizeTextBlock(activityDescription));
 }
@@ -601,9 +604,12 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
     return null;
   }
 
-  const normalizedSections = Array.isArray(fallbackInput?.majorSections) && fallbackInput.majorSections.length
-    ? fallbackInput.majorSections
-    : ['Learning Objectives', 'Exploration', 'Concept Invention', 'Application', 'Reflection'];
+  const isTestMode = String(fallbackInput?.mode || '').trim().toLowerCase() === 'test';
+  const normalizedSections = isTestMode
+    ? []
+    : Array.isArray(fallbackInput?.majorSections) && fallbackInput.majorSections.length
+      ? fallbackInput.majorSections
+      : ['Learning Objectives', 'Exploration', 'Concept Invention', 'Application', 'Reflection'];
 
   const metadata = {
     title: sanitizeHeaderValue(fallbackInput?.title, 'New Activity'),
@@ -685,7 +691,7 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
       continue;
     }
 
-    if (sectionSet.has(line)) {
+    if (!isTestMode && sectionSet.has(line)) {
       closeObjectivesList();
       closeQuestionGroup();
       currentSection = line;
@@ -780,30 +786,43 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
 }
 
 function normalizeGeneratedDraft(text, fallbackInput) {
+  const isTestMode = String(fallbackInput?.mode || '').trim().toLowerCase() === 'test';
+  const normalizedFallbackInput = isTestMode
+    ? {
+      ...fallbackInput,
+      majorSections: [],
+      timedSections: [],
+    }
+    : fallbackInput;
   const stripped = repairUnsupportedStructuredResponsePrompts(
     decodeCommonHtmlEntities(
       normalizeLegacyCommandSyntax(stripCodeFences(text))
     )
   );
-  const plaintextMarkup = coercePlaintextActivityToMarkup(stripped, fallbackInput);
+  const plaintextMarkup = coercePlaintextActivityToMarkup(stripped, normalizedFallbackInput);
   const cleaned = repairCodingQuestionsToUsePythonBlocks(
     repairGeneratedMarkupClosures(
       normalizePythonTurtleDirectives(
         applyTimedSectionDirectives(
           applyRetriesDirective(
             normalizeLearningObjectivesSection(plaintextMarkup || stripped),
-            fallbackInput.retriesRequired
+            normalizedFallbackInput.retriesRequired
           ),
-          fallbackInput.timedSections
+          normalizedFallbackInput.timedSections
         )
       )
     )
   );
-  const normalized = cleaned;
+  const normalized = isTestMode
+    ? cleaned
+        .replace(/^\\section\{[^\n]*\}(?:\{\d+\})?$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+    : cleaned;
 
   if (!normalized.includes('\\title{') || !normalized.includes('\\questiongroup{')) {
     return {
-      text: renderFallbackTemplate(fallbackInput),
+      text: renderFallbackTemplate(normalizedFallbackInput),
       usedFallback: true,
       reason: 'Model output did not pass activity markup validation.',
       rawOutput: cleaned,
@@ -853,6 +872,8 @@ async function generateWithOpenAI({
 }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const normalizedTimedSections = normalizeTimedSections(timedSections);
+  const normalizedMode = String(mode || 'group').trim().toLowerCase();
+  const isTestMode = normalizedMode === 'test';
   const timeoutMs = getCreatorOpenAiTimeoutMs();
 
   const system = [
@@ -861,13 +882,17 @@ async function generateWithOpenAI({
     'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
     'Only include \\info blocks if the creator explicitly asks for them.',
     'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
-    'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
+    isTestMode
+      ? 'For mode=test, create one continuous assessment with no \\section commands and no section timers.'
+      : 'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
     'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
     'Keep each question concise. Keep sample responses and feedback prompts short.',
     'Do not echo the creator brief, requested sections, diagnostics, or planning notes into the activity body.',
     'It is better to finish a complete compact activity than to begin a longer activity and stop halfway through.',
-    'Treat Learning Objectives as a structural section, not as an interactive activity, unless the creator explicitly asks otherwise.',
-    'If a timed section plan is provided, use the exact section titles and emit them as \\section{Title}{minutes}.',
+    isTestMode
+      ? 'Do not use section headings or section timers for test drafts.'
+      : 'Treat Learning Objectives as a structural section, not as an interactive activity, unless the creator explicitly asks otherwise.',
+    !isTestMode && 'If a timed section plan is provided, use the exact section titles and emit them as \\section{Title}{minutes}.',
     'If the activity uses turtle graphics, always wrap the turtle code in \\pythonturtle ... \\endpythonturtle.',
     'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
     'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
@@ -890,17 +915,21 @@ async function generateWithOpenAI({
     'Make the activity reflect the creator brief, not generic filler.',
     '',
     CREATOR_HOUSE_STYLE_SUMMARY,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   const user = [
     `Activity title: ${title}`,
     `Mode: ${mode}`,
     `Target duration (minutes): ${durationMinutes}`,
     `Global retries required before bypass: ${Math.max(0, Math.round(Number(retriesRequired) || 0))}`,
-    `Use these major sections in this order: ${(majorSections || []).join(' | ') || 'Learning Objectives | Exploration | Concept Invention | Application | Reflection'}`,
-    normalizedTimedSections.length
-      ? `Timed sections (use these exact titles and minutes):\n${normalizedTimedSections.map((section) => `- ${section.title}: ${section.minutes}`).join('\n')}`
-      : 'Timed sections: none requested.',
+    isTestMode
+      ? 'No section headings or section timers should appear in the draft.'
+      : `Use these major sections in this order: ${(majorSections || []).join(' | ') || 'Learning Objectives | Exploration | Concept Invention | Application | Reflection'}`,
+    isTestMode
+      ? 'Timed sections: none requested.'
+      : normalizedTimedSections.length
+        ? `Timed sections (use these exact titles and minutes):\n${normalizedTimedSections.map((section) => `- ${section.title}: ${section.minutes}`).join('\n')}`
+        : 'Timed sections: none requested.',
     `Class level: ${classLevel || 'Not specified'}`,
     `Topic/domain: ${classTopicDomain || 'Not specified'}`,
     `Class description:\n${classDescription || 'Not specified.'}`,

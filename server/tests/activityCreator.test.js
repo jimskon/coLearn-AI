@@ -8,6 +8,7 @@ const {
   normalizeGeneratedDraft,
   normalizeQuestionMarkup,
   parseQuestionRevisionOutput,
+  renderFallbackTemplate,
 } = require('../utils/activityCreator');
 
 test('question revision instructions require learner-facing prompt updates when the task changes', () => {
@@ -112,6 +113,30 @@ test('normalizeGeneratedDraft salvages structured plain-text activity output int
   assert.match(result.text, /\\python/);
   assert.match(result.text, /\\sampleresponses\{It greets the user and sometimes prints a pizza message\.\}/);
   assert.match(result.text, /\\feedbackprompt\{Compare your prediction with the actual output\.\}/);
+});
+
+test('renderFallbackTemplate omits section markup for test drafts', () => {
+  const text = renderFallbackTemplate({
+    title: 'Final Exam',
+    mode: 'test',
+    durationMinutes: 60,
+    selectedModel: 'gpt-5-mini',
+    majorSections: ['Learning Objectives', 'Exploration'],
+    timedSections: [
+      { title: 'Learning Objectives', minutes: 20 },
+      { title: 'Exploration', minutes: 40 },
+    ],
+    retriesRequired: 0,
+    classLevel: 'First Year College',
+    classTopicDomain: 'Programming',
+    classDescription: 'A closed-book assessment.',
+    activityDescription: 'A final test draft.',
+  });
+
+  assert.match(text, /\\mode\{test\}/);
+  assert.doesNotMatch(text, /\\section\{/);
+  assert.doesNotMatch(text, /Learning Objectives: 20 minutes/);
+  assert.match(text, /\\questiongroup\{Question Group 1\}/);
 });
 
 test('normalizeGeneratedDraft repairs missing endquestion markers in generated markup', () => {

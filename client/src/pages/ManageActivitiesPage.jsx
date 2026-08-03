@@ -120,7 +120,9 @@ function SourceBadge({ sourceType }) {
 
 function ModeBadge({ activity }) {
   const normalizedMode = String(
-    activity?.mode || (Number(activity?.is_test) === 1 ? 'test' : '')
+    activity?.authored_mode
+    || activity?.mode
+    || (Number(activity?.is_test) === 1 ? 'test' : '')
   ).trim().toLowerCase();
 
   const label = normalizedMode === 'test'

@@ -604,7 +604,8 @@ export default function CreatorWorkbenchPage() {
     selected_model: isDemoCreator ? 'gpt-5-mini' : emptyDraft.selected_model,
   }));
   const [advancedDraft, setAdvancedDraft] = useState(() => cloneEmptyAdvancedDraft());
-  const isTestDraft = draft.mode === 'test';
+  const normalizedDraftMode = String(draft.mode || '').trim().toLowerCase();
+  const isTestDraft = normalizedDraftMode === 'test';
   const [rawText, setRawText] = useState('');
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
@@ -1112,7 +1113,7 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
-    if (draft.mode !== 'test' && !draft.major_sections?.length) {
+    if (normalizedDraftMode !== 'test' && !draft.major_sections?.length) {
       setError('Select at least one section.');
       return;
     }
@@ -1123,7 +1124,7 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
-    const useTimedSections = draft.mode === 'test' ? false : advancedDraft.include_timing;
+    const useTimedSections = normalizedDraftMode === 'test' ? false : advancedDraft.include_timing;
     const timedSections = useTimedSections
       ? draft.major_sections.map((title) => ({
         title,
@@ -1157,9 +1158,9 @@ export default function CreatorWorkbenchPage() {
           duration_minutes: durationMinutes,
           mode: draft.mode,
           selected_model: draft.selected_model,
-          major_sections: draft.mode === 'test' ? [] : draft.major_sections,
+          major_sections: normalizedDraftMode === 'test' ? [] : draft.major_sections,
           use_timed_sections: useTimedSections,
-          timed_sections: draft.mode === 'test' ? [] : timedSections,
+          timed_sections: normalizedDraftMode === 'test' ? [] : timedSections,
           retries_required: retriesRequired,
           description: appendAdvancedPrompt(draft.description, advancedPromptText),
           createdBy: user?.id,

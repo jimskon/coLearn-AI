@@ -21,6 +21,7 @@ export default function computeRunModePolicy({
   const isInstructorView = normalizedMode === RUN_ACTIVITY_MODES.INSTRUCTOR_VIEW;
   const isActivityPreview = normalizedMode === RUN_ACTIVITY_MODES.ACTIVITY_PREVIEW;
   const isCreatorSandbox = normalizedMode === RUN_ACTIVITY_MODES.CREATOR_SANDBOX;
+  const isCreatorTestRun = normalizedMode === RUN_ACTIVITY_MODES.CREATOR_TEST_RUN;
   const isSandbox = isCreatorSandbox;
   const isInstructorPreview = isInstructorView;
 
@@ -28,6 +29,7 @@ export default function computeRunModePolicy({
     !!user &&
     (
       isCreatorSandbox ||
+      isCreatorTestRun ||
       (
         isStudentRun &&
         (
@@ -46,6 +48,7 @@ export default function computeRunModePolicy({
 
   const canEditAnswers =
     isCreatorSandbox ||
+    isCreatorTestRun ||
     (
       isStudentRun &&
       isActive &&
@@ -53,12 +56,12 @@ export default function computeRunModePolicy({
     );
 
   const canSubmitGroup = isCreatorSandbox || (isStudentRun && isActive && !isTestMode);
-  const canSubmitTest = isStudentRun && isTestMode && isStudent;
+  const canSubmitTest = isTestMode && (isStudentRun || isCreatorTestRun) && (isStudent || isCreatorTestRun);
   const canRunAI = isCreatorSandbox || (isStudentRun && isActive && !isTestMode);
-  const canPersistDrafts = isStudentRun;
-  const canPersistSubmissions = isStudentRun;
-  const canPersistAIResults = isStudentRun;
-  const loadPersistedResponses = isStudentRun || isInstructorView;
+  const canPersistDrafts = isStudentRun || isCreatorTestRun;
+  const canPersistSubmissions = isStudentRun || isCreatorTestRun;
+  const canPersistAIResults = isStudentRun || isCreatorTestRun;
+  const loadPersistedResponses = isStudentRun || isInstructorView || isCreatorTestRun;
 
   return {
     mode: normalizedMode,
@@ -68,6 +71,7 @@ export default function computeRunModePolicy({
     isInstructorView,
     isActivityPreview,
     isCreatorSandbox,
+    isCreatorTestRun,
     isInstructor,
     isStudent,
     isActive,

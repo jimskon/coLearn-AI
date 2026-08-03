@@ -152,3 +152,23 @@ test('creator sandbox can run feedback but cannot write any real instance state'
   assert.equal(policy.canPersistAIResults, false);
   assert.equal(policy.loadPersistedResponses, false);
 });
+
+test('creator test run behaves like a test-taking mode for creators', () => {
+  const policy = computeRunModePolicy({
+    mode: RUN_ACTIVITY_MODES.CREATOR_TEST_RUN,
+    user: { id: 9, role: 'creator' },
+    activity: { is_test: 1 },
+    isTestMode: true,
+  });
+
+  assert.equal(policy.mode, RUN_ACTIVITY_MODES.CREATOR_TEST_RUN);
+  assert.equal(policy.isCreatorTestRun, true);
+  assert.equal(policy.isActive, true);
+  assert.equal(policy.canEditAnswers, true);
+  assert.equal(policy.canSubmitTest, true);
+  assert.equal(policy.canSubmitGroup, false);
+  assert.equal(policy.canRunAI, false);
+  assert.equal(policy.canPersistDrafts, true);
+  assert.equal(policy.canPersistSubmissions, true);
+  assert.equal(policy.loadPersistedResponses, true);
+});

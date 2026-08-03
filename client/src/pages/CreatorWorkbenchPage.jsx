@@ -1291,9 +1291,35 @@ export default function CreatorWorkbenchPage() {
     }
   };
 
+  const openCreatorTestRun = async () => {
+    if (!activity?.id || proposal) return;
+    setSandboxBusy(true);
+    setError('');
+    try {
+      await saveSource(rawText);
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/sandbox-instance`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.instanceId) throw new Error(data?.error || 'Failed to open test run.');
+      setSandboxUrl(`${window.location.origin}/run/${data.instanceId}?mode=creator_test&embed=1&t=${Date.now()}`);
+      setRightMode('test-run');
+    } catch (err) {
+      console.error('Open creator test run failed:', err);
+      setError(err?.message || String(err));
+    } finally {
+      setSandboxBusy(false);
+    }
+  };
+
   const selectRightMode = (mode) => {
     if (mode === 'sandbox') {
       openSandbox();
+      return;
+    }
+    if (mode === 'test-run') {
+      openCreatorTestRun();
       return;
     }
     setRightMode(mode);
@@ -1967,6 +1993,14 @@ export default function CreatorWorkbenchPage() {
                 >                  {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
                   Sandbox
                 </Button>
+                <Button
+                  variant={rightMode === 'test-run' ? 'primary' : 'outline-primary'}
+                  onClick={() => selectRightMode('test-run')}
+                  disabled={!activity?.id || !!proposal || sandboxBusy}
+                >
+                  {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
+                  Test Run
+                </Button>
               </ButtonGroup>
               <Button
                 size="sm"
@@ -2584,11 +2618,15 @@ export default function CreatorWorkbenchPage() {
               </div>
             ) : null}
 
-            {rightMode === 'sandbox' ? (
+            {rightMode === 'sandbox' || rightMode === 'test-run' ? (
               sandboxUrl ? (
-                <iframe title="Creator sandbox" className="creator-sandbox-frame" src={sandboxUrl} />
+                <iframe
+                  title={rightMode === 'test-run' ? 'Creator test run' : 'Creator sandbox'}
+                  className="creator-sandbox-frame"
+                  src={sandboxUrl}
+                />
               ) : (
-                <div className="p-3"><Alert variant="secondary">Sandbox is not open.</Alert></div>
+                <div className="p-3"><Alert variant="secondary">{rightMode === 'test-run' ? 'Test run is not open.' : 'Sandbox is not open.'}</Alert></div>
               )
             ) : null}
           </div>

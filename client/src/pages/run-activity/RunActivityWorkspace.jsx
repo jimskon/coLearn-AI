@@ -45,6 +45,7 @@ export default function RunActivityWorkspace({
   groups,
   activity,
   isTestMode,
+  isCreatorTestRun,
   isStudent,
   isSubmitted,
   timeExpired,
@@ -80,6 +81,7 @@ export default function RunActivityWorkspace({
   hideStudentTestSections = false,
 }) {
   const { features: runtimeFeatures } = useRuntimeFeatures();
+  const isTestRunner = isStudent || isCreatorTestRun;
   let globalQuestionCounter = 0;
 
   return (
@@ -144,7 +146,7 @@ export default function RunActivityWorkspace({
           const testEditable =
             canEditAnswers &&
             isTestMode &&
-            isStudent &&
+            isTestRunner &&
             !isSubmitted &&
             !timeExpired &&
             !testLockState.lockedBefore;
@@ -347,7 +349,7 @@ export default function RunActivityWorkspace({
           );
         })}
 
-        {canSubmitTest && isTestMode && isStudent && !isSandbox && timeExpired && !isSubmitted && (
+        {canSubmitTest && isTestMode && !isSandbox && isTestRunner && timeExpired && !isSubmitted && (
           <Alert variant="warning" className="mt-3">
             <div className="d-flex justify-content-between align-items-center">
               <div>
@@ -360,7 +362,7 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {canSubmitTest && isTestMode && isStudent && !isSandbox && !timeExpired && !isSubmitted && (
+        {canSubmitTest && isTestMode && !isSandbox && isTestRunner && !timeExpired && !isSubmitted && (
           <div className="mt-3">
             <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
               {isSubmitting ? (

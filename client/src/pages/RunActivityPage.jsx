@@ -508,6 +508,7 @@ export default function RunActivityPage({
 
 
   const isTestMode = useMemo(() => {
+    if (requestedMode === 'creator_test') return true;
     if (activityMode === 'test') return true;
 
     // Primary: any instance with a time window is a test
@@ -532,7 +533,7 @@ export default function RunActivityPage({
           Object.keys(b.scores).length > 0
       )
     );
-  }, [activityMode, activity, groups]);
+  }, [requestedMode, activityMode, activity, groups]);
   // ✅ Non-legacy test if its test_start_at is on/after 2026-01-01 UTC
   const isNonLegacyTest = useMemo(() => {
     if (!isTestMode) return false;
@@ -564,6 +565,7 @@ export default function RunActivityPage({
   const runMode = normalizeRunActivityMode(requestedMode, { user });
   const {
     isSandbox,
+    isCreatorTestRun,
     isInstructor,
     isStudent,
     isActive,
@@ -2903,6 +2905,7 @@ export default function RunActivityPage({
             baseQidFromResponseKey={baseQidFromResponseKey}
             isObserver={isObserver}
             isSandbox={isSandbox}
+            isCreatorTestRun={isCreatorTestRun}
             allowFreeNavigation={allowFreeNavigation}
             canEditAnswers={canEditAnswers}
             canSubmitGroup={canSubmitGroup}
@@ -2928,11 +2931,13 @@ export default function RunActivityPage({
             suppressStudentTestFeedbackUi={shouldSuppressStudentTestFeedbackUi({
               isTestMode,
               isStudent,
+              isCreatorTestRun,
               runMode,
             })}
             hideStudentTestSections={shouldHideStudentTestSections({
               isTestMode,
               isStudent,
+              isCreatorTestRun,
               runMode,
             })}
           />

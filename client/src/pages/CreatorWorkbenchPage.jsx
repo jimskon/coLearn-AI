@@ -312,6 +312,14 @@ function applyMultipleChoiceEditsToSource(sourceText, block, edits) {
 
 function buildQuestionInspectorDraft(block) {
   const multipleChoice = block?.multipleChoice;
+  const scoreDraft = (type) => ({
+    points: Number.isFinite(Number(block?.scores?.[type]?.points))
+      ? String(block?.scores?.[type].points)
+      : '',
+    instructions: htmlToEditorText(
+      block?.scores?.[type]?.instructionsRaw || block?.scores?.[type]?.instructionsHtml || ''
+    ),
+  });
   return {
     prompt: htmlToEditorText(block?.prompt),
     responseLines: multipleChoice ? '' : (block?.hasTextResponse ? (Number(block?.responseLines) || 1) : ''),
@@ -321,7 +329,112 @@ function buildQuestionInspectorDraft(block) {
     multipleChoiceEnabled: !!multipleChoice,
     multipleChoiceAnswer: multipleChoice?.correctAnswer ?? 'First option',
     multipleChoiceChoices: multipleChoice?.choices?.map((choice) => choice.value) || ['First option', 'Second option'],
+    responseScorePoints: scoreDraft('response').points,
+    responseScoreInstructions: scoreDraft('response').instructions,
+    codeScorePoints: scoreDraft('code').points,
+    codeScoreInstructions: scoreDraft('code').instructions,
+    outputScorePoints: scoreDraft('output').points,
+    outputScoreInstructions: scoreDraft('output').instructions,
   };
+}
+
+function getQuestionScoreBlocks(sourceText, block) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return [];
+
+  const lines = String(sourceText || '').split('\n');
+  const start = Math.max(0, Number(sourceMeta.questionLine) - 1);
+  const end = Math.max(start, Number(sourceMeta.endQuestionLine) - 1);
+  const scoreBlocks = [];
+  let current = null;
+
+  for (let index = start; index <= end; index += 1) {
+    const line = lines[index] ?? '';
+    const trimmed = line.trim();
+
+    if (current) {
+      current.lines.push(line);
+      if (trimmed === '\\endscore') {
+        current.closeLine = index + 1;
+        scoreBlocks.push(current);
+        current = null;
+      }
+      continue;
+    }
+
+    const match = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
+    if (match) {
+      current = {
+        type: match[2].toLowerCase(),
+        points: Number.parseInt(match[1], 10),
+        openLine: index + 1,
+        closeLine: null,
+        lines: [line],
+      };
+    }
+  }
+
+  return scoreBlocks;
+}
+
+function applyQuestionScoreEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  const scoreBlocks = getQuestionScoreBlocks(sourceText, block);
+  const byType = new Map(scoreBlocks.map((scoreBlock) => [scoreBlock.type, scoreBlock]));
+  const replacementActions = [];
+  const insertionLines = [];
+
+  const bandSpecs = [
+    ['response', 'responseScorePoints', 'responseScoreInstructions'],
+    ['code', 'codeScorePoints', 'codeScoreInstructions'],
+    ['output', 'outputScorePoints', 'outputScoreInstructions'],
+  ];
+
+  for (const [type, pointsKey, instructionsKey] of bandSpecs) {
+    const existing = byType.get(type);
+    const points = Number.parseInt(edits?.[pointsKey], 10);
+    const instructions = String(edits?.[instructionsKey] || '').trim();
+    const shouldKeep = Number.isFinite(points) && points > 0;
+
+    if (existing) {
+      replacementActions.push({
+        start: existing.openLine - 1,
+        end: existing.closeLine - 1,
+        text: shouldKeep
+          ? [
+              `\\score{${points},${type}}`,
+              ...(instructions ? instructions.split('\n') : []),
+              '\\endscore',
+            ]
+          : [],
+      });
+      continue;
+    }
+
+    if (shouldKeep) {
+      insertionLines.push(
+        `\\score{${points},${type}}`,
+        ...(instructions ? instructions.split('\n') : []),
+        '\\endscore'
+      );
+    }
+  }
+
+  replacementActions
+    .sort((left, right) => right.start - left.start)
+    .forEach((action) => {
+      lines.splice(action.start, action.end - action.start + 1, ...action.text);
+    });
+
+  if (insertionLines.length > 0) {
+    const insertAt = Math.max(0, Number(sourceMeta.questionLine));
+    lines.splice(insertAt, 0, ...insertionLines);
+  }
+
+  return lines.join('\n');
 }
 
 function findSectionCommandBeforeLine(sourceText, lineNumber) {
@@ -1376,10 +1489,15 @@ export default function CreatorWorkbenchPage() {
       refreshedQuestion || selectedQuestionBlock,
       questionInspectorDraft,
     );
-    if (nextText === rawText) return;
+    const nextTextWithRubricEdits = applyQuestionScoreEditsToSource(
+      nextText,
+      refreshedQuestion || selectedQuestionBlock,
+      questionInspectorDraft,
+    );
+    if (nextTextWithRubricEdits === rawText) return;
     recordVisualEdit('updating question settings');
-    setRawText(nextText);
-    compileText(nextText);
+    setRawText(nextTextWithRubricEdits);
+    compileText(nextTextWithRubricEdits);
     setNotice('Updated question settings in source.');
     setTimeout(() => setNotice(''), 1800);
   };
@@ -2335,6 +2453,18 @@ export default function CreatorWorkbenchPage() {
                               {selectedQuestionBlock.label} · group {selectedQuestionBlock.groupId}
                             </div>
 
+                            <div className="d-flex flex-wrap gap-2 mb-3">
+                              <Button
+                                size="sm"
+                                variant="outline-success"
+                                disabled={!activity?.id || !!proposal || sandboxBusy}
+                                onClick={openCreatorTestRun}
+                              >
+                                {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
+                                Try in Test Run
+                              </Button>
+                            </div>
+
                             <Form.Group className="mb-3">
                               <Form.Label>Question Text</Form.Label>
                               <Form.Control
@@ -2387,6 +2517,50 @@ export default function CreatorWorkbenchPage() {
                                 <div className="text-muted small mt-1">Applying will add a new `\\followupprompt` line to this question.</div>
                               ) : null}
                             </Form.Group>
+
+                            <div className="border-top mt-3 pt-3 mb-3">
+                              <div className="fw-semibold mb-2">Scoring Rubric</div>
+                              <div className="text-muted small mb-3">
+                                These score bands are used when the question is graded in test mode. Leave points blank or set them to 0 to remove a band.
+                              </div>
+
+                              {[
+                                ['response', 'Written response', 'responseScorePoints', 'responseScoreInstructions'],
+                                ['code', 'Code', 'codeScorePoints', 'codeScoreInstructions'],
+                                ['output', 'Output', 'outputScorePoints', 'outputScoreInstructions'],
+                              ].map(([type, label, pointsKey, instructionsKey]) => (
+                                <div key={`rubric-${type}`} className="border rounded p-2 mb-2">
+                                  <div className="fw-semibold mb-2">{label}</div>
+                                  <Form.Group className="mb-2">
+                                    <Form.Label className="small mb-1">Points</Form.Label>
+                                    <Form.Control
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      value={questionInspectorDraft?.[pointsKey] ?? ''}
+                                      disabled={!questionInspectorDraft || !!proposal}
+                                      onChange={(event) => setQuestionInspectorDraft((prev) => ({
+                                        ...(prev || {}),
+                                        [pointsKey]: event.target.value,
+                                      }))}
+                                    />
+                                  </Form.Group>
+                                  <Form.Group>
+                                    <Form.Label className="small mb-1">Rubric notes</Form.Label>
+                                    <Form.Control
+                                      as="textarea"
+                                      rows={2}
+                                      value={questionInspectorDraft?.[instructionsKey] || ''}
+                                      disabled={!questionInspectorDraft || !!proposal}
+                                      onChange={(event) => setQuestionInspectorDraft((prev) => ({
+                                        ...(prev || {}),
+                                        [instructionsKey]: event.target.value,
+                                      }))}
+                                    />
+                                  </Form.Group>
+                                </div>
+                              ))}
+                            </div>
 
                             <Form.Group className="mb-3">
                               <Form.Check

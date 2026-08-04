@@ -20,6 +20,7 @@ export default function GroupSetupPage() {
 
   // NEW: test-related state
   const [isTest, setIsTest] = useState(false);
+  const [isAssignment, setIsAssignment] = useState(false);
   const [testStartAt, setTestStartAt] = useState('');          // datetime-local string
   const [testDurationMinutes, setTestDurationMinutes] = useState(30);
   const [lockedBeforeStart, setLockedBeforeStart] = useState(true);
@@ -30,13 +31,13 @@ export default function GroupSetupPage() {
 
 
   useEffect(() => {
-    if (isTest) return; // no cloning for tests
+    if (isTest || isAssignment) return; // no cloning for individual activities
 
     fetch(`${API_BASE_URL}/api/courses/${courseId}/activities`, { credentials: 'include' })
       .then(r => r.json())
       .then(d => setActivities(Array.isArray(d) ? d : []))
       .catch(err => console.error('❌ Failed to load course activities:', err));
-  }, [courseId, isTest]);
+  }, [courseId, isTest, isAssignment]);
 
   const handleCloneGroups = async () => {
     if (!cloneFromActivityId) return;
@@ -92,6 +93,7 @@ export default function GroupSetupPage() {
 
         const nextType = data.activity_type || (data.is_test === 1 ? 'test' : 'group');
         setIsTest(nextType === 'test');
+        setIsAssignment(nextType === 'assignment');
       } catch (err) {
         console.error('❌ Failed to load activity meta:', err);
       }
@@ -102,13 +104,13 @@ export default function GroupSetupPage() {
 
 
 
-  // NEW: when this is a test, default to groups-of-1 and no roles
+  // Tests and labs are individual workspaces: one student, no rotating roles.
   useEffect(() => {
-    if (isTest) {
+    if (isTest || isAssignment) {
       setGroupSize(1);
       setUseRoles(false);
     }
-  }, [isTest]);
+  }, [isTest, isAssignment]);
 
   const toggleSelect = (id) => {
     setSelected(prev => ({ ...prev, [id]: !prev[id] }));
@@ -290,13 +292,19 @@ export default function GroupSetupPage() {
 
   return (
     <Container className="mt-4">
-      <h2>{isTest ? 'Test Setup' : 'Group Setup'}</h2>
+      <h2>{isTest ? 'Test Setup' : isAssignment ? 'Lab Setup' : 'Group Setup'}</h2>
 
 
       {isTest && (
         <p className="text-muted">
           This activity is marked as a <strong>test</strong>.
           Each selected student will receive an individual timed instance.
+        </p>
+      )}
+
+      {isAssignment && (
+        <p className="text-muted">
+          This activity is a <strong>lab assignment</strong>. Each selected student receives an individual workspace; group roles are not used.
         </p>
       )}
 
@@ -321,7 +329,7 @@ export default function GroupSetupPage() {
 
       {/* Controls */}
       <Row className="mt-3">
-        {!isTest && (
+        {!isTest && !isAssignment && (
           <Col md={3}>
             <Form.Label>Group Size</Form.Label>
             <Form.Select
@@ -335,7 +343,7 @@ export default function GroupSetupPage() {
           </Col>
         )}
 
-        {!isTest && (
+        {!isTest && !isAssignment && (
           <Col md={3} className="d-flex align-items-end">
             <Form.Check
               type="checkbox"
@@ -388,7 +396,7 @@ export default function GroupSetupPage() {
           </>
         )}
       </Row>
-      {!isTest && (<Row className="mt-3">
+      {!isTest && !isAssignment && (<Row className="mt-3">
         <Col md={6}>
           <Form.Label>Clone groups from another activity in this instance</Form.Label>
           <Form.Select
@@ -420,15 +428,15 @@ export default function GroupSetupPage() {
       {!isTest && (
         <>
           <Button className="mt-3" onClick={generateGroups}>
-            Generate Groups
+            {isAssignment ? 'Generate Individual Lab Workspaces' : 'Generate Groups'}
           </Button>
 
           {groups.length > 0 && (
             <>
-              <h5 className="mt-4">Generated Groups:</h5>
+              <h5 className="mt-4">{isAssignment ? 'Individual Lab Workspaces:' : 'Generated Groups:'}</h5>
               {groups.map((group, idx) => (
                 <Card key={idx} className="mb-3">
-                  <Card.Header>Group {idx + 1}</Card.Header>
+                  <Card.Header>{isAssignment ? `Student workspace ${idx + 1}` : `Group ${idx + 1}`}</Card.Header>
                   <Card.Body>
                     <ul>
                       {Array.isArray(group.members) && group.members.length > 0 ? (

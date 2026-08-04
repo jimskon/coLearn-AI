@@ -197,6 +197,7 @@ export default function ViewGroupsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [clearing, setClearing] = useState(new Set());
+  const [deleting, setDeleting] = useState(new Set());
 
   // Live-edit state
   const [available, setAvailable] = useState([]);
@@ -335,6 +336,33 @@ export default function ViewGroupsPage() {
       const n2 = new Set(clearing);
       n2.delete(instanceId);
       setClearing(n2);
+    }
+  };
+
+  const deleteInstance = async (instanceId) => {
+    const confirmed = window.confirm(
+      'Delete this activity instance permanently? This removes its members, saved drafts, submissions, scores, and feedback. This cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    setDeleting((previous) => new Set(previous).add(instanceId));
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data?.error || 'Failed to delete the activity instance.');
+      await Promise.all([fetchGroups(), refreshStudents()]);
+    } catch (err) {
+      console.error('Delete activity instance failed:', err);
+      alert(err?.message || 'Failed to delete the activity instance.');
+    } finally {
+      setDeleting((previous) => {
+        const next = new Set(previous);
+        next.delete(instanceId);
+        return next;
+      });
     }
   };
 
@@ -663,6 +691,15 @@ export default function ViewGroupsPage() {
                           {clearing.has(group.instance_id) ? 'Clearing…' : 'Clear Answers'}
                         </Button>
                       ) : null}
+
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        disabled={deleting.has(instanceId)}
+                        onClick={() => deleteInstance(instanceId)}
+                      >
+                        {deleting.has(instanceId) ? 'Deleting…' : 'Delete Instance'}
+                      </Button>
 
                       <Button
                         variant="primary"

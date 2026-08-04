@@ -19,6 +19,7 @@ export default function ViewTestsPage() {
   const [error, setError] = useState('');
 
   const [clearing, setClearing] = useState(new Set());
+  const [deleting, setDeleting] = useState(new Set());
   const [reviewing, setReviewing] = useState(new Set());
 
   const [editing, setEditing] = useState(null); // { instanceId, startAtLocal, durationMinutes }
@@ -135,6 +136,30 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
       const n2 = new Set(clearing);
       n2.delete(instanceId);
       setClearing(n2);
+    }
+  };
+
+  const deleteInstance = async (instanceId) => {
+    if (!window.confirm('Delete this test attempt permanently? This removes the student membership, saved work, submission, scores, and feedback. This cannot be undone.')) return;
+
+    setDeleting((previous) => new Set(previous).add(instanceId));
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data?.error || 'Failed to delete the test attempt.');
+      await fetchTests();
+    } catch (err) {
+      console.error('Delete test instance failed:', err);
+      alert(err?.message || 'Failed to delete the test attempt.');
+    } finally {
+      setDeleting((previous) => {
+        const next = new Set(previous);
+        next.delete(instanceId);
+        return next;
+      });
     }
   };
 
@@ -319,6 +344,14 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
                         onClick={() => clearAnswers(instanceId)}
                       >
                         {clearing.has(instanceId) ? 'Clearing…' : 'Clear'}
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        disabled={deleting.has(instanceId)}
+                        onClick={() => deleteInstance(instanceId)}
+                      >
+                        {deleting.has(instanceId) ? 'Deleting…' : 'Delete'}
                       </Button>
                     </div>
                   </td>

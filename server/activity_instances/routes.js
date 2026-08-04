@@ -5,6 +5,8 @@ const controller = require('./controller');
 
 // Clear ALL answers for a group (activity instance)
 router.delete('/:instanceId/responses', controller.clearResponsesForInstance);
+// Permanently remove an instance and its members, drafts, responses, and feedback.
+router.delete('/:instanceId', controller.deleteActivityInstance);
 
 // ✅ Create a new activity instance
 router.post('/', controller.createActivityInstance);

@@ -48,6 +48,21 @@ function normalizeScoreBands(scores = {}) {
 
 const PRESENCE_WINDOW_SEC = 120;
 
+async function tableHasColumn(conn, tableName, columnName) {
+  const [rows] = await conn.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+      LIMIT 1`,
+    [tableName, columnName],
+  );
+  return rows.length > 0;
+}
+
+async function deleteInstanceRowsIfPresent(conn, tableName, columnName, instanceId) {
+  if (!(await tableHasColumn(conn, tableName, columnName))) return;
+  await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} = ?`, [instanceId]);
+}
+
 function countQuestionGroups(lines = []) {
   const count = (Array.isArray(lines) ? lines : [])
     .filter((line) => String(line || '').trimStart().startsWith('\\questiongroup'))
@@ -501,6 +516,69 @@ async function clearResponsesForInstance(req, res) {
   } catch (e) {
     console.error('clearResponsesForInstance error:', e);
     res.status(500).json({ error: 'Failed to clear responses' });
+  }
+}
+
+// Permanently remove one activity instance and all of its dependent work.
+// This intentionally supports deleting submitted attempts so an instructor can
+// correct a roster/setup mistake without manually clearing several tables first.
+async function deleteActivityInstance(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  if (!instanceId) return res.status(400).json({ error: 'Bad instance id' });
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[instance]] = await conn.query(
+      'SELECT id, activity_id, course_id FROM activity_instances WHERE id = ? FOR UPDATE',
+      [instanceId],
+    );
+    if (!instance) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Activity instance not found' });
+    }
+
+    const responseIds = (await conn.query(
+      'SELECT id FROM responses WHERE activity_instance_id = ?',
+      [instanceId],
+    ))[0].map((row) => Number(row.id)).filter(Number.isFinite);
+
+    // Some installations have additional audit/feedback tables while others do
+    // not. Delete from every known dependent table when present.
+    for (const [tableName, columnName] of [
+      ['activity_heartbeats', 'activity_instance_id'],
+      ['event_log', 'activity_instance_id'],
+      ['response_drafts', 'activity_instance_id'],
+      ['followups', 'activity_instance_id'],
+      ['feedback', 'activity_instance_id'],
+    ]) {
+      await deleteInstanceRowsIfPresent(conn, tableName, columnName, instanceId);
+    }
+
+    if (responseIds.length) {
+      for (const [tableName, columnName] of [
+        ['followups', 'response_id'],
+        ['feedback', 'response_id'],
+      ]) {
+        if (await tableHasColumn(conn, tableName, columnName)) {
+          await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} IN (?)`, [responseIds]);
+        }
+      }
+    }
+
+    await conn.query('DELETE FROM responses WHERE activity_instance_id = ?', [instanceId]);
+    await conn.query('DELETE FROM group_members WHERE activity_instance_id = ?', [instanceId]);
+    await conn.query('DELETE FROM activity_instances WHERE id = ?', [instanceId]);
+    await conn.commit();
+
+    global.emitInstanceState?.(instanceId, { deleted: true });
+    return res.json({ ok: true, deletedInstanceId: instanceId });
+  } catch (err) {
+    try { await conn.rollback(); } catch { /* no-op */ }
+    console.error('deleteActivityInstance failed:', err);
+    return res.status(500).json({ error: 'Could not delete activity instance' });
+  } finally {
+    conn.release();
   }
 }
 
@@ -2982,6 +3060,7 @@ async function getInstanceResponseHistory(req, res) {
 // Export it as part of the module
 module.exports = {
   clearResponsesForInstance,
+  deleteActivityInstance,
   getParsedActivityDoc,
   createActivityInstance,
   ensureDemoInstance,

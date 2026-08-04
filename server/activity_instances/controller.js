@@ -791,6 +791,11 @@ async function getActivityInstanceById(req, res) {
          ai.test_duration_minutes,
          ai.test_reopen_until,
          ai.submitted_at,
+         ai.graded_at,
+         ai.review_complete,
+         ai.reviewed_at,
+         ai.points_earned,
+         ai.points_possible,
          ai.hidden,
          a.title       AS title,
          a.name        AS activity_name,
@@ -2893,6 +2898,40 @@ async function recomputeTestTotals(req, res) {
   }
 }
 
+async function markTestReviewed(req, res) {
+  const { instanceId } = req.params;
+  const role = req.user?.role;
+  if (role !== 'instructor' && role !== 'root' && role !== 'creator') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  try {
+    const [[instance]] = await db.query(
+      `SELECT submitted_at FROM activity_instances WHERE id = ?`,
+      [instanceId],
+    );
+    if (!instance) return res.status(404).json({ error: 'Activity instance not found' });
+    if (!instance.submitted_at) return res.status(400).json({ error: 'A test must be submitted before it can be reviewed.' });
+
+    await db.query(
+      `UPDATE activity_instances
+       SET review_complete = 1,
+           reviewed_at = UTC_TIMESTAMP()
+       WHERE id = ?`,
+      [instanceId],
+    );
+
+    global.emitInstanceState?.(Number(instanceId), {
+      review_complete: 1,
+      reviewed_at: toDbNowString(),
+    });
+    return res.json({ ok: true, review_complete: 1 });
+  } catch (err) {
+    console.error('markTestReviewed failed:', err);
+    return res.status(500).json({ error: 'Could not mark this test as reviewed.' });
+  }
+}
+
 async function getInstanceResponseHistory(req, res) {
   const { instanceId } = req.params;
 
@@ -2945,6 +2984,7 @@ module.exports = {
   submitTest,
   updateTestSettings,
   recomputeTestTotals,
+  markTestReviewed,
   getInstanceResponseHistory,
   parseScoreSpec,
 };

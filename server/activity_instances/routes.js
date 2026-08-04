@@ -65,6 +65,7 @@ router.post('/by-activity/:courseId/:activityId/active-rotation-mode', controlle
 router.get('/:instanceId/refresh-groups', controller.refreshTotalGroups);
 
 router.post('/:instanceId/recompute-test-totals', controller.recomputeTestTotals);
+router.post('/:instanceId/mark-reviewed', controller.markTestReviewed);
 
 
 

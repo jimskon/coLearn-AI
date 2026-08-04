@@ -785,6 +785,17 @@ export default function RunActivityPage({
       return { earned: 0, max: 0 };
     }
 
+    const storedEarned = Number(activity?.points_earned);
+    const storedMax = Number(activity?.points_possible);
+    if (
+      !!activity?.submitted_at &&
+      Number.isFinite(storedEarned) &&
+      Number.isFinite(storedMax) &&
+      storedMax > 0
+    ) {
+      return { earned: storedEarned, max: storedMax };
+    }
+
     let earned = 0;
     let max = 0;
 
@@ -799,7 +810,7 @@ export default function RunActivityPage({
       }
     }
     return { earned, max };
-  }, [isTestMode, groups, existingAnswers]);
+  }, [isTestMode, groups, existingAnswers, activity?.submitted_at, activity?.points_earned, activity?.points_possible]);
 
   useEffect(() => {
     if (!DEBUG_FILES) return;
@@ -2839,6 +2850,27 @@ export default function RunActivityPage({
     }
   }
 
+  async function handleMarkTestReviewed() {
+    if (!canSaveInstructorScores || !instanceId) return;
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/mark-reviewed`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || 'Unable to mark the test as reviewed.');
+      }
+      await loadActivity();
+    } catch (err) {
+      console.error('Failed to mark test reviewed:', err);
+      alert(err.message || 'Unable to mark the test as reviewed.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function handleGradeSingleQuestion(qid) {
     if (gradingQuestionQid || gradingAllQuestions) return;
     if (!isTestMode && !isSandbox) return;
@@ -3186,6 +3218,7 @@ export default function RunActivityPage({
             isPlaygroundMode={isPlaygroundMode}
             canBypassGroups={canBypassGroups}
             handleRegradeTest={handleRegradeTest}
+            handleMarkTestReviewed={handleMarkTestReviewed}
             handleTextChange={(responseKey, value, extra) => {
               clearQuestionGradePreviewForResponseKey(responseKey);
               return handleTextChange(responseKey, value, extra);

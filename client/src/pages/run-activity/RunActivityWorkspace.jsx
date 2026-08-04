@@ -80,6 +80,7 @@ export default function RunActivityWorkspace({
   isPlaygroundMode,
   canBypassGroups,
   handleRegradeTest,
+  handleMarkTestReviewed,
   overallTestTotals,
   questionGradePreviews,
   gradingQuestionQid,
@@ -491,6 +492,15 @@ export default function RunActivityWorkspace({
             >
               {isSubmitting ? 'Regrading…' : 'Regrade Test'}
             </Button>
+            {!Number(activity?.review_complete) && (
+              <Button
+                variant="success"
+                onClick={handleMarkTestReviewed}
+                disabled={isSubmitting}
+              >
+                Mark Reviewed
+              </Button>
+            )}
           </div>
         )}
 
@@ -502,6 +512,8 @@ export default function RunActivityWorkspace({
 
         {isTestMode && !isSandbox && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
           <Alert variant="info" className="mt-3">
+            <strong>{Number(activity?.review_complete) ? 'Reviewed by instructor' : 'Preliminary score — pending instructor review'}</strong>
+            <br />
             Overall test score:{' '}
             <strong>
               {overallTestTotals.earned}/{overallTestTotals.max}

@@ -44,14 +44,23 @@ export function getMultipleChoiceTestModeIssueMessage({
   hasMultipleChoice,
   correctAnswer,
   hasResponseScore,
+  hasChoiceScores,
 }) {
   if (!isTest || !hasMultipleChoice) {
     return null;
   }
 
   const answer = String(correctAnswer || '').trim();
+  if (hasChoiceScores) {
+    if (hasResponseScore) {
+      return 'Multiple-choice questions with per-choice points cannot also use \\score{points,response}. Remove the response score block.';
+    }
+    return null;
+  }
+
   if (!answer) {
-    return 'Multiple-choice questions in test mode must include the correct answer inside \\multiplechoice{...}. Leave \\multiplechoice{} only for survey questions.';
+    if (!hasResponseScore) return null;
+    return 'A scored multiple-choice question needs per-choice points or a correct answer inside \\multiplechoice{...}.';
   }
 
   if (!hasResponseScore) {

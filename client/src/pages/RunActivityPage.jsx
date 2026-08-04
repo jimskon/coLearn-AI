@@ -1630,14 +1630,20 @@ export default function RunActivityPage({
     let responseFeedback = String(result?.responseFeedback ?? '').trim();
 
     if (isMultipleChoice && maxRespPts > 0) {
-      const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
-      if (!correctAnswer) {
-        responseScore = 0;
-        responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
+      if (multipleChoice?.hasChoiceScores) {
+        const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
+        responseScore = Number(selected?.points || 0);
+        responseFeedback = '';
       } else {
-        const isCorrect = selectedChoice === correctAnswer;
-        responseScore = isCorrect ? maxRespPts : 0;
-        responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+        const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+        if (!correctAnswer) {
+          responseScore = 0;
+          responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
+        } else {
+          const isCorrect = selectedChoice === correctAnswer;
+          responseScore = isCorrect ? maxRespPts : 0;
+          responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+        }
       }
     }
 

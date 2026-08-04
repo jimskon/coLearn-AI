@@ -291,10 +291,15 @@ function applyMultipleChoiceEditsToSource(sourceText, block, edits) {
 
   const correctAnswer = String(edits.multipleChoiceAnswer || '').trim();
   const choices = (edits.multipleChoiceChoices || [])
-    .map((choice) => String(choice || '').trim());
+    .map((choice) => ({
+      value: String(choice?.value ?? choice ?? '').trim(),
+      points: choice?.points,
+    }));
   const markup = [
     `\\multiplechoice{${correctAnswer}}`,
-    ...choices.map((choice) => `\\choice{${choice}}`),
+    ...choices.map(({ value, points }) => (
+      `\\choice{${value}}${Number.isInteger(points) && points >= 0 ? `{${points}}` : ''}`
+    )),
     '\\endmultiplechoice',
   ];
 
@@ -327,10 +332,13 @@ function buildQuestionInspectorDraft(block) {
     feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
     followupPrompt: htmlToEditorText(block?.followups?.[0]),
     multipleChoiceEnabled: !!multipleChoice,
-    multipleChoiceAnswer: multipleChoice?.correctAnswer ?? 'First option',
-    multipleChoiceChoices: multipleChoice?.choices?.map((choice) => choice.value) || ['First option', 'Second option'],
-    responseScorePoints: scoreDraft('response').points,
-    responseScoreInstructions: scoreDraft('response').instructions,
+    multipleChoiceAnswer: multipleChoice?.correctAnswer ?? '',
+    multipleChoiceChoices: multipleChoice?.choices?.map((choice) => ({
+      value: choice.value,
+      points: choice.points,
+    })) || [{ value: 'First option', points: null }, { value: 'Second option', points: null }],
+    responseScorePoints: multipleChoice?.hasChoiceScores ? '' : scoreDraft('response').points,
+    responseScoreInstructions: multipleChoice?.hasChoiceScores ? '' : scoreDraft('response').instructions,
     codeScorePoints: scoreDraft('code').points,
     codeScoreInstructions: scoreDraft('code').instructions,
     outputScorePoints: scoreDraft('output').points,
@@ -2616,7 +2624,7 @@ export default function CreatorWorkbenchPage() {
                             {questionInspectorDraft?.multipleChoiceEnabled ? (
                               <div className="border rounded p-2 mb-3 bg-light">
                                 <Form.Group className="mb-2">
-                                  <Form.Label>Correct Answer <span className="text-muted small">(optional for a survey)</span></Form.Label>
+                                  <Form.Label>Legacy Answer Key <span className="text-muted small">(optional; leave blank for surveys or choice-level scoring)</span></Form.Label>
                                   <Form.Control
                                     value={questionInspectorDraft?.multipleChoiceAnswer || ''}
                                     disabled={!!proposal}
@@ -2630,12 +2638,31 @@ export default function CreatorWorkbenchPage() {
                                 {(questionInspectorDraft?.multipleChoiceChoices || []).map((choice, index) => (
                                   <div className="d-flex gap-2 mb-2" key={`multiple-choice-option-${index}`}>
                                     <Form.Control
-                                      value={choice}
+                                      value={choice?.value ?? choice ?? ''}
                                       aria-label={`Choice ${index + 1}`}
                                       disabled={!!proposal}
                                       onChange={(event) => setQuestionInspectorDraft((prev) => {
                                         const choices = [...(prev?.multipleChoiceChoices || [])];
-                                        choices[index] = event.target.value;
+                                        choices[index] = { ...(typeof choices[index] === 'object' ? choices[index] : {}), value: event.target.value };
+                                        return { ...(prev || {}), multipleChoiceChoices: choices };
+                                      })}
+                                    />
+                                    <Form.Control
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      placeholder="Survey"
+                                      value={choice?.points ?? ''}
+                                      aria-label={`Points for choice ${index + 1}`}
+                                      disabled={!!proposal}
+                                      style={{ maxWidth: '6.5rem' }}
+                                      onChange={(event) => setQuestionInspectorDraft((prev) => {
+                                        const choices = [...(prev?.multipleChoiceChoices || [])];
+                                        const rawPoints = event.target.value;
+                                        choices[index] = {
+                                          ...(typeof choices[index] === 'object' ? choices[index] : { value: choices[index] }),
+                                          points: rawPoints === '' ? null : Number.parseInt(rawPoints, 10),
+                                        };
                                         return { ...(prev || {}), multipleChoiceChoices: choices };
                                       })}
                                     />
@@ -2659,7 +2686,7 @@ export default function CreatorWorkbenchPage() {
                                   disabled={!!proposal}
                                   onClick={() => setQuestionInspectorDraft((prev) => ({
                                     ...(prev || {}),
-                                    multipleChoiceChoices: [...(prev?.multipleChoiceChoices || []), `Option ${(prev?.multipleChoiceChoices?.length || 0) + 1}`],
+                                    multipleChoiceChoices: [...(prev?.multipleChoiceChoices || []), { value: `Option ${(prev?.multipleChoiceChoices?.length || 0) + 1}`, points: null }],
                                   }))}
                                 >
                                   <PlusLg className="me-1" /> Add Choice
@@ -2669,6 +2696,9 @@ export default function CreatorWorkbenchPage() {
                                     {multipleChoiceValidation.errors.map((message) => <div key={message}>{message}</div>)}
                                   </div>
                                 ) : null}
+                                <div className="text-muted small mt-2">
+                                  Leave every points field blank for a survey. To self-score a test question, give every choice a whole-number point value; partial credit is supported.
+                                </div>
                               </div>
                             ) : null}
 

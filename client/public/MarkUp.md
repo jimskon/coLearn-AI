@@ -96,6 +96,8 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 | `\sampleresponses{...}` | Sample instructor solution (hidden) | `\sampleresponses{Chooses a local optimum.}` |
 | `\feedbackprompt{...}` | AI grading guidance | `\feedbackprompt{Encourage elaboration.}` |
 | `\followupprompt{...}` | Optional AI follow-up hint | `\followupprompt{Why might greedy fail?}` |
+| `\multiplechoice{...}` | Begins a multiple-choice block; the optional value is the legacy answer key | `\multiplechoice{Ottawa}` |
+| `\choice{value}{points}` | A multiple-choice option with optional test-mode points | `\choice{Ottawa}{2}` |
 
 Every `\question` must explicitly end with `\endquestion`.
 
@@ -103,8 +105,9 @@ Notes:
 
 - If `\responsemode{...}` is omitted, the default is `answer`.
 - Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
-- In test mode, include an explicit `\score{points,type}` rubric block for every question so grading is unambiguous. Use only `response`, `code`, and `output` as score types.
+- In test mode, include an explicit `\score{points,type}` rubric block for every question that is not self-scoring multiple choice. Use only `response`, `code`, and `output` as score types.
 - Scoring rubrics are documented in Section 5 below. A `\score{points,type}` block gives the grader the points possible and the grading category for a question.
+- A blank `\multiplechoice{}` with unscored `\choice{...}` entries is a survey and remains ungraded. For self-scoring multiple choice (including partial credit), put points on every choice, such as `\choice{Partly correct}{1}`. The highest choice value becomes the question total; do not also add a `\score{...,response}` block.
 
 ---
 

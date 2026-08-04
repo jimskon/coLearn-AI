@@ -547,6 +547,8 @@ export function parseSheetToBlocks(lines, options = {}) {
     currentQuestion.multipleChoice = {
       correctAnswer: validation.correctAnswer,
       choices,
+      hasChoiceScores: validation.hasChoiceScores,
+      maxChoicePoints: validation.maxChoicePoints,
       sourceMeta: currentMultipleChoice.sourceMeta,
     };
     currentMultipleChoice = null;
@@ -1424,7 +1426,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         continue;
       }
 
-      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}\s*$/);
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}(?:\{(\d+)\})?\s*$/);
       if (choiceMatch) {
         const value = String(choiceMatch[1] || '').trim();
         if (!value) {
@@ -1433,6 +1435,7 @@ export function parseSheetToBlocks(lines, options = {}) {
           currentMultipleChoice.choices.push({
             value,
             content: format(value),
+            points: choiceMatch[2] === undefined ? null : Number.parseInt(choiceMatch[2], 10),
             line: lineNo,
           });
           currentMultipleChoice.sourceMeta.choiceLines.push(lineNo);
@@ -1444,7 +1447,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice.', null);
         finalizeMultipleChoice(lineNo - 1);
       } else {
-        pushIssue('error', lineNo, 'Only \\choice{value} or \\endmultiplechoice is allowed inside a \\multiplechoice block.', line);
+          pushIssue('error', lineNo, 'Only \\choice{value} or \\choice{value}{points}, or \\endmultiplechoice is allowed inside a \\multiplechoice block.', line);
         continue;
       }
     }
@@ -1512,9 +1515,19 @@ export function parseSheetToBlocks(lines, options = {}) {
         hasMultipleChoice: !!currentQuestion.multipleChoice,
         correctAnswer: currentQuestion.multipleChoice?.correctAnswer,
         hasResponseScore: !!currentQuestion.scores?.response,
+        hasChoiceScores: !!currentQuestion.multipleChoice?.hasChoiceScores,
       });
       if (multipleChoiceScoreIssue) {
         pushIssue('error', openQuestionLine ?? lineNo, multipleChoiceScoreIssue, line);
+      }
+
+      if (currentQuestion.multipleChoice?.hasChoiceScores && !currentQuestion.scores?.response) {
+        currentQuestion.scores.response = {
+          points: currentQuestion.multipleChoice.maxChoicePoints,
+          instructionsHtml: '',
+          instructionsRaw: '',
+          derivedFromChoices: true,
+        };
       }
 
       // finalize as you already do

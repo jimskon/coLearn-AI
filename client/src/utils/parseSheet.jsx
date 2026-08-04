@@ -21,6 +21,7 @@ import { Form, Button, Spinner } from 'react-bootstrap';
 
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
+import { createDisplayCodeBlock, parseDisplayCodeBlockCommand } from './displayCodeBlocks';
 
 
 
@@ -845,10 +846,9 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // --- display-only code blocks ---
-    const pythonDisplayMatch = trimmed.match(/^\\pythondisplay(?:\{([^}]*)\})?$/i);
-    const cppDisplayMatch = trimmed.match(/^\\cppdisplay(?:\{([^}]*)\})?$/i);
+    const displayCommand = parseDisplayCodeBlockCommand(trimmed);
 
-    if (pythonDisplayMatch || cppDisplayMatch) {
+    if (displayCommand?.kind === 'open') {
       flushCurrentBlock();
 
       if (currentDisplayCodeBlock) {
@@ -856,26 +856,18 @@ export function parseSheetToBlocks(lines, options = {}) {
         finalizeDisplayCodeBlock(lineNo - 1);
       }
 
-      currentField = pythonDisplayMatch ? 'pythondisplay' : 'cppdisplay';
-      currentDisplayCodeBlock = {
-        type: pythonDisplayMatch ? 'pythondisplay' : 'cppdisplay',
-        language: pythonDisplayMatch ? 'python' : 'cpp',
-        displayOnly: true,
-        lines: [],
-        sourceMeta: {
-          displayLine: lineNo,
-          endDisplayLine: null,
-        },
-      };
+      currentField = displayCommand.type;
+      currentDisplayCodeBlock = createDisplayCodeBlock({
+        type: displayCommand.type,
+        language: displayCommand.language,
+        displayLine: lineNo,
+      });
       openDisplayCodeLine = lineNo;
       continue;
     }
 
-    if (trimmed === '\\endpythondisplay' || trimmed === '\\endcppdisplay') {
-      if (currentDisplayCodeBlock && (
-        (trimmed === '\\endpythondisplay' && currentDisplayCodeBlock.type === 'pythondisplay') ||
-        (trimmed === '\\endcppdisplay' && currentDisplayCodeBlock.type === 'cppdisplay')
-      )) {
+    if (displayCommand?.kind === 'close') {
+      if (currentDisplayCodeBlock && currentDisplayCodeBlock.type === displayCommand.type) {
         finalizeDisplayCodeBlock(lineNo);
       } else {
         pushIssue('error', lineNo, `${trimmed} without a matching \\pythondisplay or \\cppdisplay block.`, line);

@@ -35,6 +35,7 @@ Rules illustrated above:
 - If you include runnable C++ code, wrap it in \cpp ... \endcpp.
 - If you include runnable Python code, wrap it in \python ... \endpython.
 - If you include remote Python code that should run on the server, wrap it in \pythonremote ... \endpythonremote.
+- If you only want to show example code without making it runnable or editable, use \pythondisplay ... \endpythondisplay or \cppdisplay ... \endcppdisplay.
 - If you include turtle code, always wrap it in \pythonturtle ... \endpythonturtle.
 - If you include runnable turtle code, prefer omitting the timeout unless a specific non-default limit is required. Use \pythonturtle{WxH} ... \endpythonturtle when only dimensions matter, or \pythonturtle ... \endpythonturtle if defaults are fine.
 - If you include multiple-choice questions, use \multiplechoice{answer} only for questions with a correct answer, and use \multiplechoice{} for survey/opinion questions with no correct answer.

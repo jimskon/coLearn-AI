@@ -37,6 +37,7 @@ export default function ActivityPythonBlock({
   responseKey,
   onCodeChange,
   localOnly = false,
+  displayOnly = false,
   codeFeedbackShown = {},
   fileContents,
   setFileContents,
@@ -325,6 +326,34 @@ export default function ActivityPythonBlock({
       whiteSpace: 'pre',
     },
   };
+
+  if (displayOnly) {
+    return (
+      <div className="mb-4">
+        <div style={styles.editorWrap}>
+          <pre ref={gutterRef} style={styles.gutter} aria-hidden="true">
+            {lineNumbers}
+          </pre>
+          <div
+            ref={codeScrollRef}
+            style={styles.codeView}
+            onScroll={onCodeViewScroll}
+          >
+            <pre style={styles.codePre}>
+              <code
+                id={codeId}
+                ref={codeRef}
+                className="language-python"
+                style={styles.codeTag}
+              >
+                {code}
+              </code>
+            </pre>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="mb-4">

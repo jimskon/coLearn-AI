@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { isSurveyMultipleChoice, validateMultipleChoice } from '../src/utils/multipleChoice.js';
 import {
-  getMultipleChoiceScoreRequirementMessage,
+  getMultipleChoiceTestModeIssueMessage,
   getUnsupportedScoreTypeMessage,
   parseScoreCommand,
 } from '../src/utils/scoreValidation.js';
@@ -65,29 +65,42 @@ test('parses only supported score types and preserves unsupported ones for valid
   );
 });
 
-test('requires an explicit response rubric for multiple-choice questions in test mode', () => {
+test('requires a correct answer and response rubric for multiple-choice questions in test mode', () => {
   assert.equal(
-    getMultipleChoiceScoreRequirementMessage({
+    getMultipleChoiceTestModeIssueMessage({
       isTest: true,
       hasMultipleChoice: true,
+      correctAnswer: '',
+      hasResponseScore: true,
+    }),
+    'Multiple-choice questions in test mode must include the correct answer inside \\multiplechoice{...}. Leave \\multiplechoice{} only for survey questions.',
+  );
+
+  assert.equal(
+    getMultipleChoiceTestModeIssueMessage({
+      isTest: true,
+      hasMultipleChoice: true,
+      correctAnswer: '18 <= age <= 65',
       hasResponseScore: false,
     }),
     'Multiple-choice questions in test mode must include an explicit \\score{points,response} rubric block.',
   );
 
   assert.equal(
-    getMultipleChoiceScoreRequirementMessage({
+    getMultipleChoiceTestModeIssueMessage({
       isTest: true,
       hasMultipleChoice: true,
+      correctAnswer: '18 <= age <= 65',
       hasResponseScore: true,
     }),
     null,
   );
 
   assert.equal(
-    getMultipleChoiceScoreRequirementMessage({
+    getMultipleChoiceTestModeIssueMessage({
       isTest: false,
       hasMultipleChoice: true,
+      correctAnswer: '',
       hasResponseScore: false,
     }),
     null,

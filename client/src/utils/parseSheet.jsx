@@ -10,7 +10,7 @@ import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { validateMultipleChoice } from './multipleChoice';
 import {
-  getMultipleChoiceScoreRequirementMessage,
+  getMultipleChoiceTestModeIssueMessage,
   getUnsupportedScoreTypeMessage,
   parseScoreCommand,
 } from './scoreValidation';
@@ -521,6 +521,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let pendingIncludeFiles = null;
   let currentAiBlock = null;
   let currentMultipleChoice = null;
+  let currentDisplayCodeBlock = null;
 
   // track some structural state to report missing closures
   let openGroupLine = null;
@@ -530,6 +531,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let openListLine = null;
   let openAiLine = null;
   let openMultipleChoiceLine = null;
+  let openDisplayCodeLine = null;
 
   const finalizeMultipleChoice = (closingLine) => {
     if (!currentMultipleChoice || !currentQuestion) return;
@@ -548,6 +550,26 @@ export function parseSheetToBlocks(lines, options = {}) {
     };
     currentMultipleChoice = null;
     openMultipleChoiceLine = null;
+  };
+
+  const finalizeDisplayCodeBlock = (closingLine) => {
+    if (!currentDisplayCodeBlock) return;
+
+    currentDisplayCodeBlock.sourceMeta.endDisplayLine = closingLine;
+    const finalized = {
+      ...currentDisplayCodeBlock,
+      content: currentDisplayCodeBlock.lines.join('\n'),
+    };
+
+    if (currentQuestion) {
+      if (!currentQuestion.displayCodeBlocks) currentQuestion.displayCodeBlocks = [];
+      currentQuestion.displayCodeBlocks.push(finalized);
+    } else {
+      blocks.push(finalized);
+    }
+
+    currentDisplayCodeBlock = null;
+    openDisplayCodeLine = null;
   };
 
 
@@ -820,6 +842,56 @@ export function parseSheetToBlocks(lines, options = {}) {
     if (inList && trimmed.startsWith('\\item')) {
       listItems.push(trimmed.replace(/^\\item\s*/, ''));
       continue;
+    }
+
+    // --- display-only code blocks ---
+    const pythonDisplayMatch = trimmed.match(/^\\pythondisplay(?:\{([^}]*)\})?$/i);
+    const cppDisplayMatch = trimmed.match(/^\\cppdisplay(?:\{([^}]*)\})?$/i);
+
+    if (pythonDisplayMatch || cppDisplayMatch) {
+      flushCurrentBlock();
+
+      if (currentDisplayCodeBlock) {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'New display-only code block started before the previous one was closed.', line);
+        finalizeDisplayCodeBlock(lineNo - 1);
+      }
+
+      currentField = pythonDisplayMatch ? 'pythondisplay' : 'cppdisplay';
+      currentDisplayCodeBlock = {
+        type: pythonDisplayMatch ? 'pythondisplay' : 'cppdisplay',
+        language: pythonDisplayMatch ? 'python' : 'cpp',
+        displayOnly: true,
+        lines: [],
+        sourceMeta: {
+          displayLine: lineNo,
+          endDisplayLine: null,
+        },
+      };
+      openDisplayCodeLine = lineNo;
+      continue;
+    }
+
+    if (trimmed === '\\endpythondisplay' || trimmed === '\\endcppdisplay') {
+      if (currentDisplayCodeBlock && (
+        (trimmed === '\\endpythondisplay' && currentDisplayCodeBlock.type === 'pythondisplay') ||
+        (trimmed === '\\endcppdisplay' && currentDisplayCodeBlock.type === 'cppdisplay')
+      )) {
+        finalizeDisplayCodeBlock(lineNo);
+      } else {
+        pushIssue('error', lineNo, `${trimmed} without a matching \\pythondisplay or \\cppdisplay block.`, line);
+      }
+      currentField = 'prompt';
+      continue;
+    }
+
+    if (currentDisplayCodeBlock) {
+      if (trimmed === '\\endquestion' || trimmed === '\\endquestiongroup') {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'Unclosed display-only code block: missing matching end tag.', null);
+        finalizeDisplayCodeBlock(lineNo - 1);
+      } else {
+        currentDisplayCodeBlock.lines.push(line);
+        continue;
+      }
     }
 
     // --- C++ blocks ---
@@ -1247,6 +1319,10 @@ export function parseSheetToBlocks(lines, options = {}) {
         pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice before \\endquestiongroup.', null);
         finalizeMultipleChoice(lineNo - 1);
       }
+      if (currentDisplayCodeBlock) {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'Unclosed display-only code block: missing matching end tag before \\endquestiongroup.', null);
+        finalizeDisplayCodeBlock(lineNo - 1);
+      }
       if (currentGroupIntro?.sourceMeta) {
         currentGroupIntro.sourceMeta.endGroupLine = lineNo;
       }
@@ -1331,6 +1407,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         aiBlocks: [],
         infos: [],
         codeBlocks: [],
+        displayCodeBlocks: [],
         scores: {},
         retriesRequired: currentGroupRetriesRequired,
         sourceMeta: {
@@ -1438,9 +1515,10 @@ export function parseSheetToBlocks(lines, options = {}) {
         finalizeMultipleChoice(lineNo - 1);
       }
 
-      const multipleChoiceScoreIssue = getMultipleChoiceScoreRequirementMessage({
+      const multipleChoiceScoreIssue = getMultipleChoiceTestModeIssueMessage({
         isTest,
         hasMultipleChoice: !!currentQuestion.multipleChoice,
+        correctAnswer: currentQuestion.multipleChoice?.correctAnswer,
         hasResponseScore: !!currentQuestion.scores?.response,
       });
       if (multipleChoiceScoreIssue) {
@@ -1760,6 +1838,10 @@ export function parseSheetToBlocks(lines, options = {}) {
   if (currentMultipleChoice) {
     pushIssue('error', openMultipleChoiceLine ?? null, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice at end of document.', null);
     finalizeMultipleChoice(lines.length);
+  }
+  if (currentDisplayCodeBlock) {
+    pushIssue('error', openDisplayCodeLine ?? null, 'Unclosed display-only code block: missing matching end tag at end of document.', null);
+    finalizeDisplayCodeBlock(lines.length);
   }
   if (currentQuestion) {
     pushIssue('error', openQuestionLine ?? null, 'Unclosed \\question: missing \\endquestion at end of document.', null);
@@ -2097,6 +2179,21 @@ export function renderBlocks(blocks, options = {}) {
 
 
 
+
+    if (block.type === 'pythondisplay' || block.type === 'cppdisplay') {
+      const DisplayComponent =
+        block.type === 'cppdisplay' ? ActivityCppBlock : ActivityPythonBlock;
+      return (
+        <div key={`${block.type}-${index}`} className="mb-3">
+          <DisplayComponent
+            code={block.content || ''}
+            blockIndex={`${block.type}-${index}`}
+            editable={false}
+            displayOnly={true}
+          />
+        </div>
+      );
+    }
 
     if (block.type === 'pythonturtle') {
       // Local-only top-level turtle: no DB keys, no prefill, always reflect sheet
@@ -2609,6 +2706,21 @@ export function renderBlocks(blocks, options = {}) {
             `question-${block.groupId}-${block.id}`,
             questionAnchorRef
           )}
+
+          {block.displayCodeBlocks?.map((displayBlock, displayIndex) => {
+            const DisplayComponent =
+              displayBlock.type === 'cppdisplay' ? ActivityCppBlock : ActivityPythonBlock;
+            return (
+              <div key={`q-${block.groupId}-${block.id}-display-${displayIndex}`} className="mb-3">
+                <DisplayComponent
+                  code={displayBlock.content || ''}
+                  blockIndex={`q-${block.groupId}-${block.id}-display-${displayIndex}`}
+                  editable={false}
+                  displayOnly={true}
+                />
+              </div>
+            );
+          })}
 
           {block.pythonBlocks?.map((py, i) => {
             const codeAnchorRef = React.createRef();

@@ -39,14 +39,24 @@ export function getUnsupportedScoreTypeMessage(scoreTypeRaw = '') {
   return `Unsupported \\score type "${scoreType}". Use response, code, or output.`;
 }
 
-export function getMultipleChoiceScoreRequirementMessage({ isTest, hasMultipleChoice, hasResponseScore }) {
+export function getMultipleChoiceTestModeIssueMessage({
+  isTest,
+  hasMultipleChoice,
+  correctAnswer,
+  hasResponseScore,
+}) {
   if (!isTest || !hasMultipleChoice) {
     return null;
   }
 
-  if (hasResponseScore) {
-    return null;
+  const answer = String(correctAnswer || '').trim();
+  if (!answer) {
+    return 'Multiple-choice questions in test mode must include the correct answer inside \\multiplechoice{...}. Leave \\multiplechoice{} only for survey questions.';
   }
 
-  return 'Multiple-choice questions in test mode must include an explicit \\score{points,response} rubric block.';
+  if (!hasResponseScore) {
+    return 'Multiple-choice questions in test mode must include an explicit \\score{points,response} rubric block.';
+  }
+
+  return null;
 }

@@ -1632,8 +1632,8 @@ export default function RunActivityPage({
     if (isMultipleChoice && maxRespPts > 0) {
       const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
       if (!correctAnswer) {
-        responseScore = selectedChoice ? maxRespPts : 0;
-        responseFeedback = '';
+        responseScore = 0;
+        responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
       } else {
         const isCorrect = selectedChoice === correctAnswer;
         responseScore = isCorrect ? maxRespPts : 0;

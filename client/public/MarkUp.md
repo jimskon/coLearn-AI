@@ -18,6 +18,7 @@ The system supports:
 - Runnable Python Remote blocks (with optional timeout)
 - Runnable C++ blocks (with optional timeout)
 - Runnable Python Turtle blocks (with window size + timeout)
+- Read-only Python and C++ display blocks for examples that should be shown but not edited or run
 - Editable and readonly file blocks
 - Inline AI help blocks for guided student questions
 - Structured AI feedback directives
@@ -321,6 +322,16 @@ Supports optional timeout: `\python{50000}`
 \endpython
 ```
 
+### Python Display
+
+Use this when you want to show Python code without letting students edit or run it.
+
+```text
+\pythondisplay
+# read-only example code
+\endpythondisplay
+```
+
 ### Python Remote
 
 Runs on the server with the same file-handling pattern as C++.
@@ -342,6 +353,17 @@ Supports optional timeout: `\cpp{50000}`
 #include <iostream>
 int main() { }
 \endcpp
+```
+
+### C++ Display
+
+Use this when you want to show C++ code without letting students edit or run it.
+
+```text
+\cppdisplay
+#include <iostream>
+int main() { }
+\endcppdisplay
 ```
 
 ---

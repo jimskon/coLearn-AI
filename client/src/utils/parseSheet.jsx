@@ -2975,6 +2975,14 @@ export function renderBlocks(blocks, options = {}) {
               <legend className="fs-6 mb-2">Choose one answer</legend>
               {block.multipleChoice.choices.map((choice, choiceIndex) => {
                 const choiceId = `multiple-choice-${responseKey}-${choiceIndex}`;
+                const isMultilineCodeChoice = /\\\\|\n/.test(String(choice.value || ''));
+                const choiceLabel = isMultilineCodeChoice ? (
+                  <code style={{ display: 'block', whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>
+                    {String(choice.value || '').replace(/\\\\/g, '\n')}
+                  </code>
+                ) : (
+                  <span dangerouslySetInnerHTML={{ __html: choice.content || choice.value }} />
+                );
                 return (
                   <Form.Check
                     key={choiceId}
@@ -2985,7 +2993,7 @@ export function renderBlocks(blocks, options = {}) {
                     checked={(prefill?.[responseKey]?.response || '') === choice.value}
                     disabled={!editable || lockMainResponse}
                     className="mb-2"
-                    label={<span dangerouslySetInnerHTML={{ __html: choice.content || choice.value }} />}
+                    label={choiceLabel}
                     onChange={() => {
                       options.onTextChange?.(responseKey, choice.value, {
                         questionText: stripHtml(block.prompt || ''),

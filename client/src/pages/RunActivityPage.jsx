@@ -1647,7 +1647,9 @@ export default function RunActivityPage({
       if (hasChoiceScores) {
         const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
         responseScore = Number(selected?.points || 0);
-        responseFeedback = '';
+        responseFeedback = selected
+          ? `Selected answer earned ${responseScore}/${maxRespPts} points.`
+          : 'No answer was selected.';
       } else {
         const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
         if (!correctAnswer) {

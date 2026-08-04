@@ -90,6 +90,22 @@ function cloneEmptyAdvancedDraft() {
   };
 }
 
+function slugifyActivityName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+}
+
+function markupHeaderValue(value) {
+  return String(value || '')
+    .replace(/[{}]/g, '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+}
+
 function allocateTimedSectionMinutes(sectionNames, totalMinutes) {
   const sections = Array.isArray(sectionNames) ? sectionNames : [];
   const total = Math.round(Number(totalMinutes));
@@ -1522,6 +1538,61 @@ export default function CreatorWorkbenchPage() {
     }
   };
 
+  const createBlankActivity = async () => {
+    setNotice('');
+    setError('');
+
+    const title = markupHeaderValue(draft.title);
+    if (!title) {
+      setError('Enter a title before creating a blank activity.');
+      return;
+    }
+
+    const mode = String(draft.mode || 'group').trim().toLowerCase() || 'group';
+    const baseName = slugifyActivityName(title) || 'untitled_activity';
+    const name = `${baseName}_${Date.now().toString(36)}`;
+    const sourceText = [
+      `\\title{${title}}`,
+      `\\name{${name}}`,
+      `\\mode{${mode}}`,
+      '',
+      '% Paste or write your activity markup below.',
+      '',
+    ].join('\n');
+
+    setCreateBusy(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name,
+          title,
+          source_type: 'local',
+          content_text: sourceText,
+          order_index: 0,
+          createdBy: user?.id,
+        }),
+      });
+      const data = await readJsonResponse(response);
+      if (!response.ok) throw new Error(data?.error || 'Failed to create blank activity.');
+
+      setActivity({ ...data, mode, content_text: sourceText });
+      setRawText(sourceText);
+      compileText(sourceText);
+      setMessages([{ role: 'assistant', text: 'Blank activity created without AI generation.' }]);
+      setRightMode('edit');
+      setNotice('Blank activity created. Paste your markup into Source, then click Save.');
+      navigate(`/creator/${data.id}?blank=1`, { replace: true });
+    } catch (err) {
+      console.error('Blank activity creation failed:', err);
+      setError(err?.message || String(err));
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+
   const loadLabBoilerplate = () => {
     if (proposal) return;
     recordVisualEdit('loading lab boilerplate');
@@ -2295,12 +2366,19 @@ export default function CreatorWorkbenchPage() {
                     {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <Stars className="me-2" />}
                     Create Draft
                   </Button>
+                  <Button variant="outline-primary" onClick={createBlankActivity} disabled={createBusy || !classId}>
+                    {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <PencilSquare className="me-2" />}
+                    Create Blank — No AI
+                  </Button>
                   {isAssignmentDraft ? (
                     <Button variant="outline-success" onClick={() => createDraft({ useLabBoilerplate: true })} disabled={createBusy || !classId}>
                       {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <PlusLg className="me-2" />}
                       Create Lab Boilerplate
                     </Button>
                   ) : null}
+                </div>
+                <div className="text-muted small mt-2">
+                  <strong>Create Blank — No AI</strong> creates a local activity immediately, then opens Source so you can paste markup. It does not send a generation request.
                 </div>
                 {isAssignmentDraft ? (
                   <div className="text-muted small mt-2">

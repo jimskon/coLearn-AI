@@ -2765,7 +2765,10 @@ export default function RunActivityPage({
     setIsSubmitting(true);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    // A full-test regrade can include several AI-scored code/written responses.
+    // Keep the request alive long enough for the server to process the whole attempt.
+    const regradeTimeoutMs = 180000;
+    const timeoutId = setTimeout(() => controller.abort(), regradeTimeoutMs);
 
     try {
       const studentId = activity?.submitted_by_user_id || null;
@@ -2845,7 +2848,7 @@ export default function RunActivityPage({
       alert('Regrade complete.');
     } catch (e) {
       console.error('[REGRD] error', e);
-      alert(e?.name === 'AbortError' ? 'Regrade timed out (20s).' : 'Regrade failed.');
+      alert(e?.name === 'AbortError' ? 'Regrade timed out after 3 minutes. Please try again or check the server log.' : 'Regrade failed.');
     } finally {
       clearTimeout(timeoutId);
       setIsSubmitting(false);

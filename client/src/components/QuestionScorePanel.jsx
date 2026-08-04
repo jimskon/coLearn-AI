@@ -135,7 +135,7 @@ export default function QuestionScorePanel({
                   ? respExplain
                   : respScore === maxResp
                   ? 'Full credit for written response.'
-                  : ''}
+                  : `Preliminary written score: ${respScore != null ? respScore : 0}/${maxResp}.`}
               </p>
             )}
           </div>
@@ -175,7 +175,7 @@ export default function QuestionScorePanel({
                   ? runExplain
                   : runScore === maxRun && maxRun > 0
                   ? 'Full credit for run/output.'
-                  : ''}
+                  : `Preliminary run/output score: ${runScore != null ? runScore : 0}/${maxRun}.`}
               </p>
             )}
           </div>
@@ -215,7 +215,7 @@ export default function QuestionScorePanel({
                   ? codeExplain
                   : codeScore === maxCode && maxCode > 0
                   ? 'Full credit for code.'
-                  : ''}
+                  : `Preliminary code score: ${codeScore != null ? codeScore : 0}/${maxCode}.`}
               </p>
             )}
           </div>

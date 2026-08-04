@@ -1629,6 +1629,9 @@ export default function RunActivityPage({
     const multipleChoice = block?.multipleChoice || null;
     const isMultipleChoice =
       Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
+    const hasChoiceScores =
+      !!multipleChoice?.hasChoiceScores ||
+      multipleChoice?.choices?.some((choice) => Number.isInteger(choice?.points));
 
     const responseText = String(payload?.responseText || '').trim();
     const selectedChoice = responseText;
@@ -1641,7 +1644,7 @@ export default function RunActivityPage({
     let responseFeedback = String(result?.responseFeedback ?? '').trim();
 
     if (isMultipleChoice && maxRespPts > 0) {
-      if (multipleChoice?.hasChoiceScores) {
+      if (hasChoiceScores) {
         const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
         responseScore = Number(selected?.points || 0);
         responseFeedback = '';

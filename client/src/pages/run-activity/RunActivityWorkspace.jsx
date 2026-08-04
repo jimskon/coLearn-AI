@@ -292,8 +292,8 @@ export default function RunActivityWorkspace({
                   isSubmitted;
                 const showScorePanel =
                   isTestMode &&
-                  isInstructor &&
-                  isSubmitted;
+                  isSubmitted &&
+                  (isInstructor || isStudent);
                 const canGradeQuestionPreviewForBlock = shouldShowQuestionGradePreview({
                   blockType: block.type,
                   canGradeQuestionPreview,

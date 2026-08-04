@@ -120,7 +120,9 @@ export default function GroupSetupPage() {
   };
 
   const generateGroups = () => {
-    const present = students.filter(s => selected[s.id]);
+    const present = isAssignment
+      ? students.filter((student) => student.role === 'student')
+      : students.filter(s => selected[s.id]);
     const shuffled = [...present].sort(() => Math.random() - 0.5);
 
     if (shuffled.length === 0) {
@@ -257,7 +259,46 @@ export default function GroupSetupPage() {
       return;
     }
 
-    // NON-TEST: old groups workflow
+    // Assignment default: everyone receives an individual, no-role workspace.
+    // Collaborative assignments still use the normal generated groups below.
+    if (isAssignment && !showGroupOptions && groups.length === 0) {
+      const assignmentGroups = students
+        .filter((student) => student.role === 'student')
+        .map((student) => ({
+          members: [{ student_id: student.id, role: null }],
+        }));
+
+      if (!assignmentGroups.length) {
+        alert('There are no enrolled students to activate for this assignment.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/activity-instances/setup-groups`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            activityId: Number(activityId),
+            courseId: Number(courseId),
+            groups: assignmentGroups,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(`❌ Error: ${data.error || 'Failed to activate assignment'}`);
+          return;
+        }
+        alert('✅ Assignment activated for all enrolled students.');
+        navigate(`/view-groups/${courseId}/${activityId}`);
+      } catch (err) {
+        console.error('❌ Assignment activation failed:', err);
+        alert('❌ Failed to activate assignment.');
+      }
+      return;
+    }
+
+    // NON-TEST: normal group workflow
     if (!groups || groups.length === 0) {
       alert('Generate groups first.');
       return;
@@ -312,23 +353,27 @@ export default function GroupSetupPage() {
       )}
 
 
-      <h5>Select Present Students:</h5>
-      <Row>
-        {Array.isArray(students) && students.length > 0 ? (
-          students.map(s => (
-            <Col md={3} key={s.id} className="mb-2">
-              <Form.Check
-                type="checkbox"
-                label={s.role === 'student' ? s.name : `${s.name} (${s.role})`}
-                checked={!!selected[s.id]}
-                onChange={() => toggleSelect(s.id)}
-              />
-            </Col>
-          ))
-        ) : (
-          <p>No students have joined this instance.</p>
-        )}
-      </Row>
+      {!isAssignment && (
+        <>
+          <h5>Select Present Students:</h5>
+          <Row>
+            {Array.isArray(students) && students.length > 0 ? (
+              students.map(s => (
+                <Col md={3} key={s.id} className="mb-2">
+                  <Form.Check
+                    type="checkbox"
+                    label={s.role === 'student' ? s.name : `${s.name} (${s.role})`}
+                    checked={!!selected[s.id]}
+                    onChange={() => toggleSelect(s.id)}
+                  />
+                </Col>
+              ))
+            ) : (
+              <p>No students have joined this instance.</p>
+            )}
+          </Row>
+        </>
+      )}
 
       {/* Controls */}
       <Row className="mt-3">
@@ -470,7 +515,7 @@ export default function GroupSetupPage() {
         </>
       )}
       <Button className="mt-3" onClick={handleSaveGroups}>
-        Save
+        {isAssignment && !showGroupOptions && groups.length === 0 ? 'Activate Assignment' : 'Save'}
       </Button>
     </Container>
   );

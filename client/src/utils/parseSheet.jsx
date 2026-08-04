@@ -1426,7 +1426,9 @@ export function parseSheetToBlocks(lines, options = {}) {
         continue;
       }
 
-      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}(?:\{(\d+)\})?\s*$/);
+      // Accept a legacy/escaped point delimiter (\\{2}) as well as the documented {2}
+      // form, then store only the option text and numeric point value.
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}(?:\\?\{(\d+)\})?\s*$/);
       if (choiceMatch) {
         const value = String(choiceMatch[1] || '').trim();
         if (!value) {

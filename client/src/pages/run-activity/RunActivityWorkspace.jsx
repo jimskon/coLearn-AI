@@ -4,6 +4,7 @@ import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
 import { collectInfosForTarget } from '../../utils/parseSheet';
 import useRuntimeFeatures from '../../hooks/useRuntimeFeatures';
+import { shouldShowQuestionGradePreview } from './gradeQuestionPreviewUi';
 
 function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   if (!infos?.length) return null;
@@ -271,7 +272,7 @@ export default function RunActivityWorkspace({
                   hideStudentTestSections,
                 });
 
-                if (!isTestMode || block.type !== 'question') {
+                if (block.type !== 'question' || (!isTestMode && !isSandbox)) {
                   return (
                     <div key={`group-${index}-block-${bIndex}`}>
                       {renderedBlock}
@@ -292,7 +293,12 @@ export default function RunActivityWorkspace({
                   isTestMode &&
                   isInstructor &&
                   isSubmitted;
-                const canGradeQuestionPreviewForBlock = canGradeQuestionPreview;
+                const canGradeQuestionPreviewForBlock = shouldShowQuestionGradePreview({
+                  blockType: block.type,
+                  canGradeQuestionPreview,
+                  isTestMode,
+                  isSandbox,
+                });
                 const questionGradePreview = questionGradePreviews?.[qid];
                 const isGradingThisQuestion = gradingQuestionQid === qid;
                 const displayNumber = nonLegacyForUI ? qid : globalQuestionCounter;

@@ -882,11 +882,24 @@ export default function CreatorWorkbenchPage() {
     selected_model: isDemoCreator ? 'gpt-5-mini' : emptyDraft.selected_model,
   }));
   const [advancedDraft, setAdvancedDraft] = useState(() => cloneEmptyAdvancedDraft());
-  const normalizedDraftMode = String(draft.mode || '').trim().toLowerCase();
+  const [rawText, setRawText] = useState('');
+  const declaredSourceMode = useMemo(() => {
+    const match = String(rawText || '').match(/^\s*\\mode\{([^}]+)\}/mi);
+    return match ? String(match[1] || '').trim().toLowerCase() : '';
+  }, [rawText]);
+  const normalizedDraftMode = declaredSourceMode || String(draft.mode || '').trim().toLowerCase();
   const isTestDraft = normalizedDraftMode === 'test';
   const isAssignmentDraft = normalizedDraftMode === 'assignment';
   const isSectionlessDraft = normalizedDraftMode === 'test' || normalizedDraftMode === 'assignment';
-  const [rawText, setRawText] = useState('');
+  const currentModeLabel = isAssignmentDraft
+    ? 'Lab Assignment'
+    : isTestDraft
+      ? 'Test'
+      : normalizedDraftMode === 'playground'
+        ? 'Playground'
+        : normalizedDraftMode === 'demo'
+          ? 'Demo'
+          : 'Group Activity';
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
   const [fileContents, setFileContents] = useState({});
@@ -1279,6 +1292,11 @@ export default function CreatorWorkbenchPage() {
           : String(sourceData?.text || activityData?.content_text || '');
 
         setActivity(activityData);
+        setDraft((previous) => ({
+          ...previous,
+          title: activityData?.title || previous.title,
+          mode: String(activityData?.mode || activityData?.activity_type || previous.mode || 'group').trim().toLowerCase(),
+        }));
         setRawText(text);
         compileText(text);
         await loadClassInfo(activityData.class_id);
@@ -2096,7 +2114,7 @@ export default function CreatorWorkbenchPage() {
 
       <div className="d-flex align-items-center justify-content-between mb-2">
         <div>
-          <h3 className="mb-0">Create Activity</h3>
+          <h3 className="mb-0">{activity?.id ? `Edit: ${currentModeLabel}` : 'Create Activity'}</h3>
           <div className="text-muted small">
             {classInfo?.name || (effectiveClassId ? `Class ${effectiveClassId}` : 'New class activity')}
             {activity?.title ? ` · ${activity.title}` : ''}
@@ -2114,6 +2132,17 @@ export default function CreatorWorkbenchPage() {
 
       {notice ? <Alert variant="info" className="py-2 mb-2">{notice}</Alert> : null}
       {error ? <Alert variant="danger" className="py-2 mb-2">{error}</Alert> : null}
+      {activity?.id && (
+        <Alert variant={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} className="py-2 mb-2 d-flex align-items-center gap-2">
+          <Badge bg={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} text={isTestDraft ? 'dark' : undefined}>
+            CURRENT MODE
+          </Badge>
+          <strong>{currentModeLabel}</strong>
+          {isAssignmentDraft ? (
+            <span className="small">All milestones are visible; students save drafts and submit the lab once at the end.</span>
+          ) : null}
+        </Alert>
+      )}
 
       <div className="creator-shell">
         <section className="creator-left">
@@ -2124,7 +2153,14 @@ export default function CreatorWorkbenchPage() {
                 Advanced
               </Button>
             </div>
-            {activity?.id ? <Badge bg="success">Draft #{activity.id}</Badge> : <Badge bg="secondary">Setup</Badge>}
+            {activity?.id ? (
+              <div className="d-flex align-items-center gap-2">
+                <Badge bg={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} text={isTestDraft ? 'dark' : undefined}>
+                  {currentModeLabel}
+                </Badge>
+                <Badge bg="light" text="dark" className="border">Draft #{activity.id}</Badge>
+              </div>
+            ) : <Badge bg="secondary">Setup</Badge>}
           </div>
           <div className="creator-panel-body">
             {!activity?.id ? (

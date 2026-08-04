@@ -9,7 +9,7 @@ const ROLES = ['facilitator', 'analyst', 'qc', 'spokesperson'];
  * Helpers
  */
 
-async function isIndividualActivity(conn, activityId) {
+async function isTestActivity(conn, activityId) {
   const [[row]] = await conn.query(
     `SELECT COALESCE(is_test, 0) AS is_test, sheet_url, source_type, content_text
        FROM pogil_activities
@@ -17,7 +17,7 @@ async function isIndividualActivity(conn, activityId) {
     [activityId]
   );
   const activityType = await inferActivityTypeFromActivity(row || {});
-  return activityType === 'test' || activityType === 'assignment';
+  return activityType === 'test';
 }
 
 // Create a new instance for a test (group of 1, no roles)
@@ -304,15 +304,15 @@ async function smartAddStudent(req, res) {
       return res.status(409).json({ error: 'Student already in a group for this activity' });
     }
 
-    const individualMode = await isIndividualActivity(conn, activityId);
-    const demoCourse = !individualMode && await isDemoCourse(conn, courseId);
+    const testMode = await isTestActivity(conn, activityId);
+    const demoCourse = !testMode && await isDemoCourse(conn, courseId);
 
     let group;
     let role = null;
     let cleanRole = null;
 
-    if (individualMode) {
-      // Tests and assignments each receive a private instance with no role.
+    if (testMode) {
+      // Tests always receive a private instance with no role.
       group = await createNewTestInstance(conn, activityId, courseId);
     } else {
       if (demoCourse) {
@@ -428,7 +428,7 @@ async function addSoloStudent(req, res) {
       return res.status(409).json({ error: 'Student already in a group for this activity' });
     }
 
-    const testMode = await isIndividualActivity(conn, activityId);
+    const testMode = await isTestActivity(conn, activityId);
 
     // Always create a brand-new instance for solo
     const group = testMode

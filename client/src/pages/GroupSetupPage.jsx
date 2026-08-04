@@ -17,6 +17,7 @@ export default function GroupSetupPage() {
 
   const [groupSize, setGroupSize] = useState(4);
   const [useRoles, setUseRoles] = useState(true);
+  const [showGroupOptions, setShowGroupOptions] = useState(false);
 
   // NEW: test-related state
   const [isTest, setIsTest] = useState(false);
@@ -28,6 +29,7 @@ export default function GroupSetupPage() {
 
   const [activities, setActivities] = useState([]);
   const [cloneFromActivityId, setCloneFromActivityId] = useState('');
+  const isIndividualLabSetup = isAssignment && groupSize === 1 && !useRoles;
 
 
   useEffect(() => {
@@ -94,6 +96,7 @@ export default function GroupSetupPage() {
         const nextType = data.activity_type || (data.is_test === 1 ? 'test' : 'group');
         setIsTest(nextType === 'test');
         setIsAssignment(nextType === 'assignment');
+        setShowGroupOptions(false);
       } catch (err) {
         console.error('❌ Failed to load activity meta:', err);
       }
@@ -104,7 +107,7 @@ export default function GroupSetupPage() {
 
 
 
-  // Tests and labs are individual workspaces: one student, no rotating roles.
+  // Tests are fixed individual attempts; assignment setup starts with individual defaults.
   useEffect(() => {
     if (isTest || isAssignment) {
       setGroupSize(1);
@@ -304,7 +307,7 @@ export default function GroupSetupPage() {
 
       {isAssignment && (
         <p className="text-muted">
-          This activity is a <strong>lab assignment</strong>. Each selected student receives an individual workspace; group roles are not used.
+          This activity is a <strong>lab assignment</strong>. It starts with group size 1 and no roles. Use group setup below when the lab is collaborative.
         </p>
       )}
 
@@ -329,7 +332,7 @@ export default function GroupSetupPage() {
 
       {/* Controls */}
       <Row className="mt-3">
-        {!isTest && !isAssignment && (
+        {!isTest && (!isAssignment || showGroupOptions) && (
           <Col md={3}>
             <Form.Label>Group Size</Form.Label>
             <Form.Select
@@ -343,7 +346,7 @@ export default function GroupSetupPage() {
           </Col>
         )}
 
-        {!isTest && !isAssignment && (
+        {!isTest && (!isAssignment || showGroupOptions) && (
           <Col md={3} className="d-flex align-items-end">
             <Form.Check
               type="checkbox"
@@ -396,7 +399,17 @@ export default function GroupSetupPage() {
           </>
         )}
       </Row>
-      {!isTest && !isAssignment && (<Row className="mt-3">
+      {isAssignment && !showGroupOptions && (
+        <Button
+          variant="outline-primary"
+          className="mt-3"
+          onClick={() => setShowGroupOptions(true)}
+        >
+          Configure Groups
+        </Button>
+      )}
+
+      {!isTest && (!isAssignment || showGroupOptions) && (<Row className="mt-3">
         <Col md={6}>
           <Form.Label>Clone groups from another activity in this instance</Form.Label>
           <Form.Select
@@ -425,18 +438,18 @@ export default function GroupSetupPage() {
       </Row>
       )}
 
-      {!isTest && (
+      {!isTest && (!isAssignment || showGroupOptions) && (
         <>
           <Button className="mt-3" onClick={generateGroups}>
-            {isAssignment ? 'Generate Individual Lab Workspaces' : 'Generate Groups'}
+            {isIndividualLabSetup ? 'Generate Individual Lab Workspaces' : 'Generate Groups'}
           </Button>
 
           {groups.length > 0 && (
             <>
-              <h5 className="mt-4">{isAssignment ? 'Individual Lab Workspaces:' : 'Generated Groups:'}</h5>
+              <h5 className="mt-4">{isIndividualLabSetup ? 'Individual Lab Workspaces:' : 'Generated Groups:'}</h5>
               {groups.map((group, idx) => (
                 <Card key={idx} className="mb-3">
-                  <Card.Header>{isAssignment ? `Student workspace ${idx + 1}` : `Group ${idx + 1}`}</Card.Header>
+                  <Card.Header>{isIndividualLabSetup ? `Student workspace ${idx + 1}` : `Group ${idx + 1}`}</Card.Header>
                   <Card.Body>
                     <ul>
                       {Array.isArray(group.members) && group.members.length > 0 ? (

@@ -619,7 +619,7 @@ test('demo-instance rejects non-demo activities and unenrolled students', async 
   );
 
   assert.equal(nonDemo.status, 400);
-  assert.deepEqual(nonDemo.body, { error: 'This activity is not a demo.' });
+  assert.deepEqual(nonDemo.body, { error: 'This activity is not a demo or playground.' });
 
   const demoDocId = 'studentDemo123456789012345678';
   const demoActivityId = await createActivity({

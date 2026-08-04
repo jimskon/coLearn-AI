@@ -510,7 +510,7 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {isTestMode && !isSandbox && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
+        {isTestMode && !isSandbox && overallTestTotals.max > 0 && isInstructor && (
           <Alert variant="info" className="mt-3">
             <strong>{Number(activity?.review_complete) ? 'Reviewed by instructor' : 'Preliminary score — pending instructor review'}</strong>
             <br />

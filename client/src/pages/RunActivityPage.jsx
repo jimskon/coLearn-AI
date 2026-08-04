@@ -3122,6 +3122,8 @@ export default function RunActivityPage({
           testLockState={testLockState}
           isStudent={isStudent}
           submittedAt={activity?.submitted_at}
+          reviewComplete={Number(activity?.review_complete) === 1}
+          score={overallTestTotals}
           formatRemainingSeconds={formatRemainingSeconds}
         />
 

@@ -547,6 +547,7 @@ async function deleteActivityInstance(req, res) {
     // not. Delete from every known dependent table when present.
     for (const [tableName, columnName] of [
       ['activity_heartbeats', 'activity_instance_id'],
+      ['audit_log', 'activity_instance_id'],
       ['event_log', 'activity_instance_id'],
       ['response_drafts', 'activity_instance_id'],
       ['followups', 'activity_instance_id'],
@@ -576,7 +577,10 @@ async function deleteActivityInstance(req, res) {
   } catch (err) {
     try { await conn.rollback(); } catch { /* no-op */ }
     console.error('deleteActivityInstance failed:', err);
-    return res.status(500).json({ error: 'Could not delete activity instance' });
+    const detail = err?.code
+      ? `${err.code}: ${err.message}`
+      : (err?.message || 'Unknown database error');
+    return res.status(500).json({ error: `Could not delete activity instance (${detail})` });
   } finally {
     conn.release();
   }

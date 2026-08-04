@@ -13,7 +13,7 @@ function stripHtml(s = "") {
 
 function normalizeScoreBands(scores = {}, rubric = {}) {
   const source = (obj, key) => obj && Object.prototype.hasOwnProperty.call(obj, key) ? obj[key] : undefined;
-  const response = source(scores, 'response') ?? source(scores, 'choice') ?? source(rubric, 'response') ?? source(rubric, 'choice') ?? null;
+  const response = source(scores, 'response') ?? source(rubric, 'response') ?? null;
   return {
     code: source(scores, 'code') ?? source(rubric, 'code') ?? null,
     output: source(scores, 'output') ?? source(rubric, 'output') ?? null,

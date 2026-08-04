@@ -362,11 +362,11 @@ function getQuestionScoreBlocks(sourceText, block) {
       continue;
     }
 
-    const match = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output|choice)\}/i);
+    const match = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
     if (match) {
       const typeRaw = match[2].toLowerCase();
       current = {
-        type: typeRaw === 'choice' ? 'response' : typeRaw,
+        type: typeRaw,
         points: Number.parseInt(match[1], 10),
         openLine: index + 1,
         closeLine: null,

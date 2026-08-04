@@ -1603,7 +1603,7 @@ export default function RunActivityPage({
 
   function normalizeScoreBands(scores = {}) {
     return {
-      response: scores.response || scores.choice || null,
+      response: scores.response || null,
       code: scores.code || null,
       output: scores.output || null,
     };

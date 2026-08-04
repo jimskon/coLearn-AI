@@ -42,7 +42,7 @@ function normalizeScoreBands(scores = {}) {
   return {
     code: scores.code || null,
     output: scores.output || null,
-    response: scores.response || scores.choice || null,
+    response: scores.response || null,
   };
 }
 
@@ -2212,7 +2212,7 @@ function parseScoreSpec(specRaw) {
 
       if (k === 'code' || k === 'codes') out.code = v;
       else if (k === 'output' || k === 'run') out.output = v;
-      else if (k === 'response' || k === 'choice') out.response = v;
+      else if (k === 'response') out.response = v;
     }
     return out;
   }
@@ -2227,7 +2227,7 @@ function parseScoreSpec(specRaw) {
     if (Number.isFinite(pts)) {
       if (bucket === 'code') out.code = pts;
       else if (bucket === 'output' || bucket === 'run') out.output = pts;
-      else if (bucket === 'response' || bucket === 'choice') out.response = pts;
+      else if (bucket === 'response') out.response = pts;
     }
   }
 

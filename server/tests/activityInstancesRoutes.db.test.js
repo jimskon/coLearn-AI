@@ -1534,3 +1534,45 @@ test('submit-test grades multiple-choice answers deterministically on the server
   );
   assert.equal(rows[0]?.response, 'Ottawa');
 });
+
+test('submit-test awards per-choice multiple-choice points, including partial credit', async () => {
+  const creator = await createUser('creator');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: creator.id, classId });
+  const sourceText = [
+    '\\mode{test}',
+    '\\questiongroup{Trivia}',
+    '\\question{Which answer is partly correct?}',
+    '\\multiplechoice{}',
+    '\\choice{Incorrect}{0}',
+    '\\choice{Partly correct}{1}',
+    '\\choice{Correct}{2}',
+    '\\endmultiplechoice',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const activityId = await createActivity({
+    classId,
+    createdBy: creator.id,
+    sourceType: 'local',
+    contentText: sourceText,
+  });
+  await db.query(`UPDATE pogil_activities SET is_test = 1 WHERE id = ?`, [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+
+  const response = await requestJson(student, `/api/activity-instances/${instanceId}/submit-test`, {
+    method: 'POST',
+    body: {
+      studentId: student.id,
+      answers: { '1a': 'Partly correct' },
+      questions: [{ qid: '1a', questionText: 'Which answer is partly correct?', scores: { response: { points: 2 } } }],
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.earned, 1);
+  assert.equal(response.body.max, 2);
+  assert.equal(response.body.questions[0].responseScore, 1);
+});

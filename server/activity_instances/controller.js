@@ -68,13 +68,19 @@ function parseTestQuestionsFromLines(lines) {
           .map((choice) => ({
             value: String(choice?.value ?? '').trim(),
             content: String(choice?.content ?? '').trim(),
+            points: Number.isInteger(choice?.points) ? choice.points : null,
           }))
           .filter((choice) => !!choice.value)
       : [];
 
+    const hasChoiceScores = choices.some((choice) => choice.points !== null);
     currentQuestion.multipleChoice = {
       correctAnswer,
       choices,
+      hasChoiceScores,
+      maxChoicePoints: hasChoiceScores
+        ? Math.max(0, ...choices.map((choice) => Number(choice.points) || 0))
+        : 0,
     };
     currentMultipleChoice = null;
   };
@@ -83,6 +89,11 @@ function parseTestQuestionsFromLines(lines) {
     if (!currentQuestion) return;
     if (currentMultipleChoice) finishMultipleChoice();
     currentQuestion.questionText = String(currentQuestion.questionText || '').trim();
+    if (currentQuestion.multipleChoice?.hasChoiceScores && !currentQuestion.scores?.response) {
+      currentQuestion.scores.response = {
+        points: currentQuestion.multipleChoice.maxChoicePoints,
+      };
+    }
     questions.push(currentQuestion);
     currentQuestion = null;
   };
@@ -121,11 +132,12 @@ function parseTestQuestionsFromLines(lines) {
         continue;
       }
 
-      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}\s*$/);
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}(?:\\?\{(\d+)\})?\s*$/);
       if (choiceMatch) {
         currentMultipleChoice.choices.push({
           value: String(choiceMatch[1] || '').trim(),
           content: String(choiceMatch[1] || '').trim(),
+          points: choiceMatch[2] === undefined ? null : Number.parseInt(choiceMatch[2], 10),
         });
       }
       continue;
@@ -2558,14 +2570,20 @@ async function submitTest(req, res) {
 
       if (isMultipleChoice) {
         if (maxRespPts > 0) {
-          const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
-          if (!correctAnswer) {
-            responseScore = 0;
-            responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
+          if (multipleChoice?.hasChoiceScores) {
+            const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
+            responseScore = Number(selected?.points || 0);
+            responseFeedback = '';
           } else {
-            const isCorrect = selectedChoice === correctAnswer;
-            responseScore = isCorrect ? maxRespPts : 0;
-            responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+            const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+            if (!correctAnswer) {
+              responseScore = 0;
+              responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
+            } else {
+              const isCorrect = selectedChoice === correctAnswer;
+              responseScore = isCorrect ? maxRespPts : 0;
+              responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+            }
           }
         } else {
           responseScore = 0;

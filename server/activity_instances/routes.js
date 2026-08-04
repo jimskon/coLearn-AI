@@ -24,6 +24,9 @@ router.post('/:instanceId/test-settings', controller.updateTestSettings);
 
 // ✅ Submit a test for this instance
 router.post('/:instanceId/submit-test', controller.submitTest);   
+// Assignment labs use the same scoring pipeline, but keep a distinct public
+// endpoint so callers do not need to represent a lab as a test.
+router.post('/:instanceId/submit-assignment', controller.submitTest);
 
 // ✅ Get activity instance details
 router.get('/:id', controller.getActivityInstanceById);

@@ -670,6 +670,161 @@ function getStarterQuestionLines(questionType) {
   return starterQuestionTemplates[questionType] || starterQuestionTemplates.written;
 }
 
+// This is intentionally concrete rather than AI-generated.  It gives creators a
+// reliable starting point for testing every major lab building block, then lets
+// them replace the prompts with their own assignment.
+const labBoilerplateSource = [
+  '\\title{Programming Lab Boilerplate}',
+  '\\name{programming_lab_boilerplate}',
+  '\\mode{assignment}',
+  '\\studentlevel{Introductory programming}',
+  '\\activitycontext{Build a small program in milestones. Save and test your work as you go, then submit the complete lab once at the end. The scores shown after submission are preliminary until your instructor reviews them.}',
+  '\\aicodeguidance{Act as a lab coach. Help students plan, debug, and test their own solution. Do not write the complete final solution for them.}',
+  '',
+  '\\questiongroup{Lab goal and plan}',
+  '\\text{Goal: create a program that reads whole numbers, keeps the valid values, and prints their total and average.}',
+  '\\question{In your own words, describe the input, processing, and output your final program will need.}',
+  '\\textresponse{5}',
+  '\\sampleresponses{The program reads values, validates them, accumulates a total and count, then prints the total and average.}',
+  '\\feedbackprompt{Give constructive feedback on whether the student identified input, processing, and output.}',
+  '\\score{3,response}',
+  '3: Clearly describes all three stages.',
+  '2: Describes most stages.',
+  '1: Vague or incomplete plan.',
+  '0: No usable plan.',
+  '\\endscore',
+  '\\endquestion',
+  '',
+  '\\question{Which expression correctly tests whether value is at least zero?}',
+  '\\multiplechoice{}',
+  '\\choice{value = 0}{0}',
+  '\\choice{value >= 0}{2}',
+  '\\choice{value ==> 0}{0}',
+  '\\choice{value < 0}{0}',
+  '\\endmultiplechoice',
+  '\\feedbackprompt{Briefly explain why the selected comparison does or does not include zero.}',
+  '\\endquestion',
+  '\\endquestiongroup',
+  '',
+  '\\questiongroup{Build and test a component}',
+  '\\pythondisplay',
+  '# Example: a running total starts at zero',
+  'total = 0',
+  '\\endpythondisplay',
+  '\\question{Write a function named add_valid that returns the sum of the non-negative values in a list. Run several tests before moving on.}',
+  '\\python',
+  'def add_valid(values):',
+  '    # Replace this starter code.',
+  '    return 0',
+  '',
+  'print(add_valid([4, -1, 6]))  # expected: 10',
+  '\\endpython',
+  '\\sampleresponses{A function that loops through values, adds non-negative ones, and returns the sum.}',
+  '\\feedbackprompt{Check the submitted code for correct filtering, accumulation, and a useful test.}',
+  '\\score{6,code}',
+  '6: Correct component with a meaningful test.',
+  '3-5: Mostly correct but has a minor logic or test gap.',
+  '1-2: Some relevant code but does not solve the component.',
+  '0: Missing or unrelated.',
+  '\\endscore',
+  '\\endquestion',
+  '',
+  '\\question{Record two test cases for your function: one ordinary case and one edge case. Explain the expected result for each.}',
+  '\\table{Component test cases}',
+  '\\row Test input & Expected result & Why this test matters',
+  '\\row \\tresponse & \\tresponse & \\tresponse',
+  '\\row \\tresponse & \\tresponse & \\tresponse',
+  '\\endtable',
+  '\\sampleresponses{Includes an ordinary list and an edge case such as an empty list or all negative values.}',
+  '\\feedbackprompt{Assess whether the test cases are specific and include an edge case.}',
+  '\\score{3,response}',
+  '3: Two useful cases including an edge case.',
+  '2: Two cases with limited explanation.',
+  '1: One useful case.',
+  '0: Missing.',
+  '\\endscore',
+  '\\endquestion',
+  '\\endquestiongroup',
+  '',
+  '\\questiongroup{Files and larger-program options}',
+  '\\file{numbers.txt,readonly}',
+  '4',
+  '-1',
+  '6',
+  '\\endfile',
+  '\\file{notes.txt}',
+  '# Keep design notes or test results here.',
+  '\\endfile',
+  '\\question{Use the supplied numbers.txt data (or your own list) to write a complete Python program that reports the total and average of valid values.}',
+  '\\pythonremote',
+  '# You may read numbers.txt or use a list while developing.',
+  '# Print both a total and an average for the valid values.',
+  '\\endpythonremote',
+  '\\sampleresponses{A complete program that reads or defines values, ignores negatives, and prints total and average.}',
+  '\\feedbackprompt{Evaluate the complete solution, including handling of no valid values and evidence of testing.}',
+  '\\score{10,code}',
+  '10: Complete, correct, readable program with appropriate edge-case handling.',
+  '7-9: Largely correct with a minor issue.',
+  '3-6: Meaningful partial implementation.',
+  '0-2: Minimal or missing implementation.',
+  '\\endscore',
+  '\\endquestion',
+  '',
+  '\\question{Optional extension: implement the same calculation in C++.}',
+  '\\cpp',
+  '#include <iostream>',
+  'int main() {',
+  '  // Optional extension.',
+  '  return 0;',
+  '}',
+  '\\endcpp',
+  '\\sampleresponses{A C++ implementation that computes and prints the requested result.}',
+  '\\feedbackprompt{Award credit only for a working, tested C++ extension.}',
+  '\\score{2,code}',
+  '2: Working extension.',
+  '1: Meaningful start.',
+  '0: Not attempted or incorrect.',
+  '\\endscore',
+  '\\endquestion',
+  '',
+  '\\question{Optional visual extension: use Python Turtle to draw one square for each valid value.}',
+  '\\pythonturtle{600x300}',
+  'import turtle',
+  '',
+  '# Optional extension: draw a square for each valid value.',
+  '\\endpythonturtle',
+  '\\sampleresponses{A turtle program that uses a loop and produces a visible drawing.}',
+  '\\feedbackprompt{Award credit for a working turtle extension that meaningfully uses the lab data or logic.}',
+  '\\score{2,code}',
+  '2: Working, meaningful extension.',
+  '1: Meaningful start.',
+  '0: Not attempted or incorrect.',
+  '\\endscore',
+  '\\endquestion',
+  '\\endquestiongroup',
+  '',
+  '\\questiongroup{Reflection and final submission}',
+  '\\question{What test result gave you the most useful information while building this program, and what did you change because of it?}',
+  '\\textresponse{5}',
+  '\\ai{critique}',
+  '\\aititle{Lab Coach}',
+  '\\aiprompt{Ask for help evaluating a test case or explaining a bug you found.}',
+  '\\aiguardrail{Coach the student through debugging and testing without providing the final program.}',
+  '\\aicontext{current-question,current-code,student-response}',
+  '\\aiinput{4}',
+  '\\endai',
+  '\\sampleresponses{Names a concrete test, result, and revision or confirmation.}',
+  '\\feedbackprompt{Give concise feedback on the student reflection and use of testing evidence.}',
+  '\\score{3,response}',
+  '3: Specific evidence and clear reflection.',
+  '2: Some evidence but limited detail.',
+  '1: General reflection only.',
+  '0: Missing.',
+  '\\endscore',
+  '\\endquestion',
+  '\\endquestiongroup',
+].join('\n');
+
 function getQuestionSource(sourceText, block) {
   const sourceMeta = block?.sourceMeta;
   if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return '';
@@ -729,6 +884,7 @@ export default function CreatorWorkbenchPage() {
   const [advancedDraft, setAdvancedDraft] = useState(() => cloneEmptyAdvancedDraft());
   const normalizedDraftMode = String(draft.mode || '').trim().toLowerCase();
   const isTestDraft = normalizedDraftMode === 'test';
+  const isAssignmentDraft = normalizedDraftMode === 'assignment';
   const isSectionlessDraft = normalizedDraftMode === 'test' || normalizedDraftMode === 'assignment';
   const [rawText, setRawText] = useState('');
   const [blocks, setBlocks] = useState([]);
@@ -1239,11 +1395,16 @@ export default function CreatorWorkbenchPage() {
       : prev);
   };
 
-  const createDraft = async () => {
+  const createDraft = async ({ useLabBoilerplate = false } = {}) => {
     setNotice('');
     setError('');
 
-    if (!draft.title.trim() || !draft.description.trim()) {
+    const draftTitle = draft.title.trim() || (useLabBoilerplate ? 'Programming Lab Boilerplate' : '');
+    const draftDescription = draft.description.trim() || (useLabBoilerplate
+      ? 'A comprehensive programming lab example with milestones, code, files, tests, feedback, and final submission.'
+      : '');
+
+    if (!draftTitle || !draftDescription) {
       setError('Enter a title and creator brief.');
       return;
     }
@@ -1295,7 +1456,7 @@ export default function CreatorWorkbenchPage() {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          title: draft.title.trim(),
+          title: draftTitle,
           duration_minutes: durationMinutes,
           mode: draft.mode,
           selected_model: draft.selected_model,
@@ -1303,17 +1464,33 @@ export default function CreatorWorkbenchPage() {
           use_timed_sections: useTimedSections,
           timed_sections: isSectionlessDraft ? [] : timedSections,
           retries_required: retriesRequired,
-          description: appendAdvancedPrompt(draft.description, advancedPromptText),
+          description: appendAdvancedPrompt(draftDescription, advancedPromptText),
           createdBy: user?.id,
         }),
       });
       const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Failed to create draft.');
 
-      setActivity(data);
-      setRawText(data.content_text || '');
-      compileText(data.content_text || '');
-      setMessages([{ role: 'assistant', text: 'Draft created.' }]);
+      let sourceText = data.content_text || '';
+      if (useLabBoilerplate) {
+        const sourceRes = await fetch(`${API_BASE_URL}/api/activities/${data.id}/source`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ text: labBoilerplateSource }),
+        });
+        const sourceData = await sourceRes.json().catch(() => ({}));
+        if (!sourceRes.ok) throw new Error(sourceData?.error || 'The assignment draft was created, but the lab boilerplate could not be saved.');
+        sourceText = labBoilerplateSource;
+      }
+
+      setActivity({ ...data, content_text: sourceText });
+      if (useLabBoilerplate) {
+        setDraft((previous) => ({ ...previous, title: draftTitle, description: draftDescription }));
+      }
+      setRawText(sourceText);
+      compileText(sourceText);
+      setMessages([{ role: 'assistant', text: useLabBoilerplate ? 'Lab boilerplate created.' : 'Draft created.' }]);
       creatorTutorial.startAfterGenerate();
       if (data.generation_status === 'fallback') {
         setNotice(data.generation_error || 'A fallback draft was created.');
@@ -1325,6 +1502,16 @@ export default function CreatorWorkbenchPage() {
     } finally {
       setCreateBusy(false);
     }
+  };
+
+  const loadLabBoilerplate = () => {
+    if (proposal) return;
+    recordVisualEdit('loading lab boilerplate');
+    setRawText(labBoilerplateSource);
+    compileText(labBoilerplateSource);
+    setSandboxUrl('');
+    setRightMode('preview');
+    setNotice('Lab boilerplate loaded. Review it, then click Save to replace this draft.');
   };
 
   const saveSource = async (sourceText = rawText) => {
@@ -2067,10 +2254,23 @@ export default function CreatorWorkbenchPage() {
                   />
                 </Form.Group>
 
-                <Button variant="success" onClick={createDraft} disabled={createBusy || !classId}>
-                  {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <Stars className="me-2" />}
-                  Create Draft
-                </Button>
+                <div className="d-flex flex-wrap gap-2">
+                  <Button variant="success" onClick={() => createDraft()} disabled={createBusy || !classId}>
+                    {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <Stars className="me-2" />}
+                    Create Draft
+                  </Button>
+                  {isAssignmentDraft ? (
+                    <Button variant="outline-success" onClick={() => createDraft({ useLabBoilerplate: true })} disabled={createBusy || !classId}>
+                      {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <PlusLg className="me-2" />}
+                      Create Lab Boilerplate
+                    </Button>
+                  ) : null}
+                </div>
+                {isAssignmentDraft ? (
+                  <div className="text-muted small mt-2">
+                    This creates a ready-to-edit sample lab without requiring a title or AI brief. It includes every supported lab building block.
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="d-flex flex-column gap-3">
@@ -2187,6 +2387,17 @@ export default function CreatorWorkbenchPage() {
               >
                 <ArrowCounterclockwise className="me-1" /> Undo
               </Button>
+              {isAssignmentDraft ? (
+                <Button
+                  size="sm"
+                  variant="outline-success"
+                  onClick={loadLabBoilerplate}
+                  disabled={!activity?.id || !!proposal}
+                  title="Replace the current source in the editor with the comprehensive lab example"
+                >
+                  <PlusLg className="me-1" /> Lab Boilerplate
+                </Button>
+              ) : null}
               {proposal ? <Badge bg="warning" text="dark">Proposal</Badge> : null}
               {activeIssues.length ? <Badge bg={activeIssues.some((issue) => issue.severity === 'error') ? 'danger' : 'warning'}>{activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</Badge> : <Badge bg="success">Clean</Badge>}
             </div>

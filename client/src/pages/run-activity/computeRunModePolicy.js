@@ -11,6 +11,7 @@ export default function computeRunModePolicy({
   activity,
   isPlaygroundMode = false,
   isTestMode = false,
+  isAssignmentMode = false,
 }) {
   const normalizedMode = normalizeRunActivityMode(mode, { user });
 
@@ -34,6 +35,7 @@ export default function computeRunModePolicy({
         isStudentRun &&
         (
           isPlaygroundMode ||
+          (isAssignmentMode && isStudent) ||
           (isTestMode && isStudent) ||
           (activeStudentId != null && String(user.id) === String(activeStudentId))
         )
@@ -55,8 +57,9 @@ export default function computeRunModePolicy({
       !activityPaused
     );
 
-  const canSubmitGroup = isCreatorSandbox || (isStudentRun && isActive && !isTestMode);
+  const canSubmitGroup = isCreatorSandbox || (isStudentRun && isActive && !isTestMode && !isAssignmentMode);
   const canSubmitTest = isTestMode && (isStudentRun || isCreatorTestRun) && (isStudent || isCreatorTestRun);
+  const canSubmitAssignment = isAssignmentMode && isStudentRun && isStudent && isActive;
   const canRunAI = isCreatorSandbox || (isStudentRun && isActive && !isTestMode);
   const canPersistDrafts = isStudentRun || isCreatorTestRun;
   const canPersistSubmissions = isStudentRun || isCreatorTestRun;
@@ -80,6 +83,7 @@ export default function computeRunModePolicy({
     canEditAnswers,
     canSubmitGroup,
     canSubmitTest,
+    canSubmitAssignment,
     canRunAI,
     canPersistDrafts,
     canPersistSubmissions,
@@ -87,12 +91,12 @@ export default function computeRunModePolicy({
     canPollActiveStudent: (isStudentRun || isInstructorView) && !isTestMode,
     canSendHeartbeat: isStudentRun && isStudent,
     canUseLiveSync: isStudentRun || isInstructorView,
-    canRegradeTests: isInstructorView && isInstructor && isTestMode,
-    canSaveInstructorScores: isInstructorView && isInstructor && isTestMode,
-    canGradeQuestionPreview: (isTestMode || isSandbox) && (isCreatorTestRun || isCreatorSandbox || isInstructor),
-    canGradeAllQuestions: (isTestMode || isSandbox) && (isCreatorTestRun || isCreatorSandbox || isInstructor),
+    canRegradeTests: isInstructorView && isInstructor && (isTestMode || isAssignmentMode),
+    canSaveInstructorScores: isInstructorView && isInstructor && (isTestMode || isAssignmentMode),
+    canGradeQuestionPreview: (isTestMode || isAssignmentMode || isSandbox) && (isCreatorTestRun || isCreatorSandbox || isInstructor),
+    canGradeAllQuestions: (isTestMode || isAssignmentMode || isSandbox) && (isCreatorTestRun || isCreatorSandbox || isInstructor),
     canRefreshInstanceMetadata: isStudentRun,
-    allowFreeNavigation: isCreatorSandbox,
+    allowFreeNavigation: isCreatorSandbox || isAssignmentMode,
     loadPersistedResponses,
     persistResponses: canPersistDrafts,
     usesRealInstanceProgression: isStudentRun,

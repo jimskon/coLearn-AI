@@ -41,7 +41,7 @@ All interactive content must appear inside a `\questiongroup`.
 | `\activitycontext{...}` | Introductory paragraph | `\activitycontext{This activity explores...}` |
 | `\aicodeguidance{...}` | Global AI behavior rules | See AI Guidance section below |
 | `\mode{group}` | Normal in-class group activity. This is also the default when no mode is set. | `\mode{group}` |
-| `\mode{assignment}` | Project-style lab assignment mode. Drafts can use milestones and are usually sectionless unless the creator explicitly asks for sections. | `\mode{assignment}` |
+| `\mode{assignment}` | Project-style lab assignment mode. Every milestone is visible, work is saved as a draft, and students submit the complete lab once at the end. | `\mode{assignment}` |
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
 | `\mode{playground}` | Instructor/student experimentation mode. All question groups are visible, there is no submit button, and each student edits a saved personal workspace. | `\mode{playground}` |
 | `\mode{demo}` | Temporary demo or conference mode. All question groups are visible, there is no submit button, and the session is meant to be disposable. | `\mode{demo}` |
@@ -52,7 +52,7 @@ Notes:
 
 - If no mode is set, the activity runs as `\mode{group}`.
 - `\mode{group}` is the normal collaborative activity mode: each question group must be submitted before the next one opens.
-- `\mode{assignment}` is for project-style lab assignments. It is a good fit for milestone-based work, code building, and revision over time. It usually skips the section structure unless the creator explicitly wants sections.
+- `\mode{assignment}` is for project-style lab assignments. It is a good fit for milestone-based work, code building, and revision over time. All question groups remain visible, AI coaching can be used while drafting, and there is one final **Submit Lab** action rather than a submit button for each group. After submission, scored questions show a preliminary grade and feedback until the instructor marks the lab reviewed. It usually skips the section structure unless the creator explicitly wants sections.
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
 - `\mode{playground}` opens every question group at once, hides submit controls, and saves each student's answers/code separately so the work can be revisited later.
 - `\mode{demo}` opens every question group at once, hides submit controls, and is intended for temporary or disposable demo sessions.

@@ -46,6 +46,7 @@ export default function RunActivityWorkspace({
   groups,
   activity,
   isTestMode,
+  isAssignmentMode,
   isCreatorTestRun,
   isStudent,
   isSubmitted,
@@ -63,6 +64,7 @@ export default function RunActivityWorkspace({
   canEditAnswers,
   canSubmitGroup,
   canSubmitTest,
+  canSubmitAssignment,
   canRegradeTests,
   canSaveInstructorScores,
   canGradeQuestionPreview,
@@ -93,6 +95,7 @@ export default function RunActivityWorkspace({
 }) {
   const { features: runtimeFeatures } = useRuntimeFeatures();
   const isTestRunner = isStudent || isCreatorTestRun;
+  const isAssessmentMode = isTestMode || isAssignmentMode;
   let globalQuestionCounter = 0;
 
   return (
@@ -171,7 +174,7 @@ export default function RunActivityWorkspace({
 
           const testEditable =
             canEditAnswers &&
-            isTestMode &&
+            isAssessmentMode &&
             isTestRunner &&
             !isSubmitted &&
             !timeExpired &&
@@ -179,7 +182,7 @@ export default function RunActivityWorkspace({
 
           const editable = isSandbox
             ? canEditAnswers
-            : isTestMode
+            : isAssessmentMode
             ? testEditable
             : (canEditAnswers && isActive && isCurrent && !isComplete);
 
@@ -187,7 +190,7 @@ export default function RunActivityWorkspace({
             isSandbox
               ? true
               : (
-            isTestMode
+            isAssessmentMode
               ? true
               : (isInstructor || isComplete || isCurrent)
               );
@@ -273,7 +276,7 @@ export default function RunActivityWorkspace({
                   hideStudentTestSections,
                 });
 
-                if (block.type !== 'question' || (!isTestMode && !isSandbox)) {
+                if (block.type !== 'question' || (!isAssessmentMode && !isSandbox)) {
                   return (
                     <div key={`group-${index}-block-${bIndex}`}>
                       {renderedBlock}
@@ -287,17 +290,17 @@ export default function RunActivityWorkspace({
 
                 const allowEdit =
                   canSaveInstructorScores &&
-                  isTestMode &&
+                  isAssessmentMode &&
                   isInstructor &&
                   isSubmitted;
                 const showScorePanel =
-                  isTestMode &&
+                  isAssessmentMode &&
                   isSubmitted &&
                   (isInstructor || isStudent);
                 const canGradeQuestionPreviewForBlock = shouldShowQuestionGradePreview({
                   blockType: block.type,
                   canGradeQuestionPreview,
-                  isTestMode,
+                  isTestMode: isAssessmentMode,
                   isSandbox,
                 });
                 const questionGradePreview = questionGradePreviews?.[qid];
@@ -424,7 +427,7 @@ export default function RunActivityWorkspace({
                 );
               })()}
 
-              {editable && canSubmitGroup && !isTestMode && !isSandbox && (
+              {editable && canSubmitGroup && !isAssessmentMode && !isSandbox && (
                 <div className="mt-2">
                   <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
                     {isSubmitting ? (
@@ -483,14 +486,23 @@ export default function RunActivityWorkspace({
           </div>
         )}
 
-        {canRegradeTests && isTestMode && isInstructor && !isSandbox && isSubmitted && (
+        {canSubmitAssignment && isAssignmentMode && !isSandbox && isStudent && !isSubmitted && (
+          <div className="mt-3">
+            <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
+              {isSubmitting ? <><Spinner animation="border" size="sm" className="me-2" />Submitting…</> : 'Submit Lab'}
+            </Button>
+            <span className="text-muted small ms-2">This records your final draft for preliminary grading and instructor review.</span>
+          </div>
+        )}
+
+        {canRegradeTests && isAssessmentMode && isInstructor && !isSandbox && isSubmitted && (
           <div className="mt-3 d-flex gap-2">
             <Button
               variant="warning"
               onClick={() => handleRegradeTest()}
               disabled={isSubmitting}
             >
-              {isSubmitting ? 'Regrading…' : 'Regrade Test'}
+              {isSubmitting ? 'Regrading…' : isAssignmentMode ? 'Regrade Lab' : 'Regrade Test'}
             </Button>
             {!Number(activity?.review_complete) && (
               <Button
@@ -510,11 +522,11 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {isTestMode && !isSandbox && overallTestTotals.max > 0 && isInstructor && (
+        {isAssessmentMode && !isSandbox && overallTestTotals.max > 0 && isInstructor && (
           <Alert variant="info" className="mt-3">
             <strong>{Number(activity?.review_complete) ? 'Reviewed by instructor' : 'Preliminary score — pending instructor review'}</strong>
             <br />
-            Overall test score:{' '}
+            Overall {isAssignmentMode ? 'lab' : 'test'} score:{' '}
             <strong>
               {overallTestTotals.earned}/{overallTestTotals.max}
             </strong>{' '}

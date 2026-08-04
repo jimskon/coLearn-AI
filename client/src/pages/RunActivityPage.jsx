@@ -341,6 +341,7 @@ export default function RunActivityPage({
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
+  const isAssignmentMode = activityMode === 'assignment';
   const [gradingQuestionQid, setGradingQuestionQid] = useState(null);
   const [gradingAllQuestions, setGradingAllQuestions] = useState(false);
   const [questionGradePreviews, setQuestionGradePreviews] = useState({});
@@ -582,6 +583,7 @@ export default function RunActivityPage({
     canEditAnswers,
     canSubmitGroup,
     canSubmitTest,
+    canSubmitAssignment,
     canRunAI,
     canPersistDrafts,
     canPersistSubmissions,
@@ -599,6 +601,7 @@ export default function RunActivityPage({
     activity,
     isPlaygroundMode,
     isTestMode,
+    isAssignmentMode,
   });
 
   const {
@@ -781,7 +784,7 @@ export default function RunActivityPage({
 
   // ✅ NEW: overall totals useMemo
   const overallTestTotals = useMemo(() => {
-    if (!isTestMode || !groups || groups.length === 0) {
+    if ((!isTestMode && !isAssignmentMode) || !groups || groups.length === 0) {
       return { earned: 0, max: 0 };
     }
 
@@ -810,7 +813,7 @@ export default function RunActivityPage({
       }
     }
     return { earned, max };
-  }, [isTestMode, groups, existingAnswers, activity?.submitted_at, activity?.points_earned, activity?.points_possible]);
+  }, [isTestMode, isAssignmentMode, groups, existingAnswers, activity?.submitted_at, activity?.points_earned, activity?.points_possible]);
 
   useEffect(() => {
     if (!DEBUG_FILES) return;
@@ -1796,7 +1799,7 @@ export default function RunActivityPage({
     let groupSubmissionString = null;
     let container = null;
     let blocks = null;
-    const useTestSubmissionFlow = isTestMode && canSubmitTest;
+    const useTestSubmissionFlow = (isTestMode && canSubmitTest) || (isAssignmentMode && canSubmitAssignment);
     function clearCodeFeedbackForQid(qid, codeCells) {
       setCodeFeedbackShown((prev) => {
         const next = { ...prev };
@@ -1903,8 +1906,9 @@ export default function RunActivityPage({
           questionsCount: questions.length,
         });
 
+        const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';
         const res = await fetch(
-          `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1920,7 +1924,7 @@ export default function RunActivityPage({
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           alert(
-            `Test submission failed: ${err.error || 'Unknown error submitting test.'
+          `${isAssignmentMode ? 'Lab' : 'Test'} submission failed: ${err.error || 'Unknown error submitting this activity.'
             }`
           );
           setIsSubmitting(false);
@@ -1930,10 +1934,10 @@ export default function RunActivityPage({
         // console.log('[RUNDBG] after submit, about to reload', { loading: loadingRef.current, t: Date.now() });
         await loadActivity();
         //console.log('[RUNDBG] after submit, reload done');
-        alert('Test submitted. Your answers have been recorded.');
+        alert(`${isAssignmentMode ? 'Lab' : 'Test'} submitted. Your answers have been recorded.`);
       } catch (err) {
-        console.error('❌ Test submission failed:', err);
-        alert('An error occurred submitting the test.');
+        console.error('❌ Assessment submission failed:', err);
+        alert(`An error occurred submitting the ${isAssignmentMode ? 'lab' : 'test'}.`);
       } finally {
         setIsSubmitting(false);
       }
@@ -2810,15 +2814,16 @@ export default function RunActivityPage({
         questions.push({ qid, questionText, scores: block.scores || {}, responseText, codeCells, outputText });
       }
 
+      const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';
       console.log('[REGRD] about to POST', {
-        url: `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+        url: `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
         studentId,
         answersCount: Object.keys(answers).length,
         questionsCount: questions.length,
       });
 
       const res = await fetch(
-        `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+        `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2881,7 +2886,7 @@ export default function RunActivityPage({
 
   async function handleGradeSingleQuestion(qid) {
     if (gradingQuestionQid || gradingAllQuestions) return;
-    if (!isTestMode && !isSandbox) return;
+    if (!isTestMode && !isAssignmentMode && !isSandbox) return;
 
     const block = findQuestionBlockByQid(qid);
     if (!block) return;
@@ -2915,7 +2920,7 @@ export default function RunActivityPage({
 
   async function handleGradeAllQuestions() {
     if (gradingQuestionQid || gradingAllQuestions) return;
-    if (!isTestMode && !isSandbox) return;
+    if (!isTestMode && !isAssignmentMode && !isSandbox) return;
 
     const blocksToGrade = groups.flatMap((group) => [group.intro, ...(group.content || [])])
       .filter((block) => block?.type === 'question');
@@ -3126,6 +3131,7 @@ export default function RunActivityPage({
 
         <RunActivityTestStatusBanner
           isTestMode={isTestMode}
+          isAssignmentMode={isAssignmentMode}
           testWindow={testWindow}
           testLockState={testLockState}
           isStudent={isStudent}
@@ -3193,6 +3199,7 @@ export default function RunActivityPage({
             groups={groups}
             activity={activity}
             isTestMode={isTestMode}
+            isAssignmentMode={isAssignmentMode}
             isStudent={isStudent}
             isSubmitted={isSubmitted}
             timeExpired={timeExpired}
@@ -3208,6 +3215,7 @@ export default function RunActivityPage({
             canEditAnswers={canEditAnswers}
             canSubmitGroup={canSubmitGroup}
             canSubmitTest={canSubmitTest}
+            canSubmitAssignment={canSubmitAssignment}
             canRegradeTests={canRegradeTests}
             canSaveInstructorScores={canSaveInstructorScores}
             canGradeQuestionPreview={canGradeQuestionPreview}

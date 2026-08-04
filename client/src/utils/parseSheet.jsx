@@ -9,6 +9,11 @@ import ActivityRemotePythonBlock from '../components/activity/ActivityRemotePyth
 import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { validateMultipleChoice } from './multipleChoice';
+import {
+  getMultipleChoiceScoreRequirementMessage,
+  getUnsupportedScoreTypeMessage,
+  parseScoreCommand,
+} from './scoreValidation';
 import { makeResponseAttrs } from './responseDom';
 import { API_BASE_URL } from '../config';
 
@@ -476,7 +481,8 @@ export function parseSheetToBlocks(lines, options = {}) {
     const mode = String(rawMode || '').trim().toLowerCase();
 
     if (mode === 'test') return 'test';
-    if (mode === 'demo' || mode === 'playground') return 'demo';
+    if (mode === 'demo') return 'demo';
+    if (mode === 'playground') return 'playground';
     if (mode === 'assignment') return 'assignment';
     if (mode === 'group' || mode === 'normal') return 'group';
 
@@ -645,20 +651,23 @@ export function parseSheetToBlocks(lines, options = {}) {
     // --- inside a \score ... \endscore block ---
     if (inScoreBlock && currentScore && currentQuestion) {
       if (trimmed === '\\endscore') {
-        // finalize this score block
-        const rawText = currentScore.lines.join('\n').trim();
-        const htmlText = format(rawText);
+        if (currentScore.supported) {
+          // finalize this score block
+          const rawText = currentScore.lines.join('\n').trim();
+          const htmlText = format(rawText);
 
-        if (!currentQuestion.scores) currentQuestion.scores = {};
-        // type is one of 'response', 'code', 'output'
-        currentQuestion.scores[currentScore.type] = {
-          points: currentScore.points,
-          instructionsHtml: htmlText,   // for display (instructor, preview)
-          instructionsRaw: rawText,     // for AI prompt building
-        };
+          if (!currentQuestion.scores) currentQuestion.scores = {};
+          // type is one of 'response', 'code', 'output'
+          currentQuestion.scores[currentScore.type] = {
+            points: currentScore.points,
+            instructionsHtml: htmlText,   // for display (instructor, preview)
+            instructionsRaw: rawText,     // for AI prompt building
+          };
+        }
 
         inScoreBlock = false;
         currentScore = null;
+        openScoreLine = null;
         continue;
       } else {
         currentScore.lines.push(line);
@@ -1429,6 +1438,15 @@ export function parseSheetToBlocks(lines, options = {}) {
         finalizeMultipleChoice(lineNo - 1);
       }
 
+      const multipleChoiceScoreIssue = getMultipleChoiceScoreRequirementMessage({
+        isTest,
+        hasMultipleChoice: !!currentQuestion.multipleChoice,
+        hasResponseScore: !!currentQuestion.scores?.response,
+      });
+      if (multipleChoiceScoreIssue) {
+        pushIssue('error', openQuestionLine ?? lineNo, multipleChoiceScoreIssue, line);
+      }
+
       // finalize as you already do
       const hasAnyCode =
         (currentQuestion.codeBlocks?.length || 0) > 0 ||
@@ -1576,30 +1594,17 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // --- scoring blocks: \score{n,type} ... \endscore ---
-    // type is one of: response, code, output, choice
-    const scoreMatch = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
+    const scoreMatch = parseScoreCommand(trimmed);
     if (scoreMatch && currentQuestion) {
-      const points = parseInt(scoreMatch[1], 10);
-      const scoreTypeRaw = scoreMatch[2].toLowerCase();
-      const scoreType = scoreTypeRaw;
+      const { points, type: scoreType, supported } = scoreMatch;
+      if (!supported) {
+        pushIssue('error', lineNo, getUnsupportedScoreTypeMessage(scoreType), line);
+      }
 
       inScoreBlock = true;
       openScoreLine = lineNo;
-      currentScore = { type: scoreType, points, lines: [] };
+      currentScore = { type: scoreType, points, lines: [], supported };
       continue;
-    }
-
-    if (inScoreBlock && currentScore && currentQuestion) {
-      if (trimmed === '\\endscore') {
-        // existing finalize logic...
-        inScoreBlock = false;
-        currentScore = null;
-        openScoreLine = null;
-        continue;
-      } else {
-        currentScore.lines.push(line);
-        continue;
-      }
     }
 
     if (trimmed.startsWith('\\textresponse')) {

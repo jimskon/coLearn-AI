@@ -576,8 +576,8 @@ async function ensureDemoInstance(req, res) {
     }
 
     const activityType = await inferActivityTypeFromActivity(activityRow);
-    if (activityType !== 'demo') {
-      return res.status(400).json({ error: 'This activity is not a demo.' });
+    if (activityType !== 'demo' && activityType !== 'playground') {
+      return res.status(400).json({ error: 'This activity is not a demo or playground.' });
     }
 
     if (userRole === 'student') {

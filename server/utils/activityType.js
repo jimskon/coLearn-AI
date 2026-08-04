@@ -4,7 +4,8 @@ function normalizeActivityType(rawMode) {
   const mode = String(rawMode || '').trim().toLowerCase();
 
   if (mode === 'test') return 'test';
-  if (mode === 'demo' || mode === 'playground') return 'demo';
+  if (mode === 'demo') return 'demo';
+  if (mode === 'playground') return 'playground';
   if (mode === 'assignment') return 'assignment';
   if (mode === 'group' || mode === 'normal') return 'group';
 
@@ -15,7 +16,8 @@ function normalizeAuthoredMode(rawMode) {
   const mode = String(rawMode || '').trim().toLowerCase();
 
   if (mode === 'test') return 'test';
-  if (mode === 'demo' || mode === 'playground') return mode;
+  if (mode === 'demo') return 'demo';
+  if (mode === 'playground') return 'playground';
   if (mode === 'assignment') return 'assignment';
   if (mode === 'group' || mode === 'normal') return 'group';
 

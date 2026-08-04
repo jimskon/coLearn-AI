@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { isSurveyMultipleChoice, validateMultipleChoice } from '../src/utils/multipleChoice.js';
+import {
+  getMultipleChoiceScoreRequirementMessage,
+  getUnsupportedScoreTypeMessage,
+  parseScoreCommand,
+} from '../src/utils/scoreValidation.js';
 
 test('accepts canonical actual answer values', () => {
   const result = validateMultipleChoice(' Ottawa ', ['Toronto', 'Ottawa', 'Montreal']);
@@ -39,4 +44,52 @@ test('identifies a blank-answer choice block as a survey', () => {
   assert.equal(isSurveyMultipleChoice({
     multipleChoice: { correctAnswer: 'Often', choices: [{ value: 'Often' }, { value: 'Never' }] },
   }), false);
+});
+
+test('parses only supported score types and preserves unsupported ones for validation', () => {
+  assert.deepEqual(parseScoreCommand('\\score{2,response}'), {
+    points: 2,
+    type: 'response',
+    supported: true,
+  });
+
+  assert.deepEqual(parseScoreCommand('\\score{2,choice}'), {
+    points: 2,
+    type: 'choice',
+    supported: false,
+  });
+
+  assert.equal(
+    getUnsupportedScoreTypeMessage('choice'),
+    'Unsupported \\score type "choice". Multiple-choice questions should use \\score{points,response}.',
+  );
+});
+
+test('requires an explicit response rubric for multiple-choice questions in test mode', () => {
+  assert.equal(
+    getMultipleChoiceScoreRequirementMessage({
+      isTest: true,
+      hasMultipleChoice: true,
+      hasResponseScore: false,
+    }),
+    'Multiple-choice questions in test mode must include an explicit \\score{points,response} rubric block.',
+  );
+
+  assert.equal(
+    getMultipleChoiceScoreRequirementMessage({
+      isTest: true,
+      hasMultipleChoice: true,
+      hasResponseScore: true,
+    }),
+    null,
+  );
+
+  assert.equal(
+    getMultipleChoiceScoreRequirementMessage({
+      isTest: false,
+      hasMultipleChoice: true,
+      hasResponseScore: false,
+    }),
+    null,
+  );
 });

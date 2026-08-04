@@ -965,6 +965,7 @@ export default function ManageActivitiesPage() {
                   onChange={handleCreateDraftFieldChange}
                 >
                   <option value="group">Group</option>
+                  <option value="playground">Playground</option>
                   <option value="demo">Demo</option>
                   <option value="test">Test</option>
                   <option value="assignment">Assignment</option>

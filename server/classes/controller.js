@@ -492,8 +492,8 @@ exports.createCreatorDraft = async (req, res) => {
     });
   }
 
-  if (!['group', 'demo', 'test', 'assignment'].includes(normalizedMode)) {
-    return res.status(400).json({ error: 'mode must be group, demo, assignment, or test.' });
+  if (!['group', 'playground', 'demo', 'test', 'assignment'].includes(normalizedMode)) {
+    return res.status(400).json({ error: 'mode must be group, playground, demo, assignment, or test.' });
   }
 
   if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {

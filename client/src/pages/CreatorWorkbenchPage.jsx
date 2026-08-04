@@ -1961,6 +1961,7 @@ export default function CreatorWorkbenchPage() {
                       <Form.Label>Mode</Form.Label>
                       <Form.Select value={draft.mode} onChange={(event) => handleDraftChange('mode', event.target.value)}>
                         <option value="group">Group</option>
+                        <option value="playground">Playground</option>
                         <option value="demo">Demo</option>
                         <option value="test">Test</option>
                         <option value="assignment">Assignment</option>

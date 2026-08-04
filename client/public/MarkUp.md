@@ -12,7 +12,8 @@ The system supports:
 
 - Collaborative learning mode (AI-guided)
 - Test / quiz mode (graded)
-- Demo mode (all groups visible, per-student sandbox)
+- Playground mode (all groups visible, saved per-student sandbox)
+- Demo mode (all groups visible, temporary disposable session)
 - Runnable Python blocks (with optional timeout)
 - Runnable Python Remote blocks (with optional timeout)
 - Runnable C++ blocks (with optional timeout)
@@ -41,7 +42,8 @@ All interactive content must appear inside a `\questiongroup`.
 | `\mode{group}` | Normal in-class group activity. This is also the default when no mode is set. | `\mode{group}` |
 | `\mode{assignment}` | Project-style lab assignment mode. Drafts can use milestones and are usually sectionless unless the creator explicitly asks for sections. | `\mode{assignment}` |
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
-| `\mode{demo}` | In-class demonstration mode. All question groups are visible, there is no submit button, and each student edits their own saved sandbox. | `\mode{demo}` |
+| `\mode{playground}` | Instructor/student experimentation mode. All question groups are visible, there is no submit button, and each student edits a saved personal workspace. | `\mode{playground}` |
+| `\mode{demo}` | Temporary demo or conference mode. All question groups are visible, there is no submit button, and the session is meant to be disposable. | `\mode{demo}` |
 | `\test` | Marks activity as graded assessment | `\test` |
 | `\section{...}` | Structural heading (non-interactive) | `\section{Introduction}` |
 
@@ -51,7 +53,8 @@ Notes:
 - `\mode{group}` is the normal collaborative activity mode: each question group must be submitted before the next one opens.
 - `\mode{assignment}` is for project-style lab assignments. It is a good fit for milestone-based work, code building, and revision over time. It usually skips the section structure unless the creator explicitly wants sections.
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
-- `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
+- `\mode{playground}` opens every question group at once, hides submit controls, and saves each student's answers/code separately so the work can be revisited later.
+- `\mode{demo}` opens every question group at once, hides submit controls, and is intended for temporary or disposable demo sessions.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
 - `\section` is structural only.
 
@@ -100,6 +103,7 @@ Notes:
 - If `\responsemode{...}` is omitted, the default is `answer`.
 - Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
 - In test mode, include an explicit `\score{points,type}` rubric block for every question so grading is unambiguous. Use only `response`, `code`, and `output` as score types.
+- Scoring rubrics are documented in Section 5 below. A `\score{points,type}` block gives the grader the points possible and the grading category for a question.
 
 ---
 
@@ -251,7 +255,8 @@ for i in range(5):
 | `response` | Written answer | `\score{6,response}` |
 | `code` | Student-written code | `\score{10,code}` |
 | `output` | Program output | `\score{4,output}` |
-| custom | Custom metadata | `\score{5,analysis}` |
+
+Multiple-choice questions also use `response`; do not invent a separate `choice` score type.
 
 Scoring is controlled only by `\score{}` blocks.
 

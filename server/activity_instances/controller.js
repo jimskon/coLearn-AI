@@ -5,6 +5,7 @@ const { authorize } = require('../utils/googleAuth');
 const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
 const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
+const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
@@ -2291,46 +2292,6 @@ async function reopenInstance(req, res) {
     console.error('❌ reopenInstance error:', err);
     return res.status(500).json({ error: 'Failed to reopen test.' });
   }
-}
-
-// Helper: parse score specs from either style:
-//   \score{10,code} or \score{6,response}
-//   \score{code=4,output=2,response=4}
-function parseScoreSpec(specRaw) {
-  const spec = String(specRaw || '').trim();
-  const out = {};
-
-  // style A: "code=4,output=2,response=4"
-  if (spec.includes('=')) {
-    for (const part of spec.split(/[;,]/)) {
-      const [kRaw, vRaw] = part.split('=');
-      if (!kRaw || !vRaw) continue;
-      const k = kRaw.trim().toLowerCase();
-      const v = Number(String(vRaw).trim());
-      if (!Number.isFinite(v)) continue;
-
-      if (k === 'code' || k === 'codes') out.code = v;
-      else if (k === 'output' || k === 'run') out.output = v;
-      else if (k === 'response') out.response = v;
-    }
-    return out;
-  }
-
-  // style B: "10,code" (or "6,response")
-  // allow whitespace: "10, code"
-  const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length >= 2) {
-    const pts = Number(parts[0]);
-    const bucket = parts[1].toLowerCase();
-
-    if (Number.isFinite(pts)) {
-      if (bucket === 'code') out.code = pts;
-      else if (bucket === 'output' || bucket === 'run') out.output = pts;
-      else if (bucket === 'response') out.response = pts;
-    }
-  }
-
-  return out;
 }
 
 // Helper: flatten Google doc into trimmed lines (same as you already do)

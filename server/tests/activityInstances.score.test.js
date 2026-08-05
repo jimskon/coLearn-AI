@@ -1,7 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseScoreSpec } = require('../activity_instances/controller');
+// This parser test must stay independent of the activity controller, which
+// loads AI integrations that have no bearing on markup-score parsing.
+const { parseScoreSpec } = require('../activity_instances/scoreSpec');
 
 test('parseScoreSpec accepts only response, code, and output score bands', () => {
   assert.deepEqual(parseScoreSpec('2,response'), { response: 2 });

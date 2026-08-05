@@ -9,6 +9,11 @@ import ActivityRemotePythonBlock from '../components/activity/ActivityRemotePyth
 import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
 import { validateMultipleChoice } from './multipleChoice';
+import {
+  getMultipleChoiceTestModeIssueMessage,
+  getUnsupportedScoreTypeMessage,
+  parseScoreCommand,
+} from './scoreValidation';
 import { makeResponseAttrs } from './responseDom';
 import { API_BASE_URL } from '../config';
 
@@ -16,6 +21,7 @@ import { Form, Button, Spinner } from 'react-bootstrap';
 
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
+import { createDisplayCodeBlock, parseDisplayCodeBlockCommand } from './displayCodeBlocks';
 
 
 
@@ -476,7 +482,9 @@ export function parseSheetToBlocks(lines, options = {}) {
     const mode = String(rawMode || '').trim().toLowerCase();
 
     if (mode === 'test') return 'test';
-    if (mode === 'demo' || mode === 'playground') return 'demo';
+    if (mode === 'demo') return 'demo';
+    if (mode === 'playground') return 'playground';
+    if (mode === 'assignment') return 'assignment';
     if (mode === 'group' || mode === 'normal') return 'group';
 
     return 'group';
@@ -514,6 +522,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let pendingIncludeFiles = null;
   let currentAiBlock = null;
   let currentMultipleChoice = null;
+  let currentDisplayCodeBlock = null;
 
   // track some structural state to report missing closures
   let openGroupLine = null;
@@ -523,6 +532,7 @@ export function parseSheetToBlocks(lines, options = {}) {
   let openListLine = null;
   let openAiLine = null;
   let openMultipleChoiceLine = null;
+  let openDisplayCodeLine = null;
 
   const finalizeMultipleChoice = (closingLine) => {
     if (!currentMultipleChoice || !currentQuestion) return;
@@ -537,10 +547,32 @@ export function parseSheetToBlocks(lines, options = {}) {
     currentQuestion.multipleChoice = {
       correctAnswer: validation.correctAnswer,
       choices,
+      hasChoiceScores: validation.hasChoiceScores,
+      maxChoicePoints: validation.maxChoicePoints,
       sourceMeta: currentMultipleChoice.sourceMeta,
     };
     currentMultipleChoice = null;
     openMultipleChoiceLine = null;
+  };
+
+  const finalizeDisplayCodeBlock = (closingLine) => {
+    if (!currentDisplayCodeBlock) return;
+
+    currentDisplayCodeBlock.sourceMeta.endDisplayLine = closingLine;
+    const finalized = {
+      ...currentDisplayCodeBlock,
+      content: currentDisplayCodeBlock.lines.join('\n'),
+    };
+
+    if (currentQuestion) {
+      if (!currentQuestion.displayCodeBlocks) currentQuestion.displayCodeBlocks = [];
+      currentQuestion.displayCodeBlocks.push(finalized);
+    } else {
+      blocks.push(finalized);
+    }
+
+    currentDisplayCodeBlock = null;
+    openDisplayCodeLine = null;
   };
 
 
@@ -644,20 +676,23 @@ export function parseSheetToBlocks(lines, options = {}) {
     // --- inside a \score ... \endscore block ---
     if (inScoreBlock && currentScore && currentQuestion) {
       if (trimmed === '\\endscore') {
-        // finalize this score block
-        const rawText = currentScore.lines.join('\n').trim();
-        const htmlText = format(rawText);
+        if (currentScore.supported) {
+          // finalize this score block
+          const rawText = currentScore.lines.join('\n').trim();
+          const htmlText = format(rawText);
 
-        if (!currentQuestion.scores) currentQuestion.scores = {};
-        // type is one of 'response', 'code', 'output'
-        currentQuestion.scores[currentScore.type] = {
-          points: currentScore.points,
-          instructionsHtml: htmlText,   // for display (instructor, preview)
-          instructionsRaw: rawText,     // for AI prompt building
-        };
+          if (!currentQuestion.scores) currentQuestion.scores = {};
+          // type is one of 'response', 'code', 'output'
+          currentQuestion.scores[currentScore.type] = {
+            points: currentScore.points,
+            instructionsHtml: htmlText,   // for display (instructor, preview)
+            instructionsRaw: rawText,     // for AI prompt building
+          };
+        }
 
         inScoreBlock = false;
         currentScore = null;
+        openScoreLine = null;
         continue;
       } else {
         currentScore.lines.push(line);
@@ -810,6 +845,47 @@ export function parseSheetToBlocks(lines, options = {}) {
     if (inList && trimmed.startsWith('\\item')) {
       listItems.push(trimmed.replace(/^\\item\s*/, ''));
       continue;
+    }
+
+    // --- display-only code blocks ---
+    const displayCommand = parseDisplayCodeBlockCommand(trimmed);
+
+    if (displayCommand?.kind === 'open') {
+      flushCurrentBlock();
+
+      if (currentDisplayCodeBlock) {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'New display-only code block started before the previous one was closed.', line);
+        finalizeDisplayCodeBlock(lineNo - 1);
+      }
+
+      currentField = displayCommand.type;
+      currentDisplayCodeBlock = createDisplayCodeBlock({
+        type: displayCommand.type,
+        language: displayCommand.language,
+        displayLine: lineNo,
+      });
+      openDisplayCodeLine = lineNo;
+      continue;
+    }
+
+    if (displayCommand?.kind === 'close') {
+      if (currentDisplayCodeBlock && currentDisplayCodeBlock.type === displayCommand.type) {
+        finalizeDisplayCodeBlock(lineNo);
+      } else {
+        pushIssue('error', lineNo, `${trimmed} without a matching \\pythondisplay or \\cppdisplay block.`, line);
+      }
+      currentField = 'prompt';
+      continue;
+    }
+
+    if (currentDisplayCodeBlock) {
+      if (trimmed === '\\endquestion' || trimmed === '\\endquestiongroup') {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'Unclosed display-only code block: missing matching end tag.', null);
+        finalizeDisplayCodeBlock(lineNo - 1);
+      } else {
+        currentDisplayCodeBlock.lines.push(line);
+        continue;
+      }
     }
 
     // --- C++ blocks ---
@@ -1237,6 +1313,10 @@ export function parseSheetToBlocks(lines, options = {}) {
         pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice before \\endquestiongroup.', null);
         finalizeMultipleChoice(lineNo - 1);
       }
+      if (currentDisplayCodeBlock) {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'Unclosed display-only code block: missing matching end tag before \\endquestiongroup.', null);
+        finalizeDisplayCodeBlock(lineNo - 1);
+      }
       if (currentGroupIntro?.sourceMeta) {
         currentGroupIntro.sourceMeta.endGroupLine = lineNo;
       }
@@ -1321,6 +1401,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         aiBlocks: [],
         infos: [],
         codeBlocks: [],
+        displayCodeBlocks: [],
         scores: {},
         retriesRequired: currentGroupRetriesRequired,
         sourceMeta: {
@@ -1345,7 +1426,9 @@ export function parseSheetToBlocks(lines, options = {}) {
         continue;
       }
 
-      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}\s*$/);
+      // Accept a legacy/escaped point delimiter (\\{2}) as well as the documented {2}
+      // form, then store only the option text and numeric point value.
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}(?:\\?\{(\d+)\})?\s*$/);
       if (choiceMatch) {
         const value = String(choiceMatch[1] || '').trim();
         if (!value) {
@@ -1354,6 +1437,7 @@ export function parseSheetToBlocks(lines, options = {}) {
           currentMultipleChoice.choices.push({
             value,
             content: format(value),
+            points: choiceMatch[2] === undefined ? null : Number.parseInt(choiceMatch[2], 10),
             line: lineNo,
           });
           currentMultipleChoice.sourceMeta.choiceLines.push(lineNo);
@@ -1365,7 +1449,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice.', null);
         finalizeMultipleChoice(lineNo - 1);
       } else {
-        pushIssue('error', lineNo, 'Only \\choice{value} or \\endmultiplechoice is allowed inside a \\multiplechoice block.', line);
+          pushIssue('error', lineNo, 'Only \\choice{value} or \\choice{value}{points}, or \\endmultiplechoice is allowed inside a \\multiplechoice block.', line);
         continue;
       }
     }
@@ -1426,6 +1510,26 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (currentMultipleChoice) {
         pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice before \\endquestion.', null);
         finalizeMultipleChoice(lineNo - 1);
+      }
+
+      const multipleChoiceScoreIssue = getMultipleChoiceTestModeIssueMessage({
+        isTest,
+        hasMultipleChoice: !!currentQuestion.multipleChoice,
+        correctAnswer: currentQuestion.multipleChoice?.correctAnswer,
+        hasResponseScore: !!currentQuestion.scores?.response,
+        hasChoiceScores: !!currentQuestion.multipleChoice?.hasChoiceScores,
+      });
+      if (multipleChoiceScoreIssue) {
+        pushIssue('error', openQuestionLine ?? lineNo, multipleChoiceScoreIssue, line);
+      }
+
+      if (currentQuestion.multipleChoice?.hasChoiceScores && !currentQuestion.scores?.response) {
+        currentQuestion.scores.response = {
+          points: currentQuestion.multipleChoice.maxChoicePoints,
+          instructionsHtml: '',
+          instructionsRaw: '',
+          derivedFromChoices: true,
+        };
       }
 
       // finalize as you already do
@@ -1575,29 +1679,17 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // --- scoring blocks: \score{n,type} ... \endscore ---
-    // type is one of: response, code, output
-    const scoreMatch = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
+    const scoreMatch = parseScoreCommand(trimmed);
     if (scoreMatch && currentQuestion) {
-      const points = parseInt(scoreMatch[1], 10);
-      const scoreType = scoreMatch[2].toLowerCase();
+      const { points, type: scoreType, supported } = scoreMatch;
+      if (!supported) {
+        pushIssue('error', lineNo, getUnsupportedScoreTypeMessage(scoreType), line);
+      }
 
       inScoreBlock = true;
       openScoreLine = lineNo;
-      currentScore = { type: scoreType, points, lines: [] };
+      currentScore = { type: scoreType, points, lines: [], supported };
       continue;
-    }
-
-    if (inScoreBlock && currentScore && currentQuestion) {
-      if (trimmed === '\\endscore') {
-        // existing finalize logic...
-        inScoreBlock = false;
-        currentScore = null;
-        openScoreLine = null;
-        continue;
-      } else {
-        currentScore.lines.push(line);
-        continue;
-      }
     }
 
     if (trimmed.startsWith('\\textresponse')) {
@@ -1754,6 +1846,10 @@ export function parseSheetToBlocks(lines, options = {}) {
     pushIssue('error', openMultipleChoiceLine ?? null, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice at end of document.', null);
     finalizeMultipleChoice(lines.length);
   }
+  if (currentDisplayCodeBlock) {
+    pushIssue('error', openDisplayCodeLine ?? null, 'Unclosed display-only code block: missing matching end tag at end of document.', null);
+    finalizeDisplayCodeBlock(lines.length);
+  }
   if (currentQuestion) {
     pushIssue('error', openQuestionLine ?? null, 'Unclosed \\question: missing \\endquestion at end of document.', null);
   }
@@ -1816,6 +1912,7 @@ export function renderBlocks(blocks, options = {}) {
     isActive = false,
     isObserver = false,
     isInstructor = false,
+    isTestMode = false,
     allowLocalToggle = true,
     prefill = {},
     mode: runMode = 'preview',
@@ -1838,6 +1935,8 @@ export function renderBlocks(blocks, options = {}) {
     renderInsertAfterQuestion = null,
     renderInsertBeforeGroup = null,
     renderInsertAfterGroup = null,
+    suppressStudentTestFeedbackUi = false,
+    hideStudentTestSections = false,
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -1849,6 +1948,7 @@ export function renderBlocks(blocks, options = {}) {
       : (editable && isActive);   // only active student edits in RUN
 
   const renderInfoBubbles = (block, target, keyPrefix, anchorRef, bubbleOptions = {}) => {
+    if (suppressStudentTestFeedbackUi && !isInstructor) return null;
     const bubbleSession = bubbleOptions.infoBubbleSession || infoBubbleSession;
     const bubbleKey = `${keyPrefix}-${target}`;
     const infos = getInfosForTarget(block, target);
@@ -1926,6 +2026,9 @@ export function renderBlocks(blocks, options = {}) {
     }
 
     if (block.type === 'section') {
+      if (hideStudentTestSections && runMode !== 'preview' && !isInstructor) {
+        return null;
+      }
       return (
         <h2 key={`section-${index}`} className="my-3">
           {block.title}
@@ -2032,8 +2135,8 @@ export function renderBlocks(blocks, options = {}) {
                 Retries: {retriesRequired}
               </span>
             ) : null}
-            {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
-            {runMode === 'preview' && renderInfoBubbles(
+            {!suppressStudentTestFeedbackUi && renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
+            {runMode === 'preview' && !suppressStudentTestFeedbackUi && renderInfoBubbles(
               block,
               'submitbutton',
               `groupIntro-submit-${index}`,
@@ -2083,6 +2186,21 @@ export function renderBlocks(blocks, options = {}) {
 
 
 
+
+    if (block.type === 'pythondisplay' || block.type === 'cppdisplay') {
+      const DisplayComponent =
+        block.type === 'cppdisplay' ? ActivityCppBlock : ActivityPythonBlock;
+      return (
+        <div key={`${block.type}-${index}`} className="mb-3">
+          <DisplayComponent
+            code={block.content || ''}
+            blockIndex={`${block.type}-${index}`}
+            editable={false}
+            displayOnly={true}
+          />
+        </div>
+      );
+    }
 
     if (block.type === 'pythonturtle') {
       // Local-only top-level turtle: no DB keys, no prefill, always reflect sheet
@@ -2509,22 +2627,33 @@ export function renderBlocks(blocks, options = {}) {
       if (block.scores) {
         const scoreEntries = [
           ['response', 'Response'],
+          ['choice', 'Choice'],
           ['code', 'Code'],
           ['output', 'Output'],
         ];
         for (const [key, label] of scoreEntries) {
           const s = block.scores[key];
-          if (s && typeof s.points === 'number') {
+          if (s && Number.isFinite(Number(s.points))) {
+            const points = Number(s.points);
             scoreBadges.push(
               <span
                 key={`score-${responseKey}-${key}`}
                 className="badge bg-light text-muted border ms-2"
               >
-                {s.points} pt{s.points !== 1 ? 's' : ''} {label}
+                {points} pt{points !== 1 ? 's' : ''} {label}
               </span>
             );
           }
         }
+      } else if (runMode === 'preview' && isInstructor) {
+        scoreBadges.push(
+          <span
+            key={`score-${responseKey}-missing`}
+            className="badge bg-warning text-dark border ms-2"
+          >
+            No rubric yet
+          </span>
+        );
       }
 
       const isSelectedPreviewBlock = runMode === 'preview' && selectedPreviewKey === block.previewKey;
@@ -2585,6 +2714,21 @@ export function renderBlocks(blocks, options = {}) {
             questionAnchorRef
           )}
 
+          {block.displayCodeBlocks?.map((displayBlock, displayIndex) => {
+            const DisplayComponent =
+              displayBlock.type === 'cppdisplay' ? ActivityCppBlock : ActivityPythonBlock;
+            return (
+              <div key={`q-${block.groupId}-${block.id}-display-${displayIndex}`} className="mb-3">
+                <DisplayComponent
+                  code={displayBlock.content || ''}
+                  blockIndex={`q-${block.groupId}-${block.id}-display-${displayIndex}`}
+                  editable={false}
+                  displayOnly={true}
+                />
+              </div>
+            );
+          })}
+
           {block.pythonBlocks?.map((py, i) => {
             const codeAnchorRef = React.createRef();
             const PythonBlockComponent =
@@ -2622,7 +2766,7 @@ export function renderBlocks(blocks, options = {}) {
 
             return (
               <div key={`q-${block.groupId}-${block.id}-py-${i}`} ref={codeAnchorRef}>
-                {renderInfoBubbles(
+                {!suppressStudentTestFeedbackUi && renderInfoBubbles(
                   block,
                   'coderesponse',
                   `question-${block.groupId}-${block.id}-py-${i}`,
@@ -2704,7 +2848,7 @@ export function renderBlocks(blocks, options = {}) {
 
             return (
               <div key={`q-${block.groupId}-${block.id}-cpp-${i}`} ref={codeAnchorRef}>
-                {renderInfoBubbles(
+                {!suppressStudentTestFeedbackUi && renderInfoBubbles(
                   block,
                   'coderesponse',
                   `question-${block.groupId}-${block.id}-cpp-${i}`,
@@ -2813,7 +2957,7 @@ export function renderBlocks(blocks, options = {}) {
             </div>
           ))}
 
-          {block.aiBlocks?.map((aiBlock, i) => {
+          {(!suppressStudentTestFeedbackUi || isInstructor) && block.aiBlocks?.map((aiBlock, i) => {
             return (
               <InlineAiAssistBlock
                 key={`q-ai-${block.groupId}-${block.id}-${i}`}
@@ -2831,6 +2975,14 @@ export function renderBlocks(blocks, options = {}) {
               <legend className="fs-6 mb-2">Choose one answer</legend>
               {block.multipleChoice.choices.map((choice, choiceIndex) => {
                 const choiceId = `multiple-choice-${responseKey}-${choiceIndex}`;
+                const isMultilineCodeChoice = /\\\\|\n/.test(String(choice.value || ''));
+                const choiceLabel = isMultilineCodeChoice ? (
+                  <code style={{ display: 'block', whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>
+                    {String(choice.value || '').replace(/\\\\/g, '\n')}
+                  </code>
+                ) : (
+                  <span dangerouslySetInnerHTML={{ __html: choice.content || choice.value }} />
+                );
                 return (
                   <Form.Check
                     key={choiceId}
@@ -2841,7 +2993,7 @@ export function renderBlocks(blocks, options = {}) {
                     checked={(prefill?.[responseKey]?.response || '') === choice.value}
                     disabled={!editable || lockMainResponse}
                     className="mb-2"
-                    label={<span dangerouslySetInnerHTML={{ __html: choice.content || choice.value }} />}
+                    label={choiceLabel}
                     onChange={() => {
                       options.onTextChange?.(responseKey, choice.value, {
                         questionText: stripHtml(block.prompt || ''),
@@ -2905,6 +3057,7 @@ export function renderBlocks(blocks, options = {}) {
 
 
           {(() => {
+            if (suppressStudentTestFeedbackUi && !isInstructor) return null;
             const aiFeedbackVisible =
               Boolean(textFeedbackShown?.[responseKey]) ||
               (runMode === 'preview' &&
@@ -2947,7 +3100,7 @@ export function renderBlocks(blocks, options = {}) {
             );
           })()}
 
-          {unansweredMessage && (
+          {unansweredMessage && !suppressStudentTestFeedbackUi && (
             <Alert
               variant="warning"
               className="mt-2 border border-warning"
@@ -2958,7 +3111,7 @@ export function renderBlocks(blocks, options = {}) {
             </Alert>
           )}
 
-          {runMode === 'preview' &&
+          {runMode === 'preview' && !suppressStudentTestFeedbackUi &&
             renderInfoBubbles(
               block,
               'submitbutton',
@@ -2970,7 +3123,7 @@ export function renderBlocks(blocks, options = {}) {
 
 
           {/* Follow-up UI */}
-          {followupsShown?.[responseKey] && (
+          {followupsShown?.[responseKey] && !suppressStudentTestFeedbackUi && (
             !showTextArea && hasPython ? (
               <div className="mt-3 alert alert-warning py-2">
                 <strong>Follow-up:</strong> {followupsShown[responseKey]}

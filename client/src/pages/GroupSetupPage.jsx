@@ -17,9 +17,11 @@ export default function GroupSetupPage() {
 
   const [groupSize, setGroupSize] = useState(4);
   const [useRoles, setUseRoles] = useState(true);
+  const [showGroupOptions, setShowGroupOptions] = useState(false);
 
   // NEW: test-related state
   const [isTest, setIsTest] = useState(false);
+  const [isAssignment, setIsAssignment] = useState(false);
   const [testStartAt, setTestStartAt] = useState('');          // datetime-local string
   const [testDurationMinutes, setTestDurationMinutes] = useState(30);
   const [lockedBeforeStart, setLockedBeforeStart] = useState(true);
@@ -27,16 +29,17 @@ export default function GroupSetupPage() {
 
   const [activities, setActivities] = useState([]);
   const [cloneFromActivityId, setCloneFromActivityId] = useState('');
+  const isIndividualLabSetup = isAssignment && groupSize === 1 && !useRoles;
 
 
   useEffect(() => {
-    if (isTest) return; // no cloning for tests
+    if (isTest || isAssignment) return; // no cloning for individual activities
 
     fetch(`${API_BASE_URL}/api/courses/${courseId}/activities`, { credentials: 'include' })
       .then(r => r.json())
       .then(d => setActivities(Array.isArray(d) ? d : []))
       .catch(err => console.error('❌ Failed to load course activities:', err));
-  }, [courseId, isTest]);
+  }, [courseId, isTest, isAssignment]);
 
   const handleCloneGroups = async () => {
     if (!cloneFromActivityId) return;
@@ -92,6 +95,8 @@ export default function GroupSetupPage() {
 
         const nextType = data.activity_type || (data.is_test === 1 ? 'test' : 'group');
         setIsTest(nextType === 'test');
+        setIsAssignment(nextType === 'assignment');
+        setShowGroupOptions(false);
       } catch (err) {
         console.error('❌ Failed to load activity meta:', err);
       }
@@ -102,20 +107,22 @@ export default function GroupSetupPage() {
 
 
 
-  // NEW: when this is a test, default to groups-of-1 and no roles
+  // Tests are fixed individual attempts; assignment setup starts with individual defaults.
   useEffect(() => {
-    if (isTest) {
+    if (isTest || isAssignment) {
       setGroupSize(1);
       setUseRoles(false);
     }
-  }, [isTest]);
+  }, [isTest, isAssignment]);
 
   const toggleSelect = (id) => {
     setSelected(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
   const generateGroups = () => {
-    const present = students.filter(s => selected[s.id]);
+    const present = isAssignment
+      ? students.filter((student) => student.role === 'student')
+      : students.filter(s => selected[s.id]);
     const shuffled = [...present].sort(() => Math.random() - 0.5);
 
     if (shuffled.length === 0) {
@@ -252,7 +259,46 @@ export default function GroupSetupPage() {
       return;
     }
 
-    // NON-TEST: old groups workflow
+    // Assignment default: everyone receives an individual, no-role workspace.
+    // Collaborative assignments still use the normal generated groups below.
+    if (isAssignment && !showGroupOptions && groups.length === 0) {
+      const assignmentGroups = students
+        .filter((student) => student.role === 'student')
+        .map((student) => ({
+          members: [{ student_id: student.id, role: null }],
+        }));
+
+      if (!assignmentGroups.length) {
+        alert('There are no enrolled students to activate for this assignment.');
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/activity-instances/setup-groups`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            activityId: Number(activityId),
+            courseId: Number(courseId),
+            groups: assignmentGroups,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert(`❌ Error: ${data.error || 'Failed to activate assignment'}`);
+          return;
+        }
+        alert('✅ Assignment activated for all enrolled students.');
+        navigate(`/view-groups/${courseId}/${activityId}`);
+      } catch (err) {
+        console.error('❌ Assignment activation failed:', err);
+        alert('❌ Failed to activate assignment.');
+      }
+      return;
+    }
+
+    // NON-TEST: normal group workflow
     if (!groups || groups.length === 0) {
       alert('Generate groups first.');
       return;
@@ -290,7 +336,7 @@ export default function GroupSetupPage() {
 
   return (
     <Container className="mt-4">
-      <h2>{isTest ? 'Test Setup' : 'Group Setup'}</h2>
+      <h2>{isTest ? 'Test Setup' : isAssignment ? 'Lab Setup' : 'Group Setup'}</h2>
 
 
       {isTest && (
@@ -300,28 +346,38 @@ export default function GroupSetupPage() {
         </p>
       )}
 
+      {isAssignment && (
+        <p className="text-muted">
+          This activity is a <strong>lab assignment</strong>. It starts with group size 1 and no roles. Use group setup below when the lab is collaborative.
+        </p>
+      )}
 
-      <h5>Select Present Students:</h5>
-      <Row>
-        {Array.isArray(students) && students.length > 0 ? (
-          students.map(s => (
-            <Col md={3} key={s.id} className="mb-2">
-              <Form.Check
-                type="checkbox"
-                label={s.role === 'student' ? s.name : `${s.name} (${s.role})`}
-                checked={!!selected[s.id]}
-                onChange={() => toggleSelect(s.id)}
-              />
-            </Col>
-          ))
-        ) : (
-          <p>No students have joined this instance.</p>
-        )}
-      </Row>
+
+      {!isAssignment && (
+        <>
+          <h5>Select Present Students:</h5>
+          <Row>
+            {Array.isArray(students) && students.length > 0 ? (
+              students.map(s => (
+                <Col md={3} key={s.id} className="mb-2">
+                  <Form.Check
+                    type="checkbox"
+                    label={s.role === 'student' ? s.name : `${s.name} (${s.role})`}
+                    checked={!!selected[s.id]}
+                    onChange={() => toggleSelect(s.id)}
+                  />
+                </Col>
+              ))
+            ) : (
+              <p>No students have joined this instance.</p>
+            )}
+          </Row>
+        </>
+      )}
 
       {/* Controls */}
       <Row className="mt-3">
-        {!isTest && (
+        {!isTest && (!isAssignment || showGroupOptions) && (
           <Col md={3}>
             <Form.Label>Group Size</Form.Label>
             <Form.Select
@@ -335,7 +391,7 @@ export default function GroupSetupPage() {
           </Col>
         )}
 
-        {!isTest && (
+        {!isTest && (!isAssignment || showGroupOptions) && (
           <Col md={3} className="d-flex align-items-end">
             <Form.Check
               type="checkbox"
@@ -388,7 +444,17 @@ export default function GroupSetupPage() {
           </>
         )}
       </Row>
-      {!isTest && (<Row className="mt-3">
+      {isAssignment && !showGroupOptions && (
+        <Button
+          variant="outline-primary"
+          className="mt-3"
+          onClick={() => setShowGroupOptions(true)}
+        >
+          Configure Groups
+        </Button>
+      )}
+
+      {!isTest && (!isAssignment || showGroupOptions) && (<Row className="mt-3">
         <Col md={6}>
           <Form.Label>Clone groups from another activity in this instance</Form.Label>
           <Form.Select
@@ -417,18 +483,18 @@ export default function GroupSetupPage() {
       </Row>
       )}
 
-      {!isTest && (
+      {!isTest && (!isAssignment || showGroupOptions) && (
         <>
           <Button className="mt-3" onClick={generateGroups}>
-            Generate Groups
+            {isIndividualLabSetup ? 'Generate Individual Lab Workspaces' : 'Generate Groups'}
           </Button>
 
           {groups.length > 0 && (
             <>
-              <h5 className="mt-4">Generated Groups:</h5>
+              <h5 className="mt-4">{isIndividualLabSetup ? 'Individual Lab Workspaces:' : 'Generated Groups:'}</h5>
               {groups.map((group, idx) => (
                 <Card key={idx} className="mb-3">
-                  <Card.Header>Group {idx + 1}</Card.Header>
+                  <Card.Header>{isIndividualLabSetup ? `Student workspace ${idx + 1}` : `Group ${idx + 1}`}</Card.Header>
                   <Card.Body>
                     <ul>
                       {Array.isArray(group.members) && group.members.length > 0 ? (
@@ -449,7 +515,7 @@ export default function GroupSetupPage() {
         </>
       )}
       <Button className="mt-3" onClick={handleSaveGroups}>
-        Save
+        {isAssignment && !showGroupOptions && groups.length === 0 ? 'Activate Assignment' : 'Save'}
       </Button>
     </Container>
   );

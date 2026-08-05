@@ -12,16 +12,88 @@ const CREATOR_HOUSE_STYLE_SUMMARY = [
   '- Use \\section{Title} or \\section{Title}{minutes} for each requested section.',
   '- Put interactive work inside \\questiongroup{...} ... \\endquestiongroup.',
   '- Put each prompt inside \\question{...} ... \\endquestion.',
+  '- Put \\responsemode{answer} or \\responsemode{questions} on its own line immediately after \\question{...}; never attach it to the question header.',
   '- Use \\responsemode{answer} for ordinary questions and \\responsemode{questions} for prompts that ask students to write questions.',
   '- Treat \\responsemode{answer} as the default for legacy content, but include it explicitly in new questions when practical.',
+  '- For mode=test, include an explicit \\score{points,type} rubric block for every question so grading is unambiguous.',
   '- Use \\textresponse{n} for short written answers.',
-  '- Use \\multiplechoice{answer} for single-answer multiple-choice questions, and use \\multiplechoice{} for survey questions with no correct answer.',
+  '- For multiple-choice questions, use \\multiplechoice{exact correct choice text} followed by one \\choice{...} line per choice, then \\endmultiplechoice.',
+  '- Never use A/B/C letter labels or other abbreviations inside \\multiplechoice{...}; the answer text must exactly match one \\choice{...} value.',
+  '- Use \\multiplechoice{} only for survey or opinion questions with no correct answer, and still list the choices with \\choice{...}.',
   '- Never invent a fake correct answer just to satisfy the parser when a multiple-choice question is intended to be a survey.',
   '- Use \\sampleresponses{...} and \\feedbackprompt{...} with plain text only.',
   '- Wrap runnable Python in \\python ... \\endpython or \\pythonremote ... \\endpythonremote.',
+  '- Use \\pythondisplay ... \\endpythondisplay or \\cppdisplay ... \\endcppdisplay for read-only code examples that students should see but not run or edit.',
   '- Use \\ai{mode} ... \\endai only when it clearly supports the pedagogy.',
+  '- For \\mode{assignment}, create a project-style lab assignment with milestone steps and a final assembled solution. Assignment drafts are usually sectionless unless the creator explicitly asks for sections.',
   '- Do not include Markdown fences, prose before the activity, or diagnostics.',
 ].join('\n');
+
+function normalizeCreatorMode(modeOrFlag) {
+  if (typeof modeOrFlag === 'boolean') {
+    return modeOrFlag ? 'test' : 'group';
+  }
+
+  return String(modeOrFlag || 'group').trim().toLowerCase();
+}
+
+function buildActivityGenerationInstructions(modeOrFlag) {
+  const normalizedMode = normalizeCreatorMode(modeOrFlag);
+  const isTestMode = normalizedMode === 'test';
+  const isAssignmentMode = normalizedMode === 'assignment';
+  const isSectionlessMode = isTestMode || isAssignmentMode;
+
+  return [
+    'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
+    'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
+    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
+    'Only include \\info blocks if the creator explicitly asks for them.',
+    'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
+    isTestMode
+      ? 'For mode=test, create one continuous assessment with no \\section commands and no section timers. Every question must include an explicit \\score{points,type} rubric block that matches how it will be graded.'
+      : isAssignmentMode
+        ? 'For mode=assignment, create a project-style lab assignment with a clear project goal, a small sequence of milestone tasks, optional checkpoints, and a final assembled solution. Do not require a linear worksheet flow or section headings.'
+        : 'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
+    'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
+    'Keep each question concise. Keep sample responses and feedback prompts short.',
+    'Do not echo the creator brief, requested sections, diagnostics, or planning notes into the activity body.',
+    'It is better to finish a complete compact activity than to begin a longer activity and stop halfway through.',
+    isSectionlessMode
+      ? 'Do not use section headings or section timers for this draft.'
+      : 'Treat Learning Objectives as a structural section, not as an interactive activity, unless the creator explicitly asks otherwise.',
+    !isSectionlessMode && 'If a timed section plan is provided, use the exact section titles and emit them as \\section{Title}{minutes}.',
+    'If the activity uses turtle graphics, always wrap the turtle code in \\pythonturtle ... \\endpythonturtle.',
+    'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
+    'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
+    'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp, \\python ... \\endpython, or \\pythonremote ... \\endpythonremote. Never paste raw code directly into question text.',
+    'Only use a runnable \\python block when students must write or modify executable Python code.',
+    'If students are asked to modify existing code, repeat the current code in a new editable \\python block so they can run and test the changed version.',
+    'If you only want to show example code without making it runnable or editable, use \\pythondisplay ... \\endpythondisplay or \\cppdisplay ... \\endcppdisplay instead of a runnable code block.',
+    'Use \\textresponse for prose tasks such as objectives, predictions, explanations, prompt-writing, reflections, lists, and short written answers.',
+    'Do not ask multiple students to type separate answers into one shared text box.',
+    'Do not ask for unsupported response formats such as "one per line", per-student rosters, tables-in-a-textbox, or "each group member writes ..." inside a single \\textresponse.',
+    'If you need multiple contributions, ask for one concise group summary or split the work into separate questions.',
+    'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
+    'If you include multiple-choice questions, use \\multiplechoice{answer} only for questions with a real correct answer. For survey or opinion questions, keep \\multiplechoice{} blank and never invent a placeholder answer to satisfy validation.',
+    'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
+    'If you do use an \\ai block, keep it tightly scoped and include a guardrail.',
+    'Use the compact house-style rules below as syntax guidance.',
+    'For mode=group, use collaborative prompts and progression.',
+    'For mode=playground, write an experimentation-first prompt sequence for instructor-led demonstration and student exploration. Playground work should feel saved and revisitable.',
+    'For mode=demo, use concise temporary demo-style prompts for short-lived conference/demo flows.',
+    'For mode=assignment, write a lab/project assignment that can be completed in smaller milestones and revised over time. Make the steps concrete but not necessarily linear, and favor prompts that help students plan, prototype, test, and assemble their solution.',
+    'Use \\responsemode{answer} for ordinary questions and \\responsemode{questions} for prompts that ask students to write questions.',
+    'For multiple-choice questions, write the answer as the exact text of one choice: \\multiplechoice{exact answer text}. Then add one \\choice{...} line for each option and close with \\endmultiplechoice.',
+    'Do not use A/B/C/D letters or numeric labels inside \\multiplechoice{...}; the parser compares the exact answer text against the \\choice{...} lines.',
+    'If a multiple-choice question is a survey or opinion item, keep \\multiplechoice{} blank and still provide the choices with \\choice{...}.',
+    'For mode=playground, use guided observation, prediction, and explanation prompts suitable for instructor demonstration and student experimentation. Playground work should be saved and revisitable.',
+    'For mode=demo, use concise temporary demo-style prompts for short-lived conference/demo flows.',
+    'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
+    'Make the activity reflect the creator brief, not generic filler.',
+    '',
+    CREATOR_HOUSE_STYLE_SUMMARY,
+  ].filter(Boolean).join('\n');
+}
 
 function sanitizeHeaderValue(value, fallback = '') {
   return String(value == null ? fallback : value)
@@ -86,6 +158,10 @@ function renderFallbackTemplate({
   activityDescription,
 }) {
   const template = fs.readFileSync(CREATOR_TEMPLATE_PATH, 'utf8');
+  const normalizedMode = String(mode || '').trim().toLowerCase();
+  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const renderedMajorSections = isSectionlessMode ? [] : (majorSections || []);
+  const renderedTimedSections = isSectionlessMode ? [] : timedSections;
 
   return template
     .replace('__TITLE__', sanitizeHeaderValue(title, 'New Activity'))
@@ -95,12 +171,12 @@ function renderFallbackTemplate({
     .replace('__DURATION_MINUTES__', String(durationMinutes))
     .replace('__SELECTED_MODEL__', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
     .replace('__RETRIES_REQUIRED__', String(Math.max(0, Math.round(Number(retriesRequired) || 0))))
-    .replace('__MAJOR_SECTIONS_BLOCK__', normalizeTextBlock((majorSections || []).join(', '), 'Not specified.'))
+    .replace('__MAJOR_SECTIONS_BLOCK__', normalizeTextBlock(renderedMajorSections.join(', '), isSectionlessMode ? 'No sections requested.' : 'Not specified.'))
     .replace('__TIMED_SECTIONS_BLOCK__', normalizeTextBlock(
-      normalizeTimedSections(timedSections).map((section) => `${section.title}: ${section.minutes} minutes`).join('\n'),
-      'No section timers requested.'
+      normalizeTimedSections(renderedTimedSections).map((section) => `${section.title}: ${section.minutes} minutes`).join('\n'),
+      isSectionlessMode ? 'No section timers are used for this draft type.' : 'No section timers requested.'
     ))
-    .replace('__REQUESTED_SECTION_MARKUP__', renderRequestedSectionMarkup(majorSections, timedSections))
+    .replace('__REQUESTED_SECTION_MARKUP__', isSectionlessMode ? '' : renderRequestedSectionMarkup(majorSections, timedSections))
     .replace('__CLASS_DESCRIPTION_BLOCK__', normalizeTextBlock(classDescription))
     .replace('__ACTIVITY_DESCRIPTION_BLOCK__', normalizeTextBlock(activityDescription));
 }
@@ -601,9 +677,13 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
     return null;
   }
 
-  const normalizedSections = Array.isArray(fallbackInput?.majorSections) && fallbackInput.majorSections.length
-    ? fallbackInput.majorSections
-    : ['Learning Objectives', 'Exploration', 'Concept Invention', 'Application', 'Reflection'];
+  const normalizedMode = String(fallbackInput?.mode || '').trim().toLowerCase();
+  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const normalizedSections = isSectionlessMode
+    ? []
+    : Array.isArray(fallbackInput?.majorSections) && fallbackInput.majorSections.length
+      ? fallbackInput.majorSections
+      : ['Learning Objectives', 'Exploration', 'Concept Invention', 'Application', 'Reflection'];
 
   const metadata = {
     title: sanitizeHeaderValue(fallbackInput?.title, 'New Activity'),
@@ -685,7 +765,7 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
       continue;
     }
 
-    if (sectionSet.has(line)) {
+    if (!isSectionlessMode && sectionSet.has(line)) {
       closeObjectivesList();
       closeQuestionGroup();
       currentSection = line;
@@ -780,30 +860,44 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
 }
 
 function normalizeGeneratedDraft(text, fallbackInput) {
+  const normalizedMode = String(fallbackInput?.mode || '').trim().toLowerCase();
+  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const normalizedFallbackInput = isSectionlessMode
+    ? {
+      ...fallbackInput,
+      majorSections: [],
+      timedSections: [],
+    }
+    : fallbackInput;
   const stripped = repairUnsupportedStructuredResponsePrompts(
     decodeCommonHtmlEntities(
       normalizeLegacyCommandSyntax(stripCodeFences(text))
     )
   );
-  const plaintextMarkup = coercePlaintextActivityToMarkup(stripped, fallbackInput);
+  const plaintextMarkup = coercePlaintextActivityToMarkup(stripped, normalizedFallbackInput);
   const cleaned = repairCodingQuestionsToUsePythonBlocks(
     repairGeneratedMarkupClosures(
       normalizePythonTurtleDirectives(
         applyTimedSectionDirectives(
           applyRetriesDirective(
             normalizeLearningObjectivesSection(plaintextMarkup || stripped),
-            fallbackInput.retriesRequired
+            normalizedFallbackInput.retriesRequired
           ),
-          fallbackInput.timedSections
+          normalizedFallbackInput.timedSections
         )
       )
     )
   );
-  const normalized = cleaned;
+  const normalized = isSectionlessMode
+    ? cleaned
+        .replace(/^\\section\{[^\n]*\}(?:\{\d+\})?$/gm, '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+    : cleaned;
 
   if (!normalized.includes('\\title{') || !normalized.includes('\\questiongroup{')) {
     return {
-      text: renderFallbackTemplate(fallbackInput),
+      text: renderFallbackTemplate(normalizedFallbackInput),
       usedFallback: true,
       reason: 'Model output did not pass activity markup validation.',
       rawOutput: cleaned,
@@ -853,54 +947,27 @@ async function generateWithOpenAI({
 }) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const normalizedTimedSections = normalizeTimedSections(timedSections);
+  const normalizedMode = String(mode || 'group').trim().toLowerCase();
+  const isTestMode = normalizedMode === 'test';
+  const isAssignmentMode = normalizedMode === 'assignment';
+  const isSectionlessMode = isTestMode || isAssignmentMode;
   const timeoutMs = getCreatorOpenAiTimeoutMs();
 
-  const system = [
-    'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
-    'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
-    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
-    'Only include \\info blocks if the creator explicitly asks for them.',
-    'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
-    'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
-    'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
-    'Keep each question concise. Keep sample responses and feedback prompts short.',
-    'Do not echo the creator brief, requested sections, diagnostics, or planning notes into the activity body.',
-    'It is better to finish a complete compact activity than to begin a longer activity and stop halfway through.',
-    'Treat Learning Objectives as a structural section, not as an interactive activity, unless the creator explicitly asks otherwise.',
-    'If a timed section plan is provided, use the exact section titles and emit them as \\section{Title}{minutes}.',
-    'If the activity uses turtle graphics, always wrap the turtle code in \\pythonturtle ... \\endpythonturtle.',
-    'For \\pythonturtle blocks, do not invent tiny explicit timeouts. Omit the timeout unless a specific non-default runtime limit is truly needed. Prefer \\pythonturtle{WxH} over \\pythonturtle{WxH,timeout}.',
-    'Emit one global \\retries{n} directive near the top of the activity using the requested retry count.',
-    'If you include code examples, wrap them in explicit code blocks such as \\cpp ... \\endcpp, \\python ... \\endpython, or \\pythonremote ... \\endpythonremote. Never paste raw code directly into question text.',
-    'Only use a runnable \\python block when students must write or modify executable Python code.',
-    'If students are asked to modify existing code, repeat the current code in a new editable \\python block so they can run and test the changed version.',
-    'Use \\textresponse for prose tasks such as objectives, predictions, explanations, prompt-writing, reflections, lists, and short written answers.',
-    'Do not ask multiple students to type separate answers into one shared text box.',
-    'Do not ask for unsupported response formats such as "one per line", per-student rosters, tables-in-a-textbox, or "each group member writes ..." inside a single \\textresponse.',
-    'If you need multiple contributions, ask for one concise group summary or split the work into separate questions.',
-    'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
-    'If you include multiple-choice questions, use \\multiplechoice{answer} only for questions with a real correct answer. For survey or opinion questions, keep \\multiplechoice{} blank and never invent a placeholder answer to satisfy validation.',
-    'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
-    'If you do use an \\ai block, keep it tightly scoped and include a guardrail.',
-    'Use the compact house-style rules below as syntax guidance.',
-    'For mode=group, use collaborative prompts and progression.',
-    'Use \\responsemode{answer} for ordinary questions and \\responsemode{questions} for prompts that ask students to write questions.',
-    'For mode=demo, use guided observation, prediction, and explanation prompts suitable for individual experimentation.',
-    'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
-    'Make the activity reflect the creator brief, not generic filler.',
-    '',
-    CREATOR_HOUSE_STYLE_SUMMARY,
-  ].join('\n');
+  const system = buildActivityGenerationInstructions(normalizedMode);
 
   const user = [
     `Activity title: ${title}`,
     `Mode: ${mode}`,
     `Target duration (minutes): ${durationMinutes}`,
     `Global retries required before bypass: ${Math.max(0, Math.round(Number(retriesRequired) || 0))}`,
-    `Use these major sections in this order: ${(majorSections || []).join(' | ') || 'Learning Objectives | Exploration | Concept Invention | Application | Reflection'}`,
-    normalizedTimedSections.length
-      ? `Timed sections (use these exact titles and minutes):\n${normalizedTimedSections.map((section) => `- ${section.title}: ${section.minutes}`).join('\n')}`
-      : 'Timed sections: none requested.',
+    isSectionlessMode
+      ? 'No section headings or section timers should appear in the draft.'
+      : `Use these major sections in this order: ${(majorSections || []).join(' | ') || 'Learning Objectives | Exploration | Concept Invention | Application | Reflection'}`,
+    isSectionlessMode
+      ? 'Timed sections: none requested.'
+      : normalizedTimedSections.length
+        ? `Timed sections (use these exact titles and minutes):\n${normalizedTimedSections.map((section) => `- ${section.title}: ${section.minutes}`).join('\n')}`
+        : 'Timed sections: none requested.',
     `Class level: ${classLevel || 'Not specified'}`,
     `Topic/domain: ${classTopicDomain || 'Not specified'}`,
     `Class description:\n${classDescription || 'Not specified.'}`,
@@ -1072,8 +1139,10 @@ function buildQuestionRevisionInstructions() {
     'The creator request is a required specification, not a suggestion. You may revise every part of this question block.',
     'When the request changes what the learner must do, explicitly rewrite the learner-facing \\question{...} text. Do not leave that text unchanged merely because you updated starter code.',
     'Keep the question prompt, code, response type, sample responses, feedback prompts, follow-up prompts, and any \\ai blocks consistent with the requested learning task. Change every dependent part that needs changing.',
-    'For multiple-choice questions, preserve the author’s intent: use \\multiplechoice{answer} only for questions that truly have a correct answer, and keep \\multiplechoice{} blank for survey or opinion questions. Never invent a placeholder answer to satisfy the parser.',
+    'For multiple-choice questions, preserve the author’s intent: use \\multiplechoice{exact correct choice text} only for questions that truly have a correct answer, then list one \\choice{...} line for each option and close with \\endmultiplechoice. Keep \\multiplechoice{} blank for survey or opinion questions and still list the choices. Never invent a placeholder answer to satisfy the parser.',
+    'Never use A/B/C letter labels or numeric labels inside \\multiplechoice{...}; the answer text must exactly match one \\choice{...} value.',
     'For new questions, explicitly include \\responsemode{answer} unless the student should write questions, in which case use \\responsemode{questions}.',
+    'If the question is graded, preserve or add an explicit \\score{points,type} rubric block that matches the revised task.',
     'Keep sample responses and feedback prompts plain text.',
     'Retain only valid coLearn-AI response-type blocks such as \\textresponse, \\python, \\pythonremote, \\pythonturtle, \\cpp, \\ai, and \\responsemode.',
     'In summary, briefly state the learner-facing changes you made.',
@@ -1335,6 +1404,7 @@ module.exports = {
   generateActivityDraft,
   reviseActivityDraft,
   reviseQuestionDraft,
+  buildActivityGenerationInstructions,
   buildQuestionRevisionInstructions,
   buildQuestionRevisionResponseFormat,
   isOutputTokenTruncation,

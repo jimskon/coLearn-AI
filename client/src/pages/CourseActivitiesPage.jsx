@@ -9,12 +9,16 @@ const TYPE_LABELS = {
   group: 'Group',
   test: 'Test',
   demo: 'Demo',
+  playground: 'Playground',
+  assignment: 'Assignment',
 };
 
 const TYPE_BADGE_VARIANTS = {
   group: 'secondary',
   test: 'warning',
   demo: 'info',
+  playground: 'info',
+  assignment: 'success',
 };
 
 
@@ -82,13 +86,18 @@ export default function CourseActivitiesPage() {
 
   const handleDoActivity = async (activity, isInstructor = false) => {
     const activityId = activity.activity_id;
-    const activityType = activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
+    const activityType =
+      activity.activity_type
+      || activity.authored_mode
+      || (activity.is_test === 1 ? 'test' : 'group');
     const isTest = activityType === 'test';
     const isDemo = activityType === 'demo';
-    const isDemoClassGroup = isDemoClass && !isTest && !isDemo;
+    const isPlayground = activityType === 'playground';
+    const isDemoLike = isDemo || isPlayground;
+    const isDemoClassGroup = isDemoClass && !isTest && !isDemoLike;
     let instanceId = activity.instance_id;
 
-    if (isDemo) {
+    if (isDemoLike) {
       try {
         instanceId = await ensureDemoInstance(activity);
         setActivities((prev) =>
@@ -140,7 +149,7 @@ export default function CourseActivitiesPage() {
     const path = isInstructor
       ? (isTest
         ? `/test-setup/${courseId}/${activityId}`   // ✅ tests go here
-        : isDemo
+        : isDemoLike
           ? `/run/${instanceId}`
           : isDemoClassGroup
             ? `/view-groups/${courseId}/${activityId}`
@@ -219,14 +228,19 @@ export default function CourseActivitiesPage() {
             {activities.map((activity) => {
               const title = activity.title || activity.activity_name || 'Untitled Activity';
               const activityType =
-                activity.activity_type || (activity.is_test === 1 ? 'test' : 'group');
+                activity.activity_type
+                || activity.authored_mode
+                || (activity.is_test === 1 ? 'test' : 'group');
+              const displayType = activity.authored_mode || activityType;
               const isTest = activityType === 'test';
               const isDemo = activityType === 'demo';
-              const isDemoClassGroup = isDemoClass && !isTest && !isDemo;
-              const setupLabel = isDemo ? 'Open Demo' : isDemoClassGroup ? 'Live Groups' : 'Setup Groups';
-              const viewLabel = isDemo ? 'View Demo' : 'View Groups';
-              const typeLabel = TYPE_LABELS[activityType] || 'Group';
-              const typeVariant = TYPE_BADGE_VARIANTS[activityType] || 'secondary';
+              const isPlayground = activityType === 'playground';
+              const isDemoLike = isDemo || isPlayground;
+              const isDemoClassGroup = isDemoClass && !isTest && !isDemoLike;
+              const setupLabel = isDemoLike ? (isPlayground ? 'Open Playground' : 'Open Demo') : isDemoClassGroup ? 'Live Groups' : 'Setup Groups';
+              const viewLabel = isDemoLike ? (isPlayground ? 'View Playground' : 'View Demo') : 'View Groups';
+              const typeLabel = TYPE_LABELS[displayType] || TYPE_LABELS[activityType] || 'Group';
+              const typeVariant = TYPE_BADGE_VARIANTS[displayType] || TYPE_BADGE_VARIANTS[activityType] || 'secondary';
 
               return (
                 <tr key={activity.activity_id}>
@@ -237,15 +251,15 @@ export default function CourseActivitiesPage() {
                     </div>
                   </td>
                   <td>
-                    {user?.role === 'student' && (activity.instance_id || isDemo || isDemoClassGroup) && !activity.hidden ? (
+                    {user?.role === 'student' && (activity.instance_id || isDemoLike || isDemoClassGroup) && !activity.hidden ? (
 
                       (() => {
                         const status = activity.student_status;
 
-                        let label = isDemo ? 'Open Demo' : isDemoClassGroup ? 'Join Demo Group' : 'Start';
+                        let label = isDemoLike ? (isPlayground ? 'Open Playground' : 'Open Demo') : isDemoClassGroup ? 'Join Demo Group' : 'Start';
                         let variant = 'success';
 
-                        if (isDemo) {
+                        if (isDemoLike) {
                           variant = 'secondary';
                         } else if (status === 'in_progress') {
                           label = 'Resume';
@@ -302,7 +316,7 @@ export default function CourseActivitiesPage() {
                               <Button
                                 variant="secondary"
                                 onClick={() =>
-                                  isDemo
+                                  isDemoLike
                                     ? handleDoActivity(activity, true)
                                     : navigate(`/view-groups/${courseId}/${activity.activity_id}`, {
                                         state: { courseName },

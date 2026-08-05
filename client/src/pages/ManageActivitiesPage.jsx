@@ -21,6 +21,12 @@ const emptyUploadActivity = {
   order_index: '',
 };
 
+const emptyBlankActivity = {
+  name: '',
+  title: '',
+  order_index: '',
+};
+
 const emptyCloneActivity = {
   name: '',
   title: '',
@@ -112,6 +118,35 @@ function SourceBadge({ sourceType }) {
   );
 }
 
+function ModeBadge({ activity }) {
+  const normalizedMode = String(
+    activity?.authored_mode
+    || activity?.mode
+    || (Number(activity?.is_test) === 1 ? 'test' : '')
+  ).trim().toLowerCase();
+
+  const label = normalizedMode === 'test'
+    ? 'Test'
+    : normalizedMode === 'playground'
+      ? 'Playground'
+      : normalizedMode === 'demo'
+        ? 'Demo'
+        : normalizedMode === 'assignment'
+          ? 'Assignment'
+          : 'Group';
+  const variant = normalizedMode === 'test'
+    ? 'danger'
+    : normalizedMode === 'playground'
+      ? 'info'
+      : normalizedMode === 'demo'
+        ? 'info'
+        : normalizedMode === 'assignment'
+          ? 'success'
+          : 'secondary';
+
+  return <Badge bg={variant}>{label}</Badge>;
+}
+
 function cloneActivityDefaults(activity) {
   const sourceType = String(activity?.source_type || 'remote').toLowerCase();
   return {
@@ -139,6 +174,7 @@ export default function ManageActivitiesPage() {
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showBlankModal, setShowBlankModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
 
   const [downloadSelection, setDownloadSelection] = useState({});
@@ -150,6 +186,9 @@ export default function ManageActivitiesPage() {
   const [createDraft, setCreateDraft] = useState(emptyCreateDraft);
   const [createNote, setCreateNote] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
+  const [blankActivity, setBlankActivity] = useState(emptyBlankActivity);
+  const [blankBusy, setBlankBusy] = useState(false);
+  const [blankNote, setBlankNote] = useState('');
   const [cloneSourceActivity, setCloneSourceActivity] = useState(null);
   const [cloneDraft, setCloneDraft] = useState(emptyCloneActivity);
   const [cloneNote, setCloneNote] = useState('');
@@ -222,12 +261,17 @@ export default function ManageActivitiesPage() {
       }
 
       if (name === 'mode') {
+        const nextMode = String(value || '').trim().toLowerCase();
+        const nextIsSectionlessMode = nextMode === 'test' || nextMode === 'assignment';
         const nextMajorSections = [...majorSectionOptions];
         return {
           ...prev,
-          mode: value,
-          major_sections: nextMajorSections,
-          section_minutes: distributeMinutes(prev.duration_minutes, nextMajorSections),
+          mode: nextMode,
+          major_sections: nextIsSectionlessMode ? [] : nextMajorSections,
+          use_timed_sections: nextIsSectionlessMode ? false : prev.use_timed_sections,
+          section_minutes: nextIsSectionlessMode
+            ? {}
+            : distributeMinutes(prev.duration_minutes, nextMajorSections),
         };
       }
 
@@ -242,6 +286,9 @@ export default function ManageActivitiesPage() {
       return { ...prev, [name]: value };
     });
   };
+
+  const createDraftMode = String(createDraft.mode || '').trim().toLowerCase();
+  const isCreateDraftSectionlessMode = createDraftMode === 'test' || createDraftMode === 'assignment';
 
   const handleSectionMinutesChange = (sectionName, value) => {
     setCreateDraft((prev) => ({
@@ -447,6 +494,12 @@ export default function ManageActivitiesPage() {
     navigate(`/class/${classId}/create`);
   };
 
+  const openBlankActivityModal = () => {
+    setBlankActivity(emptyBlankActivity);
+    setBlankNote('');
+    setShowBlankModal(true);
+  };
+
   const openDownloadPlaceholder = () => {
     setShowDownloadModal(true);
   };
@@ -461,6 +514,11 @@ export default function ManageActivitiesPage() {
   const handleCloneFieldChange = (e) => {
     const { name, value } = e.target;
     setCloneDraft((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleBlankFieldChange = (e) => {
+    const { name, value } = e.target;
+    setBlankActivity((prev) => ({ ...prev, [name]: value }));
   };
 
   const triggerBrowserDownload = (filename, text, mimeType = 'text/plain;charset=utf-8') => {
@@ -596,6 +654,61 @@ export default function ManageActivitiesPage() {
     }
   };
 
+  const handleCreateBlankActivity = async () => {
+    setBlankNote('');
+
+    if (!blankActivity.title.trim()) {
+      setBlankNote('Enter a title for the blank activity.');
+      return;
+    }
+
+    const normalizedName = slugifyActivityName(blankActivity.name.trim() || blankActivity.title.trim());
+    if (!normalizedName) {
+      setBlankNote('Enter a valid activity ID or title.');
+      return;
+    }
+
+    const parsedOrderIndex = blankActivity.order_index === ''
+      ? 0
+      : parseInt(blankActivity.order_index, 10);
+    if (!Number.isFinite(parsedOrderIndex) || parsedOrderIndex < 0) {
+      setBlankNote('Enter a valid order number.');
+      return;
+    }
+
+    setBlankBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: normalizedName,
+          title: blankActivity.title.trim(),
+          source_type: 'local',
+          content_text: '',
+          order_index: parsedOrderIndex,
+          createdBy: user?.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to create the blank activity.');
+      }
+
+      setShowBlankModal(false);
+      setBlankActivity(emptyBlankActivity);
+      await refreshActivities();
+      navigate(`/creator/${data.id}?blank=1`);
+    } catch (err) {
+      console.error('Blank activity creation failed:', err);
+      setBlankNote(err?.message || 'Failed to create the blank activity.');
+    } finally {
+      setBlankBusy(false);
+    }
+  };
+
   const handleCreateDraft = async () => {
     setCreateNote('');
 
@@ -616,13 +729,13 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    if (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length) {
+    if (!isCreateDraftSectionlessMode && (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length)) {
       setCreateNote('Select at least one major section for the draft structure.');
       return;
     }
 
     let timedSections = [];
-    if (createDraft.use_timed_sections) {
+    if (!isCreateDraftSectionlessMode && createDraft.use_timed_sections) {
       timedSections = createDraft.major_sections.map((sectionName) => ({
         title: sectionName,
         minutes: parseInt(createDraft.section_minutes?.[sectionName], 10),
@@ -651,9 +764,9 @@ export default function ManageActivitiesPage() {
           duration_minutes: durationMinutes,
           mode: createDraft.mode,
           selected_model: createDraft.selected_model,
-          major_sections: createDraft.major_sections,
-          use_timed_sections: createDraft.use_timed_sections,
-          timed_sections: timedSections,
+          major_sections: isCreateDraftSectionlessMode ? [] : createDraft.major_sections,
+          use_timed_sections: isCreateDraftSectionlessMode ? false : createDraft.use_timed_sections,
+          timed_sections: isCreateDraftSectionlessMode ? [] : timedSections,
           retries_required: retriesRequired,
           description: createDraft.description,
           createdBy: user?.id,
@@ -710,6 +823,7 @@ export default function ManageActivitiesPage() {
             <th>Name</th>
             <th>Title</th>
             <th>Source</th>
+            <th>Mode</th>
             <th>Sheet URL</th>
             <th>Order</th>
             <th style={{ width: '30%' }}>Actions</th>
@@ -729,6 +843,9 @@ export default function ManageActivitiesPage() {
               </td>
               <td className="align-middle text-center">
                 <SourceBadge sourceType={activity.source_type} />
+              </td>
+              <td className="align-middle text-center">
+                <ModeBadge activity={activity} />
               </td>
               <td>
                 <Form.Control
@@ -793,6 +910,9 @@ export default function ManageActivitiesPage() {
         <Button variant="success" onClick={openCreateWorkbench}>
           Create
         </Button>
+        <Button variant="outline-primary" onClick={openBlankActivityModal}>
+          Blank Activity
+        </Button>
         <Button variant="primary" onClick={() => setShowUploadModal(true)}>
           Upload
         </Button>
@@ -838,16 +958,21 @@ export default function ManageActivitiesPage() {
             </div>
             <div className="col-md-8">
               <Form.Group>
-                <Form.Label>Activity Type</Form.Label>
+                <Form.Label>Mode</Form.Label>
                 <Form.Select
                   name="mode"
                   value={createDraft.mode}
                   onChange={handleCreateDraftFieldChange}
                 >
                   <option value="group">Group</option>
+                  <option value="playground">Playground</option>
                   <option value="demo">Demo</option>
                   <option value="test">Test</option>
+                  <option value="assignment">Assignment</option>
                 </Form.Select>
+                <div className="text-muted small mt-2">
+                  Assignment mode is best for project-style labs and does not require section structure.
+                </div>
               </Form.Group>
             </div>
           </div>
@@ -907,27 +1032,29 @@ export default function ManageActivitiesPage() {
             />
           </Form.Group>
 
-          <Form.Group className="mt-3">
-            <Form.Label>Major Sections</Form.Label>
-            <div className="row g-2">
-              {majorSectionOptions.map((sectionName) => (
-                <div className="col-md-6" key={sectionName}>
-                  <Form.Check
-                    type="checkbox"
-                    id={`major-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
-                    label={sectionName}
-                    checked={createDraft.major_sections.includes(sectionName)}
-                    onChange={() => handleMajorSectionToggle(sectionName)}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="text-muted small mt-2">
-              We will use these as the high-level structure for the first draft.
-            </div>
-          </Form.Group>
+          {!isCreateDraftSectionlessMode ? (
+            <Form.Group className="mt-3">
+              <Form.Label>Major Sections</Form.Label>
+              <div className="row g-2">
+                {majorSectionOptions.map((sectionName) => (
+                  <div className="col-md-6" key={sectionName}>
+                    <Form.Check
+                      type="checkbox"
+                      id={`major-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                      label={sectionName}
+                      checked={createDraft.major_sections.includes(sectionName)}
+                      onChange={() => handleMajorSectionToggle(sectionName)}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="text-muted small mt-2">
+                We will use these as the high-level structure for the first draft.
+              </div>
+            </Form.Group>
+          ) : null}
 
-          {createDraft.use_timed_sections ? (
+          {!isCreateDraftSectionlessMode && createDraft.use_timed_sections ? (
             <Form.Group className="mt-3">
               <Form.Label>Section Timing</Form.Label>
               <div className="row g-2">
@@ -949,6 +1076,12 @@ export default function ManageActivitiesPage() {
             </Form.Group>
           ) : null}
 
+          {isCreateDraftSectionlessMode ? (
+            <Alert variant="info" className="mt-3">
+              This mode is generated without section structure or section timing.
+            </Alert>
+          ) : null}
+
           <div className="text-muted small mt-3">
             We will create a first local draft using the class metadata and this description, then open it in the creator workbench.
           </div>
@@ -965,6 +1098,67 @@ export default function ManageActivitiesPage() {
           </Button>
           <Button variant="success" onClick={handleCreateDraft} disabled={createBusy}>
             Create Draft
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={showBlankModal} onHide={() => !blankBusy && setShowBlankModal(false)}>
+        <Modal.Header closeButton={!blankBusy}>
+          <Modal.Title>Create Blank Activity</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>Activity ID</Form.Label>
+            <Form.Control
+              name="name"
+              value={blankActivity.name}
+              onChange={handleBlankFieldChange}
+              placeholder="optional_slug_id"
+            />
+            <div className="text-muted small mt-2">
+              If you leave this blank, we’ll generate one from the title.
+            </div>
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Title</Form.Label>
+            <Form.Control
+              name="title"
+              value={blankActivity.title}
+              onChange={handleBlankFieldChange}
+              placeholder="Untitled Activity"
+              autoFocus
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Order</Form.Label>
+            <Form.Control
+              type="number"
+              min="0"
+              name="order_index"
+              value={blankActivity.order_index}
+              onChange={handleBlankFieldChange}
+              placeholder="0"
+            />
+          </Form.Group>
+
+          <Alert variant="info" className="mb-0">
+            This creates an empty local activity with no AI draft. You can paste or type source directly and save it.
+          </Alert>
+
+          {blankNote ? (
+            <Alert variant="warning" className="mt-3 mb-0">
+              {blankNote}
+            </Alert>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowBlankModal(false)} disabled={blankBusy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleCreateBlankActivity} disabled={blankBusy}>
+            Create Blank Activity
           </Button>
         </Modal.Footer>
       </Modal>

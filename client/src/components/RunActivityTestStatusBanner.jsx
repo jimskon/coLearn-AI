@@ -4,15 +4,31 @@ import { Alert } from 'react-bootstrap';
 
 export default function RunActivityTestStatusBanner({
   isTestMode,
+  isAssignmentMode = false,
   testWindow,
   testLockState,
   isStudent,
   submittedAt,
+  reviewComplete = false,
+  score,
   formatRemainingSeconds,
 }) {
-  if (!isTestMode) return null;
+  if (!isTestMode && !isAssignmentMode) return null;
 
   const { lockedBefore, lockedAfter, remainingSeconds } = testLockState || {};
+  const earned = Number(score?.earned);
+  const possible = Number(score?.max);
+  const hasScore = Number.isFinite(earned) && Number.isFinite(possible) && possible > 0;
+  const percentage = hasScore ? ((earned / possible) * 100).toFixed(1) : null;
+
+  if (isAssignmentMode) {
+    return submittedAt && isStudent ? (
+      <Alert variant="info" className="mt-2">
+        <strong>{reviewComplete ? 'Reviewed by instructor' : 'Preliminary lab score — pending instructor review'}</strong>
+        {hasScore ? <div className="mt-1">Score: <strong>{earned}/{possible}</strong> ({percentage}%)</div> : null}
+      </Alert>
+    ) : null;
+  }
 
   return (
     <Alert
@@ -59,6 +75,15 @@ export default function RunActivityTestStatusBanner({
         <div className="small mt-1">
           The test window is closed
           {submittedAt ? ' and your test has been submitted.' : '.'}
+        </div>
+      )}
+
+      {isStudent && submittedAt && hasScore && (
+        <div className="mt-3 pt-2 border-top">
+          <strong>{reviewComplete ? 'Reviewed by instructor' : 'Preliminary score — pending instructor review'}</strong>
+          <div className="mt-1">
+            Score: <strong>{earned}/{possible}</strong> ({percentage}%)
+          </div>
         </div>
       )}
     </Alert>

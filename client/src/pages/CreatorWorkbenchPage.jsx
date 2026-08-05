@@ -90,6 +90,22 @@ function cloneEmptyAdvancedDraft() {
   };
 }
 
+function slugifyActivityName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+}
+
+function markupHeaderValue(value) {
+  return String(value || '')
+    .replace(/[{}]/g, '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+}
+
 function allocateTimedSectionMinutes(sectionNames, totalMinutes) {
   const sections = Array.isArray(sectionNames) ? sectionNames : [];
   const total = Math.round(Number(totalMinutes));
@@ -291,10 +307,15 @@ function applyMultipleChoiceEditsToSource(sourceText, block, edits) {
 
   const correctAnswer = String(edits.multipleChoiceAnswer || '').trim();
   const choices = (edits.multipleChoiceChoices || [])
-    .map((choice) => String(choice || '').trim());
+    .map((choice) => ({
+      value: String(choice?.value ?? choice ?? '').trim(),
+      points: choice?.points,
+    }));
   const markup = [
     `\\multiplechoice{${correctAnswer}}`,
-    ...choices.map((choice) => `\\choice{${choice}}`),
+    ...choices.map(({ value, points }) => (
+      `\\choice{${value}}${Number.isInteger(points) && points >= 0 ? `{${points}}` : ''}`
+    )),
     '\\endmultiplechoice',
   ];
 
@@ -312,6 +333,14 @@ function applyMultipleChoiceEditsToSource(sourceText, block, edits) {
 
 function buildQuestionInspectorDraft(block) {
   const multipleChoice = block?.multipleChoice;
+  const scoreDraft = (type) => ({
+    points: Number.isFinite(Number(block?.scores?.[type]?.points))
+      ? String(block?.scores?.[type].points)
+      : '',
+    instructions: htmlToEditorText(
+      block?.scores?.[type]?.instructionsRaw || block?.scores?.[type]?.instructionsHtml || ''
+    ),
+  });
   return {
     prompt: htmlToEditorText(block?.prompt),
     responseLines: multipleChoice ? '' : (block?.hasTextResponse ? (Number(block?.responseLines) || 1) : ''),
@@ -319,9 +348,118 @@ function buildQuestionInspectorDraft(block) {
     feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
     followupPrompt: htmlToEditorText(block?.followups?.[0]),
     multipleChoiceEnabled: !!multipleChoice,
-    multipleChoiceAnswer: multipleChoice?.correctAnswer ?? 'First option',
-    multipleChoiceChoices: multipleChoice?.choices?.map((choice) => choice.value) || ['First option', 'Second option'],
+    multipleChoiceAnswer: multipleChoice?.correctAnswer ?? '',
+    multipleChoiceChoices: multipleChoice?.choices?.map((choice) => ({
+      value: choice.value,
+      points: choice.points,
+    })) || [{ value: 'First option', points: null }, { value: 'Second option', points: null }],
+    responseScorePoints: multipleChoice?.hasChoiceScores ? '' : scoreDraft('response').points,
+    responseScoreInstructions: multipleChoice?.hasChoiceScores ? '' : scoreDraft('response').instructions,
+    codeScorePoints: scoreDraft('code').points,
+    codeScoreInstructions: scoreDraft('code').instructions,
+    outputScorePoints: scoreDraft('output').points,
+    outputScoreInstructions: scoreDraft('output').instructions,
   };
+}
+
+function getQuestionScoreBlocks(sourceText, block) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return [];
+
+  const lines = String(sourceText || '').split('\n');
+  const start = Math.max(0, Number(sourceMeta.questionLine) - 1);
+  const end = Math.max(start, Number(sourceMeta.endQuestionLine) - 1);
+  const scoreBlocks = [];
+  let current = null;
+
+  for (let index = start; index <= end; index += 1) {
+    const line = lines[index] ?? '';
+    const trimmed = line.trim();
+
+    if (current) {
+      current.lines.push(line);
+      if (trimmed === '\\endscore') {
+        current.closeLine = index + 1;
+        scoreBlocks.push(current);
+        current = null;
+      }
+      continue;
+    }
+
+    const match = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
+    if (match) {
+      const typeRaw = match[2].toLowerCase();
+      current = {
+        type: typeRaw,
+        points: Number.parseInt(match[1], 10),
+        openLine: index + 1,
+        closeLine: null,
+        lines: [line],
+      };
+    }
+  }
+
+  return scoreBlocks;
+}
+
+function applyQuestionScoreEditsToSource(sourceText, block, edits) {
+  const sourceMeta = block?.sourceMeta;
+  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
+
+  const lines = String(sourceText || '').split('\n');
+  const scoreBlocks = getQuestionScoreBlocks(sourceText, block);
+  const byType = new Map(scoreBlocks.map((scoreBlock) => [scoreBlock.type, scoreBlock]));
+  const replacementActions = [];
+  const insertionLines = [];
+
+  const bandSpecs = [
+    ['response', 'responseScorePoints', 'responseScoreInstructions'],
+    ['code', 'codeScorePoints', 'codeScoreInstructions'],
+    ['output', 'outputScorePoints', 'outputScoreInstructions'],
+  ];
+
+  for (const [type, pointsKey, instructionsKey] of bandSpecs) {
+    const existing = byType.get(type);
+    const points = Number.parseInt(edits?.[pointsKey], 10);
+    const instructions = String(edits?.[instructionsKey] || '').trim();
+    const shouldKeep = Number.isFinite(points) && points > 0;
+
+    if (existing) {
+      replacementActions.push({
+        start: existing.openLine - 1,
+        end: existing.closeLine - 1,
+        text: shouldKeep
+          ? [
+              `\\score{${points},${type}}`,
+              ...(instructions ? instructions.split('\n') : []),
+              '\\endscore',
+            ]
+          : [],
+      });
+      continue;
+    }
+
+    if (shouldKeep) {
+      insertionLines.push(
+        `\\score{${points},${type}}`,
+        ...(instructions ? instructions.split('\n') : []),
+        '\\endscore'
+      );
+    }
+  }
+
+  replacementActions
+    .sort((left, right) => right.start - left.start)
+    .forEach((action) => {
+      lines.splice(action.start, action.end - action.start + 1, ...action.text);
+    });
+
+  if (insertionLines.length > 0) {
+    const insertAt = Math.max(0, Number(sourceMeta.questionLine));
+    lines.splice(insertAt, 0, ...insertionLines);
+  }
+
+  return lines.join('\n');
 }
 
 function findSectionCommandBeforeLine(sourceText, lineNumber) {
@@ -548,6 +686,161 @@ function getStarterQuestionLines(questionType) {
   return starterQuestionTemplates[questionType] || starterQuestionTemplates.written;
 }
 
+// This is intentionally concrete rather than AI-generated.  It gives creators a
+// reliable starting point for testing every major lab building block, then lets
+// them replace the prompts with their own assignment.
+const labBoilerplateSource = [
+  '\\title{Programming Lab Boilerplate}',
+  '\\name{programming_lab_boilerplate}',
+  '\\mode{assignment}',
+  '\\studentlevel{Introductory programming}',
+  '\\activitycontext{Build a small program in milestones. Save and test your work as you go, then submit the complete lab once at the end. The scores shown after submission are preliminary until your instructor reviews them.}',
+  '\\aicodeguidance{Act as a lab coach. Help students plan, debug, and test their own solution. Do not write the complete final solution for them.}',
+  '',
+  '\\questiongroup{Lab goal and plan}',
+  '\\text{Goal: create a program that reads whole numbers, keeps the valid values, and prints their total and average.}',
+  '\\question{In your own words, describe the input, processing, and output your final program will need.}',
+  '\\textresponse{5}',
+  '\\sampleresponses{The program reads values, validates them, accumulates a total and count, then prints the total and average.}',
+  '\\feedbackprompt{Give constructive feedback on whether the student identified input, processing, and output.}',
+  '\\score{3,response}',
+  '3: Clearly describes all three stages.',
+  '2: Describes most stages.',
+  '1: Vague or incomplete plan.',
+  '0: No usable plan.',
+  '\\endscore',
+  '\\endquestion',
+  '',
+  '\\question{Which expression correctly tests whether value is at least zero?}',
+  '\\multiplechoice{}',
+  '\\choice{value = 0}{0}',
+  '\\choice{value >= 0}{2}',
+  '\\choice{value ==> 0}{0}',
+  '\\choice{value < 0}{0}',
+  '\\endmultiplechoice',
+  '\\feedbackprompt{Briefly explain why the selected comparison does or does not include zero.}',
+  '\\endquestion',
+  '\\endquestiongroup',
+  '',
+  '\\questiongroup{Build and test a component}',
+  '\\pythondisplay',
+  '# Example: a running total starts at zero',
+  'total = 0',
+  '\\endpythondisplay',
+  '\\question{Write a function named add_valid that returns the sum of the non-negative values in a list. Run several tests before moving on.}',
+  '\\python',
+  'def add_valid(values):',
+  '    # Replace this starter code.',
+  '    return 0',
+  '',
+  'print(add_valid([4, -1, 6]))  # expected: 10',
+  '\\endpython',
+  '\\sampleresponses{A function that loops through values, adds non-negative ones, and returns the sum.}',
+  '\\feedbackprompt{Check the submitted code for correct filtering, accumulation, and a useful test.}',
+  '\\score{6,code}',
+  '6: Correct component with a meaningful test.',
+  '3-5: Mostly correct but has a minor logic or test gap.',
+  '1-2: Some relevant code but does not solve the component.',
+  '0: Missing or unrelated.',
+  '\\endscore',
+  '\\endquestion',
+  '',
+  '\\question{Record two test cases for your function: one ordinary case and one edge case. Explain the expected result for each.}',
+  '\\table{Component test cases}',
+  '\\row Test input & Expected result & Why this test matters',
+  '\\row \\tresponse & \\tresponse & \\tresponse',
+  '\\row \\tresponse & \\tresponse & \\tresponse',
+  '\\endtable',
+  '\\sampleresponses{Includes an ordinary list and an edge case such as an empty list or all negative values.}',
+  '\\feedbackprompt{Assess whether the test cases are specific and include an edge case.}',
+  '\\score{3,response}',
+  '3: Two useful cases including an edge case.',
+  '2: Two cases with limited explanation.',
+  '1: One useful case.',
+  '0: Missing.',
+  '\\endscore',
+  '\\endquestion',
+  '\\endquestiongroup',
+  '',
+  '\\questiongroup{Files and larger-program options}',
+  '\\file{numbers.txt,readonly}',
+  '4',
+  '-1',
+  '6',
+  '\\endfile',
+  '\\file{notes.txt}',
+  '# Keep design notes or test results here.',
+  '\\endfile',
+  '\\question{Use the supplied numbers.txt data (or your own list) to write a complete Python program that reports the total and average of valid values.}',
+  '\\pythonremote',
+  '# You may read numbers.txt or use a list while developing.',
+  '# Print both a total and an average for the valid values.',
+  '\\endpythonremote',
+  '\\sampleresponses{A complete program that reads or defines values, ignores negatives, and prints total and average.}',
+  '\\feedbackprompt{Evaluate the complete solution, including handling of no valid values and evidence of testing.}',
+  '\\score{10,code}',
+  '10: Complete, correct, readable program with appropriate edge-case handling.',
+  '7-9: Largely correct with a minor issue.',
+  '3-6: Meaningful partial implementation.',
+  '0-2: Minimal or missing implementation.',
+  '\\endscore',
+  '\\endquestion',
+  '',
+  '\\question{Optional extension: implement the same calculation in C++.}',
+  '\\cpp',
+  '#include <iostream>',
+  'int main() {',
+  '  // Optional extension.',
+  '  return 0;',
+  '}',
+  '\\endcpp',
+  '\\sampleresponses{A C++ implementation that computes and prints the requested result.}',
+  '\\feedbackprompt{Award credit only for a working, tested C++ extension.}',
+  '\\score{2,code}',
+  '2: Working extension.',
+  '1: Meaningful start.',
+  '0: Not attempted or incorrect.',
+  '\\endscore',
+  '\\endquestion',
+  '',
+  '\\question{Optional visual extension: use Python Turtle to draw one square for each valid value.}',
+  '\\pythonturtle{600x300}',
+  'import turtle',
+  '',
+  '# Optional extension: draw a square for each valid value.',
+  '\\endpythonturtle',
+  '\\sampleresponses{A turtle program that uses a loop and produces a visible drawing.}',
+  '\\feedbackprompt{Award credit for a working turtle extension that meaningfully uses the lab data or logic.}',
+  '\\score{2,code}',
+  '2: Working, meaningful extension.',
+  '1: Meaningful start.',
+  '0: Not attempted or incorrect.',
+  '\\endscore',
+  '\\endquestion',
+  '\\endquestiongroup',
+  '',
+  '\\questiongroup{Reflection and final submission}',
+  '\\question{What test result gave you the most useful information while building this program, and what did you change because of it?}',
+  '\\textresponse{5}',
+  '\\ai{critique}',
+  '\\aititle{Lab Coach}',
+  '\\aiprompt{Ask for help evaluating a test case or explaining a bug you found.}',
+  '\\aiguardrail{Coach the student through debugging and testing without providing the final program.}',
+  '\\aicontext{current-question,current-code,student-response}',
+  '\\aiinput{4}',
+  '\\endai',
+  '\\sampleresponses{Names a concrete test, result, and revision or confirmation.}',
+  '\\feedbackprompt{Give concise feedback on the student reflection and use of testing evidence.}',
+  '\\score{3,response}',
+  '3: Specific evidence and clear reflection.',
+  '2: Some evidence but limited detail.',
+  '1: General reflection only.',
+  '0: Missing.',
+  '\\endscore',
+  '\\endquestion',
+  '\\endquestiongroup',
+].join('\n');
+
 function getQuestionSource(sourceText, block) {
   const sourceMeta = block?.sourceMeta;
   if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return '';
@@ -596,6 +889,7 @@ export default function CreatorWorkbenchPage() {
   const location = useLocation();
   const { user } = useUser();
   const isDemoCreator = new URLSearchParams(location.search).get('demo') === '1';
+  const isBlankCreate = new URLSearchParams(location.search).get('blank') === '1';
 
   const [classInfo, setClassInfo] = useState(null);
   const [activity, setActivity] = useState(null);
@@ -605,6 +899,23 @@ export default function CreatorWorkbenchPage() {
   }));
   const [advancedDraft, setAdvancedDraft] = useState(() => cloneEmptyAdvancedDraft());
   const [rawText, setRawText] = useState('');
+  const declaredSourceMode = useMemo(() => {
+    const match = String(rawText || '').match(/^\s*\\mode\{([^}]+)\}/mi);
+    return match ? String(match[1] || '').trim().toLowerCase() : '';
+  }, [rawText]);
+  const normalizedDraftMode = declaredSourceMode || String(draft.mode || '').trim().toLowerCase();
+  const isTestDraft = normalizedDraftMode === 'test';
+  const isAssignmentDraft = normalizedDraftMode === 'assignment';
+  const isSectionlessDraft = normalizedDraftMode === 'test' || normalizedDraftMode === 'assignment';
+  const currentModeLabel = isAssignmentDraft
+    ? 'Lab Assignment'
+    : isTestDraft
+      ? 'Test'
+      : normalizedDraftMode === 'playground'
+        ? 'Playground'
+        : normalizedDraftMode === 'demo'
+          ? 'Demo'
+          : 'Group Activity';
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
   const [fileContents, setFileContents] = useState({});
@@ -898,6 +1209,14 @@ export default function CreatorWorkbenchPage() {
     }
   }, [draft.selected_model, isDemoCreator]);
 
+  useEffect(() => {
+    if (isTestDraft && rightMode === 'sandbox') {
+      setRightMode('preview');
+    } else if (!isTestDraft && rightMode === 'test-run') {
+      setRightMode('preview');
+    }
+  }, [isTestDraft, rightMode]);
+
   const compileText = useCallback((sourceText) => {
     const parsed = parseActivityText(sourceText);
     setBlocks(parsed.blocks);
@@ -989,6 +1308,11 @@ export default function CreatorWorkbenchPage() {
           : String(sourceData?.text || activityData?.content_text || '');
 
         setActivity(activityData);
+        setDraft((previous) => ({
+          ...previous,
+          title: activityData?.title || previous.title,
+          mode: String(activityData?.mode || activityData?.activity_type || previous.mode || 'group').trim().toLowerCase(),
+        }));
         setRawText(text);
         compileText(text);
         await loadClassInfo(activityData.class_id);
@@ -1007,6 +1331,14 @@ export default function CreatorWorkbenchPage() {
     autoTimerRef.current = setTimeout(() => compileText(rawText), 250);
     return () => clearTimeout(autoTimerRef.current);
   }, [compileText, proposal, rawText, skulptLoaded]);
+
+  useEffect(() => {
+    if (!activity?.id || proposal) return;
+    if (rightMode !== 'preview') return;
+    if (isBlankCreate || !String(rawText || '').trim()) {
+      setRightMode('edit');
+    }
+  }, [activity?.id, isBlankCreate, proposal, rawText, rightMode]);
 
   useEffect(() => {
     if (!selectedQuestionBlock) {
@@ -1044,25 +1376,40 @@ export default function CreatorWorkbenchPage() {
   const handleDraftChange = (field, value) => {
     setDraft((prev) => {
       if (field === 'mode') {
-        return { ...prev, mode: value, major_sections: [...majorSectionOptions] };
+        const nextMode = String(value || '').trim().toLowerCase();
+        const nextIsSectionless = nextMode === 'test' || nextMode === 'assignment';
+        return {
+          ...prev,
+          mode: nextMode,
+          major_sections: nextIsSectionless ? [] : [...majorSectionOptions],
+        };
       }
       return { ...prev, [field]: value };
     });
 
     if (field === 'duration_minutes' || field === 'mode') {
-      setAdvancedDraft((prev) => prev.include_timing
-        ? {
-          ...prev,
-          timed_section_minutes: allocateTimedSectionMinutes(
-            field === 'mode' ? majorSectionOptions : draft.major_sections,
-            field === 'duration_minutes' ? value : draft.duration_minutes
-          ),
+      setAdvancedDraft((prev) => {
+        if (field === 'mode' && (String(value || '').trim().toLowerCase() === 'test' || String(value || '').trim().toLowerCase() === 'assignment')) {
+          return {
+            ...prev,
+            include_timing: false,
+          };
         }
-        : prev);
+        return prev.include_timing
+          ? {
+            ...prev,
+            timed_section_minutes: allocateTimedSectionMinutes(
+              field === 'mode' ? majorSectionOptions : draft.major_sections,
+              field === 'duration_minutes' ? value : draft.duration_minutes
+            ),
+          }
+          : prev;
+      });
     }
   };
 
   const toggleMajorSection = (sectionName) => {
+    if (isSectionlessDraft) return;
     const selected = new Set(draft.major_sections || []);
     if (selected.has(sectionName)) selected.delete(sectionName);
     else selected.add(sectionName);
@@ -1082,11 +1429,16 @@ export default function CreatorWorkbenchPage() {
       : prev);
   };
 
-  const createDraft = async () => {
+  const createDraft = async ({ useLabBoilerplate = false } = {}) => {
     setNotice('');
     setError('');
 
-    if (!draft.title.trim() || !draft.description.trim()) {
+    const draftTitle = draft.title.trim() || (useLabBoilerplate ? 'Programming Lab Boilerplate' : '');
+    const draftDescription = draft.description.trim() || (useLabBoilerplate
+      ? 'A comprehensive programming lab example with milestones, code, files, tests, feedback, and final submission.'
+      : '');
+
+    if (!draftTitle || !draftDescription) {
       setError('Enter a title and creator brief.');
       return;
     }
@@ -1097,7 +1449,7 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
-    if (!draft.major_sections?.length) {
+    if (!isSectionlessDraft && !draft.major_sections?.length) {
       setError('Select at least one section.');
       return;
     }
@@ -1108,7 +1460,7 @@ export default function CreatorWorkbenchPage() {
       return;
     }
 
-    const useTimedSections = advancedDraft.include_timing;
+    const useTimedSections = isSectionlessDraft ? false : advancedDraft.include_timing;
     const timedSections = useTimedSections
       ? draft.major_sections.map((title) => ({
         title,
@@ -1138,25 +1490,41 @@ export default function CreatorWorkbenchPage() {
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          title: draft.title.trim(),
+          title: draftTitle,
           duration_minutes: durationMinutes,
           mode: draft.mode,
           selected_model: draft.selected_model,
-          major_sections: draft.major_sections,
+          major_sections: isSectionlessDraft ? [] : draft.major_sections,
           use_timed_sections: useTimedSections,
-          timed_sections: timedSections,
+          timed_sections: isSectionlessDraft ? [] : timedSections,
           retries_required: retriesRequired,
-          description: appendAdvancedPrompt(draft.description, advancedPromptText),
+          description: appendAdvancedPrompt(draftDescription, advancedPromptText),
           createdBy: user?.id,
         }),
       });
       const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Failed to create draft.');
 
-      setActivity(data);
-      setRawText(data.content_text || '');
-      compileText(data.content_text || '');
-      setMessages([{ role: 'assistant', text: 'Draft created.' }]);
+      let sourceText = data.content_text || '';
+      if (useLabBoilerplate) {
+        const sourceRes = await fetch(`${API_BASE_URL}/api/activities/${data.id}/source`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ text: labBoilerplateSource }),
+        });
+        const sourceData = await sourceRes.json().catch(() => ({}));
+        if (!sourceRes.ok) throw new Error(sourceData?.error || 'The assignment draft was created, but the lab boilerplate could not be saved.');
+        sourceText = labBoilerplateSource;
+      }
+
+      setActivity({ ...data, content_text: sourceText });
+      if (useLabBoilerplate) {
+        setDraft((previous) => ({ ...previous, title: draftTitle, description: draftDescription }));
+      }
+      setRawText(sourceText);
+      compileText(sourceText);
+      setMessages([{ role: 'assistant', text: useLabBoilerplate ? 'Lab boilerplate created.' : 'Draft created.' }]);
       creatorTutorial.startAfterGenerate();
       if (data.generation_status === 'fallback') {
         setNotice(data.generation_error || 'A fallback draft was created.');
@@ -1168,6 +1536,71 @@ export default function CreatorWorkbenchPage() {
     } finally {
       setCreateBusy(false);
     }
+  };
+
+  const createBlankActivity = async () => {
+    setNotice('');
+    setError('');
+
+    const title = markupHeaderValue(draft.title);
+    if (!title) {
+      setError('Enter a title before creating a blank activity.');
+      return;
+    }
+
+    const mode = String(draft.mode || 'group').trim().toLowerCase() || 'group';
+    const baseName = slugifyActivityName(title) || 'untitled_activity';
+    const name = `${baseName}_${Date.now().toString(36)}`;
+    const sourceText = [
+      `\\title{${title}}`,
+      `\\name{${name}}`,
+      `\\mode{${mode}}`,
+      '',
+      '% Paste or write your activity markup below.',
+      '',
+    ].join('\n');
+
+    setCreateBusy(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name,
+          title,
+          source_type: 'local',
+          content_text: sourceText,
+          order_index: 0,
+          createdBy: user?.id,
+        }),
+      });
+      const data = await readJsonResponse(response);
+      if (!response.ok) throw new Error(data?.error || 'Failed to create blank activity.');
+
+      setActivity({ ...data, mode, content_text: sourceText });
+      setRawText(sourceText);
+      compileText(sourceText);
+      setMessages([{ role: 'assistant', text: 'Blank activity created without AI generation.' }]);
+      setRightMode('edit');
+      setNotice('Blank activity created. Paste your markup into Source, then click Save.');
+      navigate(`/creator/${data.id}?blank=1`, { replace: true });
+    } catch (err) {
+      console.error('Blank activity creation failed:', err);
+      setError(err?.message || String(err));
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+
+  const loadLabBoilerplate = () => {
+    if (proposal) return;
+    recordVisualEdit('loading lab boilerplate');
+    setRawText(labBoilerplateSource);
+    compileText(labBoilerplateSource);
+    setSandboxUrl('');
+    setRightMode('preview');
+    setNotice('Lab boilerplate loaded. Review it, then click Save to replace this draft.');
   };
 
   const saveSource = async (sourceText = rawText) => {
@@ -1291,9 +1724,35 @@ export default function CreatorWorkbenchPage() {
     }
   };
 
+  const openCreatorTestRun = async () => {
+    if (!activity?.id || proposal) return;
+    setSandboxBusy(true);
+    setError('');
+    try {
+      await saveSource(rawText);
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/sandbox-instance`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.instanceId) throw new Error(data?.error || 'Failed to open test run.');
+      setSandboxUrl(`${window.location.origin}/run/${data.instanceId}?mode=creator_test&embed=1&t=${Date.now()}`);
+      setRightMode('test-run');
+    } catch (err) {
+      console.error('Open creator test run failed:', err);
+      setError(err?.message || String(err));
+    } finally {
+      setSandboxBusy(false);
+    }
+  };
+
   const selectRightMode = (mode) => {
     if (mode === 'sandbox') {
       openSandbox();
+      return;
+    }
+    if (mode === 'test-run') {
+      openCreatorTestRun();
       return;
     }
     setRightMode(mode);
@@ -1317,10 +1776,15 @@ export default function CreatorWorkbenchPage() {
       refreshedQuestion || selectedQuestionBlock,
       questionInspectorDraft,
     );
-    if (nextText === rawText) return;
+    const nextTextWithRubricEdits = applyQuestionScoreEditsToSource(
+      nextText,
+      refreshedQuestion || selectedQuestionBlock,
+      questionInspectorDraft,
+    );
+    if (nextTextWithRubricEdits === rawText) return;
     recordVisualEdit('updating question settings');
-    setRawText(nextText);
-    compileText(nextText);
+    setRawText(nextTextWithRubricEdits);
+    compileText(nextTextWithRubricEdits);
     setNotice('Updated question settings in source.');
     setTimeout(() => setNotice(''), 1800);
   };
@@ -1721,7 +2185,7 @@ export default function CreatorWorkbenchPage() {
 
       <div className="d-flex align-items-center justify-content-between mb-2">
         <div>
-          <h3 className="mb-0">Create Activity</h3>
+          <h3 className="mb-0">{activity?.id ? `Edit: ${currentModeLabel}` : 'Create Activity'}</h3>
           <div className="text-muted small">
             {classInfo?.name || (effectiveClassId ? `Class ${effectiveClassId}` : 'New class activity')}
             {activity?.title ? ` · ${activity.title}` : ''}
@@ -1739,6 +2203,17 @@ export default function CreatorWorkbenchPage() {
 
       {notice ? <Alert variant="info" className="py-2 mb-2">{notice}</Alert> : null}
       {error ? <Alert variant="danger" className="py-2 mb-2">{error}</Alert> : null}
+      {activity?.id && (
+        <Alert variant={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} className="py-2 mb-2 d-flex align-items-center gap-2">
+          <Badge bg={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} text={isTestDraft ? 'dark' : undefined}>
+            CURRENT MODE
+          </Badge>
+          <strong>{currentModeLabel}</strong>
+          {isAssignmentDraft ? (
+            <span className="small">All milestones are visible; students save drafts and submit the lab once at the end.</span>
+          ) : null}
+        </Alert>
+      )}
 
       <div className="creator-shell">
         <section className="creator-left">
@@ -1749,7 +2224,14 @@ export default function CreatorWorkbenchPage() {
                 Advanced
               </Button>
             </div>
-            {activity?.id ? <Badge bg="success">Draft #{activity.id}</Badge> : <Badge bg="secondary">Setup</Badge>}
+            {activity?.id ? (
+              <div className="d-flex align-items-center gap-2">
+                <Badge bg={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} text={isTestDraft ? 'dark' : undefined}>
+                  {currentModeLabel}
+                </Badge>
+                <Badge bg="light" text="dark" className="border">Draft #{activity.id}</Badge>
+              </div>
+            ) : <Badge bg="secondary">Setup</Badge>}
           </div>
           <div className="creator-panel-body">
             {!activity?.id ? (
@@ -1781,9 +2263,14 @@ export default function CreatorWorkbenchPage() {
                       <Form.Label>Mode</Form.Label>
                       <Form.Select value={draft.mode} onChange={(event) => handleDraftChange('mode', event.target.value)}>
                         <option value="group">Group</option>
+                        <option value="playground">Playground</option>
                         <option value="demo">Demo</option>
                         <option value="test">Test</option>
+                        <option value="assignment">Assignment</option>
                       </Form.Select>
+                      <div className="text-muted small mt-1">
+                        Assignment mode is for project-style labs and does not require section structure.
+                      </div>
                     </Form.Group>
                   </div>
                 </div>
@@ -1797,68 +2284,72 @@ export default function CreatorWorkbenchPage() {
                   </Form.Select>
                 </Form.Group>
 
-                <Form.Group className="mb-3">
-                  <Form.Label>Sections</Form.Label>
-                  <div className="d-grid gap-1">
-                    {majorSectionOptions.map((sectionName) => (
-                      <Form.Check
-                        key={sectionName}
-                        type="checkbox"
-                        id={`creator-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
-                        label={sectionName}
-                        checked={draft.major_sections.includes(sectionName)}
-                        onChange={() => toggleMajorSection(sectionName)}
-                      />
-                    ))}
-                  </div>
-                </Form.Group>
-
-                <div className="border rounded p-2 mb-3">
-                  <Form.Check
-                    type="checkbox"
-                    id="creator-add-section-timers"
-                    label="Add timers to sections"
-                    checked={advancedDraft.include_timing}
-                    onChange={(event) => setAdvancedDraft((prev) => ({
-                      ...prev,
-                      include_timing: event.target.checked,
-                      timed_section_minutes: event.target.checked
-                        ? allocateTimedSectionMinutes(draft.major_sections, draft.duration_minutes)
-                        : prev.timed_section_minutes,
-                    }))}
-                  />
-                  <div className="text-muted small mt-1">
-                    Each timer is shared by the question groups in its section.
-                  </div>
-                  {advancedDraft.include_timing ? (
-                    <div className="d-grid gap-2 mt-2">
-                      {draft.major_sections.map((sectionName) => (
-                        <div className="d-flex align-items-center gap-2" key={sectionName}>
-                          <Form.Label className="mb-0 flex-grow-1" htmlFor={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}>
-                            {sectionName}
-                          </Form.Label>
-                          <Form.Control
-                            id={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
-                            type="number"
-                            min="1"
-                            step="1"
-                            aria-label={`${sectionName} minutes`}
-                            style={{ width: '5.5rem' }}
-                            value={advancedDraft.timed_section_minutes?.[sectionName] || ''}
-                            onChange={(event) => setAdvancedDraft((prev) => ({
-                              ...prev,
-                              timed_section_minutes: {
-                                ...prev.timed_section_minutes,
-                                [sectionName]: event.target.value,
-                              },
-                            }))}
+                {!isSectionlessDraft ? (
+                  <>
+                    <Form.Group className="mb-3">
+                      <Form.Label>Sections</Form.Label>
+                      <div className="d-grid gap-1">
+                        {majorSectionOptions.map((sectionName) => (
+                          <Form.Check
+                            key={sectionName}
+                            type="checkbox"
+                            id={`creator-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                            label={sectionName}
+                            checked={draft.major_sections.includes(sectionName)}
+                            onChange={() => toggleMajorSection(sectionName)}
                           />
-                          <span className="text-muted small">min</span>
+                        ))}
+                      </div>
+                    </Form.Group>
+
+                    <div className="border rounded p-2 mb-3">
+                      <Form.Check
+                        type="checkbox"
+                        id="creator-add-section-timers"
+                        label="Add timers to sections"
+                        checked={advancedDraft.include_timing}
+                        onChange={(event) => setAdvancedDraft((prev) => ({
+                          ...prev,
+                          include_timing: event.target.checked,
+                          timed_section_minutes: event.target.checked
+                            ? allocateTimedSectionMinutes(draft.major_sections, draft.duration_minutes)
+                            : prev.timed_section_minutes,
+                        }))}
+                      />
+                      <div className="text-muted small mt-1">
+                        Each timer is shared by the question groups in its section.
+                      </div>
+                      {advancedDraft.include_timing ? (
+                        <div className="d-grid gap-2 mt-2">
+                          {draft.major_sections.map((sectionName) => (
+                            <div className="d-flex align-items-center gap-2" key={sectionName}>
+                              <Form.Label className="mb-0 flex-grow-1" htmlFor={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}>
+                                {sectionName}
+                              </Form.Label>
+                              <Form.Control
+                                id={`create-timed-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                                type="number"
+                                min="1"
+                                step="1"
+                                aria-label={`${sectionName} minutes`}
+                                style={{ width: '5.5rem' }}
+                                value={advancedDraft.timed_section_minutes?.[sectionName] || ''}
+                                onChange={(event) => setAdvancedDraft((prev) => ({
+                                  ...prev,
+                                  timed_section_minutes: {
+                                    ...prev.timed_section_minutes,
+                                    [sectionName]: event.target.value,
+                                  },
+                                }))}
+                              />
+                              <span className="text-muted small">min</span>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      ) : null}
                     </div>
-                  ) : null}
-                </div>
+                  </>
+                ) : null}
 
                 <Form.Group className="mb-3" ref={tutorialRefs.brief}>
                   <Form.Label>Activity Description</Form.Label>
@@ -1870,10 +2361,30 @@ export default function CreatorWorkbenchPage() {
                   />
                 </Form.Group>
 
-                <Button variant="success" onClick={createDraft} disabled={createBusy || !classId}>
-                  {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <Stars className="me-2" />}
-                  Create Draft
-                </Button>
+                <div className="d-flex flex-wrap gap-2">
+                  <Button variant="success" onClick={() => createDraft()} disabled={createBusy || !classId}>
+                    {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <Stars className="me-2" />}
+                    Create Draft
+                  </Button>
+                  <Button variant="outline-primary" onClick={createBlankActivity} disabled={createBusy || !classId}>
+                    {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <PencilSquare className="me-2" />}
+                    Create Blank — No AI
+                  </Button>
+                  {isAssignmentDraft ? (
+                    <Button variant="outline-success" onClick={() => createDraft({ useLabBoilerplate: true })} disabled={createBusy || !classId}>
+                      {createBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <PlusLg className="me-2" />}
+                      Create Lab Boilerplate
+                    </Button>
+                  ) : null}
+                </div>
+                <div className="text-muted small mt-2">
+                  <strong>Create Blank — No AI</strong> creates a local activity immediately, then opens Source so you can paste markup. It does not send a generation request.
+                </div>
+                {isAssignmentDraft ? (
+                  <div className="text-muted small mt-2">
+                    This creates a ready-to-edit sample lab without requiring a title or AI brief. It includes every supported lab building block.
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="d-flex flex-column gap-3">
@@ -1959,14 +2470,27 @@ export default function CreatorWorkbenchPage() {
                 <Button variant={rightMode === 'edit' ? 'primary' : 'outline-primary'} onClick={() => selectRightMode('edit')}>
                   <PencilSquare className="me-1" /> Source
                 </Button>
-                <Button
-                  ref={tutorialRefs.sandbox}
-                  variant={rightMode === 'sandbox' ? 'primary' : 'outline-primary'}
-                  onClick={() => selectRightMode('sandbox')}
-                  disabled={!activity?.id || !!proposal || sandboxBusy}
-                >                  {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
-                  Sandbox
-                </Button>
+                {!isTestDraft ? (
+                  <Button
+                    ref={tutorialRefs.sandbox}
+                    variant={rightMode === 'sandbox' ? 'primary' : 'outline-primary'}
+                    onClick={() => selectRightMode('sandbox')}
+                    disabled={!activity?.id || !!proposal || sandboxBusy}
+                  >
+                    {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
+                    Sandbox
+                  </Button>
+                ) : null}
+                {isTestDraft ? (
+                  <Button
+                    variant={rightMode === 'test-run' ? 'primary' : 'outline-primary'}
+                    onClick={() => selectRightMode('test-run')}
+                    disabled={!activity?.id || !!proposal || sandboxBusy}
+                  >
+                    {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
+                    Test Run
+                  </Button>
+                ) : null}
               </ButtonGroup>
               <Button
                 size="sm"
@@ -1977,6 +2501,17 @@ export default function CreatorWorkbenchPage() {
               >
                 <ArrowCounterclockwise className="me-1" /> Undo
               </Button>
+              {isAssignmentDraft ? (
+                <Button
+                  size="sm"
+                  variant="outline-success"
+                  onClick={loadLabBoilerplate}
+                  disabled={!activity?.id || !!proposal}
+                  title="Replace the current source in the editor with the comprehensive lab example"
+                >
+                  <PlusLg className="me-1" /> Lab Boilerplate
+                </Button>
+              ) : null}
               {proposal ? <Badge bg="warning" text="dark">Proposal</Badge> : null}
               {activeIssues.length ? <Badge bg={activeIssues.some((issue) => issue.severity === 'error') ? 'danger' : 'warning'}>{activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</Badge> : <Badge bg="success">Clean</Badge>}
             </div>
@@ -2259,6 +2794,43 @@ export default function CreatorWorkbenchPage() {
                               {selectedQuestionBlock.label} · group {selectedQuestionBlock.groupId}
                             </div>
 
+                            <div className="d-flex flex-wrap gap-2 mb-3">
+                              <Button
+                                size="sm"
+                                variant="outline-success"
+                                disabled={!activity?.id || !!proposal || sandboxBusy}
+                                onClick={openCreatorTestRun}
+                              >
+                                {sandboxBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <PlayCircle className="me-1" />}
+                                Open Test Run
+                              </Button>
+                            </div>
+                            <div className="text-muted small mb-3">
+                              Opens a creator-only test run for this question so you can check grading behavior and refine the rubric below.
+                            </div>
+
+                            {selectedQuestionBlock?.scores ? (
+                              <div className="border rounded bg-light p-2 mb-3">
+                                <div className="fw-semibold small mb-1">Current scoring</div>
+                                <div className="d-flex flex-wrap gap-2 small">
+                                  {[
+                                    ['response', 'Written'],
+                                    ['code', 'Code'],
+                                    ['output', 'Output'],
+                                  ].map(([key, label]) => {
+                                    const score = selectedQuestionBlock?.scores?.[key];
+                                    if (!score || !Number.isFinite(Number(score.points))) return null;
+                                    const points = Number(score.points);
+                                    return (
+                                      <span key={`score-summary-${key}`} className="badge bg-light text-muted border">
+                                        {label}: {points} pt{points !== 1 ? 's' : ''}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            ) : null}
+
                             <Form.Group className="mb-3">
                               <Form.Label>Question Text</Form.Label>
                               <Form.Control
@@ -2312,6 +2884,50 @@ export default function CreatorWorkbenchPage() {
                               ) : null}
                             </Form.Group>
 
+                            <div className="border-top mt-3 pt-3 mb-3">
+                              <div className="fw-semibold mb-2">Scoring Rubric</div>
+                              <div className="text-muted small mb-3">
+                                These score bands are used when the question is graded in test mode. Edit them here to tune the grading for this question. Leave points blank or set them to 0 to remove a band.
+                              </div>
+
+                              {[
+                                ['response', 'Written response', 'responseScorePoints', 'responseScoreInstructions'],
+                                ['code', 'Code', 'codeScorePoints', 'codeScoreInstructions'],
+                                ['output', 'Output', 'outputScorePoints', 'outputScoreInstructions'],
+                              ].map(([type, label, pointsKey, instructionsKey]) => (
+                                <div key={`rubric-${type}`} className="border rounded p-2 mb-2">
+                                  <div className="fw-semibold mb-2">{label}</div>
+                                  <Form.Group className="mb-2">
+                                    <Form.Label className="small mb-1">Points</Form.Label>
+                                    <Form.Control
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      value={questionInspectorDraft?.[pointsKey] ?? ''}
+                                      disabled={!questionInspectorDraft || !!proposal}
+                                      onChange={(event) => setQuestionInspectorDraft((prev) => ({
+                                        ...(prev || {}),
+                                        [pointsKey]: event.target.value,
+                                      }))}
+                                    />
+                                  </Form.Group>
+                                  <Form.Group>
+                                    <Form.Label className="small mb-1">Rubric notes</Form.Label>
+                                    <Form.Control
+                                      as="textarea"
+                                      rows={2}
+                                      value={questionInspectorDraft?.[instructionsKey] || ''}
+                                      disabled={!questionInspectorDraft || !!proposal}
+                                      onChange={(event) => setQuestionInspectorDraft((prev) => ({
+                                        ...(prev || {}),
+                                        [instructionsKey]: event.target.value,
+                                      }))}
+                                    />
+                                  </Form.Group>
+                                </div>
+                              ))}
+                            </div>
+
                             <Form.Group className="mb-3">
                               <Form.Check
                                 type="switch"
@@ -2333,7 +2949,7 @@ export default function CreatorWorkbenchPage() {
                             {questionInspectorDraft?.multipleChoiceEnabled ? (
                               <div className="border rounded p-2 mb-3 bg-light">
                                 <Form.Group className="mb-2">
-                                  <Form.Label>Correct Answer <span className="text-muted small">(optional for a survey)</span></Form.Label>
+                                  <Form.Label>Legacy Answer Key <span className="text-muted small">(optional; leave blank for surveys or choice-level scoring)</span></Form.Label>
                                   <Form.Control
                                     value={questionInspectorDraft?.multipleChoiceAnswer || ''}
                                     disabled={!!proposal}
@@ -2347,12 +2963,31 @@ export default function CreatorWorkbenchPage() {
                                 {(questionInspectorDraft?.multipleChoiceChoices || []).map((choice, index) => (
                                   <div className="d-flex gap-2 mb-2" key={`multiple-choice-option-${index}`}>
                                     <Form.Control
-                                      value={choice}
+                                      value={choice?.value ?? choice ?? ''}
                                       aria-label={`Choice ${index + 1}`}
                                       disabled={!!proposal}
                                       onChange={(event) => setQuestionInspectorDraft((prev) => {
                                         const choices = [...(prev?.multipleChoiceChoices || [])];
-                                        choices[index] = event.target.value;
+                                        choices[index] = { ...(typeof choices[index] === 'object' ? choices[index] : {}), value: event.target.value };
+                                        return { ...(prev || {}), multipleChoiceChoices: choices };
+                                      })}
+                                    />
+                                    <Form.Control
+                                      type="number"
+                                      min="0"
+                                      step="1"
+                                      placeholder="Survey"
+                                      value={choice?.points ?? ''}
+                                      aria-label={`Points for choice ${index + 1}`}
+                                      disabled={!!proposal}
+                                      style={{ maxWidth: '6.5rem' }}
+                                      onChange={(event) => setQuestionInspectorDraft((prev) => {
+                                        const choices = [...(prev?.multipleChoiceChoices || [])];
+                                        const rawPoints = event.target.value;
+                                        choices[index] = {
+                                          ...(typeof choices[index] === 'object' ? choices[index] : { value: choices[index] }),
+                                          points: rawPoints === '' ? null : Number.parseInt(rawPoints, 10),
+                                        };
                                         return { ...(prev || {}), multipleChoiceChoices: choices };
                                       })}
                                     />
@@ -2376,7 +3011,7 @@ export default function CreatorWorkbenchPage() {
                                   disabled={!!proposal}
                                   onClick={() => setQuestionInspectorDraft((prev) => ({
                                     ...(prev || {}),
-                                    multipleChoiceChoices: [...(prev?.multipleChoiceChoices || []), `Option ${(prev?.multipleChoiceChoices?.length || 0) + 1}`],
+                                    multipleChoiceChoices: [...(prev?.multipleChoiceChoices || []), { value: `Option ${(prev?.multipleChoiceChoices?.length || 0) + 1}`, points: null }],
                                   }))}
                                 >
                                   <PlusLg className="me-1" /> Add Choice
@@ -2386,6 +3021,9 @@ export default function CreatorWorkbenchPage() {
                                     {multipleChoiceValidation.errors.map((message) => <div key={message}>{message}</div>)}
                                   </div>
                                 ) : null}
+                                <div className="text-muted small mt-2">
+                                  Leave every points field blank for a survey. To self-score a test question, give every choice a whole-number point value; partial credit is supported.
+                                </div>
                               </div>
                             ) : null}
 
@@ -2584,11 +3222,15 @@ export default function CreatorWorkbenchPage() {
               </div>
             ) : null}
 
-            {rightMode === 'sandbox' ? (
+            {rightMode === 'sandbox' || rightMode === 'test-run' ? (
               sandboxUrl ? (
-                <iframe title="Creator sandbox" className="creator-sandbox-frame" src={sandboxUrl} />
+                <iframe
+                  title={rightMode === 'test-run' ? 'Creator test run' : 'Creator sandbox'}
+                  className="creator-sandbox-frame"
+                  src={sandboxUrl}
+                />
               ) : (
-                <div className="p-3"><Alert variant="secondary">Sandbox is not open.</Alert></div>
+                <div className="p-3"><Alert variant="secondary">{rightMode === 'test-run' ? 'Test run is not open.' : 'Sandbox is not open.'}</Alert></div>
               )
             ) : null}
           </div>

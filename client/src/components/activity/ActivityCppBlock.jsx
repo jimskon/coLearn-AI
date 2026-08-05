@@ -16,6 +16,7 @@ export default function ActivityCppBlock({
   onCodeChange,
   timeLimit = 50000,        // currently unused but kept for API compatibility
   editable = true,
+  displayOnly = false,
   blockIndex = 0,
   localOnly = false,       // if true, don't send files / remote sync
   codeFeedbackShown = {},
@@ -619,6 +620,34 @@ export default function ActivityCppBlock({
       }}
     />
   );
+
+  if (displayOnly) {
+    return (
+      <div className="mb-4">
+        <div style={styles.editorWrap}>
+          <pre ref={gutterRef} style={styles.gutter} aria-hidden="true">
+            {lineNumbers}
+          </pre>
+          <div
+            ref={codeScrollRef}
+            style={styles.codeView}
+            onScroll={onCodeViewScroll}
+          >
+            <pre style={styles.codePre}>
+              <code
+                id={codeId}
+                ref={codeRef}
+                className="language-cpp"
+                style={styles.codeTag}
+              >
+                {code}
+              </code>
+            </pre>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const editorSection = (
     <>

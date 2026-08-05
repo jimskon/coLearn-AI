@@ -366,6 +366,41 @@ test('class activity routes can create a local stored activity', async () => {
   assert.equal(row.sheet_url, null);
 });
 
+test('class activity routes can create an empty local activity shell', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const activityName = uniqueName('blank-activity').toLowerCase();
+
+  const create = await requestJson(`/api/classes/${classId}/activities`, {
+    method: 'POST',
+    body: {
+      name: activityName,
+      title: 'Blank Activity',
+      source_type: 'local',
+      content_text: '',
+      order_index: 2,
+      createdBy: creatorId,
+    },
+  });
+
+  assert.equal(create.status, 201);
+  assert.equal(create.body.name, activityName);
+  assert.equal(create.body.title, 'Blank Activity');
+  assert.equal(create.body.source_type, 'local');
+  assert.equal(create.body.content_text, '');
+  remember('activities', create.body.id);
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text
+       FROM pogil_activities
+      WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(row.source_type, 'local');
+  assert.equal(row.content_text, '');
+});
+
 test('creator draft route creates a local draft from the template and class metadata', async () => {
   await ensureSchema();
   const creatorId = await createUser('creator');
@@ -454,6 +489,144 @@ test('creator draft route creates a local draft from the template and class meta
     assert.equal(row.source_type, 'local');
     assert.equal(row.is_test, 0);
     assert.match(row.content_text, /What do you predict insertion sort will do first\?/);
+  } finally {
+    activityCreator.generateActivityDraft = originalGenerator;
+  }
+});
+
+test('creator draft route creates a test draft without section requirements', async () => {
+  await ensureSchema();
+  const creatorId = await createUser('creator');
+  const className = uniqueName('CreatorTestClass');
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, level, topic_domain, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+    [className, 'This class focuses on assessment only.', 'First-year college', 'Computer Science', creatorId]
+  );
+  const classId = remember('classes', classResult.insertId);
+
+  const originalGenerator = activityCreator.generateActivityDraft;
+  let capturedInput = null;
+  activityCreator.generateActivityDraft = async (input) => {
+    capturedInput = input;
+    return {
+      text: [
+        '\\title{Final Exam}',
+        '\\mode{test}',
+        '\\studentlevel{First-year college}',
+        '\\activitycontext{Computer Science}',
+        '\\retries{0}',
+        '\\questiongroup{Exam Questions}',
+        '\\question{What does the program print?}',
+        '\\textresponse{3}',
+        '\\sampleresponses{It prints a greeting.}',
+        '\\feedbackprompt{Explain the output clearly.}',
+        '\\endquestion',
+        '\\endquestiongroup',
+      ].join('\n'),
+      generation_status: 'generated',
+      generation_error: null,
+    };
+  };
+
+  try {
+    const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
+      method: 'POST',
+      body: {
+        title: 'Final Exam',
+        duration_minutes: 60,
+        mode: 'test',
+        description: 'Create a full test without section structure.',
+        selected_model: 'gpt-5-mini',
+        major_sections: [],
+        use_timed_sections: false,
+        timed_sections: [],
+        retries_required: 0,
+        createdBy: creatorId,
+      },
+    });
+
+    assert.equal(create.status, 201);
+    assert.equal(create.body.title, 'Final Exam');
+    assert.equal(create.body.mode, 'test');
+    assert.deepEqual(create.body.major_sections, []);
+    assert.equal(create.body.use_timed_sections, false);
+    assert.deepEqual(create.body.timed_sections, []);
+    assert.equal(create.body.retries_required, 0);
+    assert.deepEqual(capturedInput?.majorSections, []);
+    assert.deepEqual(capturedInput?.timedSections, []);
+    assert.match(create.body.content_text, /\\mode\{test\}/);
+    assert.doesNotMatch(create.body.content_text, /\\section\{/);
+    remember('activities', create.body.id);
+  } finally {
+    activityCreator.generateActivityDraft = originalGenerator;
+  }
+});
+
+test('creator draft route creates an assignment draft without section requirements', async () => {
+  await ensureSchema();
+  const creatorId = await createUser('creator');
+  const className = uniqueName('CreatorAssignmentClass');
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, level, topic_domain, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+    [className, 'This class focuses on lab assignments.', 'First-year college', 'Computer Science', creatorId]
+  );
+  const classId = remember('classes', classResult.insertId);
+
+  const originalGenerator = activityCreator.generateActivityDraft;
+  let capturedInput = null;
+  activityCreator.generateActivityDraft = async (input) => {
+    capturedInput = input;
+    return {
+      text: [
+        '\\title{Lab Project}',
+        '\\mode{assignment}',
+        '\\studentlevel{First-year college}',
+        '\\activitycontext{Computer Science}',
+        '\\retries{2}',
+        '\\questiongroup{Project Goal}',
+        '\\question{Describe the first milestone you will complete.}',
+        '\\textresponse{3}',
+        '\\sampleresponses{Describe a concrete first step.}',
+        '\\feedbackprompt{Keep the answer tied to an actual project milestone.}',
+        '\\endquestion',
+        '\\endquestiongroup',
+      ].join('\n'),
+      generation_status: 'generated',
+      generation_error: null,
+    };
+  };
+
+  try {
+    const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
+      method: 'POST',
+      body: {
+        title: 'Lab Project',
+        duration_minutes: 90,
+        mode: 'assignment',
+        description: 'Create a project-style lab assignment.',
+        selected_model: 'gpt-5-mini',
+        major_sections: [],
+        use_timed_sections: false,
+        timed_sections: [],
+        retries_required: 2,
+        createdBy: creatorId,
+      },
+    });
+
+    assert.equal(create.status, 201);
+    assert.equal(create.body.title, 'Lab Project');
+    assert.equal(create.body.mode, 'assignment');
+    assert.deepEqual(create.body.major_sections, []);
+    assert.equal(create.body.use_timed_sections, false);
+    assert.deepEqual(create.body.timed_sections, []);
+    assert.equal(create.body.retries_required, 2);
+    assert.deepEqual(capturedInput?.majorSections, []);
+    assert.deepEqual(capturedInput?.timedSections, []);
+    assert.match(create.body.content_text, /\\mode\{assignment\}/);
+    assert.doesNotMatch(create.body.content_text, /\\section\{/);
+    remember('activities', create.body.id);
   } finally {
     activityCreator.generateActivityDraft = originalGenerator;
   }

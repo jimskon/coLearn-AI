@@ -5,6 +5,7 @@ const { authorize } = require('../utils/googleAuth');
 const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
 const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
+const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
@@ -38,7 +39,30 @@ function normalizeActiveRotationMode(raw) {
   return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
 }
 
+function normalizeScoreBands(scores = {}) {
+  return {
+    code: scores.code || null,
+    output: scores.output || null,
+    response: scores.response || null,
+  };
+}
+
 const PRESENCE_WINDOW_SEC = 120;
+
+async function tableHasColumn(conn, tableName, columnName) {
+  const [rows] = await conn.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+      LIMIT 1`,
+    [tableName, columnName],
+  );
+  return rows.length > 0;
+}
+
+async function deleteInstanceRowsIfPresent(conn, tableName, columnName, instanceId) {
+  if (!(await tableHasColumn(conn, tableName, columnName))) return;
+  await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} = ?`, [instanceId]);
+}
 
 function countQuestionGroups(lines = []) {
   const count = (Array.isArray(lines) ? lines : [])
@@ -60,13 +84,19 @@ function parseTestQuestionsFromLines(lines) {
           .map((choice) => ({
             value: String(choice?.value ?? '').trim(),
             content: String(choice?.content ?? '').trim(),
+            points: Number.isInteger(choice?.points) ? choice.points : null,
           }))
           .filter((choice) => !!choice.value)
       : [];
 
+    const hasChoiceScores = choices.some((choice) => choice.points !== null);
     currentQuestion.multipleChoice = {
       correctAnswer,
       choices,
+      hasChoiceScores,
+      maxChoicePoints: hasChoiceScores
+        ? Math.max(0, ...choices.map((choice) => Number(choice.points) || 0))
+        : 0,
     };
     currentMultipleChoice = null;
   };
@@ -75,6 +105,11 @@ function parseTestQuestionsFromLines(lines) {
     if (!currentQuestion) return;
     if (currentMultipleChoice) finishMultipleChoice();
     currentQuestion.questionText = String(currentQuestion.questionText || '').trim();
+    if (currentQuestion.multipleChoice?.hasChoiceScores && !currentQuestion.scores?.response) {
+      currentQuestion.scores.response = {
+        points: currentQuestion.multipleChoice.maxChoicePoints,
+      };
+    }
     questions.push(currentQuestion);
     currentQuestion = null;
   };
@@ -113,11 +148,12 @@ function parseTestQuestionsFromLines(lines) {
         continue;
       }
 
-      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}\s*$/);
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}(?:\\?\{(\d+)\})?\s*$/);
       if (choiceMatch) {
         currentMultipleChoice.choices.push({
           value: String(choiceMatch[1] || '').trim(),
           content: String(choiceMatch[1] || '').trim(),
+          points: choiceMatch[2] === undefined ? null : Number.parseInt(choiceMatch[2], 10),
         });
       }
       continue;
@@ -484,6 +520,73 @@ async function clearResponsesForInstance(req, res) {
   }
 }
 
+// Permanently remove one activity instance and all of its dependent work.
+// This intentionally supports deleting submitted attempts so an instructor can
+// correct a roster/setup mistake without manually clearing several tables first.
+async function deleteActivityInstance(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  if (!instanceId) return res.status(400).json({ error: 'Bad instance id' });
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[instance]] = await conn.query(
+      'SELECT id, activity_id, course_id FROM activity_instances WHERE id = ? FOR UPDATE',
+      [instanceId],
+    );
+    if (!instance) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Activity instance not found' });
+    }
+
+    const responseIds = (await conn.query(
+      'SELECT id FROM responses WHERE activity_instance_id = ?',
+      [instanceId],
+    ))[0].map((row) => Number(row.id)).filter(Number.isFinite);
+
+    // Some installations have additional audit/feedback tables while others do
+    // not. Delete from every known dependent table when present.
+    for (const [tableName, columnName] of [
+      ['activity_heartbeats', 'activity_instance_id'],
+      ['audit_log', 'activity_instance_id'],
+      ['event_log', 'activity_instance_id'],
+      ['response_drafts', 'activity_instance_id'],
+      ['followups', 'activity_instance_id'],
+      ['feedback', 'activity_instance_id'],
+    ]) {
+      await deleteInstanceRowsIfPresent(conn, tableName, columnName, instanceId);
+    }
+
+    if (responseIds.length) {
+      for (const [tableName, columnName] of [
+        ['followups', 'response_id'],
+        ['feedback', 'response_id'],
+      ]) {
+        if (await tableHasColumn(conn, tableName, columnName)) {
+          await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} IN (?)`, [responseIds]);
+        }
+      }
+    }
+
+    await conn.query('DELETE FROM responses WHERE activity_instance_id = ?', [instanceId]);
+    await conn.query('DELETE FROM group_members WHERE activity_instance_id = ?', [instanceId]);
+    await conn.query('DELETE FROM activity_instances WHERE id = ?', [instanceId]);
+    await conn.commit();
+
+    global.emitInstanceState?.(instanceId, { deleted: true });
+    return res.json({ ok: true, deletedInstanceId: instanceId });
+  } catch (err) {
+    try { await conn.rollback(); } catch { /* no-op */ }
+    console.error('deleteActivityInstance failed:', err);
+    const detail = err?.code
+      ? `${err.code}: ${err.message}`
+      : (err?.message || 'Unknown database error');
+    return res.status(500).json({ error: `Could not delete activity instance (${detail})` });
+  } finally {
+    conn.release();
+  }
+}
+
 
 async function getParsedActivityDoc(req, res) {
   const { instanceId } = req.params;
@@ -568,8 +671,8 @@ async function ensureDemoInstance(req, res) {
     }
 
     const activityType = await inferActivityTypeFromActivity(activityRow);
-    if (activityType !== 'demo') {
-      return res.status(400).json({ error: 'This activity is not a demo.' });
+    if (activityType !== 'demo' && activityType !== 'playground') {
+      return res.status(400).json({ error: 'This activity is not a demo or playground.' });
     }
 
     if (userRole === 'student') {
@@ -783,6 +886,11 @@ async function getActivityInstanceById(req, res) {
          ai.test_duration_minutes,
          ai.test_reopen_until,
          ai.submitted_at,
+         ai.graded_at,
+         ai.review_complete,
+         ai.reviewed_at,
+         ai.points_earned,
+         ai.points_possible,
          ai.hidden,
          a.title       AS title,
          a.name        AS activity_name,
@@ -2186,46 +2294,6 @@ async function reopenInstance(req, res) {
   }
 }
 
-// Helper: parse score specs from either style:
-//   \score{10,code} or \score{6,response}
-//   \score{code=4,output=2,response=4}
-function parseScoreSpec(specRaw) {
-  const spec = String(specRaw || '').trim();
-  const out = {};
-
-  // style A: "code=4,output=2,response=4"
-  if (spec.includes('=')) {
-    for (const part of spec.split(/[;,]/)) {
-      const [kRaw, vRaw] = part.split('=');
-      if (!kRaw || !vRaw) continue;
-      const k = kRaw.trim().toLowerCase();
-      const v = Number(String(vRaw).trim());
-      if (!Number.isFinite(v)) continue;
-
-      if (k === 'code' || k === 'codes') out.code = v;
-      else if (k === 'output' || k === 'run') out.output = v;
-      else if (k === 'response') out.response = v;
-    }
-    return out;
-  }
-
-  // style B: "10,code" (or "6,response")
-  // allow whitespace: "10, code"
-  const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length >= 2) {
-    const pts = Number(parts[0]);
-    const bucket = parts[1].toLowerCase();
-
-    if (Number.isFinite(pts)) {
-      if (bucket === 'code') out.code = pts;
-      else if (bucket === 'output' || bucket === 'run') out.output = pts;
-      else if (bucket === 'response') out.response = pts;
-    }
-  }
-
-  return out;
-}
-
 // Helper: flatten Google doc into trimmed lines (same as you already do)
 async function loadTestQuestionsForInstance(instanceId) {
   const [[row]] = await db.query(
@@ -2419,7 +2487,7 @@ async function submitTest(req, res) {
       }
 
       const text = q.questionText || q.text || '';
-      const scores = q.scores || {};
+      const scores = normalizeScoreBands(q.scores || {});
       const sourceQuestion = parsedQuestions[index] || {};
       const multipleChoice = sourceQuestion.multipleChoice || null;
       const isMultipleChoice = Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
@@ -2545,14 +2613,22 @@ async function submitTest(req, res) {
 
       if (isMultipleChoice) {
         if (maxRespPts > 0) {
-          const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
-          if (!correctAnswer) {
-            responseScore = selectedChoice ? maxRespPts : 0;
-            responseFeedback = '';
+          if (multipleChoice?.hasChoiceScores) {
+            const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
+            responseScore = Number(selected?.points || 0);
+            responseFeedback = selected
+              ? `Selected answer earned ${responseScore}/${maxRespPts} points.`
+              : 'No answer was selected.';
           } else {
-            const isCorrect = selectedChoice === correctAnswer;
-            responseScore = isCorrect ? maxRespPts : 0;
-            responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+            const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+            if (!correctAnswer) {
+              responseScore = 0;
+              responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
+            } else {
+              const isCorrect = selectedChoice === correctAnswer;
+              responseScore = isCorrect ? maxRespPts : 0;
+              responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+            }
           }
         } else {
           responseScore = 0;
@@ -2885,6 +2961,40 @@ async function recomputeTestTotals(req, res) {
   }
 }
 
+async function markTestReviewed(req, res) {
+  const { instanceId } = req.params;
+  const role = req.user?.role;
+  if (role !== 'instructor' && role !== 'root' && role !== 'creator') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  try {
+    const [[instance]] = await db.query(
+      `SELECT submitted_at FROM activity_instances WHERE id = ?`,
+      [instanceId],
+    );
+    if (!instance) return res.status(404).json({ error: 'Activity instance not found' });
+    if (!instance.submitted_at) return res.status(400).json({ error: 'A test must be submitted before it can be reviewed.' });
+
+    await db.query(
+      `UPDATE activity_instances
+       SET review_complete = 1,
+           reviewed_at = UTC_TIMESTAMP()
+       WHERE id = ?`,
+      [instanceId],
+    );
+
+    global.emitInstanceState?.(Number(instanceId), {
+      review_complete: 1,
+      reviewed_at: toDbNowString(),
+    });
+    return res.json({ ok: true, review_complete: 1 });
+  } catch (err) {
+    console.error('markTestReviewed failed:', err);
+    return res.status(500).json({ error: 'Could not mark this test as reviewed.' });
+  }
+}
+
 async function getInstanceResponseHistory(req, res) {
   const { instanceId } = req.params;
 
@@ -2915,6 +3025,7 @@ async function getInstanceResponseHistory(req, res) {
 // Export it as part of the module
 module.exports = {
   clearResponsesForInstance,
+  deleteActivityInstance,
   getParsedActivityDoc,
   createActivityInstance,
   ensureDemoInstance,
@@ -2937,5 +3048,7 @@ module.exports = {
   submitTest,
   updateTestSettings,
   recomputeTestTotals,
+  markTestReviewed,
   getInstanceResponseHistory,
+  parseScoreSpec,
 };

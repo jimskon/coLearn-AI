@@ -312,7 +312,7 @@ async function smartAddStudent(req, res) {
     let cleanRole = null;
 
     if (testMode) {
-      // TEST: always create a brand-new instance (group of 1)
+      // Tests always receive a private instance with no role.
       group = await createNewTestInstance(conn, activityId, courseId);
     } else {
       if (demoCourse) {

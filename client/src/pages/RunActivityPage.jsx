@@ -12,6 +12,10 @@ import { isSurveyMultipleChoice } from '../utils/multipleChoice';
 import { renderBlocks } from '../utils/parseSheet';
 import { parseUtcDbDatetime } from '../utils/time';
 import { normalizeRunActivityMode } from './run-activity/modes';
+import {
+  shouldHideStudentTestSections,
+  shouldSuppressStudentTestFeedbackUi,
+} from './run-activity/testModeUi';
 import useRunModePolicy from './run-activity/useRunModePolicy';
 import useRunActivityData from './run-activity/useRunActivityData';
 import useRunActivitySync from './run-activity/useRunActivitySync';
@@ -337,6 +341,10 @@ export default function RunActivityPage({
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
+  const isAssignmentMode = activityMode === 'assignment';
+  const [gradingQuestionQid, setGradingQuestionQid] = useState(null);
+  const [gradingAllQuestions, setGradingAllQuestions] = useState(false);
+  const [questionGradePreviews, setQuestionGradePreviews] = useState({});
 
   const [groups, setGroups] = useState([]);
   const [activeStudentName, setActiveStudentName] = useState('');
@@ -382,6 +390,15 @@ export default function RunActivityPage({
   const isLockedFU = (qid) => qidsNoFURef.current?.has(qid);
 
   const currentTimedSection = useMemo(() => {
+    const isTestStyleActivity =
+      activityMode === 'test' ||
+      Number(activity?.is_test) === 1 ||
+      (
+        activity?.test_start_at &&
+        Number(activity?.test_duration_minutes) > 0
+      );
+
+    if (isTestStyleActivity) return null;
     if (!Array.isArray(groups) || currentGroupIndex >= groups.length) return null;
 
     const group = groups[currentGroupIndex];
@@ -392,7 +409,7 @@ export default function RunActivityPage({
       key: section.key,
       minutes: Number(section.minutes),
     };
-  }, [groups, currentGroupIndex]);
+  }, [activity?.is_test, activity?.test_duration_minutes, activity?.test_start_at, activityMode, groups, currentGroupIndex]);
 
   const sectionTimer = useMemo(() => {
     const startedAt = activity?.section_timer_started_at
@@ -495,6 +512,7 @@ export default function RunActivityPage({
 
 
   const isTestMode = useMemo(() => {
+    if (requestedMode === 'creator_test') return true;
     if (activityMode === 'test') return true;
 
     // Primary: any instance with a time window is a test
@@ -519,7 +537,7 @@ export default function RunActivityPage({
           Object.keys(b.scores).length > 0
       )
     );
-  }, [activityMode, activity, groups]);
+  }, [requestedMode, activityMode, activity, groups]);
   // ✅ Non-legacy test if its test_start_at is on/after 2026-01-01 UTC
   const isNonLegacyTest = useMemo(() => {
     if (!isTestMode) return false;
@@ -551,6 +569,8 @@ export default function RunActivityPage({
   const runMode = normalizeRunActivityMode(requestedMode, { user });
   const {
     isSandbox,
+    isCreatorSandbox,
+    isCreatorTestRun,
     isInstructor,
     isStudent,
     isActive,
@@ -563,12 +583,15 @@ export default function RunActivityPage({
     canEditAnswers,
     canSubmitGroup,
     canSubmitTest,
+    canSubmitAssignment,
     canRunAI,
     canPersistDrafts,
     canPersistSubmissions,
     canPersistAIResults,
     canRegradeTests,
     canSaveInstructorScores,
+    canGradeQuestionPreview,
+    canGradeAllQuestions,
     canRefreshInstanceMetadata,
     loadPersistedResponses,
   } = useRunModePolicy({
@@ -578,6 +601,7 @@ export default function RunActivityPage({
     activity,
     isPlaygroundMode,
     isTestMode,
+    isAssignmentMode,
   });
 
   const {
@@ -652,6 +676,7 @@ export default function RunActivityPage({
     loadingRef,
     stripHtml,
     isNoAI,
+    isTestMode,
   });
 
   useEffect(() => {
@@ -759,8 +784,19 @@ export default function RunActivityPage({
 
   // ✅ NEW: overall totals useMemo
   const overallTestTotals = useMemo(() => {
-    if (!isTestMode || !groups || groups.length === 0) {
+    if ((!isTestMode && !isAssignmentMode) || !groups || groups.length === 0) {
       return { earned: 0, max: 0 };
+    }
+
+    const storedEarned = Number(activity?.points_earned);
+    const storedMax = Number(activity?.points_possible);
+    if (
+      !!activity?.submitted_at &&
+      Number.isFinite(storedEarned) &&
+      Number.isFinite(storedMax) &&
+      storedMax > 0
+    ) {
+      return { earned: storedEarned, max: storedMax };
     }
 
     let earned = 0;
@@ -777,7 +813,7 @@ export default function RunActivityPage({
       }
     }
     return { earned, max };
-  }, [isTestMode, groups, existingAnswers]);
+  }, [isTestMode, isAssignmentMode, groups, existingAnswers, activity?.submitted_at, activity?.points_earned, activity?.points_possible]);
 
   useEffect(() => {
     if (!DEBUG_FILES) return;
@@ -833,6 +869,88 @@ export default function RunActivityPage({
       }
     }
     return null;
+  }
+
+  function buildPreviewRubric(block, payload) {
+    const hasExplicitRubric = block?.scores && Object.keys(block.scores).length > 0;
+    if (hasExplicitRubric) {
+      return { scores: block.scores, inferred: false };
+    }
+
+    const scores = {};
+    const addBand = (key, points, instructionsRaw) => {
+      scores[key] = {
+        points,
+        instructionsRaw,
+        instructionsHtml: instructionsRaw,
+      };
+    };
+
+    const responseText = String(payload?.responseText || '').trim();
+    const outputText = String(payload?.outputText || '').trim();
+    const hasCode = Array.isArray(payload?.codeCells) && payload.codeCells.length > 0;
+    const hasWrittenResponse = !!block?.hasTextResponse || responseText.length > 0 || !!block?.multipleChoice;
+
+    if (hasCode) {
+      addBand('code', 1, 'Judge whether the submitted code solves the task correctly. Give brief, concrete feedback about what works and what still needs attention.');
+    }
+    if (hasCode || outputText) {
+      addBand('output', 1, 'Judge whether the program output or test behavior matches the requested task. Give brief, concrete feedback about any mismatch or success.');
+    }
+    if (hasWrittenResponse) {
+      addBand('response', 1, 'Judge whether the written response answers the question directly and clearly. Give brief, concrete feedback about the quality of the explanation.');
+    }
+
+    if (!Object.keys(scores).length) {
+      addBand('response', 1, 'Judge whether the student response addresses the question. Give brief, concrete feedback.');
+    }
+
+    return { scores, inferred: true };
+  }
+
+  async function fetchQuestionGradePreview(block) {
+    const qid = `${block.groupId}${block.id}`;
+    const payloadContainer = document;
+    const { questions } = buildTestSubmissionPayload([block], payloadContainer, existingAnswers);
+    const payload = questions?.[0];
+    if (!payload) return null;
+
+    const rubric = buildPreviewRubric(block, payload);
+
+    const res = await fetch(`${API_BASE_URL}/api/ai/grade-test-question`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        questionText: payload.questionText,
+        scores: rubric.scores || payload.scores || block.scores || {},
+        responseText: payload.responseText || '',
+        codeCells: payload.codeCells || [],
+        outputText: payload.outputText || '',
+        rubric: rubric.scores || payload.scores || block.scores || {},
+      }),
+    });
+
+    const raw = await res.text();
+    if (!res.ok) {
+      throw new Error(raw || `Question grading failed (${res.status})`);
+    }
+
+    let parsed;
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (err) {
+      throw new Error('Question grading returned invalid JSON.');
+    }
+
+    return {
+      ...normalizeQuestionGradeResult({
+        block,
+        payload,
+        result: parsed,
+      }),
+      rubricSource: rubric.inferred ? 'inferred' : 'explicit',
+    };
   }
 
   const socket = useRunActivitySync({
@@ -1490,6 +1608,94 @@ export default function RunActivityPage({
     return { answers, questions };
   }
 
+  function bucketPoints(bucket) {
+    if (bucket == null) return 0;
+    if (typeof bucket === 'number') return bucket;
+    if (typeof bucket === 'object' && typeof bucket.points === 'number') return bucket.points;
+    return 0;
+  }
+
+  function normalizeScoreBands(scores = {}) {
+    return {
+      response: scores.response || null,
+      code: scores.code || null,
+      output: scores.output || null,
+    };
+  }
+
+  function normalizeQuestionGradeResult({ block, payload, result }) {
+    const scores = normalizeScoreBands(block?.scores || {});
+    const maxCodePts = bucketPoints(scores.code);
+    const maxRunPts = bucketPoints(scores.output);
+    const maxRespPts = bucketPoints(scores.response);
+
+    const multipleChoice = block?.multipleChoice || null;
+    const isMultipleChoice =
+      Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
+    const hasChoiceScores =
+      !!multipleChoice?.hasChoiceScores ||
+      multipleChoice?.choices?.some((choice) => Number.isInteger(choice?.points));
+
+    const responseText = String(payload?.responseText || '').trim();
+    const selectedChoice = responseText;
+
+    let codeScore = Number(result?.codeScore ?? 0);
+    let runScore = Number(result?.runScore ?? 0);
+    let responseScore = Number(result?.responseScore ?? 0);
+    let codeFeedback = String(result?.codeFeedback ?? '').trim();
+    let runFeedback = String(result?.runFeedback ?? '').trim();
+    let responseFeedback = String(result?.responseFeedback ?? '').trim();
+
+    if (isMultipleChoice && maxRespPts > 0) {
+      if (hasChoiceScores) {
+        const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
+        responseScore = Number(selected?.points || 0);
+        responseFeedback = selected
+          ? `Selected answer earned ${responseScore}/${maxRespPts} points.`
+          : 'No answer was selected.';
+      } else {
+        const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+        if (!correctAnswer) {
+          responseScore = 0;
+          responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
+        } else {
+          const isCorrect = selectedChoice === correctAnswer;
+          responseScore = isCorrect ? maxRespPts : 0;
+          responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+        }
+      }
+    }
+
+    codeScore = Math.max(0, Math.min(maxCodePts, Number.isFinite(codeScore) ? codeScore : 0));
+    runScore = Math.max(0, Math.min(maxRunPts, Number.isFinite(runScore) ? runScore : 0));
+    responseScore = Math.max(
+      0,
+      Math.min(maxRespPts, Number.isFinite(responseScore) ? responseScore : 0)
+    );
+
+    const earnedTotal = codeScore + runScore + responseScore;
+    const maxTotal = maxCodePts + maxRunPts + maxRespPts;
+
+    return {
+      status: 'ready',
+      qid: payload?.qid || null,
+      questionText: payload?.questionText || '',
+      selectedChoice,
+      codeScore,
+      runScore,
+      responseScore,
+      codeFeedback,
+      runFeedback,
+      responseFeedback,
+      maxCode: maxCodePts,
+      maxRun: maxRunPts,
+      maxResp: maxRespPts,
+      earnedTotal,
+      maxTotal,
+      gradedAt: new Date().toISOString(),
+    };
+  }
+
 
   function isGroupCodeOnlyQuestion(block) {
     const hasTextOrTable = !!block?.hasTextResponse || !!block?.hasTableResponse;
@@ -1593,7 +1799,7 @@ export default function RunActivityPage({
     let groupSubmissionString = null;
     let container = null;
     let blocks = null;
-    const useTestSubmissionFlow = isTestMode && canSubmitTest;
+    const useTestSubmissionFlow = (isTestMode && canSubmitTest) || (isAssignmentMode && canSubmitAssignment);
     function clearCodeFeedbackForQid(qid, codeCells) {
       setCodeFeedbackShown((prev) => {
         const next = { ...prev };
@@ -1700,8 +1906,9 @@ export default function RunActivityPage({
           questionsCount: questions.length,
         });
 
+        const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';
         const res = await fetch(
-          `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1717,7 +1924,7 @@ export default function RunActivityPage({
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           alert(
-            `Test submission failed: ${err.error || 'Unknown error submitting test.'
+          `${isAssignmentMode ? 'Lab' : 'Test'} submission failed: ${err.error || 'Unknown error submitting this activity.'
             }`
           );
           setIsSubmitting(false);
@@ -1727,10 +1934,10 @@ export default function RunActivityPage({
         // console.log('[RUNDBG] after submit, about to reload', { loading: loadingRef.current, t: Date.now() });
         await loadActivity();
         //console.log('[RUNDBG] after submit, reload done');
-        alert('Test submitted. Your answers have been recorded.');
+        alert(`${isAssignmentMode ? 'Lab' : 'Test'} submitted. Your answers have been recorded.`);
       } catch (err) {
-        console.error('❌ Test submission failed:', err);
-        alert('An error occurred submitting the test.');
+        console.error('❌ Assessment submission failed:', err);
+        alert(`An error occurred submitting the ${isAssignmentMode ? 'lab' : 'test'}.`);
       } finally {
         setIsSubmitting(false);
       }
@@ -1930,6 +2137,16 @@ export default function RunActivityPage({
           answers[`${qid}CodeRetriesRequired`] = '';
           answers[`${qid}CodeSubmissionString`] = groupSubmissionString;
 
+          continue;
+        }
+
+        if (isTestMode) {
+          answers[`${qid}CodeFeedback`] = '';
+          answers[`${qid}CodeAccepted`] = 'true';
+          answers[`${qid}CodeCanContinue`] = 'false';
+          answers[`${qid}CodeRetryCount`] = '';
+          answers[`${qid}CodeRetriesRequired`] = '';
+          answers[`${qid}CodeSubmissionString`] = groupSubmissionString;
           continue;
         }
 
@@ -2554,7 +2771,10 @@ export default function RunActivityPage({
     setIsSubmitting(true);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    // A full-test regrade can include several AI-scored code/written responses.
+    // Keep the request alive long enough for the server to process the whole attempt.
+    const regradeTimeoutMs = 180000;
+    const timeoutId = setTimeout(() => controller.abort(), regradeTimeoutMs);
 
     try {
       const studentId = activity?.submitted_by_user_id || null;
@@ -2594,15 +2814,16 @@ export default function RunActivityPage({
         questions.push({ qid, questionText, scores: block.scores || {}, responseText, codeCells, outputText });
       }
 
+      const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';
       console.log('[REGRD] about to POST', {
-        url: `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+        url: `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
         studentId,
         answersCount: Object.keys(answers).length,
         questionsCount: questions.length,
       });
 
       const res = await fetch(
-        `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+        `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2634,12 +2855,119 @@ export default function RunActivityPage({
       alert('Regrade complete.');
     } catch (e) {
       console.error('[REGRD] error', e);
-      alert(e?.name === 'AbortError' ? 'Regrade timed out (20s).' : 'Regrade failed.');
+      alert(e?.name === 'AbortError' ? 'Regrade timed out after 3 minutes. Please try again or check the server log.' : 'Regrade failed.');
     } finally {
       clearTimeout(timeoutId);
       setIsSubmitting(false);
       console.log('[REGRD] done');
     }
+  }
+
+  async function handleMarkTestReviewed() {
+    if (!canSaveInstructorScores || !instanceId) return;
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/mark-reviewed`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || 'Unable to mark the test as reviewed.');
+      }
+      await loadActivity();
+    } catch (err) {
+      console.error('Failed to mark test reviewed:', err);
+      alert(err.message || 'Unable to mark the test as reviewed.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleGradeSingleQuestion(qid) {
+    if (gradingQuestionQid || gradingAllQuestions) return;
+    if (!isTestMode && !isAssignmentMode && !isSandbox) return;
+
+    const block = findQuestionBlockByQid(qid);
+    if (!block) return;
+
+    setGradingQuestionQid(qid);
+
+    try {
+      const preview = await fetchQuestionGradePreview(block);
+      if (!preview) return;
+
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        [qid]: preview,
+      }));
+    } catch (err) {
+      console.error('Single-question grading failed:', err);
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        [qid]: {
+          status: 'error',
+          qid,
+          questionText: getQuestionText(block, qid),
+          error: err?.message || 'Question grading failed.',
+          gradedAt: new Date().toISOString(),
+        },
+      }));
+    } finally {
+      setGradingQuestionQid(null);
+    }
+  }
+
+  async function handleGradeAllQuestions() {
+    if (gradingQuestionQid || gradingAllQuestions) return;
+    if (!isTestMode && !isAssignmentMode && !isSandbox) return;
+
+    const blocksToGrade = groups.flatMap((group) => [group.intro, ...(group.content || [])])
+      .filter((block) => block?.type === 'question');
+    if (!blocksToGrade.length) return;
+
+    setGradingAllQuestions(true);
+    try {
+      const nextPreviews = {};
+      for (const block of blocksToGrade) {
+        const qid = `${block.groupId}${block.id}`;
+        try {
+          const preview = await fetchQuestionGradePreview(block);
+          if (preview) {
+            nextPreviews[qid] = preview;
+          }
+        } catch (err) {
+          console.error('Question grading failed:', err);
+          nextPreviews[qid] = {
+            status: 'error',
+            qid,
+            questionText: getQuestionText(block, qid),
+            error: err?.message || 'Question grading failed.',
+            gradedAt: new Date().toISOString(),
+          };
+        }
+      }
+
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        ...nextPreviews,
+      }));
+    } finally {
+      setGradingAllQuestions(false);
+    }
+  }
+
+  function clearQuestionGradePreview(qid) {
+    setQuestionGradePreviews((prev) => {
+      const next = { ...prev };
+      delete next[qid];
+      return next;
+    });
+  }
+
+  function clearQuestionGradePreviewForResponseKey(responseKey) {
+    const qid = baseQidFromResponseKey(responseKey);
+    if (qid) clearQuestionGradePreview(qid);
   }
   // Instructor override: save edited per-question scores & feedback
   async function handleSaveQuestionScores(qid, local) {
@@ -2803,10 +3131,13 @@ export default function RunActivityPage({
 
         <RunActivityTestStatusBanner
           isTestMode={isTestMode}
+          isAssignmentMode={isAssignmentMode}
           testWindow={testWindow}
           testLockState={testLockState}
           isStudent={isStudent}
           submittedAt={activity?.submitted_at}
+          reviewComplete={Number(activity?.review_complete) === 1}
+          score={overallTestTotals}
           formatRemainingSeconds={formatRemainingSeconds}
         />
 
@@ -2868,6 +3199,7 @@ export default function RunActivityPage({
             groups={groups}
             activity={activity}
             isTestMode={isTestMode}
+            isAssignmentMode={isAssignmentMode}
             isStudent={isStudent}
             isSubmitted={isSubmitted}
             timeExpired={timeExpired}
@@ -2875,21 +3207,26 @@ export default function RunActivityPage({
             socket={socket}
             instanceId={instanceId}
             user={user}
-            handleCodeChange={handleCodeChange}
             baseQidFromResponseKey={baseQidFromResponseKey}
             isObserver={isObserver}
             isSandbox={isSandbox}
+            isCreatorTestRun={isCreatorTestRun}
             allowFreeNavigation={allowFreeNavigation}
             canEditAnswers={canEditAnswers}
             canSubmitGroup={canSubmitGroup}
             canSubmitTest={canSubmitTest}
+            canSubmitAssignment={canSubmitAssignment}
             canRegradeTests={canRegradeTests}
             canSaveInstructorScores={canSaveInstructorScores}
+            canGradeQuestionPreview={canGradeQuestionPreview}
+            canGradeAllQuestions={canGradeAllQuestions}
+            gradingAllQuestions={gradingAllQuestions}
+            isCreatorSandbox={isCreatorSandbox}
+            handleGradeAllQuestions={handleGradeAllQuestions}
             sandboxGroupIndex={sandboxGroupIndex}
             setSandboxGroupIndex={setSandboxGroupIndex}
             codeViewMode={codeViewMode}
             localCode={localCode}
-            handleTextChange={handleTextChange}
             textFeedbackShown={textFeedbackShown}
             nonLegacyForUI={nonLegacyForUI}
             getQuestionScores={getQuestionScores}
@@ -2899,8 +3236,33 @@ export default function RunActivityPage({
             isPlaygroundMode={isPlaygroundMode}
             canBypassGroups={canBypassGroups}
             handleRegradeTest={handleRegradeTest}
+            handleMarkTestReviewed={handleMarkTestReviewed}
+            handleTextChange={(responseKey, value, extra) => {
+              clearQuestionGradePreviewForResponseKey(responseKey);
+              return handleTextChange(responseKey, value, extra);
+            }}
+            handleCodeChange={(responseKey, code, extra) => {
+              clearQuestionGradePreviewForResponseKey(responseKey);
+              return handleCodeChange(responseKey, code, extra);
+            }}
             overallTestTotals={overallTestTotals}
+            questionGradePreviews={questionGradePreviews}
+            gradingQuestionQid={gradingQuestionQid}
+            handleGradeSingleQuestion={handleGradeSingleQuestion}
+            clearQuestionGradePreview={clearQuestionGradePreview}
             infoBubbleSession={infoBubbleSessionRef.current}
+            suppressStudentTestFeedbackUi={shouldSuppressStudentTestFeedbackUi({
+              isTestMode,
+              isStudent,
+              isCreatorTestRun,
+              runMode,
+            })}
+            hideStudentTestSections={shouldHideStudentTestSections({
+              isTestMode,
+              isStudent,
+              isCreatorTestRun,
+              runMode,
+            })}
           />
         )}
       </Container>

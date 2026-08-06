@@ -214,6 +214,18 @@ function InlineAiAssistBlock({
           }
       }
     >
+      {aiBlock.title ? (
+        <h5
+          className="mb-2"
+          dangerouslySetInnerHTML={{ __html: aiBlock.title }}
+        />
+      ) : null}
+      {aiBlock.prompt ? (
+        <div
+          className="mb-3"
+          dangerouslySetInnerHTML={{ __html: aiBlock.prompt }}
+        />
+      ) : null}
       <Form.Group>
         <Form.Label className="small text-muted mb-1">Query</Form.Label>
         <Form.Control

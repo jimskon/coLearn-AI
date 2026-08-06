@@ -162,7 +162,8 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS hidden TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_before_start TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0
+      ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS test_focus_enforcement TINYINT(1) NOT NULL DEFAULT 0
   `);
 
   await db.query(`
@@ -1587,6 +1588,15 @@ test('first test focus loss warns and the second requires submission', async () 
   await db.query('UPDATE pogil_activities SET is_test = 1 WHERE id = ?', [activityId]);
   const instanceId = await createInstance({ activityId, courseId });
   await addGroupMember({ instanceId, studentId: student.id });
+
+  const disabled = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(disabled.status, 200);
+  assert.equal(disabled.body.action, 'ignore');
+  assert.equal(disabled.body.focusLossCount, 0);
+
+  await db.query('UPDATE activity_instances SET test_focus_enforcement = 1 WHERE id = ?', [instanceId]);
 
   const first = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
     method: 'POST',

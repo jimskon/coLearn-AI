@@ -545,7 +545,8 @@ async function recordTestFocusLoss(req, res) {
     try {
       await conn.beginTransaction();
       const [[instance]] = await conn.query(
-        `SELECT ai.id, ai.activity_id, ai.course_id, ai.submitted_at, a.is_test
+        `SELECT ai.id, ai.activity_id, ai.course_id, ai.submitted_at,
+                ai.test_focus_enforcement, a.is_test
            FROM activity_instances ai
            JOIN pogil_activities a ON a.id = ai.activity_id
            JOIN group_members gm ON gm.activity_instance_id = ai.id
@@ -561,6 +562,10 @@ async function recordTestFocusLoss(req, res) {
       if (Number(instance.is_test) !== 1) {
         await conn.rollback();
         return res.status(400).json({ error: 'Focus events apply only to tests.' });
+      }
+      if (Number(instance.test_focus_enforcement) !== 1) {
+        await conn.rollback();
+        return res.json({ ok: true, action: 'ignore', focusLossCount: 0 });
       }
       if (instance.submitted_at) {
         await conn.rollback();
@@ -956,6 +961,7 @@ async function getActivityInstanceById(req, res) {
   const { id } = req.params;
 
   try {
+    await ensureTestFocusSchema();
     const [[instance]] = await db.query(
       `SELECT
          ai.id,
@@ -975,6 +981,7 @@ async function getActivityInstanceById(req, res) {
          ai.test_start_at,
          ai.test_duration_minutes,
          ai.test_reopen_until,
+         ai.test_focus_enforcement,
          ai.submitted_at,
          ai.graded_at,
          ai.review_complete,
@@ -1336,7 +1343,7 @@ async function rotateActiveStudent(req, res) {
 
 // Body:
 // Non-test: { activityId, courseId, groups: [ { members: [ { student_id, role } ] } ] }
-// Test:     { activityId, courseId, selectedStudentIds: [id...], testStartAt, testDurationMinutes, lockedBeforeStart, lockedAfterEnd }
+// Test:     { activityId, courseId, selectedStudentIds: [id...], testStartAt, testDurationMinutes, lockedBeforeStart, lockedAfterEnd, focusEnforcement }
 async function setupMultipleGroupInstances(req, res) {
   const {
     activityId,
@@ -1347,12 +1354,14 @@ async function setupMultipleGroupInstances(req, res) {
     testDurationMinutes,
     lockedBeforeStart,
     lockedAfterEnd,
+    focusEnforcement,
   } = req.body;
 
   if (!activityId || !courseId) {
     return res.status(400).json({ error: 'ZZZ_NEW_GUARD activityId and courseId are required' });
   }
 
+  await ensureTestFocusSchema();
   const lockName = `setupGroups:${courseId}:${activityId}`;
   const conn = await db.getConnection();
 
@@ -1452,8 +1461,9 @@ async function setupMultipleGroupInstances(req, res) {
       const [instanceResult] = await conn.query(
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
-            test_start_at, test_duration_minutes, locked_before_start, locked_after_end, active_rotation_mode)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, 'submit')`,
+            test_start_at, test_duration_minutes, locked_before_start, locked_after_end,
+            test_focus_enforcement, active_rotation_mode)
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, 'submit')`,
         [
           courseId,
           activityId,
@@ -1463,6 +1473,7 @@ async function setupMultipleGroupInstances(req, res) {
           isTest ? effectiveDuration : 0,
           isTest ? (lockedBeforeStart ? 1 : 0) : 0,
           isTest ? (lockedAfterEnd ? 1 : 0) : 0,
+          isTest && focusEnforcement ? 1 : 0,
         ]
       );
       return instanceResult.insertId;
@@ -1520,6 +1531,7 @@ async function setupMultipleGroupInstances(req, res) {
       activityId: Number(activityId),
       details: {
         is_test: isTest,
+        test_focus_enforcement: isTest && !!focusEnforcement,
         total_groups: computedTotalGroups,
         instance_count: isTest ? selectedStudentIds.length : groups.length,
       },
@@ -1900,6 +1912,7 @@ async function getInstanceGroups(req, res) {
 async function getInstancesForActivityInCourse(req, res) {
   const { courseId, activityId } = req.params;
   try {
+    await ensureTestFocusSchema();
     const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
     const [[activity]] = await db.query(`SELECT title FROM pogil_activities WHERE id = ?`, [activityId]);
 
@@ -1922,6 +1935,7 @@ async function getInstancesForActivityInCourse(req, res) {
 	              test_start_at,
               test_duration_minutes,
               test_reopen_until,
+              test_focus_enforcement,
               submitted_at,
               graded_at,
               review_complete,
@@ -2017,6 +2031,7 @@ async function getInstancesForActivityInCourse(req, res) {
         test_start_at: inst.test_start_at,
         test_duration_minutes: inst.test_duration_minutes,
         test_reopen_until: inst.test_reopen_until,
+        test_focus_enforcement: Number(inst.test_focus_enforcement) === 1,
         submitted_at: inst.submitted_at,
         graded_at: inst.graded_at,
         review_complete: inst.review_complete,

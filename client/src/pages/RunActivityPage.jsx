@@ -1141,6 +1141,7 @@ export default function RunActivityPage({
     const canMonitor =
       isTestMode &&
       isStudent &&
+      Number(activity?.test_focus_enforcement) === 1 &&
       !!instanceId &&
       !activity?.submitted_at &&
       !testLockState.lockedBefore;
@@ -1185,7 +1186,14 @@ export default function RunActivityPage({
     return () => document.removeEventListener('visibilitychange', recordFocusLoss);
     // handleSubmit is a function declaration below, as in the timed-submit effect above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTestMode, isStudent, instanceId, activity?.submitted_at, testLockState.lockedBefore]);
+  }, [
+    isTestMode,
+    isStudent,
+    instanceId,
+    activity?.submitted_at,
+    activity?.test_focus_enforcement,
+    testLockState.lockedBefore,
+  ]);
 
 
   async function saveResponse(instanceId, key, value) {

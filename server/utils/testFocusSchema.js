@@ -11,7 +11,8 @@ async function ensureTestFocusSchema() {
   if (!ensurePromise) {
     ensurePromise = db.query(`
       ALTER TABLE activity_instances
-        ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0
+        ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS test_focus_enforcement TINYINT(1) NOT NULL DEFAULT 0
     `)
       .then(() => {
         ensured = true;

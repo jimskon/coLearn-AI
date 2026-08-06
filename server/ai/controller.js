@@ -25,6 +25,23 @@ function getInlineAiModel(value) {
   return INLINE_AI_ALLOWED_MODELS.has(model) ? model : INLINE_AI_DEFAULT_MODEL;
 }
 
+function getResponseOutputText(response) {
+  const convenienceText = String(response?.output_text || '').trim();
+  if (convenienceText) return convenienceText;
+
+  // Some Responses API/SDK versions expose only the canonical output array,
+  // rather than the output_text convenience field.
+  const parts = Array.isArray(response?.output)
+    ? response.output.flatMap((item) => Array.isArray(item?.content) ? item.content : [])
+    : [];
+  return parts
+    .filter((part) => part?.type === 'output_text' && typeof part.text === 'string')
+    .map((part) => part.text.trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
 console.log("[AI_FINGERPRINT] controller.js loaded at", new Date().toISOString(), "AI_DEBUG=", process.env.AI_DEBUG);
 
 
@@ -195,7 +212,15 @@ async function assistInlineActivity(req, res) {
       max_output_tokens: 500,
     });
 
-    const outputText = String(response.output_text || '').trim();
+    const outputText = getResponseOutputText(response);
+    if (!outputText) {
+      console.warn('[inline-ai] empty model response', {
+        model: selectedModel,
+        status: response?.status || null,
+        incompleteReason: response?.incomplete_details?.reason || null,
+        outputItems: Array.isArray(response?.output) ? response.output.length : 0,
+      });
+    }
     return res.json({
       response: outputText || 'The AI did not return a response.',
       demo: false,

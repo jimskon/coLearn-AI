@@ -118,7 +118,12 @@ test('inline AI uses an allowed per-block model and defaults unsupported values 
   process.env.OPENAI_API_KEY = 'live-test-key';
   __testHooks.openai.responses.create = async (request) => {
     requests.push(request);
-    return { output_text: 'Try tracing the value through the loop.' };
+    return {
+      output: [{
+        type: 'message',
+        content: [{ type: 'output_text', text: 'Try tracing the value through the loop.' }],
+      }],
+    };
   };
 
   try {
@@ -140,6 +145,7 @@ test('inline AI uses an allowed per-block model and defaults unsupported values 
 
     assert.equal(explicit.status, 200);
     assert.equal(fallback.status, 200);
+    assert.equal(explicit.body.response, 'Try tracing the value through the loop.');
     assert.equal(requests[0].model, 'gpt-4o-mini');
     assert.equal(requests[1].model, 'gpt-5-mini');
   } finally {

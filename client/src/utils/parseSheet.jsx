@@ -2034,7 +2034,6 @@ export function renderBlocks(blocks, options = {}) {
     // A standalone AI panel is a group-level learning tool, not a question and
     // not a response. It therefore has no grading, retry, or response state.
     if (block.type === 'ai') {
-      if (suppressStudentTestFeedbackUi && !isInstructor) return null;
       return (
         <InlineAiAssistBlock
           key={`group-ai-${block.groupId}-${block.previewKey}`}
@@ -3026,7 +3025,7 @@ export function renderBlocks(blocks, options = {}) {
             </div>
           ))}
 
-          {(!suppressStudentTestFeedbackUi || isInstructor) && block.aiBlocks?.map((aiBlock, i) => {
+          {block.aiBlocks?.map((aiBlock, i) => {
             return (
               <InlineAiAssistBlock
                 key={`q-ai-${block.groupId}-${block.id}-${i}`}

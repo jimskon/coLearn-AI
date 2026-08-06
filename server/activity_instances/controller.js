@@ -528,12 +528,15 @@ async function clearResponsesForInstance(req, res) {
 // refresh cannot reset the rule.
 async function recordTestFocusLoss(req, res) {
   const instanceId = Number(req.params.instanceId);
-  const userId = Number(req.user?.id || req.session?.userId);
+  const userId = Number(req.user?.id);
 
-  if (!instanceId || !userId) {
-    return res.status(400).json({ error: 'A signed-in student and instance are required.' });
+  if (!instanceId) {
+    return res.status(400).json({ error: 'A test instance is required.' });
   }
-  if (req.user?.role && req.user.role !== 'student') {
+  if (!userId) {
+    return res.status(401).json({ error: 'Authentication is required.' });
+  }
+  if (req.user.role !== 'student') {
     return res.status(403).json({ error: 'Only students can record test focus events.' });
   }
 
@@ -1358,7 +1361,7 @@ async function setupMultipleGroupInstances(req, res) {
   } = req.body;
 
   if (!activityId || !courseId) {
-    return res.status(400).json({ error: 'ZZZ_NEW_GUARD activityId and courseId are required' });
+    return res.status(400).json({ error: 'activityId and courseId are required.' });
   }
 
   await ensureTestFocusSchema();

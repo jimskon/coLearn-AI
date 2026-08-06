@@ -1327,7 +1327,7 @@ test('test setup ignores an unscheduled placeholder instance', async () => {
       activityId,
       courseId,
       selectedStudentIds: [student.id],
-      testStartAt: '2026-08-06T13:00:00.000Z',
+      testStartAt: new Date(Date.now() + (60 * 60 * 1000)).toISOString(),
       testDurationMinutes: 30,
     },
   });
@@ -1639,6 +1639,12 @@ test('first test focus loss warns and the second requires submission', async () 
   await db.query('UPDATE pogil_activities SET is_test = 1 WHERE id = ?', [activityId]);
   const instanceId = await createInstance({ activityId, courseId });
   await addGroupMember({ instanceId, studentId: student.id });
+
+  const instructorAttempt = await requestJson(instructor, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(instructorAttempt.status, 403);
+  assert.equal(instructorAttempt.body.error, 'Only students can record test focus events.');
 
   const disabled = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
     method: 'POST',

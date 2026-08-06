@@ -14,6 +14,16 @@ const { gradeTestQuestionHttp, gradeTestQuestion } = require("./grading");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
+const INLINE_AI_ALLOWED_MODELS = new Set([
+  'gpt-5-mini',
+  'gpt-4o-mini',
+]);
+
+function getInlineAiModel(value) {
+  const model = String(value || '').trim();
+  return INLINE_AI_ALLOWED_MODELS.has(model) ? model : INLINE_AI_DEFAULT_MODEL;
+}
 
 console.log("[AI_FINGERPRINT] controller.js loaded at", new Date().toISOString(), "AI_DEBUG=", process.env.AI_DEBUG);
 
@@ -120,6 +130,7 @@ function sendAI(res, payload, status = 200) {
 async function assistInlineActivity(req, res) {
   const {
     mode = 'explain',
+    model,
     title = '',
     assistantPrompt = '',
     guardrail = '',
@@ -129,6 +140,8 @@ async function assistInlineActivity(req, res) {
     studentCode = '',
     studentInput = '',
   } = req.body || {};
+
+  const selectedModel = getInlineAiModel(model);
 
   const cleanedInput = String(studentInput || '').trim();
   if (!cleanedInput) {
@@ -175,7 +188,7 @@ async function assistInlineActivity(req, res) {
 
   try {
     const response = await openai.responses.create({
-      model: MODEL,
+      model: selectedModel,
       instructions: system,
       input: user,
       text: { format: { type: 'text' } },
@@ -2021,5 +2034,6 @@ module.exports = {
   extractStudentQuestion,
   __testHooks: {
     openai,
+    getInlineAiModel,
   },
 };

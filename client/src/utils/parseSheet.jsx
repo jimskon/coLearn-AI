@@ -54,6 +54,19 @@ const SUPPORTED_INFO_TARGETS = new Set([
   'aifeedback',
 ]);
 
+export const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
+export const INLINE_AI_MODEL_OPTIONS = [
+  { value: 'gpt-5-mini', label: 'GPT-5 mini — standard' },
+  { value: 'gpt-4o-mini', label: 'GPT-4o mini — fast and economical' },
+];
+
+const normalizeInlineAiModel = (value) => {
+  const model = String(value || '').trim();
+  return INLINE_AI_MODEL_OPTIONS.some((option) => option.value === model)
+    ? model
+    : INLINE_AI_DEFAULT_MODEL;
+};
+
 const parseInfoSeconds = (value) => {
   const seconds = Number.parseInt(String(value || '').trim(), 10);
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 8;
@@ -155,6 +168,7 @@ function InlineAiAssistBlock({
         credentials: 'include',
         body: JSON.stringify({
           mode: aiBlock.mode,
+          model: aiBlock.model,
           title: aiBlock.title || 'AI Assistant',
           assistantPrompt: aiBlock.prompt || '',
           guardrail: aiBlock.guardrail || '',
@@ -1601,6 +1615,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         groupId: currentQuestion.groupId,
         previewKey: `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`,
         mode,
+        model: INLINE_AI_DEFAULT_MODEL,
         title: format('AI Coach'),
         prompt: '',
         guardrail: '',
@@ -1608,6 +1623,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         inputRows: 4,
         sourceMeta: {
           aiLine: lineNo,
+          modelLine: null,
           titleLine: null,
           promptLine: null,
           guardrailLine: null,
@@ -1634,6 +1650,17 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     if (currentAiBlock) {
+      const modelMatch = trimmed.match(/^\\aimodel\{([\s\S]*?)\}\s*$/);
+      if (modelMatch) {
+        const requestedModel = String(modelMatch[1] || '').trim();
+        currentAiBlock.model = normalizeInlineAiModel(requestedModel);
+        currentAiBlock.sourceMeta.modelLine = lineNo;
+        if (requestedModel && requestedModel !== currentAiBlock.model) {
+          pushIssue('warn', lineNo, `Unsupported AI model "${requestedModel}"; using ${INLINE_AI_DEFAULT_MODEL}.`, line);
+        }
+        continue;
+      }
+
       const titleMatch = trimmed.match(/^\\aititle\{([\s\S]*?)\}\s*$/);
       if (titleMatch) {
         currentAiBlock.title = format(titleMatch[1] || '');

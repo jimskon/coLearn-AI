@@ -104,6 +104,7 @@ Notes:
 
 ```text
 \ai{explain}
+\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{Ask the AI for help understanding what this code does.}
 \aiguardrail{Help the student reason about the code without giving away the whole worksheet answer.}
@@ -117,6 +118,7 @@ Notes:
 | Syntax | Description | Example |
 |--------|-------------|---------|
 | `\ai{mode}` | Starts an inline AI help block | `\ai{explain}` |
+| `\aimodel{model}` | Model for this AI interaction; defaults to `gpt-5-mini` | `\aimodel{gpt-4o-mini}` |
 | `\aititle{...}` | Visible card title | `\aititle{AI Coach}` |
 | `\aiprompt{...}` | Student-facing instructions | `\aiprompt{Ask the AI for help interpreting the loop.}` |
 | `\aiguardrail{...}` | Creator-facing AI restriction / scope | `\aiguardrail{Guide the student but do not provide the final worksheet answer.}` |
@@ -130,6 +132,12 @@ Notes:
 - `critique`
 - `testgen`
 - `generate`
+
+### Supported Models
+
+- `gpt-5-mini` is the default for new and existing AI blocks.
+- `gpt-4o-mini` is available when a faster, lower-cost response is preferred.
+- Any other `\aimodel` value safely falls back to `gpt-5-mini`.
 
 ### Supported Initial Context Sources
 
@@ -150,6 +158,7 @@ for i in range(5):
 \endpython
 
 \ai{explain}
+\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{If you are unsure, ask the AI for help understanding the loop.}
 \aiguardrail{Explain the behavior of the code and guide the student toward the pattern. Do not give away broader worksheet answers.}

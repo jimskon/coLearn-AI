@@ -30,7 +30,12 @@ import {
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
-import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
+import {
+  INLINE_AI_DEFAULT_MODEL,
+  INLINE_AI_MODEL_OPTIONS,
+  parseSheetToBlocks,
+  renderBlocks,
+} from '../utils/parseSheet';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 import { getSectionKeyAtLine, swapSourceRanges } from '../utils/creatorVisualEdits';
 import { validateMultipleChoice } from '../utils/multipleChoice';
@@ -534,6 +539,9 @@ function applyAiEditsToSource(sourceText, block, edits) {
   if (!sourceMeta?.aiLine || !sourceMeta?.endAiLine) return sourceText;
 
   const lines = String(sourceText || '').split('\n');
+  const model = INLINE_AI_MODEL_OPTIONS.some((option) => option.value === edits.model)
+    ? edits.model
+    : INLINE_AI_DEFAULT_MODEL;
   const title = String(edits.title || '').trim();
   const prompt = String(edits.prompt || '').trim();
   const guardrail = String(edits.guardrail || '').trim();
@@ -547,6 +555,12 @@ function applyAiEditsToSource(sourceText, block, edits) {
   const insertions = [];
 
   updateLine(lines, sourceMeta.aiLine, `\\ai{${String(edits.mode || 'explain').trim().toLowerCase() || 'explain'}}`);
+
+  if (sourceMeta.modelLine) {
+    updateLine(lines, sourceMeta.modelLine, `\\aimodel{${model}}`);
+  } else {
+    insertions.push({ anchorLine: sourceMeta.aiLine, text: `\\aimodel{${model}}` });
+  }
 
   if (sourceMeta.titleLine) {
     updateLine(lines, sourceMeta.titleLine, `\\aititle{${title}}`);
@@ -585,6 +599,9 @@ function applyAiEditsToSource(sourceText, block, edits) {
 function buildAiInspectorDraft(block) {
   return {
     mode: String(block?.mode || 'explain').trim().toLowerCase() || 'explain',
+    model: INLINE_AI_MODEL_OPTIONS.some((option) => option.value === block?.model)
+      ? block.model
+      : INLINE_AI_DEFAULT_MODEL,
     title: htmlToEditorText(block?.title || 'AI Coach'),
     prompt: htmlToEditorText(block?.prompt),
     guardrail: htmlToEditorText(block?.guardrail),
@@ -2712,6 +2729,20 @@ export default function CreatorWorkbenchPage() {
                                   <option value="testgen">Testgen</option>
                                   <option value="generate">Generate</option>
                                 </Form.Select>
+                              </Form.Group>
+
+                              <Form.Group className="mb-3">
+                                <Form.Label>AI Model</Form.Label>
+                                <Form.Select
+                                  value={aiInspectorDraft?.model || INLINE_AI_DEFAULT_MODEL}
+                                  disabled={!aiInspectorDraft || !!proposal}
+                                  onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), model: event.target.value }))}
+                                >
+                                  {INLINE_AI_MODEL_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </Form.Select>
+                                <div className="text-muted small mt-1">Used only for this AI interaction.</div>
                               </Form.Group>
 
                               <Form.Group className="mb-3">

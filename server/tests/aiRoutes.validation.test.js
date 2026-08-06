@@ -111,6 +111,43 @@ test.after(() => {
   global.fetch = nativeFetch;
 });
 
+test('inline AI uses an allowed per-block model and defaults unsupported values safely', async () => {
+  const originalApiKey = process.env.OPENAI_API_KEY;
+  const originalCreate = __testHooks.openai.responses.create;
+  const requests = [];
+  process.env.OPENAI_API_KEY = 'live-test-key';
+  __testHooks.openai.responses.create = async (request) => {
+    requests.push(request);
+    return { output_text: 'Try tracing the value through the loop.' };
+  };
+
+  try {
+    const commonBody = {
+      mode: 'explain',
+      title: 'AI Coach',
+      assistantPrompt: 'Help with the loop.',
+      studentInput: 'Why does total change?',
+    };
+
+    const explicit = await postJson('/api/ai/assist', {
+      ...commonBody,
+      model: 'gpt-4o-mini',
+    });
+    const fallback = await postJson('/api/ai/assist', {
+      ...commonBody,
+      model: 'not-a-model',
+    });
+
+    assert.equal(explicit.status, 200);
+    assert.equal(fallback.status, 200);
+    assert.equal(requests[0].model, 'gpt-4o-mini');
+    assert.equal(requests[1].model, 'gpt-5-mini');
+  } finally {
+    __testHooks.openai.responses.create = originalCreate;
+    process.env.OPENAI_API_KEY = originalApiKey;
+  }
+});
+
 test('requirements-only response evaluation rejects keyboard-mash gibberish', async () => {
   const response = await postJson('/api/ai/evaluate-response', {
     questionText: 'What is the output for grade = 95, and what happens for grade = 90?',

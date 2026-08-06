@@ -684,18 +684,13 @@ const starterQuestionTemplates = {
     '\\endquestion',
   ],
   ai: [
-    '\\question{Use the AI coach to improve your response to this question.}',
-    '\\textresponse{3}',
     '\\ai{explain}',
     '\\aititle{AI Coach}',
-    '\\aiprompt{Help the student reason about the current question without giving away the answer.}',
+    '\\aiprompt{Ask for help reasoning through this activity without asking for the final answer.}',
     '\\aiguardrail{Ask guiding questions and keep the discussion focused on this activity.}',
-    '\\aicontext{current-question,student-response}',
+    '\\aicontext{nearby-text}',
     '\\aiinput{4}',
     '\\endai',
-    '\\sampleresponses{A thoughtful response that uses the AI feedback.}',
-    '\\feedbackprompt{Explain the reasoning in your own words.}',
-    '\\endquestion',
   ],
 };
 
@@ -837,15 +832,16 @@ const labBoilerplateSource = [
   '\\endquestiongroup',
   '',
   '\\questiongroup{Reflection and final submission}',
-  '\\question{What test result gave you the most useful information while building this program, and what did you change because of it?}',
-  '\\textresponse{5}',
   '\\ai{critique}',
   '\\aititle{Lab Coach}',
   '\\aiprompt{Ask for help evaluating a test case or explaining a bug you found.}',
   '\\aiguardrail{Coach the student through debugging and testing without providing the final program.}',
-  '\\aicontext{current-question,current-code,student-response}',
+  '\\aicontext{nearby-text}',
   '\\aiinput{4}',
   '\\endai',
+  '',
+  '\\question{What test result gave you the most useful information while building this program, and what did you change because of it?}',
+  '\\textresponse{5}',
   '\\sampleresponses{Names a concrete test, result, and revision or confirmation.}',
   '\\feedbackprompt{Give concise feedback on the student reflection and use of testing evidence.}',
   '\\score{3,response}',
@@ -2714,7 +2710,8 @@ export default function CreatorWorkbenchPage() {
                           ) : (
                             <>
                               <div className="text-muted small mb-3">
-                                AI block · group {selectedAiBlock.groupId} · question {selectedAiBlock.parentQuestionId}
+                                AI learning tool · group {selectedAiBlock.groupId}
+                                {selectedAiBlock.parentQuestionId ? ` · legacy question ${selectedAiBlock.parentQuestionId}` : ''}
                               </div>
 
                               <Form.Group className="mb-3">

@@ -569,6 +569,21 @@ export function parseSheetToBlocks(lines, options = {}) {
     openMultipleChoiceLine = null;
   };
 
+  // AI panels may be attached to a question (legacy markup) or may stand on
+  // their own as a learning-tool block in a question group.
+  const finalizeAiBlock = (closingLine) => {
+    if (!currentAiBlock) return;
+
+    currentAiBlock.sourceMeta.endAiLine = closingLine;
+    if (currentAiBlock.parentQuestionId && currentQuestion) {
+      currentQuestion.aiBlocks.push(currentAiBlock);
+    } else {
+      blocks.push(currentAiBlock);
+    }
+    currentAiBlock = null;
+    openAiLine = null;
+  };
+
   const finalizeDisplayCodeBlock = (closingLine) => {
     if (!currentDisplayCodeBlock) return;
 
@@ -1313,12 +1328,9 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (!inGroup) {
         pushIssue('error', lineNo, '\\endquestiongroup without a matching \\questiongroup', line);
       }
-      if (currentAiBlock && currentQuestion) {
+      if (currentAiBlock) {
         pushIssue('error', lineNo, 'Closing group while an \\ai block is still open. Missing \\endai before \\endquestiongroup.', line);
-        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
-        currentQuestion.aiBlocks.push(currentAiBlock);
-        currentAiBlock = null;
-        openAiLine = null;
+        finalizeAiBlock(lineNo - 1);
       }
       if (currentQuestion) {
         pushIssue('error', lineNo, 'Closing group while a \\question is still open. Missing \\endquestion before \\endquestiongroup.', line);
@@ -1515,10 +1527,7 @@ export function parseSheetToBlocks(lines, options = {}) {
 
       if (currentAiBlock) {
         pushIssue('error', lineNo, 'Closing question while an \\ai block is still open. Missing \\endai before \\endquestion.', line);
-        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
-        currentQuestion.aiBlocks.push(currentAiBlock);
-        currentAiBlock = null;
-        openAiLine = null;
+        finalizeAiBlock(lineNo - 1);
       }
 
       if (currentMultipleChoice) {
@@ -1595,25 +1604,30 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     if (trimmed.startsWith('\\ai{')) {
-      if (!currentQuestion) {
-        pushIssue('error', lineNo, '\\ai found outside of a \\question. AI blocks are currently only supported inside questions.', line);
+      if (!inGroup) {
+        pushIssue('error', lineNo, '\\ai found outside of a \\questiongroup. Put AI blocks inside a question group.', line);
         continue;
       }
 
       if (currentAiBlock) {
         pushIssue('error', lineNo, 'New \\ai block started before the previous \\ai block was closed. Missing \\endai.', line);
-        currentQuestion.aiBlocks.push(currentAiBlock);
+        finalizeAiBlock(lineNo - 1);
       }
 
       const match = trimmed.match(/^\\ai\{([\s\S]*?)\}\s*$/);
       const mode = String(match?.[1] || 'explain').trim().toLowerCase() || 'explain';
-      const aiIndex = (currentQuestion.aiBlocks?.length || 0) + 1;
+      const isQuestionAttached = !!currentQuestion;
+      const aiIndex = isQuestionAttached
+        ? (currentQuestion.aiBlocks?.length || 0) + 1
+        : blocks.filter((block) => block?.type === 'ai' && block?.groupId === groupNumber).length + 1;
 
       currentAiBlock = {
         type: 'ai',
-        parentQuestionId: currentQuestion.id,
-        groupId: currentQuestion.groupId,
-        previewKey: `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`,
+        parentQuestionId: isQuestionAttached ? currentQuestion.id : null,
+        groupId: isQuestionAttached ? currentQuestion.groupId : groupNumber,
+        previewKey: isQuestionAttached
+          ? `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`
+          : `ai:${groupNumber}:standalone:${aiIndex}`,
         mode,
         model: INLINE_AI_DEFAULT_MODEL,
         title: format('AI Coach'),
@@ -1637,15 +1651,12 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     if (trimmed === '\\endai') {
-      if (!currentAiBlock || !currentQuestion) {
+      if (!currentAiBlock) {
         pushIssue('error', lineNo, '\\endai without a matching \\ai{...}', line);
         continue;
       }
 
-      currentAiBlock.sourceMeta.endAiLine = lineNo;
-      currentQuestion.aiBlocks.push(currentAiBlock);
-      currentAiBlock = null;
-      openAiLine = null;
+      finalizeAiBlock(lineNo);
       continue;
     }
 
@@ -2006,6 +2017,22 @@ export function renderBlocks(blocks, options = {}) {
       return nextBlock?.type === 'groupIntro' || typeof renderInsertAfterGroup !== 'function'
         ? null
         : renderInsertAfterGroup(block);
+    }
+
+    // A standalone AI panel is a group-level learning tool, not a question and
+    // not a response. It therefore has no grading, retry, or response state.
+    if (block.type === 'ai') {
+      if (suppressStudentTestFeedbackUi && !isInstructor) return null;
+      return (
+        <InlineAiAssistBlock
+          key={`group-ai-${block.groupId}-${block.previewKey}`}
+          aiBlock={block}
+          questionBlock={null}
+          runMode={runMode}
+          selectedPreviewKey={selectedPreviewKey}
+          onSelectBlock={onSelectBlock}
+        />
+      );
     }
 
     // 🔹 Render headers (title/name/activitycontext/studentlevel) inline where they appear

@@ -76,7 +76,7 @@ function buildActivityGenerationInstructions(modeOrFlag) {
     'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
     'If you include multiple-choice questions, use \\multiplechoice{answer} only for questions with a real correct answer. For survey or opinion questions, keep \\multiplechoice{} blank and never invent a placeholder answer to satisfy validation.',
     'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
-    'If you do use an \\ai block, keep it tightly scoped, include a guardrail, and use \\aimodel{gpt-5-mini} unless the creator requests the faster \\aimodel{gpt-4o-mini}.',
+    'If you do use an \\ai block, place it directly inside a \\questiongroup (between questions), not inside a \\question. It is a learning tool, not a response: do not add \\textresponse, samples, feedback prompts, scores, or retries for the AI block itself. Keep it tightly scoped, include a guardrail, and use \\aimodel{gpt-5-mini} unless the creator requests the faster \\aimodel{gpt-4o-mini}.',
     'Use the compact house-style rules below as syntax guidance.',
     'For mode=group, use collaborative prompts and progression.',
     'For mode=playground, write an experimentation-first prompt sequence for instructor-led demonstration and student exploration. Playground work should feel saved and revisitable.',

@@ -113,7 +113,11 @@ Notes:
 \endai
 ```
 
-`\\ai` blocks are currently supported only inside a `\\question`.
+`\\ai` is a standalone learning-tool block placed directly inside a
+`\\questiongroup`. It is not a question, creates no student response, and is
+never included in scoring or retry evaluation. Existing `\\ai` blocks inside
+questions remain supported for compatibility, but new activities should place
+them between questions.
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
@@ -149,6 +153,7 @@ Notes:
 ### Example
 
 ```text
+\questiongroup{Tracing a loop}
 \question{What does this loop do?}
 \textresponse{4}
 
@@ -156,6 +161,7 @@ Notes:
 for i in range(5):
     print(i * 2)
 \endpython
+\endquestion
 
 \ai{explain}
 \aimodel{gpt-5-mini}
@@ -165,8 +171,7 @@ for i in range(5):
 \aicontext{current-question,current-code,student-response}
 \aiinput{5}
 \endai
-
-\endquestion
+\endquestiongroup
 ```
 
 ---

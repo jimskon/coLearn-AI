@@ -2314,7 +2314,9 @@ export default function RunActivityPage({
               };
             }
 
-            if (data?.canContinue === true) {
+            // An accepted answer may continue immediately. The bypass button is
+            // only for a rejected answer after its retry limit is exhausted.
+            if (data?.accepted === false && data?.canContinue === true) {
               setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
             }
           } finally {
@@ -2566,8 +2568,9 @@ export default function RunActivityPage({
           pendingRevision.push(`${qid} (AI)`);
         }
 
-        // If backend says retries threshold reached for this group, enable bypass button
-        if (ai?.canContinue === true) {
+        // An accepted answer may advance immediately. Only expose the bypass
+        // button when a rejected answer has exhausted its retry allowance.
+        if (ai?.accepted === false && ai?.canContinue === true) {
           setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
         }
         /*console.log('[RETRY GATE]', {

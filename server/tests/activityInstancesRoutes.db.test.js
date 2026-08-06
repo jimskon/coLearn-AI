@@ -30,17 +30,28 @@ function remember(kind, id) {
 }
 
 async function cleanupCreatedRows() {
-  const instanceIds = [...created.instances];
+  const instanceIds = new Set(created.instances);
   const activityIds = [...created.activities];
   const courseIds = [...created.courses];
   const classIds = [...created.classes];
   const userIds = [...created.users];
 
-  if (instanceIds.length) {
-    await db.query(`DELETE FROM response_drafts WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM responses WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
+  // Some routes create their own attempts, so discover every instance linked
+  // to this test's activities instead of relying only on helper-created IDs.
+  if (activityIds.length) {
+    const [rows] = await db.query(
+      `SELECT id FROM activity_instances WHERE activity_id IN (?)`,
+      [activityIds],
+    );
+    rows.forEach((row) => instanceIds.add(Number(row.id)));
+  }
+
+  const allInstanceIds = [...instanceIds].filter(Number.isFinite);
+  if (allInstanceIds.length) {
+    await db.query(`DELETE FROM response_drafts WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM responses WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [allInstanceIds]);
   }
   if (activityIds.length) {
     await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]);

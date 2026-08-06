@@ -1374,21 +1374,6 @@ async function setupMultipleGroupInstances(req, res) {
 
     await conn.beginTransaction();
 
-    // ✅ GUARD: if group 1 exists, do NOT create a second set
-    // Put this BEFORE any deletes/inserts.
-    const [[g1]] = await conn.query(
-      `SELECT id
-       FROM activity_instances
-       WHERE course_id = ? AND activity_id = ? AND group_number = 1
-       LIMIT 1`,
-      [courseId, activityId]
-    );
-
-    if (g1) {
-      await conn.rollback();
-      return res.status(409).json({ error: 'Groups already exist for this activity.' });
-    }
-
     // Look up DB truth
     const [[activityRow]] = await conn.query(
       `SELECT is_test, sheet_url, source_type, content_text FROM pogil_activities WHERE id = ?`,
@@ -1400,6 +1385,25 @@ async function setupMultipleGroupInstances(req, res) {
     const dbIsTest = activityType === 'test';
     const hasTiming = !!testStartAt && Number(testDurationMinutes) > 0;
     const isTest = dbIsTest || hasTiming;
+
+    // A sandbox or abandoned preview may leave an unconfigured placeholder
+    // row behind. It is not a student test attempt and must not block setup.
+    const existingAttemptCondition = isTest
+      ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
+      : '';
+    const [[existingAttempt]] = await conn.query(
+      `SELECT id
+         FROM activity_instances
+        WHERE course_id = ? AND activity_id = ? AND group_number = 1
+          ${existingAttemptCondition}
+        LIMIT 1`,
+      [courseId, activityId],
+    );
+
+    if (existingAttempt) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Groups already exist for this activity.' });
+    }
 
     // For NON-tests, we require groups[]
     if (!isTest) {
@@ -1914,10 +1918,18 @@ async function getInstancesForActivityInCourse(req, res) {
   try {
     await ensureTestFocusSchema();
     const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
-    const [[activity]] = await db.query(`SELECT title FROM pogil_activities WHERE id = ?`, [activityId]);
+    const [[activity]] = await db.query(
+      `SELECT title, is_test, sheet_url, source_type, content_text
+         FROM pogil_activities WHERE id = ?`,
+      [activityId],
+    );
 
     const courseName = course?.name || 'Unknown Course';
     const activityTitle = activity?.title || '';
+    const activityType = await inferActivityTypeFromActivity(activity || {});
+    const scheduledTestOnly = activityType === 'test'
+      ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
+      : '';
 
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
@@ -1945,6 +1957,7 @@ async function getInstancesForActivityInCourse(req, res) {
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
+         ${scheduledTestOnly}
        ORDER BY group_number`,
       [courseId, activityId]
     );

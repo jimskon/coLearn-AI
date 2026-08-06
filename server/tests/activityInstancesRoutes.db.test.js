@@ -1296,6 +1296,46 @@ test('setup-groups returns 409 when group 1 already exists for the activity', as
   assert.equal(Number(countRow.instance_count), 1);
 });
 
+test('test setup ignores an unscheduled placeholder instance', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({
+    classId,
+    createdBy: instructor.id,
+    sourceType: 'local',
+    contentText: '\\mode{test}',
+  });
+  await db.query('UPDATE pogil_activities SET is_test = 1 WHERE id = ?', [activityId]);
+  await createInstance({ activityId, courseId, groupNumber: 1 });
+
+  const response = await requestJson(instructor, '/api/activity-instances/setup-groups', {
+    method: 'POST',
+    body: {
+      activityId,
+      courseId,
+      selectedStudentIds: [student.id],
+      testStartAt: '2026-08-06T13:00:00.000Z',
+      testDurationMinutes: 30,
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const [[scheduledCount]] = await db.query(
+    `SELECT COUNT(*) AS count FROM activity_instances
+      WHERE activity_id = ? AND course_id = ?
+        AND test_start_at IS NOT NULL AND test_duration_minutes > 0`,
+    [activityId, courseId],
+  );
+  assert.equal(Number(scheduledCount.count), 1);
+
+  const roster = await requestJson(instructor, `/api/activity-instances/by-activity/${courseId}/${activityId}`);
+  assert.equal(roster.status, 200);
+  assert.equal(roster.body.groups.length, 1);
+  assert.equal(Number(roster.body.groups[0].members[0].student_id), student.id);
+});
+
 test('submit-test regrade fails cleanly when legacy ownership is ambiguous', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');

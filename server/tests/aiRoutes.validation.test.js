@@ -148,6 +148,8 @@ test('inline AI uses an allowed per-block model and defaults unsupported values 
     assert.equal(explicit.body.response, 'Try tracing the value through the loop.');
     assert.equal(requests[0].model, 'gpt-4o-mini');
     assert.equal(requests[1].model, 'gpt-5-mini');
+    assert.equal(requests[1].max_output_tokens, 1600);
+    assert.deepEqual(requests[1].reasoning, { effort: 'minimal' });
   } finally {
     __testHooks.openai.responses.create = originalCreate;
     process.env.OPENAI_API_KEY = originalApiKey;

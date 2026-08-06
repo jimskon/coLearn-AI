@@ -204,13 +204,22 @@ async function assistInlineActivity(req, res) {
   ].filter(Boolean).join('\n\n');
 
   try {
-    const response = await openai.responses.create({
+    // GPT-5 mini is a reasoning model.  A 500-token total allowance can be
+    // consumed entirely by reasoning before it emits visible text, which the
+    // API reports as incomplete/max_output_tokens.  Inline classroom help is
+    // short and direct, so use minimal reasoning with room for an answer.
+    const request = {
       model: selectedModel,
       instructions: system,
       input: user,
       text: { format: { type: 'text' } },
-      max_output_tokens: 500,
-    });
+      max_output_tokens: selectedModel === 'gpt-5-mini' ? 1600 : 500,
+    };
+    if (selectedModel === 'gpt-5-mini') {
+      request.reasoning = { effort: 'minimal' };
+    }
+
+    const response = await openai.responses.create(request);
 
     const outputText = getResponseOutputText(response);
     if (!outputText) {

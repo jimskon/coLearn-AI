@@ -1049,11 +1049,18 @@ async function applyGroupRetryGate({
     let retryCount = Number(map.get(cntKey));
     let storedHash = String(map.get(hashKey) ?? "");
 
-    // initialize max/count if missing
-    if (!Number.isFinite(storedMax)) {
+    // A retry policy belongs to the current version of the activity.  When an
+    // instructor changes \retries{n}, counters from an earlier policy must not
+    // make a fresh attempt look exhausted.  Reset the count and fingerprint
+    // together so the next rejected submission is counted as attempt one.
+    const policyChanged = !Number.isFinite(storedMax) || storedMax !== max;
+    if (policyChanged) {
       await upsertResp(conn, instanceId, maxKey, max, answeredByUserId);
-    }
-    if (!Number.isFinite(retryCount)) {
+      retryCount = 0;
+      await upsertResp(conn, instanceId, cntKey, retryCount, answeredByUserId);
+      storedHash = "";
+      await upsertResp(conn, instanceId, hashKey, storedHash, answeredByUserId);
+    } else if (!Number.isFinite(retryCount)) {
       retryCount = 0;
       await upsertResp(conn, instanceId, cntKey, retryCount, answeredByUserId);
     }

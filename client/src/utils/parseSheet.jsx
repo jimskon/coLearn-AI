@@ -2634,14 +2634,17 @@ export function renderBlocks(blocks, options = {}) {
       const hasPython = (block.pythonBlocks?.length || 0) > 0;
       const hasCpp = (block.cppBlocks?.length || 0) > 0;
       const hasMultipleChoice = (block.multipleChoice?.choices?.length || 0) > 0;
+      const hasInlineAi = (block.aiBlocks?.length || 0) > 0;
       const isCodeOnly =
         (hasPython || hasCpp) && !block.hasTextResponse && !block.hasTableResponse;
 
       // A multiple-choice response replaces the default free-text response. Authors can
-      // still add code, tables, or other response elements to the same question.
+      // still add code, tables, or other response elements to the same question. An
+      // inline AI block is itself an interaction, so it does not receive the legacy
+      // default text area unless the author explicitly adds \textresponse.
       const showTextArea =
         !hasMultipleChoice &&
-        (block.hasTextResponse || (!hasPython && !hasCpp && !block.hasTableResponse));
+        (block.hasTextResponse || (!hasInlineAi && !hasPython && !hasCpp && !block.hasTableResponse));
 
       const lockMainResponse =
         runMode === 'preview'

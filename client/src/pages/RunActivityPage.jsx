@@ -382,6 +382,9 @@ export default function RunActivityPage({
   const [timeExpired, setTimeExpired] = useState(false);
   // ✅ add this (prevents repeat auto-submit calls)
   const [autoSubmitted, setAutoSubmitted] = useState(false);
+  const [focusWarning, setFocusWarning] = useState(null);
+  const focusLossRequestRef = useRef(false);
+  const focusAutoSubmitRef = useRef(false);
   const [sectionTimerNowMs, setSectionTimerNowMs] = useState(() => Date.now());
 
 
@@ -2755,6 +2758,64 @@ export default function RunActivityPage({
 
   } // END handleSubmit
 
+  // A web page cannot prevent a tab/app switch, but it can reliably detect
+  // that the page became hidden. The server persists the count so refreshing
+  // the page cannot reset the first-warning/second-submit policy.
+  useEffect(() => {
+    const canMonitor =
+      isTestMode &&
+      isStudent &&
+      !!instanceId &&
+      !activity?.submitted_at &&
+      !testLockState.lockedBefore;
+
+    if (!canMonitor) return undefined;
+
+    const recordFocusLoss = async () => {
+      if (!document.hidden || focusLossRequestRef.current || focusAutoSubmitRef.current) return;
+
+      focusLossRequestRef.current = true;
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/focus-loss`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            keepalive: true,
+          },
+        );
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.ok) {
+          console.warn('Could not record test focus loss:', result?.error || response.status);
+          return;
+        }
+
+        if (result.action === 'submit') {
+          focusAutoSubmitRef.current = true;
+          setFocusWarning('Focus was lost a second time. Your test is being submitted.');
+          await handleSubmit(false);
+          return;
+        }
+
+        setFocusWarning('Warning: leaving the test window was recorded. Leaving it again will submit your test.');
+      } catch (err) {
+        console.warn('Could not record test focus loss:', err);
+      } finally {
+        focusLossRequestRef.current = false;
+      }
+    };
+
+    document.addEventListener('visibilitychange', recordFocusLoss);
+    return () => document.removeEventListener('visibilitychange', recordFocusLoss);
+  }, [
+    isTestMode,
+    isStudent,
+    instanceId,
+    activity?.submitted_at,
+    testLockState.lockedBefore,
+    handleSubmit,
+  ]);
+
   async function handleRegradeTest() {
     if (isSubmitting) return;
     if (!canRegradeTests) return;
@@ -3170,6 +3231,16 @@ export default function RunActivityPage({
             className="mt-3"
           >
             {submitAlert}
+          </Alert>
+        )}
+        {focusWarning && (
+          <Alert
+            variant={focusAutoSubmitRef.current ? 'danger' : 'warning'}
+            dismissible={!focusAutoSubmitRef.current}
+            onClose={() => setFocusWarning(null)}
+            className="mt-3"
+          >
+            {focusWarning}
           </Alert>
         )}
         {effectiveViewMode === 'history' ? (

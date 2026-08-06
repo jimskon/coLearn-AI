@@ -9,6 +9,7 @@ const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
+const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
 
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -470,6 +471,7 @@ async function clearResponsesForInstance(req, res) {
   if (!instanceId) return res.status(400).json({ error: 'Bad instance id' });
 
   try {
+    await ensureTestFocusSchema();
     const [del] = await db.query(
       `DELETE FROM responses WHERE activity_instance_id = ?`,
       [instanceId]
@@ -491,6 +493,7 @@ async function clearResponsesForInstance(req, res) {
 	       section_timer_paused = 0,
 	       section_timer_paused_at = NULL,
 	       test_reopen_until = NULL,
+	       test_focus_loss_count = 0,
 	       completed_groups  = 0
 	   WHERE id = ?`,
       [instanceId]
@@ -517,6 +520,93 @@ async function clearResponsesForInstance(req, res) {
   } catch (e) {
     console.error('clearResponsesForInstance error:', e);
     res.status(500).json({ error: 'Failed to clear responses' });
+  }
+}
+
+// Record a student leaving the visible test page. The first loss is a warning;
+// the second instructs the browser to submit. The server owns the count so a
+// refresh cannot reset the rule.
+async function recordTestFocusLoss(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  const userId = Number(req.user?.id || req.session?.userId);
+
+  if (!instanceId || !userId) {
+    return res.status(400).json({ error: 'A signed-in student and instance are required.' });
+  }
+  if (req.user?.role && req.user.role !== 'student') {
+    return res.status(403).json({ error: 'Only students can record test focus events.' });
+  }
+
+  try {
+    await ensureTestFocusSchema();
+    const conn = await db.getConnection();
+    let focusLossCount;
+    let context;
+    try {
+      await conn.beginTransaction();
+      const [[instance]] = await conn.query(
+        `SELECT ai.id, ai.activity_id, ai.course_id, ai.submitted_at, a.is_test
+           FROM activity_instances ai
+           JOIN pogil_activities a ON a.id = ai.activity_id
+           JOIN group_members gm ON gm.activity_instance_id = ai.id
+          WHERE ai.id = ? AND gm.student_id = ?
+          FOR UPDATE`,
+        [instanceId, userId],
+      );
+
+      if (!instance) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Test attempt not found for this student.' });
+      }
+      if (Number(instance.is_test) !== 1) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Focus events apply only to tests.' });
+      }
+      if (instance.submitted_at) {
+        await conn.rollback();
+        return res.status(409).json({ error: 'This test has already been submitted.' });
+      }
+
+      await conn.query(
+        `UPDATE activity_instances
+            SET test_focus_loss_count = test_focus_loss_count + 1
+          WHERE id = ?`,
+        [instanceId],
+      );
+      const [[updated]] = await conn.query(
+        'SELECT test_focus_loss_count FROM activity_instances WHERE id = ?',
+        [instanceId],
+      );
+      focusLossCount = Number(updated?.test_focus_loss_count || 0);
+      context = instance;
+      await conn.commit();
+    } catch (err) {
+      try { await conn.rollback(); } catch { /* no-op */ }
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    void recordAuditEvent('test_focus_lost', {
+      req,
+      userId,
+      courseId: context.course_id,
+      activityId: context.activity_id,
+      activityInstanceId: instanceId,
+      details: {
+        focus_loss_count: focusLossCount,
+        action: focusLossCount >= 2 ? 'submit' : 'warn',
+      },
+    });
+
+    return res.json({
+      ok: true,
+      focusLossCount,
+      action: focusLossCount >= 2 ? 'submit' : 'warn',
+    });
+  } catch (err) {
+    console.error('recordTestFocusLoss failed:', err);
+    return res.status(500).json({ error: 'Could not record the test focus event.' });
   }
 }
 
@@ -3025,6 +3115,7 @@ async function getInstanceResponseHistory(req, res) {
 // Export it as part of the module
 module.exports = {
   clearResponsesForInstance,
+  recordTestFocusLoss,
   deleteActivityInstance,
   getParsedActivityDoc,
   createActivityInstance,

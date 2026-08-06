@@ -153,6 +153,9 @@ async function main() {
           FOREIGN KEY (active_student_id) REFERENCES users(id)
       );
 
+      ALTER TABLE activity_instances
+        ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0;
+
       CREATE TABLE IF NOT EXISTS audit_log (
         id INT AUTO_INCREMENT PRIMARY KEY,
         event_type VARCHAR(191) NOT NULL,

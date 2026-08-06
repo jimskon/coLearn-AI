@@ -161,7 +161,8 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS points_possible DECIMAL(10,2) NULL,
       ADD COLUMN IF NOT EXISTS hidden TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_before_start TINYINT(1) NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0
+      ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0
   `);
 
   await db.query(`
@@ -1575,4 +1576,35 @@ test('submit-test awards per-choice multiple-choice points, including partial cr
   assert.equal(response.body.earned, 1);
   assert.equal(response.body.max, 2);
   assert.equal(response.body.questions[0].responseScore, 1);
+});
+
+test('first test focus loss warns and the second requires submission', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  await db.query('UPDATE pogil_activities SET is_test = 1 WHERE id = ?', [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+  await addGroupMember({ instanceId, studentId: student.id });
+
+  const first = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.action, 'warn');
+  assert.equal(first.body.focusLossCount, 1);
+
+  const second = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(second.status, 200);
+  assert.equal(second.body.action, 'submit');
+  assert.equal(second.body.focusLossCount, 2);
+
+  const [[instance]] = await db.query(
+    'SELECT test_focus_loss_count FROM activity_instances WHERE id = ?',
+    [instanceId],
+  );
+  assert.equal(Number(instance.test_focus_loss_count), 2);
 });

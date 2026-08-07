@@ -1,13 +1,40 @@
 // server/activities/controller.js
 const db = require('../db');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
-const { loadActivitySourceById } = require('../utils/activityContent');
+const {
+  loadActivitySourceById,
+  fetchGoogleDocLinesByUrl,
+  fetchGoogleDocMetadataByUrl,
+  sourceSyncStatus,
+} = require('../utils/activityContent');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureActivitySourceSchema } = require('../utils/activitySourceSchema');
 
 function extractTitleFromText(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
   return match ? match[1].trim() : null;
+}
+
+async function getRemoteActivityStatus(activity) {
+  if (!activity?.sheet_url) {
+    const error = new Error('This activity does not have a linked Google Doc.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const [remote, remoteLines] = await Promise.all([
+    fetchGoogleDocMetadataByUrl(activity.sheet_url),
+    fetchGoogleDocLinesByUrl(activity.sheet_url),
+  ]);
+  const remoteText = remoteLines.join('\n');
+  const comparison = sourceSyncStatus({
+    localText: activity.content_text,
+    localUpdatedAt: activity.source_updated_at,
+    remoteText,
+    remoteUpdatedAt: remote.updated_at,
+  });
+
+  return { remote, remoteText, comparison };
 }
 
 // Create a new activity
@@ -147,6 +174,77 @@ exports.saveActivitySource = async (req, res) => {
   } catch (err) {
     console.error('saveActivitySource error:', err);
     return res.status(500).json({ error: 'Could not save activity source.' });
+  }
+};
+
+exports.getRemoteSourceStatus = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await ensureActivitySourceSchema();
+    const [[activity]] = await db.query(
+      `SELECT id, sheet_url, content_text, source_updated_at
+         FROM pogil_activities WHERE id = ?`,
+      [id]
+    );
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    const { remote, comparison } = await getRemoteActivityStatus(activity);
+    return res.json({
+      activity_id: Number(id),
+      local: { updated_at: activity.source_updated_at || null, has_copy: activity.content_text != null },
+      remote,
+      comparison,
+    });
+  } catch (err) {
+    console.error('getRemoteSourceStatus error:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : 'Could not read the linked Google Doc.',
+    });
+  }
+};
+
+exports.importRemoteSource = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await ensureActivitySourceSchema();
+    const [[activity]] = await db.query(
+      `SELECT id, title, sheet_url, content_text, source_updated_at
+         FROM pogil_activities WHERE id = ?`,
+      [id]
+    );
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    const { remote, remoteText } = await getRemoteActivityStatus(activity);
+    const nextTitle = extractTitleFromText(remoteText) || activity.title;
+    await db.query(
+      `UPDATE pogil_activities
+          SET content_text = ?, source_type = 'local', title = ?, source_updated_at = NOW(3)
+        WHERE id = ?`,
+      [remoteText, nextTitle, id]
+    );
+    const [[saved]] = await db.query(
+      'SELECT source_updated_at FROM pogil_activities WHERE id = ?', [id]
+    );
+
+    void recordAuditEvent('activity_remote_imported', {
+      req,
+      userId: req.user?.id || null,
+      activityId: Number(id),
+      details: { remote_updated_at: remote.updated_at, remote_url: remote.url },
+    });
+    return res.json({
+      activity_id: Number(id),
+      title: nextTitle,
+      source_type: 'local',
+      source_updated_at: saved?.source_updated_at || null,
+      text: remoteText,
+      remote,
+    });
+  } catch (err) {
+    console.error('importRemoteSource error:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : 'Could not import the linked Google Doc.',
+    });
   }
 };
 

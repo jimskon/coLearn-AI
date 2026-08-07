@@ -1,4 +1,5 @@
 const { google } = require('googleapis');
+const crypto = require('crypto');
 const { authorize } = require('./googleAuth');
 const { extractGoogleFileId } = require('./googleIds');
 
@@ -29,6 +30,49 @@ async function fetchGoogleDocLinesByUrl(sheetUrl) {
   const docs = google.docs({ version: 'v1', auth });
   const doc = await docs.documents.get({ documentId: docId });
   return linesFromGoogleDoc(doc);
+}
+
+async function fetchGoogleDocMetadataByUrl(sheetUrl) {
+  const docId = extractGoogleFileId(sheetUrl);
+  if (!docId) {
+    throw new Error('Invalid Google Doc URL');
+  }
+
+  const auth = await authorize();
+  const drive = google.drive({ version: 'v3', auth });
+  const response = await drive.files.get({
+    fileId: docId,
+    fields: 'id,name,modifiedTime,webViewLink,mimeType',
+  });
+
+  return {
+    id: response.data.id || docId,
+    title: response.data.name || null,
+    updated_at: response.data.modifiedTime || null,
+    url: response.data.webViewLink || sheetUrl,
+    mime_type: response.data.mimeType || null,
+  };
+}
+
+function sourceSyncStatus({ localText, localUpdatedAt, remoteText, remoteUpdatedAt }) {
+  const local = String(localText ?? '').replace(/\r\n/g, '\n');
+  const remote = String(remoteText ?? '').replace(/\r\n/g, '\n');
+  const localHash = crypto.createHash('sha256').update(local).digest('hex');
+  const remoteHash = crypto.createHash('sha256').update(remote).digest('hex');
+
+  if (localHash === remoteHash) {
+    return { state: 'in_sync', local_hash: localHash, remote_hash: remoteHash };
+  }
+
+  const localTime = localUpdatedAt ? new Date(localUpdatedAt).getTime() : NaN;
+  const remoteTime = remoteUpdatedAt ? new Date(remoteUpdatedAt).getTime() : NaN;
+  const state = !local.trim()
+    ? 'remote_only'
+    : Number.isFinite(localTime) && Number.isFinite(remoteTime)
+      ? (remoteTime > localTime ? 'remote_newer' : 'local_newer')
+      : 'different_unknown';
+
+  return { state, local_hash: localHash, remote_hash: remoteHash };
 }
 
 async function loadActivitySourceLines(activity) {
@@ -79,6 +123,8 @@ module.exports = {
   linesFromStoredText,
   linesFromGoogleDoc,
   fetchGoogleDocLinesByUrl,
+  fetchGoogleDocMetadataByUrl,
+  sourceSyncStatus,
   loadActivitySourceLines,
   loadActivitySourceText,
   loadActivitySourceById,

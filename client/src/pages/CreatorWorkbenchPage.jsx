@@ -960,6 +960,10 @@ export default function CreatorWorkbenchPage() {
   const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
   const [showIssuesModal, setShowIssuesModal] = useState(false);
+  const [showRemoteSync, setShowRemoteSync] = useState(false);
+  const [remoteStatus, setRemoteStatus] = useState(null);
+  const [remoteBusy, setRemoteBusy] = useState(false);
+  const [remoteError, setRemoteError] = useState('');
   const [visualUndoStack, setVisualUndoStack] = useState([]);
 
   const autoTimerRef = useRef(null);
@@ -1653,6 +1657,77 @@ export default function CreatorWorkbenchPage() {
       return data;
     } finally {
       setSaveBusy(false);
+    }
+  };
+
+  const loadRemoteStatus = async () => {
+    if (!activity?.id) return;
+    setRemoteBusy(true);
+    setRemoteError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/remote-status`, {
+        credentials: 'include',
+      });
+      const data = await readJsonResponse(res);
+      if (!res.ok) throw new Error(data?.error || 'Could not check the linked Google Doc.');
+      setRemoteStatus(data);
+    } catch (err) {
+      setRemoteStatus(null);
+      setRemoteError(err?.message || String(err));
+    } finally {
+      setRemoteBusy(false);
+    }
+  };
+
+  const openRemoteSync = () => {
+    setShowRemoteSync(true);
+    loadRemoteStatus();
+  };
+
+  const copyLocalSource = async () => {
+    try {
+      await navigator.clipboard.writeText(rawText);
+      setNotice('Local markup copied. Paste it into the Google Doc.');
+      setTimeout(() => setNotice(''), 3000);
+    } catch (err) {
+      setRemoteError('Your browser did not allow copying. Select the Source tab and copy the markup manually.');
+    }
+  };
+
+  const openRemoteDocument = () => {
+    const url = remoteStatus?.remote?.url || activity?.sheet_url;
+    if (!url) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const importRemoteSource = async () => {
+    if (!activity?.id) return;
+    if (!window.confirm('Replace the local activity markup with the current Google Doc text? This cannot be undone from this dialog.')) return;
+    setRemoteBusy(true);
+    setRemoteError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/import-remote`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await readJsonResponse(res);
+      if (!res.ok) throw new Error(data?.error || 'Could not import the linked Google Doc.');
+      setRawText(data.text || '');
+      compileText(data.text || '');
+      setActivity((prev) => ({
+        ...(prev || {}),
+        title: data.title || prev?.title,
+        content_text: data.text || '',
+        source_type: 'local',
+        source_updated_at: data.source_updated_at || prev?.source_updated_at || null,
+      }));
+      setNotice('Imported the current Google Doc into the local activity.');
+      setTimeout(() => setNotice(''), 3000);
+      await loadRemoteStatus();
+    } catch (err) {
+      setRemoteError(err?.message || String(err));
+    } finally {
+      setRemoteBusy(false);
     }
   };
 
@@ -2550,10 +2625,17 @@ export default function CreatorWorkbenchPage() {
               {proposal ? <Badge bg="warning" text="dark">Proposal</Badge> : null}
               {activeIssues.length ? <Badge bg={activeIssues.some((issue) => issue.severity === 'error') ? 'danger' : 'warning'}>{activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</Badge> : <Badge bg="success">Clean</Badge>}
             </div>
-            <Button size="sm" variant="success" onClick={() => saveSource(rawText)} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal}>
-              {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
-              Save
-            </Button>
+            <div className="d-flex gap-2">
+              {activity?.sheet_url ? (
+                <Button size="sm" variant="outline-secondary" onClick={openRemoteSync} disabled={!!proposal}>
+                  Remote Copy
+                </Button>
+              ) : null}
+              <Button size="sm" variant="success" onClick={() => saveSource(rawText)} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal}>
+                {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
+                Save
+              </Button>
+            </div>
           </div>
           {isDemoCreator ? (
             <div className="px-3 py-2 border-top bg-light text-muted small">
@@ -3439,6 +3521,44 @@ export default function CreatorWorkbenchPage() {
             </Alert>
           ))}
         </Modal.Body>
+      </Modal>
+      <Modal show={showRemoteSync} onHide={() => setShowRemoteSync(false)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Remote Google Doc</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="text-muted">
+            Google is read-only from coLearn-AI. You can copy the local markup to paste into the Doc, or explicitly import the Doc into this activity.
+          </p>
+          {remoteBusy ? <div className="text-muted">Checking the linked Google Doc…</div> : null}
+          {remoteError ? <Alert variant="danger" className="py-2">{remoteError}</Alert> : null}
+          {remoteStatus ? (
+            <>
+              <div className="border rounded p-3 mb-3">
+                <div><strong>Local version:</strong> {remoteStatus.local?.updated_at ? formatLocalDateTime(remoteStatus.local.updated_at) : 'not recorded yet'}</div>
+                <div><strong>Google Doc version:</strong> {remoteStatus.remote?.updated_at ? formatLocalDateTime(remoteStatus.remote.updated_at) : 'unknown'}</div>
+                <div className="mt-2"><strong>Status:</strong> {
+                  ({
+                    in_sync: 'Markup matches',
+                    local_newer: 'Local markup is newer',
+                    remote_newer: 'Google Doc markup is newer',
+                    remote_only: 'Only the Google Doc has markup',
+                    different_unknown: 'Markup differs; timestamps are unavailable',
+                  })[remoteStatus.comparison?.state] || 'Could not compare versions'
+                }</div>
+              </div>
+              <div className="small text-muted">{remoteStatus.remote?.title || activity?.sheet_url}</div>
+            </>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer className="justify-content-between">
+          <Button variant="outline-secondary" onClick={loadRemoteStatus} disabled={remoteBusy}>Refresh status</Button>
+          <div className="d-flex gap-2">
+            <Button variant="outline-primary" onClick={copyLocalSource} disabled={!rawText}>Copy Local Markup</Button>
+            <Button variant="outline-primary" onClick={openRemoteDocument}>Open Remote</Button>
+            <Button variant="warning" onClick={importRemoteSource} disabled={remoteBusy}>Import Remote</Button>
+          </div>
+        </Modal.Footer>
       </Modal>
       <CreatorTutorialOverlay
         phase={creatorTutorial.phase}

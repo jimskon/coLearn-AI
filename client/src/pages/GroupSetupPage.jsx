@@ -27,6 +27,7 @@ export default function GroupSetupPage() {
   const [lockedBeforeStart, setLockedBeforeStart] = useState(true);
   const [lockedAfterEnd, setLockedAfterEnd] = useState(true);
   const [focusEnforcement, setFocusEnforcement] = useState(false);
+  const [assignmentDueAt, setAssignmentDueAt] = useState('');
 
   const [activities, setActivities] = useState([]);
   const [cloneFromActivityId, setCloneFromActivityId] = useState('');
@@ -284,6 +285,7 @@ export default function GroupSetupPage() {
             activityId: Number(activityId),
             courseId: Number(courseId),
             groups: assignmentGroups,
+            assignmentDueAt: assignmentDueAt ? new Date(assignmentDueAt).toISOString() : null,
           }),
         });
         const data = await res.json();
@@ -315,6 +317,7 @@ export default function GroupSetupPage() {
           activityId: Number(activityId),
           courseId: Number(courseId),
           groups,
+          assignmentDueAt: isAssignment && assignmentDueAt ? new Date(assignmentDueAt).toISOString() : null,
         })
       });
 
@@ -456,6 +459,19 @@ export default function GroupSetupPage() {
               </Form.Text>
             </Col>
           </>
+        )}
+        {isAssignment && (
+          <Col md={4}>
+            <Form.Label>Due date &amp; time <span className="text-muted">(optional)</span></Form.Label>
+            <Form.Control
+              type="datetime-local"
+              value={assignmentDueAt}
+              onChange={(e) => setAssignmentDueAt(e.target.value)}
+            />
+            <Form.Text muted>
+              Students may still submit afterward; those submissions are marked late.
+            </Form.Text>
+          </Col>
         )}
       </Row>
       {isAssignment && !showGroupOptions && (

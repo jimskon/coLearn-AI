@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { isSurveyMultipleChoice, validateMultipleChoice } from '../src/utils/multipleChoice.js';
+import {
+  isSurveyMultipleChoice,
+  parseMultipleChoiceSelections,
+  serializeMultipleChoiceSelections,
+  validateMultipleChoice,
+} from '../src/utils/multipleChoice.js';
 import {
   getMultipleChoiceTestModeIssueMessage,
   getUnsupportedScoreTypeMessage,
@@ -70,6 +75,13 @@ test('identifies a blank-answer choice block as a survey', () => {
       choices: [{ value: 'Often', points: 1 }, { value: 'Never', points: 0 }],
     },
   }), false);
+});
+
+test('round-trips multi-select survey choices without treating malformed values as selections', () => {
+  const stored = serializeMultipleChoiceSelections(['Code tracing', 'Discussion', 'Code tracing']);
+  assert.equal(stored, '["Code tracing","Discussion"]');
+  assert.deepEqual(parseMultipleChoiceSelections(stored), ['Code tracing', 'Discussion']);
+  assert.deepEqual(parseMultipleChoiceSelections('Code tracing'), []);
 });
 
 test('parses only supported score types and preserves unsupported ones for validation', () => {

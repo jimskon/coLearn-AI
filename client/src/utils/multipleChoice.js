@@ -45,3 +45,17 @@ export function isSurveyMultipleChoice(questionBlock) {
     && !String(questionBlock.multipleChoice.correctAnswer || '').trim()
     && !questionBlock.multipleChoice.hasChoiceScores;
 }
+
+export function parseMultipleChoiceSelections(rawValue) {
+  if (Array.isArray(rawValue)) return rawValue.map(String);
+  try {
+    const parsed = JSON.parse(String(rawValue || '[]'));
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function serializeMultipleChoiceSelections(values) {
+  return JSON.stringify([...new Set(Array.isArray(values) ? values.map(String) : [])]);
+}

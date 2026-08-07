@@ -90,6 +90,9 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 | `\sampleresponses{...}` | Sample instructor solution (hidden) | `\sampleresponses{Chooses a local optimum.}` |
 | `\feedbackprompt{...}` | AI grading guidance | `\feedbackprompt{Encourage elaboration.}` |
 | `\followupprompt{...}` | Optional AI follow-up hint | `\followupprompt{Why might greedy fail?}` |
+| `\multiplechoice{...}` | Begins a single-answer multiple-choice block; the optional value is its answer key | `\multiplechoice{Ottawa}` |
+| `\multiplechoice{multiple}` | Begins an ungraded “select all that apply” survey block | `\multiplechoice{multiple}` |
+| `\choice{value}` | Adds a choice to a multiple-choice block | `\choice{Writing code}` |
 
 Every `\question` must explicitly end with `\endquestion`.
 
@@ -97,6 +100,7 @@ Notes:
 
 - If `\responsemode{...}` is omitted, the default is `answer`.
 - Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
+- Use `\multiplechoice{multiple}` for a multi-select survey. It displays checkboxes, stores all selected choice texts, and has no automatic grading. Do not attach choice points or a `\score` block.
 
 ---
 

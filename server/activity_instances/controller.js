@@ -79,7 +79,10 @@ function parseTestQuestionsFromLines(lines) {
 
   const finishMultipleChoice = () => {
     if (!currentQuestion || !currentMultipleChoice) return;
-    const correctAnswer = String(currentMultipleChoice.correctAnswer || '').trim();
+    const selectionMode = currentMultipleChoice.selectionMode === 'multiple' ? 'multiple' : 'single';
+    const correctAnswer = selectionMode === 'multiple'
+      ? ''
+      : String(currentMultipleChoice.correctAnswer || '').trim();
     const choices = Array.isArray(currentMultipleChoice.choices)
       ? currentMultipleChoice.choices
           .map((choice) => ({
@@ -93,6 +96,7 @@ function parseTestQuestionsFromLines(lines) {
     const hasChoiceScores = choices.some((choice) => choice.points !== null);
     currentQuestion.multipleChoice = {
       correctAnswer,
+      selectionMode,
       choices,
       hasChoiceScores,
       maxChoicePoints: hasChoiceScores
@@ -162,8 +166,10 @@ function parseTestQuestionsFromLines(lines) {
 
     if (trimmed.startsWith('\\multiplechoice')) {
       const match = trimmed.match(/^\\multiplechoice\{([\s\S]*?)\}\s*$/);
+      const value = String(match?.[1] || '').trim();
       currentMultipleChoice = {
-        correctAnswer: String(match?.[1] || '').trim(),
+        correctAnswer: value.toLowerCase() === 'multiple' ? '' : value,
+        selectionMode: value.toLowerCase() === 'multiple' ? 'multiple' : 'single',
         choices: [],
       };
       continue;
@@ -2612,6 +2618,7 @@ async function submitTest(req, res) {
       const sourceQuestion = parsedQuestions[index] || {};
       const multipleChoice = sourceQuestion.multipleChoice || null;
       const isMultipleChoice = Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
+      const isMultipleSelect = multipleChoice?.selectionMode === 'multiple';
 
       const bucketPoints = (bucket) => {
         if (!bucket) return 0;
@@ -2732,7 +2739,7 @@ async function submitTest(req, res) {
         responseFeedback = graded.responseFeedback || '';
       }
 
-      if (isMultipleChoice) {
+      if (isMultipleChoice && !isMultipleSelect) {
         if (maxRespPts > 0) {
           if (multipleChoice?.hasChoiceScores) {
             const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);

@@ -311,16 +311,17 @@ function applyMultipleChoiceEditsToSource(sourceText, block, edits) {
     return lines.join('\n');
   }
 
-  const correctAnswer = String(edits.multipleChoiceAnswer || '').trim();
+  const selectionMode = edits.multipleChoiceSelectionMode === 'multiple' ? 'multiple' : 'single';
+  const correctAnswer = selectionMode === 'multiple' ? '' : String(edits.multipleChoiceAnswer || '').trim();
   const choices = (edits.multipleChoiceChoices || [])
     .map((choice) => ({
       value: String(choice?.value ?? choice ?? '').trim(),
       points: choice?.points,
     }));
   const markup = [
-    `\\multiplechoice{${correctAnswer}}`,
+    `\\multiplechoice{${selectionMode === 'multiple' ? 'multiple' : correctAnswer}}`,
     ...choices.map(({ value, points }) => (
-      `\\choice{${value}}${Number.isInteger(points) && points >= 0 ? `{${points}}` : ''}`
+      `\\choice{${value}}${selectionMode === 'single' && Number.isInteger(points) && points >= 0 ? `{${points}}` : ''}`
     )),
     '\\endmultiplechoice',
   ];
@@ -354,6 +355,7 @@ function buildQuestionInspectorDraft(block) {
     feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
     followupPrompt: htmlToEditorText(block?.followups?.[0]),
     multipleChoiceEnabled: !!multipleChoice,
+    multipleChoiceSelectionMode: multipleChoice?.selectionMode || 'single',
     multipleChoiceAnswer: multipleChoice?.correctAnswer ?? '',
     multipleChoiceChoices: multipleChoice?.choices?.map((choice) => ({
       value: choice.value,
@@ -993,7 +995,7 @@ export default function CreatorWorkbenchPage() {
   const multipleChoiceValidation = useMemo(() => {
     if (!questionInspectorDraft?.multipleChoiceEnabled) return { errors: [] };
     return validateMultipleChoice(
-      questionInspectorDraft.multipleChoiceAnswer,
+      questionInspectorDraft.multipleChoiceSelectionMode === 'multiple' ? '' : questionInspectorDraft.multipleChoiceAnswer,
       questionInspectorDraft.multipleChoiceChoices,
     );
   }, [questionInspectorDraft]);
@@ -3074,12 +3076,31 @@ export default function CreatorWorkbenchPage() {
                                 }))}
                               />
                               <div className="text-muted small mt-1">
-                                Students select one answer; the stored response is the choice text, not a letter.
+                                Choose single-select for one answer or multi-select for survey checkboxes.
                               </div>
                             </Form.Group>
 
                             {questionInspectorDraft?.multipleChoiceEnabled ? (
                               <div className="border rounded p-2 mb-3 bg-light">
+                                <Form.Group className="mb-3">
+                                  <Form.Label>Selection type</Form.Label>
+                                  <Form.Select
+                                    value={questionInspectorDraft?.multipleChoiceSelectionMode || 'single'}
+                                    disabled={!!proposal}
+                                    onChange={(event) => setQuestionInspectorDraft((prev) => ({
+                                      ...(prev || {}),
+                                      multipleChoiceSelectionMode: event.target.value,
+                                      multipleChoiceAnswer: event.target.value === 'multiple' ? '' : prev?.multipleChoiceAnswer,
+                                      multipleChoiceChoices: (prev?.multipleChoiceChoices || []).map((choice) => (
+                                        event.target.value === 'multiple' ? { ...choice, points: null } : choice
+                                      )),
+                                    }))}
+                                  >
+                                    <option value="single">Choose one answer</option>
+                                    <option value="multiple">Select all that apply (survey)</option>
+                                  </Form.Select>
+                                </Form.Group>
+                                {questionInspectorDraft?.multipleChoiceSelectionMode !== 'multiple' ? (
                                 <Form.Group className="mb-2">
                                   <Form.Label>Legacy Answer Key <span className="text-muted small">(optional; leave blank for surveys or choice-level scoring)</span></Form.Label>
                                   <Form.Control
@@ -3091,6 +3112,7 @@ export default function CreatorWorkbenchPage() {
                                     }))}
                                   />
                                 </Form.Group>
+                                ) : null}
                                 <Form.Label className="mb-1">Choices</Form.Label>
                                 {(questionInspectorDraft?.multipleChoiceChoices || []).map((choice, index) => (
                                   <div className="d-flex gap-2 mb-2" key={`multiple-choice-option-${index}`}>
@@ -3104,7 +3126,7 @@ export default function CreatorWorkbenchPage() {
                                         return { ...(prev || {}), multipleChoiceChoices: choices };
                                       })}
                                     />
-                                    <Form.Control
+                                    {questionInspectorDraft?.multipleChoiceSelectionMode !== 'multiple' ? <Form.Control
                                       type="number"
                                       min="0"
                                       step="1"
@@ -3122,7 +3144,7 @@ export default function CreatorWorkbenchPage() {
                                         };
                                         return { ...(prev || {}), multipleChoiceChoices: choices };
                                       })}
-                                    />
+                                    /> : null}
                                     <Button
                                       size="sm"
                                       variant="outline-danger"

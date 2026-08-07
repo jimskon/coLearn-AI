@@ -28,6 +28,7 @@ import {
   X,
 } from 'react-bootstrap-icons';
 import { useUser } from '../context/UserContext';
+import { formatLocalDateTime } from '../utils/time';
 import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import {
@@ -1320,7 +1321,13 @@ export default function CreatorWorkbenchPage() {
           ? sourceData.lines.join('\n')
           : String(sourceData?.text || activityData?.content_text || '');
 
-        setActivity(activityData);
+        setActivity({
+          ...activityData,
+          source_updated_at: sourceData?.metadata?.source_updated_at
+            ?? sourceData?.source_updated_at
+            ?? activityData?.source_updated_at
+            ?? null,
+        });
         setDraft((previous) => ({
           ...previous,
           title: activityData?.title || previous.title,
@@ -1529,6 +1536,10 @@ export default function CreatorWorkbenchPage() {
         const sourceData = await sourceRes.json().catch(() => ({}));
         if (!sourceRes.ok) throw new Error(sourceData?.error || 'The assignment draft was created, but the lab boilerplate could not be saved.');
         sourceText = labBoilerplateSource;
+        data.source_updated_at = sourceData?.metadata?.source_updated_at
+          ?? sourceData?.source_updated_at
+          ?? data.source_updated_at
+          ?? null;
       }
 
       setActivity({ ...data, content_text: sourceText });
@@ -1628,7 +1639,15 @@ export default function CreatorWorkbenchPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || `Save failed ${res.status}`);
-      setActivity((prev) => ({ ...(prev || {}), title: data?.title || prev?.title, content_text: sourceText }));
+      setActivity((prev) => ({
+        ...(prev || {}),
+        title: data?.title || prev?.title,
+        content_text: sourceText,
+        source_updated_at: data?.metadata?.source_updated_at
+          ?? data?.source_updated_at
+          ?? prev?.source_updated_at
+          ?? null,
+      }));
       setNotice('Saved.');
       setTimeout(() => setNotice(''), 1800);
       return data;
@@ -2202,6 +2221,9 @@ export default function CreatorWorkbenchPage() {
           <div className="text-muted small">
             {classInfo?.name || (effectiveClassId ? `Class ${effectiveClassId}` : 'New class activity')}
             {activity?.title ? ` · ${activity.title}` : ''}
+            {activity?.source_updated_at
+              ? ` · Activity version: ${formatLocalDateTime(activity.source_updated_at)}`
+              : activity?.id ? ' · Activity version: not recorded yet' : ''}
           </div>
         </div>
         <Button

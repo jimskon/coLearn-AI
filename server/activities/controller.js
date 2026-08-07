@@ -3,6 +3,7 @@ const db = require('../db');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const { loadActivitySourceById } = require('../utils/activityContent');
 const { recordAuditEvent } = require('../utils/auditLogger');
+const { ensureActivitySourceSchema } = require('../utils/activitySourceSchema');
 
 function extractTitleFromText(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
@@ -57,6 +58,7 @@ exports.createActivity = async (req, res) => {
 exports.getActivity = async (req, res) => {
   const { id } = req.params;
   try {
+    await ensureActivitySourceSchema();
     const [rows] = await db.query('SELECT * FROM pogil_activities WHERE id = ?', [id]);
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Activity not found' });
@@ -77,6 +79,7 @@ exports.getActivitySource = async (req, res) => {
   const { id } = req.params;
 
   try {
+    await ensureActivitySourceSchema();
     const source = await loadActivitySourceById(db, id);
     if (!source) {
       return res.status(404).json({ error: 'Activity not found' });
@@ -85,6 +88,10 @@ exports.getActivitySource = async (req, res) => {
     return res.json({
       activity_id: Number(id),
       source_type: source.activity.source_type || 'remote',
+      source_updated_at: source.activity.source_updated_at || null,
+      metadata: {
+        source_updated_at: source.activity.source_updated_at || null,
+      },
       lines: source.lines,
       text: source.text,
     });
@@ -103,6 +110,7 @@ exports.saveActivitySource = async (req, res) => {
   }
 
   try {
+    await ensureActivitySourceSchema();
     const [rows] = await db.query('SELECT id, title FROM pogil_activities WHERE id = ?', [id]);
     if (!rows.length) {
       return res.status(404).json({ error: 'Activity not found' });
@@ -115,15 +123,25 @@ exports.saveActivitySource = async (req, res) => {
       `UPDATE pogil_activities
           SET content_text = ?,
               source_type = 'local',
-              title = ?
+              title = ?,
+              source_updated_at = NOW(3)
         WHERE id = ?`,
       [text, nextTitle, id]
+    );
+
+    const [[saved]] = await db.query(
+      'SELECT source_updated_at FROM pogil_activities WHERE id = ?',
+      [id]
     );
 
     return res.json({
       activity_id: Number(id),
       source_type: 'local',
       title: nextTitle,
+      source_updated_at: saved?.source_updated_at || null,
+      metadata: {
+        source_updated_at: saved?.source_updated_at || null,
+      },
       text,
     });
   } catch (err) {

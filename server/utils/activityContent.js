@@ -57,7 +57,7 @@ async function loadActivitySourceText(activity) {
 
 async function loadActivitySourceById(db, activityId) {
   const [rows] = await db.query(
-    `SELECT id, sheet_url, source_type, content_text, is_test
+    `SELECT id, sheet_url, source_type, content_text, source_updated_at, is_test
        FROM pogil_activities
       WHERE id = ?`,
     [activityId]

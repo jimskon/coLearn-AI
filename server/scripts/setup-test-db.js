@@ -122,6 +122,7 @@ async function main() {
         sheet_url TEXT DEFAULT NULL,
         source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         content_text LONGTEXT DEFAULT NULL,
+        source_updated_at DATETIME(3) DEFAULT NULL,
         class_id INT NOT NULL,
         order_index INT NOT NULL DEFAULT 0,
         created_by INT DEFAULT NULL,
@@ -134,6 +135,7 @@ async function main() {
       );
 
       ALTER TABLE pogil_activities
+        ADD COLUMN IF NOT EXISTS source_updated_at DATETIME(3) DEFAULT NULL,
         MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         MODIFY COLUMN content_text LONGTEXT NULL;
 

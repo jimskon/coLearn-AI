@@ -236,6 +236,7 @@ CREATE TABLE `pogil_activities` (
   `is_test` tinyint(1) DEFAULT NULL,
   `source_type` varchar(16) NOT NULL DEFAULT 'remote',
   `content_text` longtext DEFAULT NULL,
+  `source_updated_at` datetime(3) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `class_id` (`class_id`),
   KEY `created_by` (`created_by`),
@@ -329,4 +330,3 @@ CREATE TABLE `users` (
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
-

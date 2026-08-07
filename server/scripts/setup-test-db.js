@@ -122,6 +122,7 @@ async function main() {
         sheet_url TEXT DEFAULT NULL,
         source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         content_text LONGTEXT DEFAULT NULL,
+        source_updated_at DATETIME(3) DEFAULT NULL,
         class_id INT NOT NULL,
         order_index INT NOT NULL DEFAULT 0,
         created_by INT DEFAULT NULL,
@@ -134,6 +135,7 @@ async function main() {
       );
 
       ALTER TABLE pogil_activities
+        ADD COLUMN IF NOT EXISTS source_updated_at DATETIME(3) DEFAULT NULL,
         MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         MODIFY COLUMN content_text LONGTEXT NULL;
 
@@ -152,6 +154,10 @@ async function main() {
         CONSTRAINT activity_instances_student_fk
           FOREIGN KEY (active_student_id) REFERENCES users(id)
       );
+
+      ALTER TABLE activity_instances
+        ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS test_focus_enforcement TINYINT(1) NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS audit_log (
         id INT AUTO_INCREMENT PRIMARY KEY,

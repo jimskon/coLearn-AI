@@ -9,6 +9,7 @@ const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
+const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
 
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -470,6 +471,7 @@ async function clearResponsesForInstance(req, res) {
   if (!instanceId) return res.status(400).json({ error: 'Bad instance id' });
 
   try {
+    await ensureTestFocusSchema();
     const [del] = await db.query(
       `DELETE FROM responses WHERE activity_instance_id = ?`,
       [instanceId]
@@ -491,6 +493,7 @@ async function clearResponsesForInstance(req, res) {
 	       section_timer_paused = 0,
 	       section_timer_paused_at = NULL,
 	       test_reopen_until = NULL,
+	       test_focus_loss_count = 0,
 	       completed_groups  = 0
 	   WHERE id = ?`,
       [instanceId]
@@ -517,6 +520,101 @@ async function clearResponsesForInstance(req, res) {
   } catch (e) {
     console.error('clearResponsesForInstance error:', e);
     res.status(500).json({ error: 'Failed to clear responses' });
+  }
+}
+
+// Record a student leaving the visible test page. The first loss is a warning;
+// the second instructs the browser to submit. The server owns the count so a
+// refresh cannot reset the rule.
+async function recordTestFocusLoss(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  const userId = Number(req.user?.id);
+
+  if (!instanceId) {
+    return res.status(400).json({ error: 'A test instance is required.' });
+  }
+  if (!userId) {
+    return res.status(401).json({ error: 'Authentication is required.' });
+  }
+  if (req.user.role !== 'student') {
+    return res.status(403).json({ error: 'Only students can record test focus events.' });
+  }
+
+  try {
+    await ensureTestFocusSchema();
+    const conn = await db.getConnection();
+    let focusLossCount;
+    let context;
+    try {
+      await conn.beginTransaction();
+      const [[instance]] = await conn.query(
+        `SELECT ai.id, ai.activity_id, ai.course_id, ai.submitted_at,
+                ai.test_focus_enforcement, a.is_test
+           FROM activity_instances ai
+           JOIN pogil_activities a ON a.id = ai.activity_id
+           JOIN group_members gm ON gm.activity_instance_id = ai.id
+          WHERE ai.id = ? AND gm.student_id = ?
+          FOR UPDATE`,
+        [instanceId, userId],
+      );
+
+      if (!instance) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Test attempt not found for this student.' });
+      }
+      if (Number(instance.is_test) !== 1) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Focus events apply only to tests.' });
+      }
+      if (Number(instance.test_focus_enforcement) !== 1) {
+        await conn.rollback();
+        return res.json({ ok: true, action: 'ignore', focusLossCount: 0 });
+      }
+      if (instance.submitted_at) {
+        await conn.rollback();
+        return res.status(409).json({ error: 'This test has already been submitted.' });
+      }
+
+      await conn.query(
+        `UPDATE activity_instances
+            SET test_focus_loss_count = test_focus_loss_count + 1
+          WHERE id = ?`,
+        [instanceId],
+      );
+      const [[updated]] = await conn.query(
+        'SELECT test_focus_loss_count FROM activity_instances WHERE id = ?',
+        [instanceId],
+      );
+      focusLossCount = Number(updated?.test_focus_loss_count || 0);
+      context = instance;
+      await conn.commit();
+    } catch (err) {
+      try { await conn.rollback(); } catch { /* no-op */ }
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    void recordAuditEvent('test_focus_lost', {
+      req,
+      userId,
+      courseId: context.course_id,
+      activityId: context.activity_id,
+      activityInstanceId: instanceId,
+      details: {
+        focus_loss_count: focusLossCount,
+        action: focusLossCount >= 2 ? 'submit' : 'warn',
+      },
+    });
+
+    return res.json({
+      ok: true,
+      focusLossCount,
+      action: focusLossCount >= 2 ? 'submit' : 'warn',
+    });
+  } catch (err) {
+    console.error('recordTestFocusLoss failed:', err);
+    return res.status(500).json({ error: 'Could not record the test focus event.' });
   }
 }
 
@@ -866,6 +964,7 @@ async function getActivityInstanceById(req, res) {
   const { id } = req.params;
 
   try {
+    await ensureTestFocusSchema();
     const [[instance]] = await db.query(
       `SELECT
          ai.id,
@@ -885,6 +984,7 @@ async function getActivityInstanceById(req, res) {
          ai.test_start_at,
          ai.test_duration_minutes,
          ai.test_reopen_until,
+         ai.test_focus_enforcement,
          ai.submitted_at,
          ai.graded_at,
          ai.review_complete,
@@ -1246,7 +1346,7 @@ async function rotateActiveStudent(req, res) {
 
 // Body:
 // Non-test: { activityId, courseId, groups: [ { members: [ { student_id, role } ] } ] }
-// Test:     { activityId, courseId, selectedStudentIds: [id...], testStartAt, testDurationMinutes, lockedBeforeStart, lockedAfterEnd }
+// Test:     { activityId, courseId, selectedStudentIds: [id...], testStartAt, testDurationMinutes, lockedBeforeStart, lockedAfterEnd, focusEnforcement }
 async function setupMultipleGroupInstances(req, res) {
   const {
     activityId,
@@ -1257,12 +1357,14 @@ async function setupMultipleGroupInstances(req, res) {
     testDurationMinutes,
     lockedBeforeStart,
     lockedAfterEnd,
+    focusEnforcement,
   } = req.body;
 
   if (!activityId || !courseId) {
-    return res.status(400).json({ error: 'ZZZ_NEW_GUARD activityId and courseId are required' });
+    return res.status(400).json({ error: 'activityId and courseId are required.' });
   }
 
+  await ensureTestFocusSchema();
   const lockName = `setupGroups:${courseId}:${activityId}`;
   const conn = await db.getConnection();
 
@@ -1275,21 +1377,6 @@ async function setupMultipleGroupInstances(req, res) {
 
     await conn.beginTransaction();
 
-    // ✅ GUARD: if group 1 exists, do NOT create a second set
-    // Put this BEFORE any deletes/inserts.
-    const [[g1]] = await conn.query(
-      `SELECT id
-       FROM activity_instances
-       WHERE course_id = ? AND activity_id = ? AND group_number = 1
-       LIMIT 1`,
-      [courseId, activityId]
-    );
-
-    if (g1) {
-      await conn.rollback();
-      return res.status(409).json({ error: 'Groups already exist for this activity.' });
-    }
-
     // Look up DB truth
     const [[activityRow]] = await conn.query(
       `SELECT is_test, sheet_url, source_type, content_text FROM pogil_activities WHERE id = ?`,
@@ -1301,6 +1388,25 @@ async function setupMultipleGroupInstances(req, res) {
     const dbIsTest = activityType === 'test';
     const hasTiming = !!testStartAt && Number(testDurationMinutes) > 0;
     const isTest = dbIsTest || hasTiming;
+
+    // A sandbox or abandoned preview may leave an unconfigured placeholder
+    // row behind. It is not a student test attempt and must not block setup.
+    const existingAttemptCondition = isTest
+      ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
+      : '';
+    const [[existingAttempt]] = await conn.query(
+      `SELECT id
+         FROM activity_instances
+        WHERE course_id = ? AND activity_id = ? AND group_number = 1
+          ${existingAttemptCondition}
+        LIMIT 1`,
+      [courseId, activityId],
+    );
+
+    if (existingAttempt) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Groups already exist for this activity.' });
+    }
 
     // For NON-tests, we require groups[]
     if (!isTest) {
@@ -1362,8 +1468,9 @@ async function setupMultipleGroupInstances(req, res) {
       const [instanceResult] = await conn.query(
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
-            test_start_at, test_duration_minutes, locked_before_start, locked_after_end, active_rotation_mode)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, 'submit')`,
+            test_start_at, test_duration_minutes, locked_before_start, locked_after_end,
+            test_focus_enforcement, active_rotation_mode)
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, 'submit')`,
         [
           courseId,
           activityId,
@@ -1373,6 +1480,7 @@ async function setupMultipleGroupInstances(req, res) {
           isTest ? effectiveDuration : 0,
           isTest ? (lockedBeforeStart ? 1 : 0) : 0,
           isTest ? (lockedAfterEnd ? 1 : 0) : 0,
+          isTest && focusEnforcement ? 1 : 0,
         ]
       );
       return instanceResult.insertId;
@@ -1430,6 +1538,7 @@ async function setupMultipleGroupInstances(req, res) {
       activityId: Number(activityId),
       details: {
         is_test: isTest,
+        test_focus_enforcement: isTest && !!focusEnforcement,
         total_groups: computedTotalGroups,
         instance_count: isTest ? selectedStudentIds.length : groups.length,
       },
@@ -1810,11 +1919,20 @@ async function getInstanceGroups(req, res) {
 async function getInstancesForActivityInCourse(req, res) {
   const { courseId, activityId } = req.params;
   try {
+    await ensureTestFocusSchema();
     const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
-    const [[activity]] = await db.query(`SELECT title FROM pogil_activities WHERE id = ?`, [activityId]);
+    const [[activity]] = await db.query(
+      `SELECT title, is_test, sheet_url, source_type, content_text
+         FROM pogil_activities WHERE id = ?`,
+      [activityId],
+    );
 
     const courseName = course?.name || 'Unknown Course';
     const activityTitle = activity?.title || '';
+    const activityType = await inferActivityTypeFromActivity(activity || {});
+    const scheduledTestOnly = activityType === 'test'
+      ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
+      : '';
 
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
@@ -1832,6 +1950,7 @@ async function getInstancesForActivityInCourse(req, res) {
 	              test_start_at,
               test_duration_minutes,
               test_reopen_until,
+              test_focus_enforcement,
               submitted_at,
               graded_at,
               review_complete,
@@ -1841,6 +1960,7 @@ async function getInstancesForActivityInCourse(req, res) {
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
+         ${scheduledTestOnly}
        ORDER BY group_number`,
       [courseId, activityId]
     );
@@ -1927,6 +2047,7 @@ async function getInstancesForActivityInCourse(req, res) {
         test_start_at: inst.test_start_at,
         test_duration_minutes: inst.test_duration_minutes,
         test_reopen_until: inst.test_reopen_until,
+        test_focus_enforcement: Number(inst.test_focus_enforcement) === 1,
         submitted_at: inst.submitted_at,
         graded_at: inst.graded_at,
         review_complete: inst.review_complete,
@@ -3025,6 +3146,7 @@ async function getInstanceResponseHistory(req, res) {
 // Export it as part of the module
 module.exports = {
   clearResponsesForInstance,
+  recordTestFocusLoss,
   deleteActivityInstance,
   getParsedActivityDoc,
   createActivityInstance,

@@ -115,6 +115,7 @@ Notes:
 
 ```text
 \ai{explain}
+\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{Ask the AI for help understanding what this code does.}
 \aiguardrail{Help the student reason about the code without giving away the whole worksheet answer.}
@@ -123,11 +124,16 @@ Notes:
 \endai
 ```
 
-`\\ai` blocks are currently supported only inside a `\\question`.
+`\\ai` is a standalone learning-tool block placed directly inside a
+`\\questiongroup`. It is not a question, creates no student response, and is
+never included in scoring or retry evaluation. Existing `\\ai` blocks inside
+questions remain supported for compatibility, but new activities should place
+them between questions.
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
 | `\ai{mode}` | Starts an inline AI help block | `\ai{explain}` |
+| `\aimodel{model}` | Model for this AI interaction; defaults to `gpt-5-mini` | `\aimodel{gpt-4o-mini}` |
 | `\aititle{...}` | Visible card title | `\aititle{AI Coach}` |
 | `\aiprompt{...}` | Student-facing instructions | `\aiprompt{Ask the AI for help interpreting the loop.}` |
 | `\aiguardrail{...}` | Creator-facing AI restriction / scope | `\aiguardrail{Guide the student but do not provide the final worksheet answer.}` |
@@ -142,6 +148,12 @@ Notes:
 - `testgen`
 - `generate`
 
+### Supported Models
+
+- `gpt-5-mini` is the default for new and existing AI blocks.
+- `gpt-4o-mini` is available when a faster, lower-cost response is preferred.
+- Any other `\aimodel` value safely falls back to `gpt-5-mini`.
+
 ### Supported Initial Context Sources
 
 - `current-question`
@@ -152,6 +164,7 @@ Notes:
 ### Example
 
 ```text
+\questiongroup{Tracing a loop}
 \question{What does this loop do?}
 \textresponse{4}
 
@@ -159,16 +172,17 @@ Notes:
 for i in range(5):
     print(i * 2)
 \endpython
+\endquestion
 
 \ai{explain}
+\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{If you are unsure, ask the AI for help understanding the loop.}
 \aiguardrail{Explain the behavior of the code and guide the student toward the pattern. Do not give away broader worksheet answers.}
 \aicontext{current-question,current-code,student-response}
 \aiinput{5}
 \endai
-
-\endquestion
+\endquestiongroup
 ```
 
 ---

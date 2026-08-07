@@ -20,6 +20,7 @@ export default function TestSetupPage() {
   const [testDurationMinutes, setTestDurationMinutes] = useState(30);
   const [lockedBeforeStart, setLockedBeforeStart] = useState(true);
   const [lockedAfterEnd, setLockedAfterEnd] = useState(true);
+  const [focusEnforcement, setFocusEnforcement] = useState(false);
 
   // preview of "attempts" to be created (groups of 1)
   const [attempts, setAttempts] = useState([]); // [{student_id}...]
@@ -106,6 +107,7 @@ export default function TestSetupPage() {
           testDurationMinutes: Number(testDurationMinutes),
           lockedBeforeStart: !!lockedBeforeStart,
           lockedAfterEnd: !!lockedAfterEnd,
+          focusEnforcement: !!focusEnforcement,
         }),
 
       });
@@ -177,6 +179,18 @@ export default function TestSetupPage() {
                     checked={lockedAfterEnd}
                     onChange={(e) => setLockedAfterEnd(e.target.checked)}
                   />
+                </Col>
+                <Col md={12}>
+                  <Form.Check
+                    type="checkbox"
+                    id="focus-enforcement"
+                    label="Submit the test if the student leaves the test window twice"
+                    checked={focusEnforcement}
+                    onChange={(e) => setFocusEnforcement(e.target.checked)}
+                  />
+                  <Form.Text muted>
+                    The first time is recorded and shows a warning. The second time submits the test.
+                  </Form.Text>
                 </Col>
               </Row>
             </Card.Body>

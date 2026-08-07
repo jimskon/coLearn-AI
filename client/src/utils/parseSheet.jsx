@@ -54,6 +54,19 @@ const SUPPORTED_INFO_TARGETS = new Set([
   'aifeedback',
 ]);
 
+export const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
+export const INLINE_AI_MODEL_OPTIONS = [
+  { value: 'gpt-5-mini', label: 'GPT-5 mini — standard' },
+  { value: 'gpt-4o-mini', label: 'GPT-4o mini — fast and economical' },
+];
+
+const normalizeInlineAiModel = (value) => {
+  const model = String(value || '').trim();
+  return INLINE_AI_MODEL_OPTIONS.some((option) => option.value === model)
+    ? model
+    : INLINE_AI_DEFAULT_MODEL;
+};
+
 const parseInfoSeconds = (value) => {
   const seconds = Number.parseInt(String(value || '').trim(), 10);
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 8;
@@ -155,6 +168,7 @@ function InlineAiAssistBlock({
         credentials: 'include',
         body: JSON.stringify({
           mode: aiBlock.mode,
+          model: aiBlock.model,
           title: aiBlock.title || 'AI Assistant',
           assistantPrompt: aiBlock.prompt || '',
           guardrail: aiBlock.guardrail || '',
@@ -200,6 +214,18 @@ function InlineAiAssistBlock({
           }
       }
     >
+      {aiBlock.title ? (
+        <h5
+          className="mb-2"
+          dangerouslySetInnerHTML={{ __html: aiBlock.title }}
+        />
+      ) : null}
+      {aiBlock.prompt ? (
+        <div
+          className="mb-3"
+          dangerouslySetInnerHTML={{ __html: aiBlock.prompt }}
+        />
+      ) : null}
       <Form.Group>
         <Form.Label className="small text-muted mb-1">Query</Form.Label>
         <Form.Control
@@ -553,6 +579,21 @@ export function parseSheetToBlocks(lines, options = {}) {
     };
     currentMultipleChoice = null;
     openMultipleChoiceLine = null;
+  };
+
+  // AI panels may be attached to a question (legacy markup) or may stand on
+  // their own as a learning-tool block in a question group.
+  const finalizeAiBlock = (closingLine) => {
+    if (!currentAiBlock) return;
+
+    currentAiBlock.sourceMeta.endAiLine = closingLine;
+    if (currentAiBlock.parentQuestionId && currentQuestion) {
+      currentQuestion.aiBlocks.push(currentAiBlock);
+    } else {
+      blocks.push(currentAiBlock);
+    }
+    currentAiBlock = null;
+    openAiLine = null;
   };
 
   const finalizeDisplayCodeBlock = (closingLine) => {
@@ -1299,12 +1340,9 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (!inGroup) {
         pushIssue('error', lineNo, '\\endquestiongroup without a matching \\questiongroup', line);
       }
-      if (currentAiBlock && currentQuestion) {
+      if (currentAiBlock) {
         pushIssue('error', lineNo, 'Closing group while an \\ai block is still open. Missing \\endai before \\endquestiongroup.', line);
-        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
-        currentQuestion.aiBlocks.push(currentAiBlock);
-        currentAiBlock = null;
-        openAiLine = null;
+        finalizeAiBlock(lineNo - 1);
       }
       if (currentQuestion) {
         pushIssue('error', lineNo, 'Closing group while a \\question is still open. Missing \\endquestion before \\endquestiongroup.', line);
@@ -1501,10 +1539,7 @@ export function parseSheetToBlocks(lines, options = {}) {
 
       if (currentAiBlock) {
         pushIssue('error', lineNo, 'Closing question while an \\ai block is still open. Missing \\endai before \\endquestion.', line);
-        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
-        currentQuestion.aiBlocks.push(currentAiBlock);
-        currentAiBlock = null;
-        openAiLine = null;
+        finalizeAiBlock(lineNo - 1);
       }
 
       if (currentMultipleChoice) {
@@ -1581,26 +1616,32 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     if (trimmed.startsWith('\\ai{')) {
-      if (!currentQuestion) {
-        pushIssue('error', lineNo, '\\ai found outside of a \\question. AI blocks are currently only supported inside questions.', line);
+      if (!inGroup) {
+        pushIssue('error', lineNo, '\\ai found outside of a \\questiongroup. Put AI blocks inside a question group.', line);
         continue;
       }
 
       if (currentAiBlock) {
         pushIssue('error', lineNo, 'New \\ai block started before the previous \\ai block was closed. Missing \\endai.', line);
-        currentQuestion.aiBlocks.push(currentAiBlock);
+        finalizeAiBlock(lineNo - 1);
       }
 
       const match = trimmed.match(/^\\ai\{([\s\S]*?)\}\s*$/);
       const mode = String(match?.[1] || 'explain').trim().toLowerCase() || 'explain';
-      const aiIndex = (currentQuestion.aiBlocks?.length || 0) + 1;
+      const isQuestionAttached = !!currentQuestion;
+      const aiIndex = isQuestionAttached
+        ? (currentQuestion.aiBlocks?.length || 0) + 1
+        : blocks.filter((block) => block?.type === 'ai' && block?.groupId === groupNumber).length + 1;
 
       currentAiBlock = {
         type: 'ai',
-        parentQuestionId: currentQuestion.id,
-        groupId: currentQuestion.groupId,
-        previewKey: `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`,
+        parentQuestionId: isQuestionAttached ? currentQuestion.id : null,
+        groupId: isQuestionAttached ? currentQuestion.groupId : groupNumber,
+        previewKey: isQuestionAttached
+          ? `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`
+          : `ai:${groupNumber}:standalone:${aiIndex}`,
         mode,
+        model: INLINE_AI_DEFAULT_MODEL,
         title: format('AI Coach'),
         prompt: '',
         guardrail: '',
@@ -1608,6 +1649,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         inputRows: 4,
         sourceMeta: {
           aiLine: lineNo,
+          modelLine: null,
           titleLine: null,
           promptLine: null,
           guardrailLine: null,
@@ -1621,19 +1663,27 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     if (trimmed === '\\endai') {
-      if (!currentAiBlock || !currentQuestion) {
+      if (!currentAiBlock) {
         pushIssue('error', lineNo, '\\endai without a matching \\ai{...}', line);
         continue;
       }
 
-      currentAiBlock.sourceMeta.endAiLine = lineNo;
-      currentQuestion.aiBlocks.push(currentAiBlock);
-      currentAiBlock = null;
-      openAiLine = null;
+      finalizeAiBlock(lineNo);
       continue;
     }
 
     if (currentAiBlock) {
+      const modelMatch = trimmed.match(/^\\aimodel\{([\s\S]*?)\}\s*$/);
+      if (modelMatch) {
+        const requestedModel = String(modelMatch[1] || '').trim();
+        currentAiBlock.model = normalizeInlineAiModel(requestedModel);
+        currentAiBlock.sourceMeta.modelLine = lineNo;
+        if (requestedModel && requestedModel !== currentAiBlock.model) {
+          pushIssue('warn', lineNo, `Unsupported AI model "${requestedModel}"; using ${INLINE_AI_DEFAULT_MODEL}.`, line);
+        }
+        continue;
+      }
+
       const titleMatch = trimmed.match(/^\\aititle\{([\s\S]*?)\}\s*$/);
       if (titleMatch) {
         currentAiBlock.title = format(titleMatch[1] || '');
@@ -1979,6 +2029,21 @@ export function renderBlocks(blocks, options = {}) {
       return nextBlock?.type === 'groupIntro' || typeof renderInsertAfterGroup !== 'function'
         ? null
         : renderInsertAfterGroup(block);
+    }
+
+    // A standalone AI panel is a group-level learning tool, not a question and
+    // not a response. It therefore has no grading, retry, or response state.
+    if (block.type === 'ai') {
+      return (
+        <InlineAiAssistBlock
+          key={`group-ai-${block.groupId}-${block.previewKey}`}
+          aiBlock={block}
+          questionBlock={null}
+          runMode={runMode}
+          selectedPreviewKey={selectedPreviewKey}
+          onSelectBlock={onSelectBlock}
+        />
+      );
     }
 
     // 🔹 Render headers (title/name/activitycontext/studentlevel) inline where they appear
@@ -2607,14 +2672,17 @@ export function renderBlocks(blocks, options = {}) {
       const hasPython = (block.pythonBlocks?.length || 0) > 0;
       const hasCpp = (block.cppBlocks?.length || 0) > 0;
       const hasMultipleChoice = (block.multipleChoice?.choices?.length || 0) > 0;
+      const hasInlineAi = (block.aiBlocks?.length || 0) > 0;
       const isCodeOnly =
         (hasPython || hasCpp) && !block.hasTextResponse && !block.hasTableResponse;
 
       // A multiple-choice response replaces the default free-text response. Authors can
-      // still add code, tables, or other response elements to the same question.
+      // still add code, tables, or other response elements to the same question. An
+      // inline AI block is itself an interaction, so it does not receive the legacy
+      // default text area unless the author explicitly adds \textresponse.
       const showTextArea =
         !hasMultipleChoice &&
-        (block.hasTextResponse || (!hasPython && !hasCpp && !block.hasTableResponse));
+        (block.hasTextResponse || (!hasInlineAi && !hasPython && !hasCpp && !block.hasTableResponse));
 
       const lockMainResponse =
         runMode === 'preview'
@@ -2957,7 +3025,7 @@ export function renderBlocks(blocks, options = {}) {
             </div>
           ))}
 
-          {(!suppressStudentTestFeedbackUi || isInstructor) && block.aiBlocks?.map((aiBlock, i) => {
+          {block.aiBlocks?.map((aiBlock, i) => {
             return (
               <InlineAiAssistBlock
                 key={`q-ai-${block.groupId}-${block.id}-${i}`}

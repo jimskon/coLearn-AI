@@ -5,6 +5,7 @@ const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
 const activityCreator = require('../utils/activityCreator');
 const { inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
+const { ensureActivitySourceSchema } = require('../utils/activitySourceSchema');
 const { recordAuditEvent } = require('../utils/auditLogger');
 
 const CREATOR_MODEL_OPTIONS = new Set([
@@ -208,20 +209,27 @@ exports.createActivityForClass = async (req, res) => {
   }
 
   try {
+    await ensureActivitySourceSchema();
     const [result] = await db.query(
       `INSERT INTO pogil_activities
-         (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (name, title, sheet_url, source_type, content_text, source_updated_at, order_index, class_id, created_by)
+       VALUES (?, ?, ?, ?, ?, CASE WHEN ? = 'local' THEN NOW(3) ELSE NULL END, ?, ?, ?)`,
       [
         name,
         title,
         normalizedSourceType === 'remote' ? sheet_url : null,
         normalizedSourceType,
         normalizedSourceType === 'local' ? content_text : null,
+        normalizedSourceType,
         order_index,
         classId,
         createdBy,
       ]
+    );
+
+    const [[created]] = await db.query(
+      'SELECT source_updated_at FROM pogil_activities WHERE id = ?',
+      [result.insertId]
     );
 
     res.status(201).json({
@@ -231,6 +239,7 @@ exports.createActivityForClass = async (req, res) => {
       sheet_url: normalizedSourceType === 'remote' ? sheet_url : null,
       source_type: normalizedSourceType,
       content_text: normalizedSourceType === 'local' ? content_text : null,
+      source_updated_at: created?.source_updated_at || null,
       order_index,
       class_id: Number(classId),
       created_by: createdBy

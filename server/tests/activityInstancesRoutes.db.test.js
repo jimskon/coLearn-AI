@@ -30,17 +30,28 @@ function remember(kind, id) {
 }
 
 async function cleanupCreatedRows() {
-  const instanceIds = [...created.instances];
+  const instanceIds = new Set(created.instances);
   const activityIds = [...created.activities];
   const courseIds = [...created.courses];
   const classIds = [...created.classes];
   const userIds = [...created.users];
 
-  if (instanceIds.length) {
-    await db.query(`DELETE FROM response_drafts WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM responses WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
+  // Some routes create their own attempts, so discover every instance linked
+  // to this test's activities instead of relying only on helper-created IDs.
+  if (activityIds.length) {
+    const [rows] = await db.query(
+      `SELECT id FROM activity_instances WHERE activity_id IN (?)`,
+      [activityIds],
+    );
+    rows.forEach((row) => instanceIds.add(Number(row.id)));
+  }
+
+  const allInstanceIds = [...instanceIds].filter(Number.isFinite);
+  if (allInstanceIds.length) {
+    await db.query(`DELETE FROM response_drafts WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM responses WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [allInstanceIds]);
   }
   if (activityIds.length) {
     await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]);
@@ -161,7 +172,9 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS points_possible DECIMAL(10,2) NULL,
       ADD COLUMN IF NOT EXISTS hidden TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_before_start TINYINT(1) NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0
+      ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS test_focus_enforcement TINYINT(1) NOT NULL DEFAULT 0
   `);
 
   await db.query(`
@@ -1294,6 +1307,46 @@ test('setup-groups returns 409 when group 1 already exists for the activity', as
   assert.equal(Number(countRow.instance_count), 1);
 });
 
+test('test setup ignores an unscheduled placeholder instance', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({
+    classId,
+    createdBy: instructor.id,
+    sourceType: 'local',
+    contentText: '\\mode{test}',
+  });
+  await db.query('UPDATE pogil_activities SET is_test = 1 WHERE id = ?', [activityId]);
+  await createInstance({ activityId, courseId, groupNumber: 1 });
+
+  const response = await requestJson(instructor, '/api/activity-instances/setup-groups', {
+    method: 'POST',
+    body: {
+      activityId,
+      courseId,
+      selectedStudentIds: [student.id],
+      testStartAt: new Date(Date.now() + (60 * 60 * 1000)).toISOString(),
+      testDurationMinutes: 30,
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const [[scheduledCount]] = await db.query(
+    `SELECT COUNT(*) AS count FROM activity_instances
+      WHERE activity_id = ? AND course_id = ?
+        AND test_start_at IS NOT NULL AND test_duration_minutes > 0`,
+    [activityId, courseId],
+  );
+  assert.equal(Number(scheduledCount.count), 1);
+
+  const roster = await requestJson(instructor, `/api/activity-instances/by-activity/${courseId}/${activityId}`);
+  assert.equal(roster.status, 200);
+  assert.equal(roster.body.groups.length, 1);
+  assert.equal(Number(roster.body.groups[0].members[0].student_id), student.id);
+});
+
 test('submit-test regrade fails cleanly when legacy ownership is ambiguous', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');
@@ -1575,4 +1628,50 @@ test('submit-test awards per-choice multiple-choice points, including partial cr
   assert.equal(response.body.earned, 1);
   assert.equal(response.body.max, 2);
   assert.equal(response.body.questions[0].responseScore, 1);
+});
+
+test('first test focus loss warns and the second requires submission', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  await db.query('UPDATE pogil_activities SET is_test = 1 WHERE id = ?', [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+  await addGroupMember({ instanceId, studentId: student.id });
+
+  const instructorAttempt = await requestJson(instructor, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(instructorAttempt.status, 403);
+  assert.equal(instructorAttempt.body.error, 'Only students can record test focus events.');
+
+  const disabled = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(disabled.status, 200);
+  assert.equal(disabled.body.action, 'ignore');
+  assert.equal(disabled.body.focusLossCount, 0);
+
+  await db.query('UPDATE activity_instances SET test_focus_enforcement = 1 WHERE id = ?', [instanceId]);
+
+  const first = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.action, 'warn');
+  assert.equal(first.body.focusLossCount, 1);
+
+  const second = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(second.status, 200);
+  assert.equal(second.body.action, 'submit');
+  assert.equal(second.body.focusLossCount, 2);
+
+  const [[instance]] = await db.query(
+    'SELECT test_focus_loss_count FROM activity_instances WHERE id = ?',
+    [instanceId],
+  );
+  assert.equal(Number(instance.test_focus_loss_count), 2);
 });

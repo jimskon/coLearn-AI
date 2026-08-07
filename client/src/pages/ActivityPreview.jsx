@@ -9,6 +9,7 @@ import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
+import { formatLocalDateTime } from '../utils/time';
 
 function normalizeAuthoredMode(rawMode) {
   const mode = String(rawMode || '').trim().toLowerCase();
@@ -170,7 +171,7 @@ export default function ActivityPreview() {
         const activityData = await res.json();
         if (cancelled) return;
 
-        setActivity(activityData);
+        activityData.source_updated_at = activityData?.source_updated_at || null;
 
         console.log("[ActivityPreview] activity loaded", {
           id: activityData?.id,
@@ -185,6 +186,11 @@ export default function ActivityPreview() {
 
         const body = await sourceRes.json();
         const lines = body?.lines || [];
+        activityData.source_updated_at = body?.metadata?.source_updated_at
+          ?? body?.source_updated_at
+          ?? activityData?.source_updated_at
+          ?? null;
+        setActivity({ ...activityData });
 
         console.log("[ActivityPreview] source lines", {
           count: lines.length,
@@ -368,6 +374,15 @@ export default function ActivityPreview() {
                     .map(([gid, v]) => `G${gid}=${v}`)
                     .join(' · ')
                   : 'No group overrides'}
+              </div>
+            </Col>
+
+            <Col md={6}>
+              <div className="small text-muted mb-1">Activity Version</div>
+              <div>
+                {activity?.source_updated_at
+                  ? formatLocalDateTime(activity.source_updated_at)
+                  : 'Not recorded yet'}
               </div>
             </Col>
 

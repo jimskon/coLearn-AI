@@ -14,6 +14,33 @@ const { gradeTestQuestionHttp, gradeTestQuestion } = require("./grading");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
+const INLINE_AI_ALLOWED_MODELS = new Set([
+  'gpt-5-mini',
+  'gpt-4o-mini',
+]);
+
+function getInlineAiModel(value) {
+  const model = String(value || '').trim();
+  return INLINE_AI_ALLOWED_MODELS.has(model) ? model : INLINE_AI_DEFAULT_MODEL;
+}
+
+function getResponseOutputText(response) {
+  const convenienceText = String(response?.output_text || '').trim();
+  if (convenienceText) return convenienceText;
+
+  // Some Responses API/SDK versions expose only the canonical output array,
+  // rather than the output_text convenience field.
+  const parts = Array.isArray(response?.output)
+    ? response.output.flatMap((item) => Array.isArray(item?.content) ? item.content : [])
+    : [];
+  return parts
+    .filter((part) => part?.type === 'output_text' && typeof part.text === 'string')
+    .map((part) => part.text.trim())
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
 
 console.log("[AI_FINGERPRINT] controller.js loaded at", new Date().toISOString(), "AI_DEBUG=", process.env.AI_DEBUG);
 
@@ -120,6 +147,7 @@ function sendAI(res, payload, status = 200) {
 async function assistInlineActivity(req, res) {
   const {
     mode = 'explain',
+    model,
     title = '',
     assistantPrompt = '',
     guardrail = '',
@@ -129,6 +157,8 @@ async function assistInlineActivity(req, res) {
     studentCode = '',
     studentInput = '',
   } = req.body || {};
+
+  const selectedModel = getInlineAiModel(model);
 
   const cleanedInput = String(studentInput || '').trim();
   if (!cleanedInput) {
@@ -174,15 +204,32 @@ async function assistInlineActivity(req, res) {
   ].filter(Boolean).join('\n\n');
 
   try {
-    const response = await openai.responses.create({
-      model: MODEL,
+    // GPT-5 mini is a reasoning model.  A 500-token total allowance can be
+    // consumed entirely by reasoning before it emits visible text, which the
+    // API reports as incomplete/max_output_tokens.  Inline classroom help is
+    // short and direct, so use minimal reasoning with room for an answer.
+    const request = {
+      model: selectedModel,
       instructions: system,
       input: user,
       text: { format: { type: 'text' } },
-      max_output_tokens: 500,
-    });
+      max_output_tokens: selectedModel === 'gpt-5-mini' ? 1600 : 500,
+    };
+    if (selectedModel === 'gpt-5-mini') {
+      request.reasoning = { effort: 'minimal' };
+    }
 
-    const outputText = String(response.output_text || '').trim();
+    const response = await openai.responses.create(request);
+
+    const outputText = getResponseOutputText(response);
+    if (!outputText) {
+      console.warn('[inline-ai] empty model response', {
+        model: selectedModel,
+        status: response?.status || null,
+        incompleteReason: response?.incomplete_details?.reason || null,
+        outputItems: Array.isArray(response?.output) ? response.output.length : 0,
+      });
+    }
     return res.json({
       response: outputText || 'The AI did not return a response.',
       demo: false,
@@ -1036,11 +1083,18 @@ async function applyGroupRetryGate({
     let retryCount = Number(map.get(cntKey));
     let storedHash = String(map.get(hashKey) ?? "");
 
-    // initialize max/count if missing
-    if (!Number.isFinite(storedMax)) {
+    // A retry policy belongs to the current version of the activity.  When an
+    // instructor changes \retries{n}, counters from an earlier policy must not
+    // make a fresh attempt look exhausted.  Reset the count and fingerprint
+    // together so the next rejected submission is counted as attempt one.
+    const policyChanged = !Number.isFinite(storedMax) || storedMax !== max;
+    if (policyChanged) {
       await upsertResp(conn, instanceId, maxKey, max, answeredByUserId);
-    }
-    if (!Number.isFinite(retryCount)) {
+      retryCount = 0;
+      await upsertResp(conn, instanceId, cntKey, retryCount, answeredByUserId);
+      storedHash = "";
+      await upsertResp(conn, instanceId, hashKey, storedHash, answeredByUserId);
+    } else if (!Number.isFinite(retryCount)) {
       retryCount = 0;
       await upsertResp(conn, instanceId, cntKey, retryCount, answeredByUserId);
     }
@@ -2021,5 +2075,6 @@ module.exports = {
   extractStudentQuestion,
   __testHooks: {
     openai,
+    getInlineAiModel,
   },
 };

@@ -382,6 +382,9 @@ export default function RunActivityPage({
   const [timeExpired, setTimeExpired] = useState(false);
   // ✅ add this (prevents repeat auto-submit calls)
   const [autoSubmitted, setAutoSubmitted] = useState(false);
+  const [focusWarning, setFocusWarning] = useState(null);
+  const focusLossRequestRef = useRef(false);
+  const focusAutoSubmitRef = useRef(false);
   const [sectionTimerNowMs, setSectionTimerNowMs] = useState(() => Date.now());
 
 
@@ -1129,6 +1132,67 @@ export default function RunActivityPage({
     timeExpired,
     autoSubmitted,
     instanceId,
+  ]);
+
+  // A web page cannot prevent a tab/app switch, but it can reliably detect
+  // that the page became hidden. The server persists the count so refreshing
+  // the page cannot reset the first-warning/second-submit policy.
+  useEffect(() => {
+    const canMonitor =
+      isTestMode &&
+      isStudent &&
+      Number(activity?.test_focus_enforcement) === 1 &&
+      !!instanceId &&
+      !activity?.submitted_at &&
+      !testLockState.lockedBefore;
+
+    if (!canMonitor) return undefined;
+
+    const recordFocusLoss = async () => {
+      if (!document.hidden || focusLossRequestRef.current || focusAutoSubmitRef.current) return;
+
+      focusLossRequestRef.current = true;
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/focus-loss`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            keepalive: true,
+          },
+        );
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.ok) {
+          console.warn('Could not record test focus loss:', result?.error || response.status);
+          return;
+        }
+
+        if (result.action === 'submit') {
+          focusAutoSubmitRef.current = true;
+          setFocusWarning('Focus was lost a second time. Your test is being submitted.');
+          await handleSubmit(false);
+          return;
+        }
+
+        setFocusWarning('Warning: leaving the test window was recorded. Leaving it again will submit your test.');
+      } catch (err) {
+        console.warn('Could not record test focus loss:', err);
+      } finally {
+        focusLossRequestRef.current = false;
+      }
+    };
+
+    document.addEventListener('visibilitychange', recordFocusLoss);
+    return () => document.removeEventListener('visibilitychange', recordFocusLoss);
+    // handleSubmit is a function declaration below, as in the timed-submit effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    isTestMode,
+    isStudent,
+    instanceId,
+    activity?.submitted_at,
+    activity?.test_focus_enforcement,
+    testLockState.lockedBefore,
   ]);
 
 
@@ -2250,7 +2314,9 @@ export default function RunActivityPage({
               };
             }
 
-            if (data?.canContinue === true) {
+            // An accepted answer may continue immediately. The bypass button is
+            // only for a rejected answer after its retry limit is exhausted.
+            if (data?.accepted === false && data?.canContinue === true) {
               setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
             }
           } finally {
@@ -2502,8 +2568,9 @@ export default function RunActivityPage({
           pendingRevision.push(`${qid} (AI)`);
         }
 
-        // If backend says retries threshold reached for this group, enable bypass button
-        if (ai?.canContinue === true) {
+        // An accepted answer may advance immediately. Only expose the bypass
+        // button when a rejected answer has exhausted its retry allowance.
+        if (ai?.accepted === false && ai?.canContinue === true) {
           setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
         }
         /*console.log('[RETRY GATE]', {
@@ -3170,6 +3237,16 @@ export default function RunActivityPage({
             className="mt-3"
           >
             {submitAlert}
+          </Alert>
+        )}
+        {focusWarning && (
+          <Alert
+            variant={focusAutoSubmitRef.current ? 'danger' : 'warning'}
+            dismissible={!focusAutoSubmitRef.current}
+            onClose={() => setFocusWarning(null)}
+            className="mt-3"
+          >
+            {focusWarning}
           </Alert>
         )}
         {effectiveViewMode === 'history' ? (

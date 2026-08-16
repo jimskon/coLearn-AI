@@ -1,6 +1,7 @@
 // client/src/components/RunActivityTestStatusBanner.jsx
 import React from 'react';
 import { Alert } from 'react-bootstrap';
+import { formatUtcToLocal, parseUtcDbDatetime } from '../utils/time';
 
 export default function RunActivityTestStatusBanner({
   isTestMode,
@@ -9,6 +10,8 @@ export default function RunActivityTestStatusBanner({
   testLockState,
   isStudent,
   submittedAt,
+  assignmentDueAt,
+  submittedLate = false,
   reviewComplete = false,
   score,
   formatRemainingSeconds,
@@ -22,12 +25,31 @@ export default function RunActivityTestStatusBanner({
   const percentage = hasScore ? ((earned / possible) * 100).toFixed(1) : null;
 
   if (isAssignmentMode) {
-    return submittedAt && isStudent ? (
-      <Alert variant="info" className="mt-2">
-        <strong>{reviewComplete ? 'Reviewed by instructor' : 'Preliminary lab score — pending instructor review'}</strong>
-        {hasScore ? <div className="mt-1">Score: <strong>{earned}/{possible}</strong> ({percentage}%)</div> : null}
+    const dueDate = assignmentDueAt ? parseUtcDbDatetime(assignmentDueAt) : null;
+    const pastDue = !!dueDate && Date.now() > dueDate.getTime();
+    const shouldShow = !!assignmentDueAt || (submittedAt && isStudent);
+    if (!shouldShow) return null;
+
+    return (
+      <Alert variant={submittedLate || (!submittedAt && pastDue) ? 'warning' : 'info'} className="mt-2">
+        {assignmentDueAt ? (
+          <div>
+            <strong>Due:</strong> {formatUtcToLocal(assignmentDueAt)}
+          </div>
+        ) : null}
+        {!submittedAt && pastDue ? (
+          <div className="small mt-1">This assignment is past due. You may still submit, but it will be marked late.</div>
+        ) : null}
+        {submittedAt && isStudent ? (
+          <div className="mt-2">
+            <strong>{submittedLate ? 'Submitted late' : 'Submitted on time'}</strong>
+            <span className="text-muted"> · {formatUtcToLocal(submittedAt)}</span>
+            <div className="mt-2"><strong>{reviewComplete ? 'Reviewed by instructor' : 'Preliminary lab score — pending instructor review'}</strong></div>
+            {hasScore ? <div className="mt-1">Score: <strong>{earned}/{possible}</strong> ({percentage}%)</div> : null}
+          </div>
+        ) : null}
       </Alert>
-    ) : null;
+    );
   }
 
   return (

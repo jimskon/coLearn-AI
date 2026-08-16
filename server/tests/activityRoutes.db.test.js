@@ -388,6 +388,19 @@ test('saveActivitySource rejects missing text and 404s for missing activity', as
   assert.equal(missing.status, 404);
   assert.deepEqual(missing.body, { error: 'Activity not found' });
 });
+
+test('remote source status explains when an activity has no linked Google Doc', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: creator.id, sheetUrl: null });
+
+  const response = await requestJson(creator, `/api/activities/${activity.id}/remote-status`);
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    error: 'This activity does not have a linked Google Doc.',
+  });
+});
 test('createActivity inserts a new activity and returns its payload', async () => {
   const creator = await createUser('creator');
   const classId = await createClassRecord();

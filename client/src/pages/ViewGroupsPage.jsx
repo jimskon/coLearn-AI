@@ -16,7 +16,7 @@ import {
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
 import { FaUserCheck, FaLaptop, FaRandom } from 'react-icons/fa';
-import { parseUtcDbDatetime } from '../utils/time';
+import { formatUtcToLocal, parseUtcDbDatetime } from '../utils/time';
 
 function progressLabelFromInstanceRow(g) {
   const tg = Number(g.total_groups || 0);
@@ -730,6 +730,16 @@ export default function ViewGroupsPage() {
                         </li>
                       ))}
                     </ul>
+                    {group.assignment_due_at ? (
+                      <div className="small mb-2">
+                        <strong>Due:</strong> {formatUtcToLocal(group.assignment_due_at)}
+                        {group.submitted_at ? (
+                          <span className={group.submitted_late ? 'text-warning-emphasis' : 'text-success'}>
+                            {group.submitted_late ? ' · Submitted late' : ' · Submitted on time'}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <GroupProgressBars group={group} />
                   </Card.Body>
                 </Card>

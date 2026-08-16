@@ -51,6 +51,8 @@ CREATE TABLE `activity_instances` (
   `test_duration_minutes` int(10) unsigned NOT NULL DEFAULT 0 COMMENT 'Time limit in minutes for timed tests (0 = no limit)',
   `test_reopen_until` datetime DEFAULT NULL COMMENT 'Optional reopen-until time for this instance',
   `submitted_at` datetime DEFAULT NULL COMMENT 'When the instance was finally submitted',
+  `assignment_due_at` datetime DEFAULT NULL COMMENT 'Optional due date for lab assignments',
+  `submitted_late` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Whether the first submission was after assignment_due_at',
   `graded_at` datetime DEFAULT NULL,
   `review_complete` tinyint(1) NOT NULL DEFAULT 0,
   `reviewed_at` datetime DEFAULT NULL,

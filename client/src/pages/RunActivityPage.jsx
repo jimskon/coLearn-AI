@@ -3203,6 +3203,8 @@ export default function RunActivityPage({
           testLockState={testLockState}
           isStudent={isStudent}
           submittedAt={activity?.submitted_at}
+          assignmentDueAt={activity?.assignment_due_at}
+          submittedLate={Number(activity?.submitted_late) === 1 || activity?.submitted_late === true}
           reviewComplete={Number(activity?.review_complete) === 1}
           score={overallTestTotals}
           formatRemainingSeconds={formatRemainingSeconds}

@@ -10,6 +10,7 @@ const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
+const { ensureAssignmentDueSchema } = require('../utils/assignmentDueSchema');
 
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -79,7 +80,10 @@ function parseTestQuestionsFromLines(lines) {
 
   const finishMultipleChoice = () => {
     if (!currentQuestion || !currentMultipleChoice) return;
-    const correctAnswer = String(currentMultipleChoice.correctAnswer || '').trim();
+    const selectionMode = currentMultipleChoice.selectionMode === 'multiple' ? 'multiple' : 'single';
+    const correctAnswer = selectionMode === 'multiple'
+      ? ''
+      : String(currentMultipleChoice.correctAnswer || '').trim();
     const choices = Array.isArray(currentMultipleChoice.choices)
       ? currentMultipleChoice.choices
           .map((choice) => ({
@@ -93,6 +97,7 @@ function parseTestQuestionsFromLines(lines) {
     const hasChoiceScores = choices.some((choice) => choice.points !== null);
     currentQuestion.multipleChoice = {
       correctAnswer,
+      selectionMode,
       choices,
       hasChoiceScores,
       maxChoicePoints: hasChoiceScores
@@ -162,8 +167,10 @@ function parseTestQuestionsFromLines(lines) {
 
     if (trimmed.startsWith('\\multiplechoice')) {
       const match = trimmed.match(/^\\multiplechoice\{([\s\S]*?)\}\s*$/);
+      const value = String(match?.[1] || '').trim();
       currentMultipleChoice = {
-        correctAnswer: String(match?.[1] || '').trim(),
+        correctAnswer: value.toLowerCase() === 'multiple' ? '' : value,
+        selectionMode: value.toLowerCase() === 'multiple' ? 'multiple' : 'single',
         choices: [],
       };
       continue;
@@ -472,6 +479,7 @@ async function clearResponsesForInstance(req, res) {
 
   try {
     await ensureTestFocusSchema();
+    await ensureAssignmentDueSchema();
     const [del] = await db.query(
       `DELETE FROM responses WHERE activity_instance_id = ?`,
       [instanceId]
@@ -965,6 +973,7 @@ async function getActivityInstanceById(req, res) {
 
   try {
     await ensureTestFocusSchema();
+    await ensureAssignmentDueSchema();
     const [[instance]] = await db.query(
       `SELECT
          ai.id,
@@ -986,6 +995,8 @@ async function getActivityInstanceById(req, res) {
          ai.test_reopen_until,
          ai.test_focus_enforcement,
          ai.submitted_at,
+         ai.assignment_due_at,
+         ai.submitted_late,
          ai.graded_at,
          ai.review_complete,
          ai.reviewed_at,
@@ -1358,6 +1369,7 @@ async function setupMultipleGroupInstances(req, res) {
     lockedBeforeStart,
     lockedAfterEnd,
     focusEnforcement,
+    assignmentDueAt,
   } = req.body;
 
   if (!activityId || !courseId) {
@@ -1365,6 +1377,7 @@ async function setupMultipleGroupInstances(req, res) {
   }
 
   await ensureTestFocusSchema();
+  await ensureAssignmentDueSchema();
   const lockName = `setupGroups:${courseId}:${activityId}`;
   const conn = await db.getConnection();
 
@@ -1386,6 +1399,7 @@ async function setupMultipleGroupInstances(req, res) {
     // Decide test vs non-test
     const activityType = await inferActivityTypeFromActivity(activityRow || {});
     const dbIsTest = activityType === 'test';
+    const isAssignment = activityType === 'assignment';
     const hasTiming = !!testStartAt && Number(testDurationMinutes) > 0;
     const isTest = dbIsTest || hasTiming;
 
@@ -1438,6 +1452,16 @@ async function setupMultipleGroupInstances(req, res) {
       }
     }
 
+    let assignmentDueForDb = null;
+    if (isAssignment && assignmentDueAt) {
+      const due = new Date(assignmentDueAt);
+      if (Number.isNaN(due.getTime())) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Invalid assignmentDueAt' });
+      }
+      assignmentDueForDb = due.toISOString().slice(0, 19).replace('T', ' ');
+    }
+
     // ✅ Compute total_groups from doc (used by BOTH tests and non-tests)
     let computedTotalGroups = 1;
     try {
@@ -1468,9 +1492,9 @@ async function setupMultipleGroupInstances(req, res) {
       const [instanceResult] = await conn.query(
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
-            test_start_at, test_duration_minutes, locked_before_start, locked_after_end,
+            test_start_at, test_duration_minutes, locked_before_start, locked_after_end, assignment_due_at,
             test_focus_enforcement, active_rotation_mode)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, 'submit')`,
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, ?, 'submit')`,
         [
           courseId,
           activityId,
@@ -1480,6 +1504,7 @@ async function setupMultipleGroupInstances(req, res) {
           isTest ? effectiveDuration : 0,
           isTest ? (lockedBeforeStart ? 1 : 0) : 0,
           isTest ? (lockedAfterEnd ? 1 : 0) : 0,
+          isAssignment ? assignmentDueForDb : null,
           isTest && focusEnforcement ? 1 : 0,
         ]
       );
@@ -1538,6 +1563,7 @@ async function setupMultipleGroupInstances(req, res) {
       activityId: Number(activityId),
       details: {
         is_test: isTest,
+        assignment_due_at: isAssignment ? assignmentDueForDb : null,
         test_focus_enforcement: isTest && !!focusEnforcement,
         total_groups: computedTotalGroups,
         instance_count: isTest ? selectedStudentIds.length : groups.length,
@@ -1920,6 +1946,7 @@ async function getInstancesForActivityInCourse(req, res) {
   const { courseId, activityId } = req.params;
   try {
     await ensureTestFocusSchema();
+    await ensureAssignmentDueSchema();
     const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
     const [[activity]] = await db.query(
       `SELECT title, is_test, sheet_url, source_type, content_text
@@ -1952,6 +1979,8 @@ async function getInstancesForActivityInCourse(req, res) {
               test_reopen_until,
               test_focus_enforcement,
               submitted_at,
+              assignment_due_at,
+              submitted_late,
               graded_at,
               review_complete,
               reviewed_at,
@@ -2049,6 +2078,8 @@ async function getInstancesForActivityInCourse(req, res) {
         test_reopen_until: inst.test_reopen_until,
         test_focus_enforcement: Number(inst.test_focus_enforcement) === 1,
         submitted_at: inst.submitted_at,
+        assignment_due_at: inst.assignment_due_at,
+        submitted_late: Number(inst.submitted_late) === 1,
         graded_at: inst.graded_at,
         review_complete: inst.review_complete,
         reviewed_at: inst.reviewed_at,
@@ -2552,6 +2583,7 @@ async function submitTest(req, res) {
   }
 
   const lockName = `submitTest:${instanceId}`;
+  await ensureAssignmentDueSchema();
   const conn = await db.getConnection();
 
   try {
@@ -2612,6 +2644,7 @@ async function submitTest(req, res) {
       const sourceQuestion = parsedQuestions[index] || {};
       const multipleChoice = sourceQuestion.multipleChoice || null;
       const isMultipleChoice = Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
+      const isMultipleSelect = multipleChoice?.selectionMode === 'multiple';
 
       const bucketPoints = (bucket) => {
         if (!bucket) return 0;
@@ -2732,7 +2765,7 @@ async function submitTest(req, res) {
         responseFeedback = graded.responseFeedback || '';
       }
 
-      if (isMultipleChoice) {
+      if (isMultipleChoice && !isMultipleSelect) {
         if (maxRespPts > 0) {
           if (multipleChoice?.hasChoiceScores) {
             const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
@@ -2897,6 +2930,10 @@ async function submitTest(req, res) {
           points_possible  = ?,
           progress_status  = 'completed',
           submitted_at     = COALESCE(submitted_at, UTC_TIMESTAMP()),
+          submitted_late   = CASE
+                               WHEN assignment_due_at IS NOT NULL AND UTC_TIMESTAMP() > assignment_due_at THEN 1
+                               ELSE 0
+                             END,
           graded_at        = UTC_TIMESTAMP(),
           submitted_by_user_id = COALESCE(submitted_by_user_id, ?)
         WHERE id = ?

@@ -8,7 +8,11 @@ import ActivityPythonBlock from '../components/activity/ActivityPythonBlock';
 import ActivityRemotePythonBlock from '../components/activity/ActivityRemotePythonBlock';
 import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
-import { validateMultipleChoice } from './multipleChoice';
+import {
+  parseMultipleChoiceSelections,
+  serializeMultipleChoiceSelections,
+  validateMultipleChoice,
+} from './multipleChoice';
 import {
   getMultipleChoiceTestModeIssueMessage,
   getUnsupportedScoreTypeMessage,
@@ -572,6 +576,7 @@ export function parseSheetToBlocks(lines, options = {}) {
     currentMultipleChoice.sourceMeta.endMultipleChoiceLine = closingLine;
     currentQuestion.multipleChoice = {
       correctAnswer: validation.correctAnswer,
+      selectionMode: currentMultipleChoice.selectionMode,
       choices,
       hasChoiceScores: validation.hasChoiceScores,
       maxChoicePoints: validation.maxChoicePoints,
@@ -1509,7 +1514,12 @@ export function parseSheetToBlocks(lines, options = {}) {
       }
 
       currentMultipleChoice = {
-        correctAnswer: String(match[1] || '').trim(),
+        correctAnswer: String(match[1] || '').trim().toLowerCase() === 'multiple'
+          ? ''
+          : String(match[1] || '').trim(),
+        selectionMode: String(match[1] || '').trim().toLowerCase() === 'multiple'
+          ? 'multiple'
+          : 'single',
         choices: [],
         sourceMeta: {
           multipleChoiceLine: lineNo,
@@ -2672,6 +2682,7 @@ export function renderBlocks(blocks, options = {}) {
       const hasPython = (block.pythonBlocks?.length || 0) > 0;
       const hasCpp = (block.cppBlocks?.length || 0) > 0;
       const hasMultipleChoice = (block.multipleChoice?.choices?.length || 0) > 0;
+      const allowsMultipleChoices = block.multipleChoice?.selectionMode === 'multiple';
       const hasInlineAi = (block.aiBlocks?.length || 0) > 0;
       const isCodeOnly =
         (hasPython || hasCpp) && !block.hasTextResponse && !block.hasTableResponse;
@@ -3039,8 +3050,8 @@ export function renderBlocks(blocks, options = {}) {
           })}
 
           {hasMultipleChoice ? (
-            <fieldset className="mt-3" aria-label="Choose one answer">
-              <legend className="fs-6 mb-2">Choose one answer</legend>
+            <fieldset className="mt-3" aria-label={allowsMultipleChoices ? 'Select all that apply' : 'Choose one answer'}>
+              <legend className="fs-6 mb-2">{allowsMultipleChoices ? 'Select all that apply' : 'Choose one answer'}</legend>
               {block.multipleChoice.choices.map((choice, choiceIndex) => {
                 const choiceId = `multiple-choice-${responseKey}-${choiceIndex}`;
                 const isMultilineCodeChoice = /\\\\|\n/.test(String(choice.value || ''));
@@ -3051,23 +3062,37 @@ export function renderBlocks(blocks, options = {}) {
                 ) : (
                   <span dangerouslySetInnerHTML={{ __html: choice.content || choice.value }} />
                 );
+                const selectedChoices = allowsMultipleChoices
+                  ? parseMultipleChoiceSelections(prefill?.[responseKey]?.response)
+                  : [];
+                const isSelected = allowsMultipleChoices
+                  ? selectedChoices.includes(choice.value)
+                  : (prefill?.[responseKey]?.response || '') === choice.value;
                 return (
                   <Form.Check
                     key={choiceId}
                     id={choiceId}
-                    type="radio"
+                    type={allowsMultipleChoices ? 'checkbox' : 'radio'}
                     name={`multiple-choice-${responseKey}`}
                     value={choice.value}
-                    checked={(prefill?.[responseKey]?.response || '') === choice.value}
+                    checked={isSelected}
                     disabled={!editable || lockMainResponse}
                     className="mb-2"
                     label={choiceLabel}
-                    onChange={() => {
-                      options.onTextChange?.(responseKey, choice.value, {
+                    onChange={(event) => {
+                      const nextValue = allowsMultipleChoices
+                        ? serializeMultipleChoiceSelections(
+                          event.target.checked
+                            ? [...selectedChoices, choice.value]
+                            : selectedChoices.filter((value) => value !== choice.value)
+                        )
+                        : choice.value;
+                      options.onTextChange?.(responseKey, nextValue, {
                         questionText: stripHtml(block.prompt || ''),
                         sampleResponse: stripHtml(block.samples?.[0] || ''),
                         feedbackPrompt: stripHtml(block.feedback?.[0] || ''),
                         hasMultipleChoice: true,
+                        allowsMultipleChoices,
                         retriesRequired: block.retriesRequired ?? 0,
                       });
                     }}

@@ -951,6 +951,7 @@ export default function RunActivityPage({
         block,
         payload,
         result: parsed,
+        scores: rubric.scores,
       }),
       rubricSource: rubric.inferred ? 'inferred' : 'explicit',
     };
@@ -1688,8 +1689,8 @@ export default function RunActivityPage({
     };
   }
 
-  function normalizeQuestionGradeResult({ block, payload, result }) {
-    const scores = normalizeScoreBands(block?.scores || {});
+  function normalizeQuestionGradeResult({ block, payload, result, scores: previewScores = null }) {
+    const scores = normalizeScoreBands(previewScores || block?.scores || {});
     const maxCodePts = bucketPoints(scores.code);
     const maxRunPts = bucketPoints(scores.output);
     const maxRespPts = bucketPoints(scores.response);

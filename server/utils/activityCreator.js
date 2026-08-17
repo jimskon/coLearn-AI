@@ -8,7 +8,7 @@ const MARKUP_HOUSE_STYLE_PATH = path.join(__dirname, '..', 'templates', 'activit
 const DEFAULT_CREATOR_OPENAI_TIMEOUT_MS = 45000;
 const CREATOR_HOUSE_STYLE_SUMMARY = [
   'Markup rules:',
-  '- Start with \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, and \\retries{n}.',
+  '- Start with \\title{...}, \\mode{...}, \\language{...}, \\studentlevel{...}, \\activitycontext{...}, and \\retries{n}.',
   '- Use \\section{Title} or \\section{Title}{minutes} for each requested section.',
   '- Put interactive work inside \\questiongroup{...} ... \\endquestiongroup.',
   '- Put each prompt inside \\question{...} ... \\endquestion.',
@@ -46,7 +46,7 @@ function buildActivityGenerationInstructions(modeOrFlag) {
   return [
     'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
     'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
-    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aimodel{gpt-5-mini}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
+    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\language{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aimodel{gpt-5-mini}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
     'Only include \\info blocks if the creator explicitly asks for them.',
     'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
     isTestMode
@@ -152,6 +152,7 @@ function renderFallbackTemplate({
   majorSections,
   timedSections,
   retriesRequired,
+  language = 'English',
   classLevel,
   classTopicDomain,
   classDescription,
@@ -940,6 +941,7 @@ async function generateWithOpenAI({
   majorSections,
   timedSections,
   retriesRequired,
+  language = 'English',
   classLevel,
   classTopicDomain,
   classDescription,
@@ -958,6 +960,7 @@ async function generateWithOpenAI({
   const user = [
     `Activity title: ${title}`,
     `Mode: ${mode}`,
+    `Activity language: ${language}. Write all student-facing markup, sample responses, and feedback prompts in this language.`,
     `Target duration (minutes): ${durationMinutes}`,
     `Global retries required before bypass: ${Math.max(0, Math.round(Number(retriesRequired) || 0))}`,
     isSectionlessMode

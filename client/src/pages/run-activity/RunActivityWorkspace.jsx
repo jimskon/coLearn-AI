@@ -161,6 +161,7 @@ export default function RunActivityWorkspace({
           onFileChange: handleFileChange,
           infoBubbleSession,
           runtimeFeatures,
+          activityLanguage: activity?.language || activity?.meta?.language || 'English',
           suppressStudentTestFeedbackUi,
           hideStudentTestSections,
         })}
@@ -216,6 +217,7 @@ export default function RunActivityWorkspace({
                   unansweredShown,
                   infoBubbleSession,
                   runtimeFeatures,
+                  activityLanguage: activity?.language || activity?.meta?.language || 'English',
                   suppressStudentTestFeedbackUi,
                   hideStudentTestSections,
                 })}

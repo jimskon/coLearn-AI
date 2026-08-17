@@ -149,6 +149,7 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
 function InlineAiAssistBlock({
   aiBlock,
   questionBlock,
+  activityLanguage = '',
   runMode,
   selectedPreviewKey,
   onSelectBlock,
@@ -183,6 +184,7 @@ function InlineAiAssistBlock({
             ? questionBlock.pythonBlocks.map((block) => block.content || '').join('\n\n').trim()
             : '',
           studentInput: trimmed,
+          activityLanguage,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -535,6 +537,7 @@ export function parseSheetToBlocks(lines, options = {}) {
     retriesDefault: 0,
     groupRetries: {},
     mode: 'group',
+    language: 'English',
   };
   let currentQuestion = null;
   let currentField = 'prompt';
@@ -1223,7 +1226,7 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // Start of a header (now always single logical line thanks to collapseBracedCommands)
-    const headerStart = trimmed.match(/^\\(title|name|activitycontext|studentlevel|aicodeguidance|mode)\{([\s\S]*?)\}$/);
+    const headerStart = trimmed.match(/^\\(title|name|activitycontext|studentlevel|aicodeguidance|mode|language)\{([\s\S]*?)\}$/);
     if (headerStart) {
       flushCurrentBlock();
       const tag = headerStart[1];
@@ -1238,6 +1241,10 @@ export function parseSheetToBlocks(lines, options = {}) {
 
         blocks.push({ type: 'header', tag, content: format(meta.mode) });
         continue;
+      }
+
+      if (tag === 'language') {
+        meta.language = String(content || '').trim() || 'English';
       }
 
       blocks.push({ type: 'header', tag, content: format(content) });
@@ -1964,6 +1971,7 @@ const HIDE_FROM_STUDENTS_HEADERS = new Set([
   'activitycontext',
   'studentlevel',
   'mode',
+  'language',
 ]);
 
 export function renderBlocks(blocks, options = {}) {
@@ -1997,6 +2005,7 @@ export function renderBlocks(blocks, options = {}) {
     renderInsertAfterGroup = null,
     suppressStudentTestFeedbackUi = false,
     hideStudentTestSections = false,
+    activityLanguage = '',
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -2049,6 +2058,7 @@ export function renderBlocks(blocks, options = {}) {
           key={`group-ai-${block.groupId}-${block.previewKey}`}
           aiBlock={block}
           questionBlock={null}
+          activityLanguage={activityLanguage}
           runMode={runMode}
           selectedPreviewKey={selectedPreviewKey}
           onSelectBlock={onSelectBlock}
@@ -2074,6 +2084,7 @@ export function renderBlocks(blocks, options = {}) {
         name: 'Name',
         activitycontext: 'Context',
         studentlevel: 'Student level',
+        language: 'Language',
         aicodeguidance: 'AI code guidance',
       };
       const label = labelMap[block.tag] || block.tag;
@@ -3042,6 +3053,7 @@ export function renderBlocks(blocks, options = {}) {
                 key={`q-ai-${block.groupId}-${block.id}-${i}`}
                 aiBlock={aiBlock}
                 questionBlock={block}
+                activityLanguage={activityLanguage}
                 runMode={runMode}
                 selectedPreviewKey={selectedPreviewKey}
                 onSelectBlock={onSelectBlock}

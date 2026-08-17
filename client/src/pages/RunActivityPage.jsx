@@ -1330,6 +1330,7 @@ export default function RunActivityPage({
         studentLevel: activity?.studentlevel || 'intro',
       },
       guidance: activity?.aicodeguidance || '',
+      activityLanguage: activity?.language || activity?.meta?.language || 'English',
       codeContext,
 
       // ✅ retry gate inputs
@@ -2248,6 +2249,7 @@ export default function RunActivityPage({
 
             // activity-level policy
             guidance: activity?.aicodeguidance || '',
+            activityLanguage: activity?.language || activity?.meta?.language || 'English',
             instanceId: Number(instanceId),
             groupNum,
             answeredByUserId: Number(user?.id),

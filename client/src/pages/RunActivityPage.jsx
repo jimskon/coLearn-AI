@@ -2956,7 +2956,7 @@ export default function RunActivityPage({
 
   async function handleGradeSingleQuestion(qid) {
     if (gradingQuestionQid || gradingAllQuestions) return;
-    if (!isTestMode && !isAssignmentMode && !isSandbox) return;
+    if (!isTestMode && !isAssignmentMode) return;
 
     const block = findQuestionBlockByQid(qid);
     if (!block) return;
@@ -2990,7 +2990,7 @@ export default function RunActivityPage({
 
   async function handleGradeAllQuestions() {
     if (gradingQuestionQid || gradingAllQuestions) return;
-    if (!isTestMode && !isAssignmentMode && !isSandbox) return;
+    if (!isTestMode && !isAssignmentMode) return;
 
     const blocksToGrade = groups.flatMap((group) => [group.intro, ...(group.content || [])])
       .filter((block) => block?.type === 'question');

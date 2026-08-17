@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { shouldShowQuestionGradePreview } from './gradeQuestionPreviewUi.js';
 
-test('sandbox creators can show per-question grading', () => {
+test('ordinary group activities do not show test-style grading in sandbox', () => {
   assert.equal(
     shouldShowQuestionGradePreview({
       blockType: 'question',
@@ -11,7 +11,7 @@ test('sandbox creators can show per-question grading', () => {
       isSandbox: true,
       isTestMode: false,
     }),
-    true
+    false
   );
 });
 

@@ -467,6 +467,7 @@ exports.createCreatorDraft = async (req, res) => {
     use_timed_sections = false,
     timed_sections = [],
     retries_required = 3,
+    language = 'English',
     createdBy,
   } = req.body || {};
 
@@ -483,6 +484,10 @@ exports.createCreatorDraft = async (req, res) => {
       : [];
   const normalizedUseTimedSections = normalizedSectionlessMode ? false : use_timed_sections === true;
   const normalizedRetriesRequired = Math.max(0, Math.round(Number(retries_required) || 0));
+  const normalizedLanguage = String(language || 'English')
+    .replace(/[{}\r\n]+/g, ' ')
+    .trim()
+    .slice(0, 80) || 'English';
   const normalizedTimedSections = normalizedUseTimedSections
     ? normalizedMajorSections.map((sectionName) => {
         const match = Array.isArray(timed_sections)
@@ -545,12 +550,23 @@ exports.createCreatorDraft = async (req, res) => {
       majorSections: normalizedMajorSections,
       timedSections: normalizedTimedSections,
       retriesRequired: normalizedRetriesRequired,
+      language: normalizedLanguage,
       classLevel: classRow.level,
       classTopicDomain: classRow.topic_domain,
       classDescription: classRow.description,
       activityDescription: normalizedDescription,
     });
-    const contentText = generation.text;
+    const generatedText = String(generation.text || '');
+    const languageLine = `\\language{${normalizedLanguage}}`;
+    const contentLines = generatedText.split('\n');
+    const existingLanguageIndex = contentLines.findIndex((line) => /^\\language\{[\s\S]*\}\s*$/.test(line.trim()));
+    if (existingLanguageIndex >= 0) {
+      contentLines[existingLanguageIndex] = languageLine;
+    } else {
+      const modeIndex = contentLines.findIndex((line) => /^\\mode\{[\s\S]*\}\s*$/.test(line.trim()));
+      contentLines.splice(modeIndex >= 0 ? modeIndex + 1 : 0, 0, languageLine);
+    }
+    const contentText = contentLines.join('\n');
 
     const [result] = await db.query(
       `INSERT INTO pogil_activities
@@ -583,6 +599,7 @@ exports.createCreatorDraft = async (req, res) => {
       use_timed_sections: normalizedUseTimedSections,
       timed_sections: normalizedTimedSections,
       retries_required: normalizedRetriesRequired,
+      language: normalizedLanguage,
       generation_status: generation.generation_status,
       generation_error: generation.generation_error,
       generation_debug_preview: generation.raw_model_output

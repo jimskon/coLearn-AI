@@ -216,10 +216,14 @@ export default function useRunActivityData({
         const aiCodeGuideBlock = blocks.find(
           (b) => b.type === 'header' && b.tag === 'aicodeguidance'
         );
+        const languageBlock = blocks.find(
+          (b) => b.type === 'header' && b.tag === 'language'
+        );
 
         const activitycontext = stripHtml(activityContextBlock?.content || '');
         const studentlevel = stripHtml(studentLevelBlock?.content || '');
         const aicodeguidance = stripHtml(aiCodeGuideBlock?.content || '');
+        const language = stripHtml(languageBlock?.content || meta.language || 'English') || 'English';
 
         setActivity((prev) => ({
           ...prev,
@@ -227,6 +231,7 @@ export default function useRunActivityData({
           activitycontext,
           studentlevel,
           aicodeguidance,
+          language,
           meta,
         }));
 

@@ -9,6 +9,7 @@ import 'xterm/css/xterm.css';
 import 'prismjs/components/prism-clike';
 import 'prismjs/components/prism-c';
 import 'prismjs/components/prism-cpp';
+import useCodeHistory from '../../hooks/useCodeHistory';
 
 export default function ActivityCppBlock({
   code: initialCode,
@@ -31,6 +32,14 @@ export default function ActivityCppBlock({
   const [isEditing, setIsEditing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [layoutMode, setLayoutMode] = useState('side'); // 'side' | 'stacked'
+  const {
+    record: recordHistory,
+    undo,
+    redo,
+    reset: resetHistory,
+    canUndo,
+    canRedo,
+  } = useCodeHistory(initialCode ?? '');
 
   // keep track of last initial to avoid loops
   const lastInitialRef = useRef(initialCode ?? '');
@@ -41,13 +50,14 @@ export default function ActivityCppBlock({
     if (!isEditing) {
       setCode(next);
       setSavedCode(next);
+      resetHistory(next);
       lastSentRef.current = next;
       pendingRemoteRef.current = null;
     } else {
       // if currently editing, queue remote update
       pendingRemoteRef.current = next;
     }
-  }, [initialCode, isEditing]);
+  }, [initialCode, isEditing, resetHistory]);
 
   // When localOnly toggles true, reset from initial
   useEffect(() => {
@@ -55,8 +65,9 @@ export default function ActivityCppBlock({
       const base = initialCode ?? '';
       setCode(base);
       setSavedCode(base);
+      resetHistory(base);
     }
-  }, [localOnly, initialCode]);
+  }, [localOnly, initialCode, resetHistory]);
 
   // --- terminal + ws refs ---
   const termRef = useRef(null);
@@ -113,6 +124,13 @@ export default function ActivityCppBlock({
   const handleKeyDown = (e) => {
     if (!isEditing || !editable) return;
 
+    const key = e.key.toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && (key === 'z' || key === 'y')) {
+      e.preventDefault();
+      applyHistorySnapshot((key === 'y' || e.shiftKey) ? redo() : undo());
+      return;
+    }
+
     const el = e.target;
     const value = code;
     const start = el.selectionStart ?? 0;
@@ -126,6 +144,7 @@ export default function ActivityCppBlock({
       const newPos = start + indent.length;
 
       setCode(newValue);
+      recordHistory(newValue, { start: newPos, end: newPos });
       if (editable) scheduleBroadcast(newValue);
       selectionRef.current = { start: newPos, end: newPos };
       return;
@@ -145,6 +164,7 @@ export default function ActivityCppBlock({
       const newPos = start + insert.length;
 
       setCode(newValue);
+      recordHistory(newValue, { start: newPos, end: newPos });
       if (editable) scheduleBroadcast(newValue);
       selectionRef.current = { start: newPos, end: newPos };
       return;
@@ -157,8 +177,16 @@ export default function ActivityCppBlock({
       pendingRemoteRef.current = null;
       setCode(incoming);
       setSavedCode(incoming);
+      resetHistory(incoming);
       lastSentRef.current = incoming;
     }
+  };
+
+  const applyHistorySnapshot = (snapshot) => {
+    if (!snapshot) return;
+    setCode(snapshot.value);
+    selectionRef.current = snapshot.selection;
+    if (editable) scheduleBroadcast(snapshot.value);
   };
 
   // focus textarea when entering edit mode
@@ -692,6 +720,27 @@ export default function ActivityCppBlock({
 
         <Button
           variant="outline-secondary"
+          size="sm"
+          disabled={!isEditing || !canUndo}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => applyHistorySnapshot(undo())}
+          title="Undo (Ctrl/Cmd+Z)"
+        >
+          Undo
+        </Button>
+        <Button
+          variant="outline-secondary"
+          size="sm"
+          disabled={!isEditing || !canRedo}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => applyHistorySnapshot(redo())}
+          title="Redo (Ctrl/Cmd+Shift+Z or Ctrl+Y)"
+        >
+          Redo
+        </Button>
+
+        <Button
+          variant="outline-secondary"
           onClick={() =>
             setLayoutMode((m) => (m === 'side' ? 'stacked' : 'side'))
           }
@@ -738,6 +787,10 @@ export default function ActivityCppBlock({
             onChange={(e) => {
               const v = e.target.value;
               setCode(v);
+              recordHistory(v, {
+                start: e.target.selectionStart,
+                end: e.target.selectionEnd,
+              });
               if (editable) scheduleBroadcast(v);
             }}
             onKeyDown={handleKeyDown}

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Form, Button } from 'react-bootstrap';
 import Prism from 'prismjs';
 import { runSkulptCode } from '../../utils/runSkulptCode';
+import useCodeHistory from '../../hooks/useCodeHistory';
 
 function createStdinController() {
   let waitingResolve = null;
@@ -53,8 +54,6 @@ export default function ActivityPythonBlock({
 
   const [consoleInput, setConsoleInput] = useState('');
   const [code, setCode] = useState(initialCode ?? '');
-  useEffect(() => { if (localOnly) setCode(initialCode ?? ''); }, [initialCode, localOnly]);
-
   const [savedCode, setSavedCode] = useState(initialCode ?? '');
   const [isEditing, setIsEditing] = useState(false);
 
@@ -65,6 +64,23 @@ export default function ActivityPythonBlock({
   const codeScrollRef = useRef(null);
   const [outputText, setOutputText] = useState('');
   const selectionRef = useRef(null);
+  const {
+    record: recordHistory,
+    undo,
+    redo,
+    reset: resetHistory,
+    canUndo,
+    canRedo,
+  } = useCodeHistory(initialCode ?? '');
+
+  useEffect(() => {
+    if (localOnly) {
+      const base = initialCode ?? '';
+      setCode(base);
+      setSavedCode(base);
+      resetHistory(base);
+    }
+  }, [initialCode, localOnly, resetHistory]);
 
   // --- NEW: outputKey derived from responseKey, same rule as C++ ---
   const outputKey = useMemo(() => {
@@ -100,11 +116,12 @@ export default function ActivityPythonBlock({
     else {
       setCode(next);
       setSavedCode(next);
+      resetHistory(next);
       lastBroadcastRef.current = next;
       lastCommittedRef.current = next;
       pendingRemoteRef.current = null;
     }
-  }, [initialCode, isEditing]);
+  }, [initialCode, isEditing, resetHistory]);
 
   const sendUpstream = (val, { broadcastOnly = false } = {}) => {
     if (!onCodeChange || !responseKey) return;
@@ -126,6 +143,7 @@ export default function ActivityPythonBlock({
       pendingRemoteRef.current = null;
       setCode(incoming);
       setSavedCode(incoming);
+      resetHistory(incoming);
       lastBroadcastRef.current = incoming;
       lastCommittedRef.current = incoming;
     }
@@ -205,9 +223,23 @@ export default function ActivityPythonBlock({
     flushPendingRemoteIfAny();
   };
 
+  const applyHistorySnapshot = (snapshot) => {
+    if (!snapshot) return;
+    setCode(snapshot.value);
+    selectionRef.current = snapshot.selection;
+    if (editable) sendUpstream(snapshot.value, { broadcastOnly: true });
+  };
+
   // NEW: Tab + auto-indent handler
   const handleKeyDown = (e) => {
     if (!isEditing || !editable) return;
+
+    const key = e.key.toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && (key === 'z' || key === 'y')) {
+      e.preventDefault();
+      applyHistorySnapshot((key === 'y' || e.shiftKey) ? redo() : undo());
+      return;
+    }
 
     const el = e.target;
     const value = code;
@@ -222,6 +254,7 @@ export default function ActivityPythonBlock({
       const newPos = start + indent.length;
 
       setCode(newValue);
+      recordHistory(newValue, { start: newPos, end: newPos });
       if (editable) sendUpstream(newValue, { broadcastOnly: true });
       selectionRef.current = { start: newPos, end: newPos };
       return;
@@ -241,6 +274,7 @@ export default function ActivityPythonBlock({
       const newPos = start + insert.length;
 
       setCode(newValue);
+      recordHistory(newValue, { start: newPos, end: newPos });
       if (editable) sendUpstream(newValue, { broadcastOnly: true });
       selectionRef.current = { start: newPos, end: newPos };
       return;
@@ -376,6 +410,27 @@ export default function ActivityPythonBlock({
         <Button variant="primary" onClick={runPython}>
           Run Python
         </Button>
+
+        <Button
+          variant="outline-secondary"
+          size="sm"
+          disabled={!isEditing || !canUndo}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => applyHistorySnapshot(undo())}
+          title="Undo (Ctrl/Cmd+Z)"
+        >
+          Undo
+        </Button>
+        <Button
+          variant="outline-secondary"
+          size="sm"
+          disabled={!isEditing || !canRedo}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => applyHistorySnapshot(redo())}
+          title="Redo (Ctrl/Cmd+Shift+Z or Ctrl+Y)"
+        >
+          Redo
+        </Button>
       </div>
 
       {/* Editor / Viewer with line-number gutter */}
@@ -395,6 +450,10 @@ export default function ActivityPythonBlock({
             onChange={(e) => {
               const v = e.target.value;
               setCode(v);
+              recordHistory(v, {
+                start: e.target.selectionStart,
+                end: e.target.selectionEnd,
+              });
               if (editable) sendUpstream(v, { broadcastOnly: true });
             }}
             onKeyDown={handleKeyDown}

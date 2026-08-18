@@ -126,7 +126,7 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {isSandbox && canGradeAllQuestions && (
+        {isSandbox && isAssessmentMode && canGradeAllQuestions && (
           <div className="d-flex flex-wrap gap-2 align-items-center mb-3">
             <Button
               size="sm"
@@ -161,6 +161,7 @@ export default function RunActivityWorkspace({
           onFileChange: handleFileChange,
           infoBubbleSession,
           runtimeFeatures,
+          activityLanguage: activity?.language || activity?.meta?.language || 'English',
           suppressStudentTestFeedbackUi,
           hideStudentTestSections,
         })}
@@ -216,6 +217,7 @@ export default function RunActivityWorkspace({
                   unansweredShown,
                   infoBubbleSession,
                   runtimeFeatures,
+                  activityLanguage: activity?.language || activity?.meta?.language || 'English',
                   suppressStudentTestFeedbackUi,
                   hideStudentTestSections,
                 })}
@@ -276,7 +278,7 @@ export default function RunActivityWorkspace({
                   hideStudentTestSections,
                 });
 
-                if (block.type !== 'question' || (!isAssessmentMode && !isSandbox)) {
+                if (block.type !== 'question' || !isAssessmentMode) {
                   return (
                     <div key={`group-${index}-block-${bIndex}`}>
                       {renderedBlock}
@@ -301,7 +303,6 @@ export default function RunActivityWorkspace({
                   blockType: block.type,
                   canGradeQuestionPreview,
                   isTestMode: isAssessmentMode,
-                  isSandbox,
                 });
                 const questionGradePreview = questionGradePreviews?.[qid];
                 const isGradingThisQuestion = gradingQuestionQid === qid;

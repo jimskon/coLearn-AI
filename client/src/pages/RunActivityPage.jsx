@@ -951,6 +951,7 @@ export default function RunActivityPage({
         block,
         payload,
         result: parsed,
+        scores: rubric.scores,
       }),
       rubricSource: rubric.inferred ? 'inferred' : 'explicit',
     };
@@ -1330,6 +1331,7 @@ export default function RunActivityPage({
         studentLevel: activity?.studentlevel || 'intro',
       },
       guidance: activity?.aicodeguidance || '',
+      activityLanguage: activity?.language || activity?.meta?.language || 'English',
       codeContext,
 
       // ✅ retry gate inputs
@@ -1687,8 +1689,8 @@ export default function RunActivityPage({
     };
   }
 
-  function normalizeQuestionGradeResult({ block, payload, result }) {
-    const scores = normalizeScoreBands(block?.scores || {});
+  function normalizeQuestionGradeResult({ block, payload, result, scores: previewScores = null }) {
+    const scores = normalizeScoreBands(previewScores || block?.scores || {});
     const maxCodePts = bucketPoints(scores.code);
     const maxRunPts = bucketPoints(scores.output);
     const maxRespPts = bucketPoints(scores.response);
@@ -2248,6 +2250,7 @@ export default function RunActivityPage({
 
             // activity-level policy
             guidance: activity?.aicodeguidance || '',
+            activityLanguage: activity?.language || activity?.meta?.language || 'English',
             instanceId: Number(instanceId),
             groupNum,
             answeredByUserId: Number(user?.id),
@@ -2953,7 +2956,7 @@ export default function RunActivityPage({
 
   async function handleGradeSingleQuestion(qid) {
     if (gradingQuestionQid || gradingAllQuestions) return;
-    if (!isTestMode && !isAssignmentMode && !isSandbox) return;
+    if (!isTestMode && !isAssignmentMode) return;
 
     const block = findQuestionBlockByQid(qid);
     if (!block) return;
@@ -2987,7 +2990,7 @@ export default function RunActivityPage({
 
   async function handleGradeAllQuestions() {
     if (gradingQuestionQid || gradingAllQuestions) return;
-    if (!isTestMode && !isAssignmentMode && !isSandbox) return;
+    if (!isTestMode && !isAssignmentMode) return;
 
     const blocksToGrade = groups.flatMap((group) => [group.intro, ...(group.content || [])])
       .filter((block) => block?.type === 'question');

@@ -112,6 +112,20 @@ function markupHeaderValue(value) {
     .trim();
 }
 
+function upsertLanguageHeader(sourceText, language) {
+  const normalizedLanguage = markupHeaderValue(language) || 'English';
+  const lines = String(sourceText || '').split('\n');
+  const existingIndex = lines.findIndex((line) => /^\\language\{[\s\S]*\}\s*$/.test(line.trim()));
+  if (existingIndex >= 0) {
+    lines[existingIndex] = `\\language{${normalizedLanguage}}`;
+    return lines.join('\n');
+  }
+
+  const modeIndex = lines.findIndex((line) => /^\\mode\{[\s\S]*\}\s*$/.test(line.trim()));
+  lines.splice(modeIndex >= 0 ? modeIndex + 1 : 0, 0, `\\language{${normalizedLanguage}}`);
+  return lines.join('\n');
+}
+
 function allocateTimedSectionMinutes(sectionNames, totalMinutes) {
   const sections = Array.isArray(sectionNames) ? sectionNames : [];
   const total = Math.round(Number(totalMinutes));
@@ -1524,6 +1538,7 @@ export default function CreatorWorkbenchPage() {
           use_timed_sections: useTimedSections,
           timed_sections: isSectionlessDraft ? [] : timedSections,
           retries_required: retriesRequired,
+          language: markupHeaderValue(advancedDraft.language) || 'English',
           description: appendAdvancedPrompt(draftDescription, advancedPromptText),
           createdBy: user?.id,
         }),
@@ -1531,17 +1546,23 @@ export default function CreatorWorkbenchPage() {
       const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Failed to create draft.');
 
-      let sourceText = data.content_text || '';
-      if (useLabBoilerplate) {
+      // The language setting is activity metadata, not merely a generation
+      // instruction.  Preserve it in the source even if a model or an older
+      // server response supplies a different (usually English) header.
+      const selectedLanguage = markupHeaderValue(advancedDraft.language) || 'English';
+      const generatedSourceText = data.content_text || '';
+      let sourceText = useLabBoilerplate
+        ? upsertLanguageHeader(labBoilerplateSource, selectedLanguage)
+        : upsertLanguageHeader(generatedSourceText, selectedLanguage);
+      if (useLabBoilerplate || sourceText !== generatedSourceText) {
         const sourceRes = await fetch(`${API_BASE_URL}/api/activities/${data.id}/source`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ text: labBoilerplateSource }),
+          body: JSON.stringify({ text: sourceText }),
         });
         const sourceData = await sourceRes.json().catch(() => ({}));
-        if (!sourceRes.ok) throw new Error(sourceData?.error || 'The assignment draft was created, but the lab boilerplate could not be saved.');
-        sourceText = labBoilerplateSource;
+        if (!sourceRes.ok) throw new Error(sourceData?.error || 'The draft was created, but its selected language could not be saved.');
         data.source_updated_at = sourceData?.metadata?.source_updated_at
           ?? sourceData?.source_updated_at
           ?? data.source_updated_at
@@ -1585,6 +1606,7 @@ export default function CreatorWorkbenchPage() {
       `\\title{${title}}`,
       `\\name{${name}}`,
       `\\mode{${mode}}`,
+      `\\language{${markupHeaderValue(advancedDraft.language) || 'English'}}`,
       '',
       '% Paste or write your activity markup below.',
       '',
@@ -1765,7 +1787,10 @@ export default function CreatorWorkbenchPage() {
       const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Revision request failed.');
 
-      const proposedText = data.proposedDocText || data.proposed_doc_text || '';
+      const revisionText = data.proposedDocText || data.proposed_doc_text || '';
+      const proposedText = isAdvancedOnlyRequest
+        ? upsertLanguageHeader(revisionText, advancedDraft.language)
+        : revisionText;
       if (!proposedText.trim()) throw new Error('Revision returned an empty proposal.');
       const parsedProposal = parseActivityText(proposedText);
       setProposal({

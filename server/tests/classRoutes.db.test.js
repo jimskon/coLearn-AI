@@ -611,6 +611,7 @@ test('creator draft route creates an assignment draft without section requiremen
         use_timed_sections: false,
         timed_sections: [],
         retries_required: 2,
+        language: 'Swedish',
         createdBy: creatorId,
       },
     });
@@ -622,9 +623,12 @@ test('creator draft route creates an assignment draft without section requiremen
     assert.equal(create.body.use_timed_sections, false);
     assert.deepEqual(create.body.timed_sections, []);
     assert.equal(create.body.retries_required, 2);
+    assert.equal(create.body.language, 'Swedish');
     assert.deepEqual(capturedInput?.majorSections, []);
     assert.deepEqual(capturedInput?.timedSections, []);
+    assert.equal(capturedInput?.language, 'Swedish');
     assert.match(create.body.content_text, /\\mode\{assignment\}/);
+    assert.match(create.body.content_text, /\\language\{Swedish\}/);
     assert.doesNotMatch(create.body.content_text, /\\section\{/);
     remember('activities', create.body.id);
   } finally {

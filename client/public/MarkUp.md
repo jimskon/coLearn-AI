@@ -40,6 +40,7 @@ All interactive content must appear inside a `\questiongroup`.
 | `\studentlevel{...}` | Target audience | `\studentlevel{Second Year}` |
 | `\activitycontext{...}` | Introductory paragraph | `\activitycontext{This activity explores...}` |
 | `\aicodeguidance{...}` | Global AI behavior rules | See AI Guidance section below |
+| `\language{...}` | Required language for AI feedback and inline AI help | `\language{Swedish}` |
 | `\mode{group}` | Normal in-class group activity. This is also the default when no mode is set. | `\mode{group}` |
 | `\mode{assignment}` | Project-style lab assignment mode. Every milestone is visible, work is saved as a draft, and students submit the complete lab once at the end. | `\mode{assignment}` |
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
@@ -57,6 +58,7 @@ Notes:
 - `\mode{playground}` opens every question group at once, hides submit controls, and saves each student's answers/code separately so the work can be revisited later.
 - `\mode{demo}` opens every question group at once, hides submit controls, and is intended for temporary or disposable demo sessions.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
+- `\language{...}` sets the language that AI feedback and inline AI help must use. It is metadata and is hidden from students in the activity workspace. If omitted, English is used.
 - `\section` is structural only.
 
 ---

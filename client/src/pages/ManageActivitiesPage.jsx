@@ -171,6 +171,7 @@ export default function ManageActivitiesPage() {
   const [newActivity, setNewActivity] = useState(emptyUploadActivity);
 
   const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [showGoogleExportMapModal, setShowGoogleExportMapModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -183,6 +184,9 @@ export default function ManageActivitiesPage() {
   const [googleImportUrl, setGoogleImportUrl] = useState('');
   const [googleImportMode, setGoogleImportMode] = useState('remote');
   const [googleImportNote, setGoogleImportNote] = useState('');
+  const [selectedGoogleExportMapFile, setSelectedGoogleExportMapFile] = useState(null);
+  const [googleExportMapBusy, setGoogleExportMapBusy] = useState(false);
+  const [googleExportMapNote, setGoogleExportMapNote] = useState('');
   const [createDraft, setCreateDraft] = useState(emptyCreateDraft);
   const [createNote, setCreateNote] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
@@ -450,6 +454,60 @@ export default function ManageActivitiesPage() {
     }
   };
 
+  const openGoogleExportMapModal = () => {
+    setSelectedGoogleExportMapFile(null);
+    setGoogleExportMapNote('');
+    setShowGoogleExportMapModal(true);
+  };
+
+  const handleGoogleExportMapping = async () => {
+    setGoogleExportMapNote('');
+    if (!selectedGoogleExportMapFile) {
+      setGoogleExportMapNote('Choose the colearn-google-export-mapping.json file first.');
+      return;
+    }
+
+    let mapping;
+    try {
+      mapping = JSON.parse(await selectedGoogleExportMapFile.text());
+    } catch (err) {
+      setGoogleExportMapNote('That file is not valid JSON. Choose the mapping file created by the Google Apps Script.');
+      return;
+    }
+    if (!Array.isArray(mapping?.activities)) {
+      setGoogleExportMapNote('This is not a coLearn Google export mapping: no activities list was found.');
+      return;
+    }
+
+    setGoogleExportMapBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/import-google-export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(mapping),
+      });
+      const data = await readJsonResponse(res);
+      if (!res.ok) {
+        setGoogleExportMapNote(data.error || 'Could not attach the exported Google Docs.');
+        return;
+      }
+
+      await refreshActivities();
+      const attachedCount = Array.isArray(data.attached) ? data.attached.length : 0;
+      const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+      const skippedDetail = skipped.length
+        ? ` ${skipped.length} skipped: ${skipped.map((item) => item.name || `#${item.activity_id}`).join(', ')}.`
+        : '';
+      setGoogleExportMapNote(`Attached ${attachedCount} new Google Doc${attachedCount === 1 ? '' : 's'}.${skippedDetail}`);
+    } catch (err) {
+      console.error('Google export mapping import failed:', err);
+      setGoogleExportMapNote(err?.message || 'Could not attach the exported Google Docs.');
+    } finally {
+      setGoogleExportMapBusy(false);
+    }
+  };
+
   const handleDelete = async (activityId) => {
     const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/${activityId}`, {
       method: 'DELETE',
@@ -559,6 +617,9 @@ export default function ManageActivitiesPage() {
           sheet_url: activity.sheet_url || null,
           order_index: activity.order_index,
           content_text: body.text || '',
+          source_revision: body.metadata?.source_revision || 0,
+          source_updated_at: body.metadata?.source_updated_at || null,
+          content_hash: body.metadata?.local_source_hash || null,
         });
       }
 
@@ -921,6 +982,9 @@ export default function ManageActivitiesPage() {
         </Button>
         <Button variant="outline-secondary" onClick={() => setShowGoogleModal(true)}>
           Google
+        </Button>
+        <Button variant="outline-success" onClick={openGoogleExportMapModal}>
+          Attach Google Export
         </Button>
       </div>
       <div className="text-muted small mb-4">
@@ -1355,6 +1419,48 @@ export default function ManageActivitiesPage() {
           </Button>
           <Button variant="primary" onClick={handleGoogleImport}>
             Import from Google
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal
+        show={showGoogleExportMapModal}
+        onHide={() => !googleExportMapBusy && setShowGoogleExportMapModal(false)}
+      >
+        <Modal.Header closeButton={!googleExportMapBusy}>
+          <Modal.Title>Attach New Google Docs</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p>
+            Use this after the Google Apps Script has created a new folder and one new Google Doc
+            for each activity in a downloaded local bundle. Upload its
+            {' '}<code>colearn-google-export-mapping.json</code> file here.
+          </p>
+          <Alert variant="info">
+            This replaces old Google links with the new Docs while retaining the local database
+            markup as the authoritative copy. It does not overwrite any Google document.
+          </Alert>
+          <Form.Group>
+            <Form.Label>Google export mapping</Form.Label>
+            <Form.Control
+              type="file"
+              accept="application/json,.json"
+              onChange={(e) => setSelectedGoogleExportMapFile(e.target.files?.[0] || null)}
+              disabled={googleExportMapBusy}
+            />
+          </Form.Group>
+          {googleExportMapNote ? (
+            <Alert variant={googleExportMapNote.startsWith('Attached ') ? 'success' : 'warning'} className="mt-3 mb-0">
+              {googleExportMapNote}
+            </Alert>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowGoogleExportMapModal(false)} disabled={googleExportMapBusy}>
+            Close
+          </Button>
+          <Button variant="success" onClick={handleGoogleExportMapping} disabled={googleExportMapBusy}>
+            {googleExportMapBusy ? 'Attaching...' : 'Attach Docs'}
           </Button>
         </Modal.Footer>
       </Modal>

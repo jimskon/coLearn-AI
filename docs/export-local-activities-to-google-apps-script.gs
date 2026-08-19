@@ -150,20 +150,20 @@ function resetIncompleteExport() {
 }
 
 function createDocumentWithMarkup(documentTitle, markup) {
-  let documentId = null;
+  const document = DocumentApp.create(documentTitle);
+  const documentId = document.getId();
+  // Create the empty document with DocumentApp, then write the source through
+  // the Docs REST API. DocumentApp.setText() can turn a long activity into
+  // thousands of internal edits and eventually rejects the save.
+  document.saveAndClose();
   let lastError = null;
 
   // Retry the same newly-created document rather than creating duplicates.
-  // Google occasionally returns a transient Documents-service error while
-  // saving a newly created file in a larger batch.
+  // The REST batch update inserts the exact markup in one request, including
+  // newlines, and avoids the DocumentApp "too many changes" limit.
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      const document = documentId
-        ? DocumentApp.openById(documentId)
-        : DocumentApp.create(documentTitle);
-      documentId = document.getId();
-      document.getBody().setText(markup);
-      document.saveAndClose();
+      writeDocumentTextWithDocsApi(documentId, markup);
       return {
         id: documentId,
         url: `https://docs.google.com/document/d/${documentId}/edit`,
@@ -177,6 +177,31 @@ function createDocumentWithMarkup(documentTitle, markup) {
   }
 
   throw new Error(`Could not save “${documentTitle}” after 3 attempts: ${lastError}`);
+}
+
+function writeDocumentTextWithDocsApi(documentId, markup) {
+  const response = UrlFetchApp.fetch(
+    `https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`,
+    {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: `Bearer ${ScriptApp.getOAuthToken()}` },
+      payload: JSON.stringify({
+        requests: [{
+          insertText: {
+            location: { index: 1 },
+            text: markup,
+          },
+        }],
+      }),
+      muteHttpExceptions: true,
+    }
+  );
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    const detail = response.getContentText().slice(0, 500);
+    throw new Error(`Google Docs API returned ${code}: ${detail}`);
+  }
 }
 
 function sha256Hex(value) {

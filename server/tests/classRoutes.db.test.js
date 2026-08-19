@@ -246,6 +246,16 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.equal(list.body[0].id, create.body.id);
   assert.equal(list.body[0].name, activityName);
 
+  await db.query(
+    `UPDATE pogil_activities
+        SET remote_source_hash = 'old-remote-hash',
+            remote_updated_at = NOW(3),
+            last_synced_hash = 'old-sync-hash',
+            last_synced_at = NOW(3)
+      WHERE id = ?`,
+    [create.body.id]
+  );
+
   const update = await requestJson(`/api/classes/${classId}/activities/${activityName}`, {
     method: 'PUT',
     body: {
@@ -262,7 +272,18 @@ test('class activity routes create, list, update, and delete an activity', async
     sheet_url: 'https://docs.google.com/document/d/1BcdEfGhIjKlMnOpQrStUvWxYz1234567890A/edit',
     order_index: 5,
     class_id: String(classId),
+    remote_link_changed: true,
   });
+
+  const [[updatedRow]] = await db.query(
+    `SELECT remote_source_hash, remote_updated_at, last_synced_hash, last_synced_at
+       FROM pogil_activities WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(updatedRow.remote_source_hash, null);
+  assert.equal(updatedRow.remote_updated_at, null);
+  assert.equal(updatedRow.last_synced_hash, null);
+  assert.equal(updatedRow.last_synced_at, null);
 
   const remove = await requestJson(`/api/classes/${classId}/activities/${create.body.id}`, {
     method: 'DELETE',

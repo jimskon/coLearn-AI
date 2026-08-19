@@ -267,12 +267,51 @@ exports.updateActivityForClass = async (req, res) => {
   const { title, sheet_url, order_index } = req.body;
 
   try {
+    await ensureActivitySourceSchema();
+    const [[existing]] = await db.query(
+      `SELECT id, sheet_url
+         FROM pogil_activities
+        WHERE name = ? AND class_id = ?`,
+      [activityName, classId]
+    );
+    if (!existing) {
+      return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    const previousUrl = String(existing.sheet_url || '').trim();
+    const nextUrl = String(sheet_url || '').trim();
+    const linkedDocumentChanged = previousUrl !== nextUrl;
+
     await db.query(
-      'UPDATE pogil_activities SET title = ?, sheet_url = ?, order_index = ? WHERE name = ? AND class_id = ?',
-      [title, sheet_url, order_index, activityName, classId]
+      `UPDATE pogil_activities
+          SET title = ?,
+              sheet_url = ?,
+              order_index = ?,
+              remote_source_hash = CASE WHEN ? THEN NULL ELSE remote_source_hash END,
+              remote_updated_at = CASE WHEN ? THEN NULL ELSE remote_updated_at END,
+              last_synced_hash = CASE WHEN ? THEN NULL ELSE last_synced_hash END,
+              last_synced_at = CASE WHEN ? THEN NULL ELSE last_synced_at END
+        WHERE id = ?`,
+      [
+        title,
+        nextUrl || null,
+        order_index,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        existing.id,
+      ]
     );
 
-    res.json({ name: activityName, title, sheet_url, order_index, class_id: classId });
+    res.json({
+      name: activityName,
+      title,
+      sheet_url: nextUrl || null,
+      order_index,
+      class_id: classId,
+      remote_link_changed: linkedDocumentChanged,
+    });
   } catch (err) {
     console.error('Error updating activity:', err);
     res.status(500).json({ error: 'Failed to update activity.' });

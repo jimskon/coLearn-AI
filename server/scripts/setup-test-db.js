@@ -123,6 +123,13 @@ async function main() {
         source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         content_text LONGTEXT DEFAULT NULL,
         source_updated_at DATETIME(3) DEFAULT NULL,
+        source_revision INT UNSIGNED NOT NULL DEFAULT 0,
+        source_origin VARCHAR(32) DEFAULT NULL,
+        local_source_hash CHAR(64) DEFAULT NULL,
+        remote_source_hash CHAR(64) DEFAULT NULL,
+        remote_updated_at DATETIME(3) DEFAULT NULL,
+        last_synced_hash CHAR(64) DEFAULT NULL,
+        last_synced_at DATETIME(3) DEFAULT NULL,
         class_id INT NOT NULL,
         order_index INT NOT NULL DEFAULT 0,
         created_by INT DEFAULT NULL,
@@ -136,6 +143,13 @@ async function main() {
 
       ALTER TABLE pogil_activities
         ADD COLUMN IF NOT EXISTS source_updated_at DATETIME(3) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS source_revision INT UNSIGNED NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS source_origin VARCHAR(32) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS local_source_hash CHAR(64) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS remote_source_hash CHAR(64) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS remote_updated_at DATETIME(3) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS last_synced_hash CHAR(64) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS last_synced_at DATETIME(3) DEFAULT NULL,
         MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         MODIFY COLUMN content_text LONGTEXT NULL;
 

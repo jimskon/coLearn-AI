@@ -1,7 +1,7 @@
 const db = require('../db');
 const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
-const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
+const { fetchGoogleDocLinesByUrl, sourceHash } = require('../utils/activityContent');
 const activityCreator = require('../utils/activityCreator');
 const { inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
@@ -267,15 +267,163 @@ exports.updateActivityForClass = async (req, res) => {
   const { title, sheet_url, order_index } = req.body;
 
   try {
+    await ensureActivitySourceSchema();
+    const [[existing]] = await db.query(
+      `SELECT id, sheet_url
+         FROM pogil_activities
+        WHERE name = ? AND class_id = ?`,
+      [activityName, classId]
+    );
+    if (!existing) {
+      return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    const previousUrl = String(existing.sheet_url || '').trim();
+    const nextUrl = String(sheet_url || '').trim();
+    const linkedDocumentChanged = previousUrl !== nextUrl;
+
     await db.query(
-      'UPDATE pogil_activities SET title = ?, sheet_url = ?, order_index = ? WHERE name = ? AND class_id = ?',
-      [title, sheet_url, order_index, activityName, classId]
+      `UPDATE pogil_activities
+          SET title = ?,
+              sheet_url = ?,
+              order_index = ?,
+              remote_source_hash = CASE WHEN ? THEN NULL ELSE remote_source_hash END,
+              remote_updated_at = CASE WHEN ? THEN NULL ELSE remote_updated_at END,
+              last_synced_hash = CASE WHEN ? THEN NULL ELSE last_synced_hash END,
+              last_synced_at = CASE WHEN ? THEN NULL ELSE last_synced_at END
+        WHERE id = ?`,
+      [
+        title,
+        nextUrl || null,
+        order_index,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        existing.id,
+      ]
     );
 
-    res.json({ name: activityName, title, sheet_url, order_index, class_id: classId });
+    res.json({
+      name: activityName,
+      title,
+      sheet_url: nextUrl || null,
+      order_index,
+      class_id: classId,
+      remote_link_changed: linkedDocumentChanged,
+    });
   } catch (err) {
     console.error('Error updating activity:', err);
     res.status(500).json({ error: 'Failed to update activity.' });
+  }
+};
+
+// Attach the Google Docs created by the instructor-owned Apps Script to the
+// existing local activities. coLearn never writes to Google: it only receives
+// the mapping file produced by that script.
+exports.importGoogleExportMapping = async (req, res) => {
+  const classId = Number(req.params.id);
+  const actorRole = String(req.user?.role || '').toLowerCase();
+  const mappingClassId = Number(req.body?.class_id);
+  const mappings = Array.isArray(req.body?.activities) ? req.body.activities : [];
+
+  if (!classId) return res.status(400).json({ error: 'Invalid class id.' });
+  if (mappingClassId && mappingClassId !== classId) {
+    return res.status(400).json({ error: 'This Google export mapping belongs to a different class.' });
+  }
+  if (!['root', 'creator', 'instructor'].includes(actorRole)) {
+    return res.status(403).json({ error: 'Only instructors, creators, or root can attach Google Docs.' });
+  }
+  if (!mappings.length) {
+    return res.status(400).json({ error: 'The mapping file does not contain any activities.' });
+  }
+
+  const seenIds = new Set();
+  const requestedIds = [];
+  for (const mapping of mappings) {
+    const activityId = Number(mapping?.activity_id ?? mapping?.id);
+    if (!activityId || seenIds.has(activityId)) {
+      return res.status(400).json({ error: 'Each mapping must contain one unique activity_id.' });
+    }
+    seenIds.add(activityId);
+    requestedIds.push(activityId);
+  }
+
+  try {
+    await ensureActivitySourceSchema();
+    const [activities] = await db.query(
+      `SELECT id, name, title, content_text
+         FROM pogil_activities
+        WHERE class_id = ? AND id IN (?)`,
+      [classId, requestedIds]
+    );
+    const activityById = new Map(activities.map((activity) => [Number(activity.id), activity]));
+    const attached = [];
+    const skipped = [];
+    const conn = await db.getConnection();
+
+    try {
+      await conn.beginTransaction();
+      for (const mapping of mappings) {
+        const activityId = Number(mapping?.activity_id ?? mapping?.id);
+        const activity = activityById.get(activityId);
+        const googleDocUrl = String(mapping?.google_doc_url ?? mapping?.sheet_url ?? '').trim();
+
+        if (!activity) {
+          skipped.push({ activity_id: activityId, reason: 'Activity is not part of this class.' });
+          continue;
+        }
+        if (!activity.content_text) {
+          skipped.push({ activity_id: activityId, name: activity.name, reason: 'Activity has no saved local markup.' });
+          continue;
+        }
+        if (!extractGoogleFileId(googleDocUrl)) {
+          skipped.push({ activity_id: activityId, name: activity.name, reason: 'Mapping does not contain a valid Google Doc URL.' });
+          continue;
+        }
+
+        const currentHash = sourceHash(activity.content_text);
+        const exportedHash = String(mapping?.content_hash || '').trim().toLowerCase();
+        if (exportedHash && exportedHash !== currentHash) {
+          skipped.push({
+            activity_id: activityId,
+            name: activity.name,
+            reason: 'Local markup changed after this export. Download a fresh bundle before attaching this Doc.',
+          });
+          continue;
+        }
+
+        await conn.query(
+          `UPDATE pogil_activities
+              SET sheet_url = ?,
+                  local_source_hash = ?,
+                  remote_source_hash = NULL,
+                  remote_updated_at = NULL,
+                  last_synced_hash = NULL,
+                  last_synced_at = NULL
+            WHERE id = ?`,
+          [googleDocUrl, currentHash, activityId]
+        );
+        attached.push({ activity_id: activityId, name: activity.name, title: activity.title, google_doc_url: googleDocUrl });
+      }
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    void recordAuditEvent('activity_google_export_mapping_imported', {
+      req,
+      userId: req.user?.id || null,
+      classId,
+      details: { attached_count: attached.length, skipped_count: skipped.length },
+    });
+    return res.json({ attached, skipped });
+  } catch (err) {
+    console.error('Failed to attach Google export mapping:', err);
+    return res.status(500).json({ error: 'Could not attach the Google export mapping.' });
   }
 };
 

@@ -7,6 +7,7 @@ const express = require('express');
 const classRoutes = require('../classes/routes');
 const db = require('../db');
 const activityCreator = require('../utils/activityCreator');
+const { sourceHash } = require('../utils/activityContent');
 
 function uniqueName(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -86,9 +87,15 @@ async function createClassRecord() {
   return remember('classes', result.insertId);
 }
 
-function createTestServer() {
+function createTestServer(user = null) {
   const app = express();
   app.use(express.json());
+  if (user) {
+    app.use((req, _res, next) => {
+      req.user = user;
+      next();
+    });
+  }
   app.use('/api/classes', classRoutes);
 
   const server = http.createServer(app);
@@ -110,8 +117,8 @@ function createTestServer() {
   });
 }
 
-async function requestJson(path, { method = 'GET', body } = {}) {
-  const server = await createTestServer();
+async function requestJson(path, { method = 'GET', body, user = null } = {}) {
+  const server = await createTestServer(user);
   try {
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
@@ -246,6 +253,16 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.equal(list.body[0].id, create.body.id);
   assert.equal(list.body[0].name, activityName);
 
+  await db.query(
+    `UPDATE pogil_activities
+        SET remote_source_hash = 'old-remote-hash',
+            remote_updated_at = NOW(3),
+            last_synced_hash = 'old-sync-hash',
+            last_synced_at = NOW(3)
+      WHERE id = ?`,
+    [create.body.id]
+  );
+
   const update = await requestJson(`/api/classes/${classId}/activities/${activityName}`, {
     method: 'PUT',
     body: {
@@ -262,7 +279,18 @@ test('class activity routes create, list, update, and delete an activity', async
     sheet_url: 'https://docs.google.com/document/d/1BcdEfGhIjKlMnOpQrStUvWxYz1234567890A/edit',
     order_index: 5,
     class_id: String(classId),
+    remote_link_changed: true,
   });
+
+  const [[updatedRow]] = await db.query(
+    `SELECT remote_source_hash, remote_updated_at, last_synced_hash, last_synced_at
+       FROM pogil_activities WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(updatedRow.remote_source_hash, null);
+  assert.equal(updatedRow.remote_updated_at, null);
+  assert.equal(updatedRow.last_synced_hash, null);
+  assert.equal(updatedRow.last_synced_at, null);
 
   const remove = await requestJson(`/api/classes/${classId}/activities/${create.body.id}`, {
     method: 'DELETE',
@@ -273,6 +301,87 @@ test('class activity routes create, list, update, and delete an activity', async
   const listAfterDelete = await requestJson(`/api/classes/${classId}/activities`);
   assert.equal(listAfterDelete.status, 200);
   assert.deepEqual(listAfterDelete.body, []);
+});
+
+test('Google export mapping attaches only matching local markup to new Google Docs', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const activityName = uniqueName('local-google-export').toLowerCase();
+  const contentText = '\\title{Local activity}\n\\question{Keep this local.}\n\\endquestion';
+
+  const create = await requestJson(`/api/classes/${classId}/activities`, {
+    method: 'POST',
+    body: {
+      name: activityName,
+      title: 'Local activity',
+      source_type: 'local',
+      content_text: contentText,
+      order_index: 0,
+      createdBy: creatorId,
+    },
+  });
+  assert.equal(create.status, 201);
+  remember('activities', create.body.id);
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET remote_source_hash = 'old-remote-hash',
+            remote_updated_at = NOW(3),
+            last_synced_hash = 'old-sync-hash',
+            last_synced_at = NOW(3)
+      WHERE id = ?`,
+    [create.body.id]
+  );
+
+  const googleDocUrl = 'https://docs.google.com/document/d/1BcdEfGhIjKlMnOpQrStUvWxYz1234567890A/edit';
+  const attach = await requestJson(`/api/classes/${classId}/activities/import-google-export`, {
+    method: 'POST',
+    user: { id: creatorId, role: 'creator' },
+    body: {
+      format: 'colearn-google-export-mapping/v1',
+      class_id: classId,
+      activities: [{
+        activity_id: create.body.id,
+        content_hash: sourceHash(contentText),
+        google_doc_url: googleDocUrl,
+      }],
+    },
+  });
+
+  assert.equal(attach.status, 200);
+  assert.equal(attach.body.attached.length, 1);
+  assert.deepEqual(attach.body.skipped, []);
+
+  const [[updated]] = await db.query(
+    `SELECT source_type, sheet_url, local_source_hash, remote_source_hash,
+            remote_updated_at, last_synced_hash, last_synced_at
+       FROM pogil_activities WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(updated.source_type, 'local');
+  assert.equal(updated.sheet_url, googleDocUrl);
+  assert.equal(updated.local_source_hash, sourceHash(contentText));
+  assert.equal(updated.remote_source_hash, null);
+  assert.equal(updated.remote_updated_at, null);
+  assert.equal(updated.last_synced_hash, null);
+  assert.equal(updated.last_synced_at, null);
+
+  const stale = await requestJson(`/api/classes/${classId}/activities/import-google-export`, {
+    method: 'POST',
+    user: { id: creatorId, role: 'creator' },
+    body: {
+      class_id: classId,
+      activities: [{
+        activity_id: create.body.id,
+        content_hash: sourceHash('older local version'),
+        google_doc_url: googleDocUrl,
+      }],
+    },
+  });
+  assert.equal(stale.status, 200);
+  assert.equal(stale.body.attached.length, 0);
+  assert.match(stale.body.skipped[0].reason, /changed after this export/i);
 });
 
 test('class activity delete also removes assigned activity instances through cascade', async () => {

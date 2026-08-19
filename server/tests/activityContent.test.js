@@ -127,3 +127,30 @@ test('sourceSyncStatus prefers matching markup over timestamps and otherwise ide
     restore();
   }
 });
+
+test('sourceSyncStatus detects when local and Google changed after their last shared version', () => {
+  const { activityContent, restore } = loadActivityContent();
+
+  try {
+    const baseHash = activityContent.sourceHash('shared base');
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'local edit',
+      remoteText: 'shared base',
+      lastSyncedHash: baseHash,
+    }).state, 'local_newer');
+
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'shared base',
+      remoteText: 'Google edit',
+      lastSyncedHash: baseHash,
+    }).state, 'remote_newer');
+
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'local edit',
+      remoteText: 'Google edit',
+      lastSyncedHash: baseHash,
+    }).state, 'conflict');
+  } finally {
+    restore();
+  }
+});

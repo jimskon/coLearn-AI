@@ -23,6 +23,7 @@ router.delete('/:id', classController.deleteClass);
 // ✅ Activities for a class
 router.get('/:id/activities', classController.getActivitiesByClass);
 router.post('/:id/activities', classController.createActivityForClass);
+router.post('/:id/activities/import-google-export', requireAuth, classController.importGoogleExportMapping);
 router.post('/:id/creator-draft', classController.createCreatorDraft);
 router.post('/:id/creator-draft/:activityId/revise', classController.reviseCreatorDraft);
 router.post('/:id/creator-draft/:activityId/revise-question', classController.reviseCreatorQuestion);

@@ -1675,8 +1675,21 @@ export default function CreatorWorkbenchPage() {
           ?? data?.source_updated_at
           ?? prev?.source_updated_at
           ?? null,
+        source_revision: data?.metadata?.source_revision
+          ?? data?.source_revision
+          ?? prev?.source_revision
+          ?? 0,
+        source_origin: data?.metadata?.source_origin
+          ?? data?.source_origin
+          ?? prev?.source_origin
+          ?? null,
+        last_synced_at: data?.metadata?.last_synced_at
+          ?? prev?.last_synced_at
+          ?? null,
       }));
-      setNotice('Saved.');
+      setNotice(activity?.sheet_url
+        ? 'Saved locally. Open Remote Copy to publish this version to Google.'
+        : 'Saved.');
       setTimeout(() => setNotice(''), 1800);
       return data;
     } finally {
@@ -1710,7 +1723,10 @@ export default function CreatorWorkbenchPage() {
 
   const copyLocalSource = async () => {
     try {
-      await navigator.clipboard.writeText(rawText);
+      // Sync status is calculated from the saved database copy, so publish the
+      // same version rather than unsaved text still sitting in the editor.
+      const savedLocalText = activity?.content_text ?? rawText;
+      await navigator.clipboard.writeText(savedLocalText);
       setNotice('Local markup copied. Paste it into the Google Doc.');
       setTimeout(() => setNotice(''), 3000);
     } catch (err) {
@@ -1744,6 +1760,9 @@ export default function CreatorWorkbenchPage() {
         content_text: data.text || '',
         source_type: 'local',
         source_updated_at: data.source_updated_at || prev?.source_updated_at || null,
+        source_revision: data.source_revision ?? prev?.source_revision ?? 0,
+        source_origin: data.source_origin || 'google_import',
+        last_synced_at: data.last_synced_at || prev?.last_synced_at || null,
       }));
       setNotice('Imported the current Google Doc into the local activity.');
       setTimeout(() => setNotice(''), 3000);
@@ -2324,7 +2343,7 @@ export default function CreatorWorkbenchPage() {
             {classInfo?.name || (effectiveClassId ? `Class ${effectiveClassId}` : 'New class activity')}
             {activity?.title ? ` · ${activity.title}` : ''}
             {activity?.source_updated_at
-              ? ` · Activity version: ${formatLocalDateTime(activity.source_updated_at)}`
+              ? ` · Activity version${activity?.source_revision ? ` ${activity.source_revision}` : ''}: ${formatLocalDateTime(activity.source_updated_at)}`
               : activity?.id ? ' · Activity version: not recorded yet' : ''}
           </div>
         </div>
@@ -3582,28 +3601,58 @@ export default function CreatorWorkbenchPage() {
           {remoteStatus ? (
             <>
               <div className="border rounded p-3 mb-3">
-                <div><strong>Local version:</strong> {remoteStatus.local?.updated_at ? formatLocalDateTime(remoteStatus.local.updated_at) : 'not recorded yet'}</div>
+                <div>
+                  <strong>Local version:</strong>{' '}
+                  {remoteStatus.local?.revision ? `revision ${remoteStatus.local.revision} · ` : ''}
+                  {remoteStatus.local?.updated_at ? formatLocalDateTime(remoteStatus.local.updated_at) : 'not recorded yet'}
+                  {remoteStatus.local?.origin ? ` · ${remoteStatus.local.origin === 'google_import' ? 'imported from Google' : 'saved in Creator'}` : ''}
+                </div>
                 <div><strong>Google Doc version:</strong> {remoteStatus.remote?.updated_at ? formatLocalDateTime(remoteStatus.remote.updated_at) : 'unknown'}</div>
                 <div className="mt-2"><strong>Status:</strong> {
                   ({
                     in_sync: 'Markup matches',
                     local_newer: 'Local markup is newer',
                     remote_newer: 'Google Doc markup is newer',
+                    conflict: 'Both local markup and the Google Doc changed since their last sync',
                     remote_only: 'Only the Google Doc has markup',
                     different_unknown: 'Markup differs; timestamps are unavailable',
                   })[remoteStatus.comparison?.state] || 'Could not compare versions'
                 }</div>
               </div>
+              {remoteStatus.comparison?.state === 'local_newer' ? (
+                <Alert variant="info" className="py-2">
+                  <strong>Publish your local edit manually:</strong> copy the local markup, open the Google Doc in your own Google account, replace its contents, then return here and refresh the status.
+                </Alert>
+              ) : null}
+              {remoteStatus.comparison?.state === 'remote_newer' ? (
+                <Alert variant="warning" className="py-2 mb-3">
+                  Google has changed since the local copy. Use <strong>Import Remote</strong> to bring that version into the database before editing locally.
+                </Alert>
+              ) : null}
+              {remoteStatus.comparison?.state === 'conflict' ? (
+                <Alert variant="danger" className="py-2 mb-3">
+                  Do not import automatically: both copies changed after their last match. Open the Google Doc and preserve the local markup before choosing which copy should win.
+                </Alert>
+              ) : null}
               <div className="small text-muted">{remoteStatus.remote?.title || activity?.sheet_url}</div>
             </>
           ) : null}
         </Modal.Body>
         <Modal.Footer className="justify-content-between">
-          <Button variant="outline-secondary" onClick={loadRemoteStatus} disabled={remoteBusy}>Refresh status</Button>
+          <Button variant="outline-secondary" onClick={loadRemoteStatus} disabled={remoteBusy}>
+            {remoteStatus?.comparison?.state === 'local_newer' ? 'I pasted into Google — Refresh' : 'Refresh status'}
+          </Button>
           <div className="d-flex gap-2">
             <Button variant="outline-primary" onClick={copyLocalSource} disabled={!rawText}>Copy Local Markup</Button>
             <Button variant="outline-primary" onClick={openRemoteDocument}>Open Remote</Button>
-            <Button variant="warning" onClick={importRemoteSource} disabled={remoteBusy}>Import Remote</Button>
+            <Button
+              variant="warning"
+              onClick={importRemoteSource}
+              disabled={remoteBusy || remoteStatus?.comparison?.state === 'conflict'}
+              title={remoteStatus?.comparison?.state === 'conflict' ? 'Resolve the conflict deliberately before importing.' : undefined}
+            >
+              Import Remote
+            </Button>
           </div>
         </Modal.Footer>
       </Modal>

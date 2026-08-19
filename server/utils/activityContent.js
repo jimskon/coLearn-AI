@@ -54,14 +54,64 @@ async function fetchGoogleDocMetadataByUrl(sheetUrl) {
   };
 }
 
-function sourceSyncStatus({ localText, localUpdatedAt, remoteText, remoteUpdatedAt }) {
-  const local = String(localText ?? '').replace(/\r\n/g, '\n');
-  const remote = String(remoteText ?? '').replace(/\r\n/g, '\n');
-  const localHash = crypto.createHash('sha256').update(local).digest('hex');
-  const remoteHash = crypto.createHash('sha256').update(remote).digest('hex');
+function normalizedSourceText(text) {
+  return String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function sourceHash(text) {
+  return crypto.createHash('sha256').update(normalizedSourceText(text)).digest('hex');
+}
+
+function sourceSyncStatus({
+  localText,
+  localUpdatedAt,
+  remoteText,
+  remoteUpdatedAt,
+  lastSyncedHash,
+}) {
+  const local = normalizedSourceText(localText);
+  const remote = normalizedSourceText(remoteText);
+  const localHash = sourceHash(local);
+  const remoteHash = sourceHash(remote);
 
   if (localHash === remoteHash) {
-    return { state: 'in_sync', local_hash: localHash, remote_hash: remoteHash };
+    return {
+      state: 'in_sync',
+      local_hash: localHash,
+      remote_hash: remoteHash,
+      last_synced_hash: lastSyncedHash || null,
+    };
+  }
+
+  // A shared hash gives us a safe three-way comparison. Do not choose a side
+  // automatically when both copies have changed after their last match.
+  if (lastSyncedHash) {
+    const localChanged = localHash !== lastSyncedHash;
+    const remoteChanged = remoteHash !== lastSyncedHash;
+    if (localChanged && remoteChanged) {
+      return {
+        state: 'conflict',
+        local_hash: localHash,
+        remote_hash: remoteHash,
+        last_synced_hash: lastSyncedHash,
+      };
+    }
+    if (remoteChanged) {
+      return {
+        state: 'remote_newer',
+        local_hash: localHash,
+        remote_hash: remoteHash,
+        last_synced_hash: lastSyncedHash,
+      };
+    }
+    if (localChanged) {
+      return {
+        state: 'local_newer',
+        local_hash: localHash,
+        remote_hash: remoteHash,
+        last_synced_hash: lastSyncedHash,
+      };
+    }
   }
 
   const localTime = localUpdatedAt ? new Date(localUpdatedAt).getTime() : NaN;
@@ -72,7 +122,7 @@ function sourceSyncStatus({ localText, localUpdatedAt, remoteText, remoteUpdated
       ? (remoteTime > localTime ? 'remote_newer' : 'local_newer')
       : 'different_unknown';
 
-  return { state, local_hash: localHash, remote_hash: remoteHash };
+  return { state, local_hash: localHash, remote_hash: remoteHash, last_synced_hash: lastSyncedHash || null };
 }
 
 async function loadActivitySourceLines(activity) {
@@ -101,7 +151,10 @@ async function loadActivitySourceText(activity) {
 
 async function loadActivitySourceById(db, activityId) {
   const [rows] = await db.query(
-    `SELECT id, sheet_url, source_type, content_text, source_updated_at, is_test
+    `SELECT id, sheet_url, source_type, content_text, source_updated_at,
+            source_revision, source_origin, local_source_hash,
+            remote_source_hash, remote_updated_at, last_synced_hash, last_synced_at,
+            is_test
        FROM pogil_activities
       WHERE id = ?`,
     [activityId]
@@ -124,6 +177,8 @@ module.exports = {
   linesFromGoogleDoc,
   fetchGoogleDocLinesByUrl,
   fetchGoogleDocMetadataByUrl,
+  normalizedSourceText,
+  sourceHash,
   sourceSyncStatus,
   loadActivitySourceLines,
   loadActivitySourceText,

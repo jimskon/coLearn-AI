@@ -5,6 +5,7 @@ const {
   loadActivitySourceById,
   fetchGoogleDocLinesByUrl,
   fetchGoogleDocMetadataByUrl,
+  sourceHash,
   sourceSyncStatus,
 } = require('../utils/activityContent');
 const { recordAuditEvent } = require('../utils/auditLogger');
@@ -32,9 +33,42 @@ async function getRemoteActivityStatus(activity) {
     localUpdatedAt: activity.source_updated_at,
     remoteText,
     remoteUpdatedAt: remote.updated_at,
+    lastSyncedHash: activity.last_synced_hash,
   });
 
   return { remote, remoteText, comparison };
+}
+
+function sqlDate(value) {
+  const date = value ? new Date(value) : null;
+  return date && Number.isFinite(date.getTime()) ? date : null;
+}
+
+// Reading Google is enough to record what we observed. If the hashes match,
+// this also establishes the shared base used for later conflict detection.
+async function recordRemoteObservation(activity, status) {
+  const hasLocalCopy = activity.content_text != null;
+  const nowInSync = hasLocalCopy && status.comparison.state === 'in_sync';
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET local_source_hash = CASE WHEN ? THEN ? ELSE local_source_hash END,
+            remote_source_hash = ?,
+            remote_updated_at = ?,
+            last_synced_hash = CASE WHEN ? THEN ? ELSE last_synced_hash END,
+            last_synced_at = CASE WHEN ? THEN NOW(3) ELSE last_synced_at END
+      WHERE id = ?`,
+    [
+      hasLocalCopy,
+      hasLocalCopy ? status.comparison.local_hash : null,
+      status.comparison.remote_hash,
+      sqlDate(status.remote.updated_at),
+      nowInSync,
+      nowInSync ? status.comparison.local_hash : null,
+      nowInSync,
+      activity.id,
+    ]
+  );
 }
 
 // Create a new activity
@@ -118,6 +152,13 @@ exports.getActivitySource = async (req, res) => {
       source_updated_at: source.activity.source_updated_at || null,
       metadata: {
         source_updated_at: source.activity.source_updated_at || null,
+        source_revision: source.activity.source_revision || 0,
+        source_origin: source.activity.source_origin || null,
+        local_source_hash: source.activity.local_source_hash || null,
+        remote_source_hash: source.activity.remote_source_hash || null,
+        remote_updated_at: source.activity.remote_updated_at || null,
+        last_synced_hash: source.activity.last_synced_hash || null,
+        last_synced_at: source.activity.last_synced_at || null,
       },
       lines: source.lines,
       text: source.text,
@@ -146,18 +187,25 @@ exports.saveActivitySource = async (req, res) => {
     const extractedTitle = extractTitleFromText(text);
     const nextTitle = extractedTitle || rows[0].title;
 
+    const localHash = sourceHash(text);
     await db.query(
       `UPDATE pogil_activities
           SET content_text = ?,
               source_type = 'local',
               title = ?,
-              source_updated_at = NOW(3)
+              source_updated_at = NOW(3),
+              source_revision = source_revision + 1,
+              source_origin = 'editor',
+              local_source_hash = ?
         WHERE id = ?`,
-      [text, nextTitle, id]
+      [text, nextTitle, localHash, id]
     );
 
     const [[saved]] = await db.query(
-      'SELECT source_updated_at FROM pogil_activities WHERE id = ?',
+      `SELECT source_updated_at, source_revision, source_origin,
+              local_source_hash, remote_source_hash, remote_updated_at,
+              last_synced_hash, last_synced_at
+         FROM pogil_activities WHERE id = ?`,
       [id]
     );
 
@@ -166,8 +214,17 @@ exports.saveActivitySource = async (req, res) => {
       source_type: 'local',
       title: nextTitle,
       source_updated_at: saved?.source_updated_at || null,
+      source_revision: saved?.source_revision || 0,
+      source_origin: saved?.source_origin || null,
       metadata: {
         source_updated_at: saved?.source_updated_at || null,
+        source_revision: saved?.source_revision || 0,
+        source_origin: saved?.source_origin || null,
+        local_source_hash: saved?.local_source_hash || null,
+        remote_source_hash: saved?.remote_source_hash || null,
+        remote_updated_at: saved?.remote_updated_at || null,
+        last_synced_hash: saved?.last_synced_hash || null,
+        last_synced_at: saved?.last_synced_at || null,
       },
       text,
     });
@@ -182,18 +239,29 @@ exports.getRemoteSourceStatus = async (req, res) => {
   try {
     await ensureActivitySourceSchema();
     const [[activity]] = await db.query(
-      `SELECT id, sheet_url, content_text, source_updated_at
+      `SELECT id, sheet_url, content_text, source_updated_at,
+              source_revision, source_origin, local_source_hash,
+              remote_source_hash, remote_updated_at, last_synced_hash, last_synced_at
          FROM pogil_activities WHERE id = ?`,
       [id]
     );
     if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
-    const { remote, comparison } = await getRemoteActivityStatus(activity);
+    const status = await getRemoteActivityStatus(activity);
+    await recordRemoteObservation(activity, status);
     return res.json({
       activity_id: Number(id),
-      local: { updated_at: activity.source_updated_at || null, has_copy: activity.content_text != null },
-      remote,
-      comparison,
+      local: {
+        updated_at: activity.source_updated_at || null,
+        revision: activity.source_revision || 0,
+        origin: activity.source_origin || null,
+        has_copy: activity.content_text != null,
+        last_synced_at: status.comparison.state === 'in_sync'
+          ? new Date().toISOString()
+          : activity.last_synced_at || null,
+      },
+      remote: status.remote,
+      comparison: status.comparison,
     });
   } catch (err) {
     console.error('getRemoteSourceStatus error:', err);
@@ -208,7 +276,8 @@ exports.importRemoteSource = async (req, res) => {
   try {
     await ensureActivitySourceSchema();
     const [[activity]] = await db.query(
-      `SELECT id, title, sheet_url, content_text, source_updated_at
+      `SELECT id, title, sheet_url, content_text, source_updated_at,
+              source_revision, last_synced_hash
          FROM pogil_activities WHERE id = ?`,
       [id]
     );
@@ -216,14 +285,26 @@ exports.importRemoteSource = async (req, res) => {
 
     const { remote, remoteText } = await getRemoteActivityStatus(activity);
     const nextTitle = extractTitleFromText(remoteText) || activity.title;
+    const syncedHash = sourceHash(remoteText);
     await db.query(
       `UPDATE pogil_activities
-          SET content_text = ?, source_type = 'local', title = ?, source_updated_at = NOW(3)
+          SET content_text = ?,
+              source_type = 'local',
+              title = ?,
+              source_updated_at = NOW(3),
+              source_revision = source_revision + 1,
+              source_origin = 'google_import',
+              local_source_hash = ?,
+              remote_source_hash = ?,
+              remote_updated_at = ?,
+              last_synced_hash = ?,
+              last_synced_at = NOW(3)
         WHERE id = ?`,
-      [remoteText, nextTitle, id]
+      [remoteText, nextTitle, syncedHash, syncedHash, sqlDate(remote.updated_at), syncedHash, id]
     );
     const [[saved]] = await db.query(
-      'SELECT source_updated_at FROM pogil_activities WHERE id = ?', [id]
+      `SELECT source_updated_at, source_revision, source_origin, last_synced_at
+         FROM pogil_activities WHERE id = ?`, [id]
     );
 
     void recordAuditEvent('activity_remote_imported', {
@@ -237,6 +318,9 @@ exports.importRemoteSource = async (req, res) => {
       title: nextTitle,
       source_type: 'local',
       source_updated_at: saved?.source_updated_at || null,
+      source_revision: saved?.source_revision || 0,
+      source_origin: saved?.source_origin || null,
+      last_synced_at: saved?.last_synced_at || null,
       text: remoteText,
       remote,
     });

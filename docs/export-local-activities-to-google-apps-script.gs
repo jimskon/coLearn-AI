@@ -35,6 +35,7 @@ const DESTINATION_FOLDER_NAME = 'coLearn activities export';
 // folder automatically.
 const EXPORT_BATCH_SIZE = 8;
 const EXPORT_STATE_KEY = 'colearn_google_export_state_v1';
+const DOCUMENT_SAVE_LINE_BATCH_SIZE = 50;
 
 function exportActivitiesToGoogleDocs() {
   if (!EXPORT_BUNDLE_FILE_ID || EXPORT_BUNDLE_FILE_ID === 'PASTE_DRIVE_FILE_ID_HERE') {
@@ -152,56 +153,31 @@ function resetIncompleteExport() {
 function createDocumentWithMarkup(documentTitle, markup) {
   const document = DocumentApp.create(documentTitle);
   const documentId = document.getId();
-  // Create the empty document with DocumentApp, then write the source through
-  // the Docs REST API. DocumentApp.setText() can turn a long activity into
-  // thousands of internal edits and eventually rejects the save.
-  document.saveAndClose();
-  let lastError = null;
+  const lines = String(markup).replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  let activeDocument = document;
+  let body = activeDocument.getBody();
 
-  // Retry the same newly-created document rather than creating duplicates.
-  // The REST batch update inserts the exact markup in one request, including
-  // newlines, and avoids the DocumentApp "too many changes" limit.
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    try {
-      writeDocumentTextWithDocsApi(documentId, markup);
-      return {
-        id: documentId,
-        url: `https://docs.google.com/document/d/${documentId}/edit`,
-      };
-    } catch (err) {
-      lastError = err;
-      if (attempt < 3) {
-        Utilities.sleep(attempt * 1500);
-      }
+  // A large setText() becomes thousands of unsaved internal changes. Instead,
+  // create the source a small number of markup lines at a time, save, then
+  // reopen the same Doc. This follows the Google error's own recommendation
+  // and does not require a Google Cloud project or Docs API access.
+  body.clear();
+  for (let start = 0; start < lines.length; start += DOCUMENT_SAVE_LINE_BATCH_SIZE) {
+    const end = Math.min(start + DOCUMENT_SAVE_LINE_BATCH_SIZE, lines.length);
+    for (let lineIndex = start; lineIndex < end; lineIndex += 1) {
+      body.appendParagraph(lines[lineIndex]);
+    }
+    activeDocument.saveAndClose();
+    if (end < lines.length) {
+      Utilities.sleep(100);
+      activeDocument = DocumentApp.openById(documentId);
+      body = activeDocument.getBody();
     }
   }
-
-  throw new Error(`Could not save “${documentTitle}” after 3 attempts: ${lastError}`);
-}
-
-function writeDocumentTextWithDocsApi(documentId, markup) {
-  const response = UrlFetchApp.fetch(
-    `https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`,
-    {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { Authorization: `Bearer ${ScriptApp.getOAuthToken()}` },
-      payload: JSON.stringify({
-        requests: [{
-          insertText: {
-            location: { index: 1 },
-            text: markup,
-          },
-        }],
-      }),
-      muteHttpExceptions: true,
-    }
-  );
-  const code = response.getResponseCode();
-  if (code < 200 || code >= 300) {
-    const detail = response.getContentText().slice(0, 500);
-    throw new Error(`Google Docs API returned ${code}: ${detail}`);
-  }
+  return {
+    id: documentId,
+    url: `https://docs.google.com/document/d/${documentId}/edit`,
+  };
 }
 
 function sha256Hex(value) {

@@ -13,8 +13,10 @@
  *    set EXPORT_BUNDLE_FILE_ID to the ID from the uploaded file's Drive URL.
  * 4. Run exportActivitiesToGoogleDocs and grant Google the requested Drive
  *    permissions. It makes one brand-new folder and one brand-new Doc per
- *    activity. Existing Google links are not used or overwritten.
- * 5. Download colearn-google-export-mapping.json from the new folder. Back in
+ *    activity. Large courses export eight Docs per run: run the same function
+ *    again until the log says the export is complete. Existing Google links
+ *    are not used or overwritten.
+ * 5. Download colearn-google-export-mapping.json from the completed folder. Back in
  *    coLearn choose Manage Activities -> Attach Google Export and upload it.
  *
  * The mapping contains hashes. coLearn refuses to attach a document if the
@@ -27,6 +29,12 @@ const EXPORT_BUNDLE_FILE_ID = 'PASTE_DRIVE_FILE_ID_HERE';
 
 // Change this if desired. The actual date/time is appended automatically.
 const DESTINATION_FOLDER_NAME = 'coLearn activities export';
+
+// Smaller batches avoid Google Apps Script / Google Docs service timeouts on
+// a full course. Run exportActivitiesToGoogleDocs again to continue the same
+// folder automatically.
+const EXPORT_BATCH_SIZE = 8;
+const EXPORT_STATE_KEY = 'colearn_google_export_state_v1';
 
 function exportActivitiesToGoogleDocs() {
   if (!EXPORT_BUNDLE_FILE_ID || EXPORT_BUNDLE_FILE_ID === 'PASTE_DRIVE_FILE_ID_HERE') {
@@ -41,17 +49,13 @@ function exportActivitiesToGoogleDocs() {
     throw new Error('The uploaded JSON bundle does not contain activities. Download two or more activities from coLearn.');
   }
 
-  const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HHmmss');
-  const folder = DriveApp.createFolder(`${DESTINATION_FOLDER_NAME} ${timestamp}`);
-  const mapping = {
-    format: 'colearn-google-export-mapping/v1',
-    class_id: Number(bundle.class_id),
-    created_at: new Date().toISOString(),
-    folder_url: folder.getUrl(),
-    activities: [],
-  };
+  const bundleHash = sha256Hex(raw);
+  const state = getOrCreateExportState(bundle, bundleHash);
+  const folder = DriveApp.getFolderById(state.folder_id);
+  const endIndex = Math.min(state.next_index + EXPORT_BATCH_SIZE, bundle.activities.length);
 
-  bundle.activities.forEach((activity, index) => {
+  for (let index = state.next_index; index < endIndex; index += 1) {
+    const activity = bundle.activities[index];
     const markup = String(activity.content_text || '');
     if (!markup.trim()) {
       throw new Error(`Activity ${activity.title || activity.name || `#${index + 1}`} has no local markup.`);
@@ -67,30 +71,82 @@ function exportActivitiesToGoogleDocs() {
     const documentInfo = createDocumentWithMarkup(documentTitle, markup);
 
     const documentFile = DriveApp.getFileById(documentInfo.id);
-    folder.addFile(documentFile);
-    // New files start in My Drive root. Move each one to the new course folder.
-    DriveApp.getRootFolder().removeFile(documentFile);
+    documentFile.moveTo(folder);
 
-    mapping.activities.push({
+    state.mapping.activities.push({
       activity_id: Number(activity.id),
       name: String(activity.name || ''),
       title,
       content_hash: sha256Hex(markup),
       google_doc_url: documentInfo.url,
     });
+    state.next_index = index + 1;
+    saveExportState(state);
 
     // Google Documents can briefly be unavailable during a large batch. A
     // small pause prevents the next creation from immediately hitting it.
     Utilities.sleep(300);
-  });
+  }
+
+  if (state.next_index < bundle.activities.length) {
+    Logger.log(
+      `Created ${state.next_index}/${bundle.activities.length} Docs in: ${folder.getUrl()}`
+    );
+    Logger.log('Run exportActivitiesToGoogleDocs again to continue this same folder.');
+    return;
+  }
 
   const mappingFile = folder.createFile(
     'colearn-google-export-mapping.json',
-    JSON.stringify(mapping, null, 2),
+    JSON.stringify(state.mapping, null, 2),
     MimeType.PLAIN_TEXT
   );
-  Logger.log(`Created ${mapping.activities.length} Google Docs in: ${folder.getUrl()}`);
+  PropertiesService.getScriptProperties().deleteProperty(EXPORT_STATE_KEY);
+  Logger.log(`Created ${state.mapping.activities.length} Google Docs in: ${folder.getUrl()}`);
   Logger.log(`Download this mapping file and upload it in coLearn: ${mappingFile.getUrl()}`);
+}
+
+function getOrCreateExportState(bundle, bundleHash) {
+  const properties = PropertiesService.getScriptProperties();
+  const stored = properties.getProperty(EXPORT_STATE_KEY);
+  if (stored) {
+    const state = JSON.parse(stored);
+    if (state.bundle_file_id !== EXPORT_BUNDLE_FILE_ID || state.bundle_hash !== bundleHash) {
+      throw new Error(
+        'An unfinished export belongs to a different bundle. Run resetIncompleteExport() before starting a different bundle.'
+      );
+    }
+    return state;
+  }
+
+  const timestamp = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HHmmss');
+  const folder = DriveApp.createFolder(`${DESTINATION_FOLDER_NAME} ${timestamp}`);
+  const state = {
+    bundle_file_id: EXPORT_BUNDLE_FILE_ID,
+    bundle_hash: bundleHash,
+    folder_id: folder.getId(),
+    next_index: 0,
+    mapping: {
+      format: 'colearn-google-export-mapping/v1',
+      class_id: Number(bundle.class_id),
+      created_at: new Date().toISOString(),
+      folder_url: folder.getUrl(),
+      activities: [],
+    },
+  };
+  saveExportState(state);
+  return state;
+}
+
+function saveExportState(state) {
+  PropertiesService.getScriptProperties().setProperty(EXPORT_STATE_KEY, JSON.stringify(state));
+}
+
+// Use this only if you intentionally want to abandon an incomplete export and
+// start over with another bundle. It does not delete the already-created folder.
+function resetIncompleteExport() {
+  PropertiesService.getScriptProperties().deleteProperty(EXPORT_STATE_KEY);
+  Logger.log('Cleared the incomplete coLearn Google export state.');
 }
 
 function createDocumentWithMarkup(documentTitle, markup) {

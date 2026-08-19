@@ -57,8 +57,14 @@ function exportActivitiesToGoogleDocs() {
       throw new Error(`Activity ${activity.title || activity.name || `#${index + 1}`} has no local markup.`);
     }
 
-    const title = String(activity.title || activity.name || `Activity ${index + 1}`).trim();
-    const document = DocumentApp.create(title);
+    const activityName = String(activity.name || '').trim();
+    const title = String(activity.title || activityName || `Activity ${index + 1}`).trim();
+    // Keep the stable coLearn name in Drive. Names such as 01_introduction...
+    // sort naturally, while the title remains readable to instructors.
+    const documentTitle = activityName && activityName !== title
+      ? `${activityName} — ${title}`
+      : title;
+    const document = DocumentApp.create(documentTitle);
     document.getBody().setText(markup);
     document.saveAndClose();
 

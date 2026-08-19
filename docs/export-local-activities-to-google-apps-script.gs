@@ -64,11 +64,9 @@ function exportActivitiesToGoogleDocs() {
     const documentTitle = activityName && activityName !== title
       ? `${activityName} — ${title}`
       : title;
-    const document = DocumentApp.create(documentTitle);
-    document.getBody().setText(markup);
-    document.saveAndClose();
+    const documentInfo = createDocumentWithMarkup(documentTitle, markup);
 
-    const documentFile = DriveApp.getFileById(document.getId());
+    const documentFile = DriveApp.getFileById(documentInfo.id);
     folder.addFile(documentFile);
     // New files start in My Drive root. Move each one to the new course folder.
     DriveApp.getRootFolder().removeFile(documentFile);
@@ -78,8 +76,12 @@ function exportActivitiesToGoogleDocs() {
       name: String(activity.name || ''),
       title,
       content_hash: sha256Hex(markup),
-      google_doc_url: document.getUrl(),
+      google_doc_url: documentInfo.url,
     });
+
+    // Google Documents can briefly be unavailable during a large batch. A
+    // small pause prevents the next creation from immediately hitting it.
+    Utilities.sleep(300);
   });
 
   const mappingFile = folder.createFile(
@@ -89,6 +91,36 @@ function exportActivitiesToGoogleDocs() {
   );
   Logger.log(`Created ${mapping.activities.length} Google Docs in: ${folder.getUrl()}`);
   Logger.log(`Download this mapping file and upload it in coLearn: ${mappingFile.getUrl()}`);
+}
+
+function createDocumentWithMarkup(documentTitle, markup) {
+  let documentId = null;
+  let lastError = null;
+
+  // Retry the same newly-created document rather than creating duplicates.
+  // Google occasionally returns a transient Documents-service error while
+  // saving a newly created file in a larger batch.
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const document = documentId
+        ? DocumentApp.openById(documentId)
+        : DocumentApp.create(documentTitle);
+      documentId = document.getId();
+      document.getBody().setText(markup);
+      document.saveAndClose();
+      return {
+        id: documentId,
+        url: `https://docs.google.com/document/d/${documentId}/edit`,
+      };
+    } catch (err) {
+      lastError = err;
+      if (attempt < 3) {
+        Utilities.sleep(attempt * 1500);
+      }
+    }
+  }
+
+  throw new Error(`Could not save “${documentTitle}” after 3 attempts: ${lastError}`);
 }
 
 function sha256Hex(value) {

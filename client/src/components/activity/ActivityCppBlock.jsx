@@ -254,9 +254,16 @@ export default function ActivityCppBlock({
       }
     };
     window.addEventListener('resize', onResize);
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(onResize);
+    resizeObserver?.observe(termRef.current);
+    const initialFitFrame = requestAnimationFrame(onResize);
 
     return () => {
       window.removeEventListener('resize', onResize);
+      resizeObserver?.disconnect();
+      cancelAnimationFrame(initialFitFrame);
       try {
         onDataDisposeRef.current?.dispose();
       } catch { }
@@ -270,6 +277,15 @@ export default function ActivityCppBlock({
       fit.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      try {
+        fit.current?.fit();
+      } catch { }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [layoutMode]);
 
   // --- line numbers + scroll sync ---
   const LINE_H = 1.45;

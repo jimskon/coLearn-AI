@@ -239,9 +239,20 @@ export default function ActivityRemotePythonBlock({
       }
     };
     window.addEventListener('resize', onResize);
+    // A terminal can be created while its Bootstrap column is narrow, then
+    // become wider when the student switches from Beside to Above. Observe the
+    // element itself, not just the browser window, so xterm recalculates its
+    // columns and reflows long program-output lines.
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(onResize);
+    resizeObserver?.observe(termRef.current);
+    const initialFitFrame = requestAnimationFrame(onResize);
 
     return () => {
       window.removeEventListener('resize', onResize);
+      resizeObserver?.disconnect();
+      cancelAnimationFrame(initialFitFrame);
       try {
         onDataDisposeRef.current?.dispose();
       } catch {
@@ -261,6 +272,17 @@ export default function ActivityRemotePythonBlock({
       fit.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      try {
+        fit.current?.fit();
+      } catch {
+        /* ignore */
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [layoutMode]);
 
   const LINE_H = 1.45;
   const EOL_SPLIT = /\r\n|\n|\r/;

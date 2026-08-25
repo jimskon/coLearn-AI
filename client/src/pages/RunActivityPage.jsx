@@ -2383,8 +2383,12 @@ export default function RunActivityPage({
               });
             }
           }
-          // ✅ compute !accepted even if server returns only accepted/comment
-          if (!accepted) {
+          // With \retries{0}, feedback is informational: retain it for the
+          // record, but let this answered question advance with the group.
+          const codeProgressAllowed = accepted || (
+            retriesRequired <= 0 && data?.canContinue === true
+          );
+          if (!codeProgressAllowed) {
             answers[`${qid}S`] = 'inprogress';
             pendingRevision.push(`${qid} (needs revision)`);
           } else {
@@ -2571,7 +2575,12 @@ export default function RunActivityPage({
           answeredByUserId: user.id,
         });
 
-        const progressAllowed = (ai.accepted === true);
+        // \retries{0} is the non-blocking feedback policy. The AI may flag
+        // an answer and leave guidance, but an answered question still lets
+        // the group advance immediately.
+        const progressAllowed = ai.accepted === true || (
+          retriesRequired <= 0 && ai?.canContinue === true
+        );
 
         answers[`${qid}S`] = progressAllowed ? 'complete' : 'inprogress';
 

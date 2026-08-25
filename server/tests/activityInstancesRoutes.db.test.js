@@ -1628,6 +1628,16 @@ test('submit-test awards per-choice multiple-choice points, including partial cr
   assert.equal(response.body.earned, 1);
   assert.equal(response.body.max, 2);
   assert.equal(response.body.questions[0].responseScore, 1);
+
+  const [feedbackRows] = await db.query(
+    `SELECT response
+       FROM responses
+      WHERE activity_instance_id = ? AND question_id = ?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [instanceId, '1aResponseFeedback'],
+  );
+  assert.match(feedbackRows[0]?.response || '', /Full-credit answer: Correct/);
 });
 
 test('first test focus loss warns and the second requires submission', async () => {

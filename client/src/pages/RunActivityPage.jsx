@@ -1338,7 +1338,11 @@ export default function RunActivityPage({
       instanceId: instanceIdNum,
       groupNum: Number(groupNum),
       answeredByUserId: Number(answeredByUserId ?? user?.id),
-      retriesRequired: Number(retriesRequired) || 1,
+      // Zero is a meaningful policy: show any AI guidance, but never block
+      // progression for a retry. Do not collapse it to the default of one.
+      retriesRequired: Number.isFinite(Number(retriesRequired))
+        ? Math.max(0, Number(retriesRequired))
+        : 1,
       submissionString: String(submissionString || ""),
       dryRun: !canPersistAIResults,
     };
@@ -1933,8 +1937,12 @@ export default function RunActivityPage({
       const completedCount = Number(activity?.completed_groups ?? 0);
       groupNum = isSandbox ? submitGroupIndex + 1 : completedCount + 1; // ✅ 1-based, ALWAYS
 
-      retriesRequired =
-        Number(currentGroup?.intro?.retriesRequired ?? 1) || 1;
+      // Preserve an explicit \retries{0}. It means feedback may be shown,
+      // but a rejected answer can continue immediately.
+      const configuredRetries = Number(currentGroup?.intro?.retriesRequired);
+      retriesRequired = Number.isFinite(configuredRetries)
+        ? Math.max(0, configuredRetries)
+        : 1;
 
       blocks = [currentGroup.intro, ...currentGroup.content];
 

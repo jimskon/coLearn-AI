@@ -1597,7 +1597,12 @@ async function submitGroupResponses(req, res) {
   const instanceId = Number(req.params.instanceId);
   const studentId = Number(req.body?.studentId);
   const groupNum = Number(req.body?.groupNum);
-  const retriesRequired = Number(req.body?.retriesRequired || 1);
+  // An explicit zero is valid: it records AI feedback without making the
+  // group wait for a retry. Only use one when the client omitted the setting.
+  const requestedRetries = Number(req.body?.retriesRequired);
+  const retriesRequired = Number.isFinite(requestedRetries)
+    ? Math.max(0, requestedRetries)
+    : 1;
   const forceOverride = !!req.body?.forceOverride;
 
   const attempt = req.body?.attempt || {};

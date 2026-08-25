@@ -2325,9 +2325,14 @@ export default function RunActivityPage({
               };
             }
 
-            // An accepted answer may continue immediately. The bypass button is
-            // only for a rejected answer after its retry limit is exhausted.
-            if (data?.accepted === false && data?.canContinue === true) {
+            // A zero-retry group has no bypass path: it advances only when
+            // the evaluator accepts the response. Positive retry counts may
+            // offer the explicit instructor-approved bypass once exhausted.
+            if (
+              retriesRequired > 0 &&
+              data?.accepted === false &&
+              data?.canContinue === true
+            ) {
               setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
             }
           } finally {
@@ -2383,12 +2388,9 @@ export default function RunActivityPage({
               });
             }
           }
-          // With \retries{0}, feedback is informational: retain it for the
-          // record, but let this answered question advance with the group.
-          const codeProgressAllowed = accepted || (
-            retriesRequired <= 0 && data?.canContinue === true
-          );
-          if (!codeProgressAllowed) {
+          // AI acceptance is the progression gate. A zero-retry policy means
+          // no bypass is available, not that rejected work is auto-accepted.
+          if (!accepted) {
             answers[`${qid}S`] = 'inprogress';
             pendingRevision.push(`${qid} (needs revision)`);
           } else {
@@ -2575,12 +2577,9 @@ export default function RunActivityPage({
           answeredByUserId: user.id,
         });
 
-        // \retries{0} is the non-blocking feedback policy. The AI may flag
-        // an answer and leave guidance, but an answered question still lets
-        // the group advance immediately.
-        const progressAllowed = ai.accepted === true || (
-          retriesRequired <= 0 && ai?.canContinue === true
-        );
+        // AI acceptance is the progression gate. A zero-retry policy means
+        // no bypass is available, not that rejected work is auto-accepted.
+        const progressAllowed = ai.accepted === true;
 
         answers[`${qid}S`] = progressAllowed ? 'complete' : 'inprogress';
 
@@ -2588,9 +2587,13 @@ export default function RunActivityPage({
           pendingRevision.push(`${qid} (AI)`);
         }
 
-        // An accepted answer may advance immediately. Only expose the bypass
-        // button when a rejected answer has exhausted its retry allowance.
-        if (ai?.accepted === false && ai?.canContinue === true) {
+        // Only expose the bypass button when a rejected answer has exhausted
+        // a positive retry allowance. \retries{0} has no bypass.
+        if (
+          retriesRequired > 0 &&
+          ai?.accepted === false &&
+          ai?.canContinue === true
+        ) {
           setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
         }
         /*console.log('[RETRY GATE]', {

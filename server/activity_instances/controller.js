@@ -1757,8 +1757,11 @@ async function submitGroupResponses(req, res) {
       }
     );
 
+    // A zero-retry group has no bypass route: it advances only when every
+    // submitted question was accepted. Positive retry policies may opt into
+    // the explicit client-side override after their allowance is exhausted.
     const shouldAdvance =
-      !!forceOverride ||
+      (!!forceOverride && retriesRequired > 0) ||
       (
         submittedStatusEntries.length > 0 &&
         submittedStatusEntries.every(([, response]) => normalizeStatus(response) === 'complete')

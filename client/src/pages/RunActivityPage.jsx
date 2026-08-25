@@ -2325,14 +2325,10 @@ export default function RunActivityPage({
               };
             }
 
-            // A zero-retry group has no bypass path: it advances only when
-            // the evaluator accepts the response. Positive retry counts may
-            // offer the explicit instructor-approved bypass once exhausted.
-            if (
-              retriesRequired > 0 &&
-              data?.accepted === false &&
-              data?.canContinue === true
-            ) {
+            // A rejected answer can offer the explicit Continue button once
+            // its retry allowance is exhausted. \retries{0} is exhausted on
+            // the first rejected submission, so the button appears at once.
+            if (data?.accepted === false && data?.canContinue === true) {
               setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
             }
           } finally {
@@ -2587,13 +2583,9 @@ export default function RunActivityPage({
           pendingRevision.push(`${qid} (AI)`);
         }
 
-        // Only expose the bypass button when a rejected answer has exhausted
-        // a positive retry allowance. \retries{0} has no bypass.
-        if (
-          retriesRequired > 0 &&
-          ai?.accepted === false &&
-          ai?.canContinue === true
-        ) {
+        // A rejected answer can offer the explicit Continue button once its
+        // retry allowance is exhausted. \retries{0} means that is immediate.
+        if (ai?.accepted === false && ai?.canContinue === true) {
           setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
         }
         /*console.log('[RETRY GATE]', {

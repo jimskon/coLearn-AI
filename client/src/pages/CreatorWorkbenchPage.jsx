@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useBlocker, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import CreatorTutorialOverlay, { useCreatorTutorial } from '../components/tutorial/CreatorTutorialOverlay';
 import {
   Alert,
@@ -983,6 +983,7 @@ export default function CreatorWorkbenchPage() {
   const [visualUndoStack, setVisualUndoStack] = useState([]);
   const [savedSourceText, setSavedSourceText] = useState('');
   const [savedSourceRevision, setSavedSourceRevision] = useState(null);
+  const [pendingNavigation, setPendingNavigation] = useState(null);
 
   const autoTimerRef = useRef(null);
   const sourceTextareaRef = useRef(null);
@@ -1008,7 +1009,6 @@ export default function CreatorWorkbenchPage() {
   );
   const hasProposalErrors = !!proposal?.issues?.some((issue) => issue.severity === 'error');
   const hasUnsavedChanges = !!activity?.id && rawText !== savedSourceText;
-  const navigationBlocker = useBlocker(hasUnsavedChanges && !saveBusy);
   const advancedPromptText = useMemo(() => buildAdvancedPromptText(advancedDraft), [advancedDraft]);
   const multipleChoiceValidation = useMemo(() => {
     if (!questionInspectorDraft?.multipleChoiceEnabled) return { errors: [] };
@@ -2149,6 +2149,14 @@ export default function CreatorWorkbenchPage() {
     await saveSource(rawText);
   };
 
+  const requestNavigation = (destination) => {
+    if (hasUnsavedChanges) {
+      setPendingNavigation(destination);
+      return;
+    }
+    navigate(destination);
+  };
+
   const removeQuestionGroup = (groupId, { skipConfirmation = false } = {}) => {
     if (proposal) return;
     const group = blocks.find((block) => block?.type === 'groupIntro' && block?.groupId === groupId);
@@ -2433,7 +2441,7 @@ export default function CreatorWorkbenchPage() {
           ref={tutorialRefs.classLink}
           variant="outline-secondary"
           size="sm"
-          onClick={() => navigate(effectiveClassId ? `/class/${effectiveClassId}` : '/manage-classes')}
+          onClick={() => requestNavigation(effectiveClassId ? `/class/${effectiveClassId}` : '/manage-classes')}
         >
           <ArrowLeft className="me-1" /> Class
         </Button>
@@ -3752,7 +3760,7 @@ export default function CreatorWorkbenchPage() {
           </div>
         </Modal.Footer>
       </Modal>
-      <Modal show={navigationBlocker.state === 'blocked'} onHide={() => navigationBlocker.reset()} centered backdrop="static">
+      <Modal show={!!pendingNavigation} onHide={() => setPendingNavigation(null)} centered backdrop="static">
         <Modal.Header>
           <Modal.Title>Unsaved activity changes</Modal.Title>
         </Modal.Header>
@@ -3760,14 +3768,14 @@ export default function CreatorWorkbenchPage() {
           You have changes in this browser that have not been saved to the activity. Save them, discard them, or keep editing.
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="outline-secondary" onClick={() => navigationBlocker.reset()}>Keep Editing</Button>
+          <Button variant="outline-secondary" onClick={() => setPendingNavigation(null)}>Keep Editing</Button>
           <Button
             variant="outline-danger"
             onClick={() => {
               setRawText(savedSourceText);
               compileText(savedSourceText);
               setVisualUndoStack([]);
-              navigationBlocker.proceed();
+              navigate(pendingNavigation);
             }}
           >
             Discard Changes
@@ -3778,7 +3786,7 @@ export default function CreatorWorkbenchPage() {
             onClick={async () => {
               try {
                 await saveSource(rawText);
-                navigationBlocker.proceed();
+                navigate(pendingNavigation);
               } catch (err) {
                 setError(err?.message || 'Could not save before leaving.');
               }

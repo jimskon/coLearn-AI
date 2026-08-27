@@ -1918,15 +1918,18 @@ export default function CreatorWorkbenchPage() {
       setSandboxUrl('');
       compileText(nextText);
     }
-    await saveSource(nextText);
-    setNotice('Saved.');
-    setTimeout(() => setNotice(''), 1800);
+    try {
+      await saveSource(nextText);
+      setNotice('Saved.');
+      setTimeout(() => setNotice(''), 1800);
+    } catch (err) {
+      setError(err?.message || 'Could not save the visual edits.');
+      throw err;
+    }
   };
 
-  const applyQuestionInspectorChanges = async () => {
-    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
-    if (multipleChoiceValidation.errors.length) return;
-
+  const buildQuestionInspectorSource = () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft) return rawText;
     const nextTextWithQuestionEdits = applyQuestionEditsToSource(
       rawText,
       selectedQuestionBlock,
@@ -1964,7 +1967,13 @@ export default function CreatorWorkbenchPage() {
       nextText = lines.join('\n');
     }
 
-    await persistVisualSource(nextText, 'updating question settings');
+    return nextText;
+  };
+
+  const applyQuestionInspectorChanges = async () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
+    if (multipleChoiceValidation.errors.length) return;
+    await persistVisualSource(buildQuestionInspectorSource(), 'updating question settings');
   };
 
   const applyStarterCodeChanges = async () => {
@@ -2078,7 +2087,11 @@ export default function CreatorWorkbenchPage() {
   const saveVisualEditorChanges = async () => {
     if (proposal) return;
     if (selectedQuestionBlock && questionInspectorDraft) {
-      await applyQuestionInspectorChanges();
+      if (multipleChoiceValidation.errors.length) {
+        setError('Fix the multiple-choice settings before saving.');
+        return;
+      }
+      await persistVisualSource(buildQuestionInspectorSource(), 'updating question settings');
       return;
     }
     if (selectedQuestionGroupBlock && questionGroupInspectorDraft) {

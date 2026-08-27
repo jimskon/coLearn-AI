@@ -1911,7 +1911,19 @@ export default function CreatorWorkbenchPage() {
     setRightMode(mode);
   };
 
-  const applyQuestionInspectorChanges = () => {
+  const persistVisualSource = async (nextText, label) => {
+    if (nextText !== rawText) {
+      recordVisualEdit(label);
+      setRawText(nextText);
+      setSandboxUrl('');
+      compileText(nextText);
+    }
+    await saveSource(nextText);
+    setNotice('Saved.');
+    setTimeout(() => setNotice(''), 1800);
+  };
+
+  const applyQuestionInspectorChanges = async () => {
     if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
     if (multipleChoiceValidation.errors.length) return;
 
@@ -1924,25 +1936,38 @@ export default function CreatorWorkbenchPage() {
       block?.type === 'question'
       && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
     ));
-    const nextText = applyMultipleChoiceEditsToSource(
+    const nextTextWithMultipleChoiceEdits = applyMultipleChoiceEditsToSource(
       nextTextWithQuestionEdits,
       refreshedQuestion || selectedQuestionBlock,
       questionInspectorDraft,
     );
-    const nextTextWithRubricEdits = applyQuestionScoreEditsToSource(
-      nextText,
+    let nextText = applyQuestionScoreEditsToSource(
+      nextTextWithMultipleChoiceEdits,
       refreshedQuestion || selectedQuestionBlock,
       questionInspectorDraft,
     );
-    if (nextTextWithRubricEdits === rawText) return;
-    recordVisualEdit('updating question settings');
-    setRawText(nextTextWithRubricEdits);
-    compileText(nextTextWithRubricEdits);
-    setNotice('Updated question settings in source.');
-    setTimeout(() => setNotice(''), 1800);
+
+    // Starter-code changes share this inspector. Include them in the same
+    // save so the author never has to remember a second button.
+    const refreshedBlock = parseActivityText(nextText).blocks.find((block) => (
+      block?.type === 'question'
+      && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
+    ));
+    const codeBlock = getQuestionCodeBlock(nextText, refreshedBlock || selectedQuestionBlock);
+    if (codeBlock && String(starterCodeDraft || '') !== String(codeBlock.content || '')) {
+      const lines = String(nextText || '').split('\n');
+      lines.splice(
+        codeBlock.openLine,
+        codeBlock.closeLine - codeBlock.openLine - 1,
+        ...String(starterCodeDraft || '').split('\n'),
+      );
+      nextText = lines.join('\n');
+    }
+
+    await persistVisualSource(nextText, 'updating question settings');
   };
 
-  const applyStarterCodeChanges = () => {
+  const applyStarterCodeChanges = async () => {
     if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return;
     const lines = String(rawText || '').split('\n');
     const replacementLines = String(starterCodeDraft || '').split('\n');
@@ -1952,13 +1977,7 @@ export default function CreatorWorkbenchPage() {
       ...replacementLines
     );
     const nextText = lines.join('\n');
-    if (nextText === rawText) return;
-    recordVisualEdit(`updating ${selectedQuestionCodeBlock.label} starter code`);
-    setRawText(nextText);
-    setSandboxUrl('');
-    compileText(nextText);
-    setNotice(`Updated ${selectedQuestionCodeBlock.label} starter code.`);
-    setTimeout(() => setNotice(''), 1800);
+    await persistVisualSource(nextText, `updating ${selectedQuestionCodeBlock.label} starter code`);
   };
 
   const removeResponseLines = () => {
@@ -2044,27 +2063,33 @@ export default function CreatorWorkbenchPage() {
     setTimeout(() => setNotice(''), 2400);
   };
 
-  const applyQuestionGroupInspectorChanges = () => {
+  const applyQuestionGroupInspectorChanges = async () => {
     if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return;
     const nextText = applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
-    if (nextText === rawText) return;
-    recordVisualEdit('updating question group settings');
-    setRawText(nextText);
-    setSandboxUrl('');
-    compileText(nextText);
-    setNotice('Updated question group settings in source.');
-    setTimeout(() => setNotice(''), 1800);
+    await persistVisualSource(nextText, 'updating question group settings');
   };
 
-  const applyAiInspectorChanges = () => {
+  const applyAiInspectorChanges = async () => {
     if (!selectedAiBlock || !aiInspectorDraft || proposal) return;
     const nextText = applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft);
-    if (nextText === rawText) return;
-    recordVisualEdit('updating AI block settings');
-    setRawText(nextText);
-    compileText(nextText);
-    setNotice('Updated AI block settings in source.');
-    setTimeout(() => setNotice(''), 1800);
+    await persistVisualSource(nextText, 'updating AI block settings');
+  };
+
+  const saveVisualEditorChanges = async () => {
+    if (proposal) return;
+    if (selectedQuestionBlock && questionInspectorDraft) {
+      await applyQuestionInspectorChanges();
+      return;
+    }
+    if (selectedQuestionGroupBlock && questionGroupInspectorDraft) {
+      await applyQuestionGroupInspectorChanges();
+      return;
+    }
+    if (selectedAiBlock && aiInspectorDraft) {
+      await applyAiInspectorChanges();
+      return;
+    }
+    await saveSource(rawText);
   };
 
   const removeQuestionGroup = (groupId, { skipConfirmation = false } = {}) => {
@@ -2677,7 +2702,7 @@ export default function CreatorWorkbenchPage() {
                   Remote Copy
                 </Button>
               ) : null}
-              <Button size="sm" variant="success" onClick={() => saveSource(rawText)} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal}>
+              <Button size="sm" variant="success" onClick={saveVisualEditorChanges} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal}>
                 {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
                 Save
               </Button>
@@ -2783,13 +2808,13 @@ export default function CreatorWorkbenchPage() {
                                 </Form.Group>
                               ) : null}
                               <div className="text-muted small mt-2">
-                                This timer belongs to the section. Groups under the same section share it; Apply writes the timer into the activity markup.
+                                This timer belongs to the section. Groups under the same section share it; Save Changes writes it into the activity markup and saves the activity.
                               </div>
                             </div>
 
                             <div className="d-flex gap-2">
-                              <Button size="sm" variant="primary" disabled={!questionGroupInspectorDraft || !!proposal} onClick={applyQuestionGroupInspectorChanges}>
-                                Apply
+                              <Button size="sm" variant="primary" disabled={!questionGroupInspectorDraft || !!proposal || saveBusy} onClick={applyQuestionGroupInspectorChanges}>
+                                Save Changes
                               </Button>
                               <Button
                                 size="sm"
@@ -2835,8 +2860,8 @@ export default function CreatorWorkbenchPage() {
                                   className="creator-question-code-editor"
                                   onChange={(event) => setStarterCodeDraft(event.target.value)}
                                 />
-                                <Button size="sm" className="mt-2" variant="outline-primary" disabled={!!proposal} onClick={applyStarterCodeChanges}>
-                                  Apply Starter Code
+                                <Button size="sm" className="mt-2" variant="outline-primary" disabled={!!proposal || saveBusy} onClick={applyStarterCodeChanges}>
+                                  Save Starter Code
                                 </Button>
                               </div>
                             ) : null}
@@ -2948,8 +2973,8 @@ export default function CreatorWorkbenchPage() {
                               </Form.Group>
 
                               <div className="d-flex gap-2">
-                                <Button size="sm" variant="primary" disabled={!aiInspectorDraft || !!proposal} onClick={applyAiInspectorChanges}>
-                                  Apply
+                              <Button size="sm" variant="primary" disabled={!aiInspectorDraft || !!proposal || saveBusy} onClick={applyAiInspectorChanges}>
+                                  Save Changes
                                 </Button>
                                 <Button
                                   size="sm"
@@ -3253,14 +3278,14 @@ export default function CreatorWorkbenchPage() {
                                 )}
                               </div>
                               <div className="text-muted small mt-1">
-                                Written responses are optional for code questions. Leave this blank to omit them; use Apply to set or change the count.
+                                Written responses are optional for code questions. Leave this blank to omit them; Save Changes sets or changes the count and saves the activity.
                               </div>
                             </Form.Group>
                             ) : null}
 
                             <div className="d-flex gap-2">
-                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal || multipleChoiceValidation.errors.length > 0} onClick={applyQuestionInspectorChanges}>
-                                Apply
+                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal || saveBusy || multipleChoiceValidation.errors.length > 0} onClick={applyQuestionInspectorChanges}>
+                                Save Changes
                               </Button>
                               <Button
                                 size="sm"

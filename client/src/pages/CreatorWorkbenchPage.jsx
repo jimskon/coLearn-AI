@@ -2772,6 +2772,15 @@ export default function CreatorWorkbenchPage() {
                   Remote Copy
                 </Button>
               ) : null}
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={!hasPendingPanelChanges || !!proposal || multipleChoiceValidation.errors.length > 0}
+                onClick={trySelectedPanelChanges}
+                title="Apply the selected panel's changes in this browser without saving to the database"
+              >
+                Try Changes
+              </Button>
               <Button size="sm" variant="success" onClick={saveVisualEditorChanges} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || !hasUnsavedChanges}>
                 {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
                 Save
@@ -2820,18 +2829,8 @@ export default function CreatorWorkbenchPage() {
                         </div>
                         {(selectedQuestionBlock || selectedQuestionGroupBlock || selectedAiBlock) ? (
                           <div className="border rounded bg-light p-2 mb-3">
-                            <div className="d-flex align-items-center justify-content-between gap-2">
-                              <div className="small text-muted">
-                                {hasPendingPanelChanges ? 'Panel changes are ready to try in this browser.' : 'Change a field to enable Try Changes.'}
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="primary"
-                                disabled={!hasPendingPanelChanges || !!proposal || multipleChoiceValidation.errors.length > 0}
-                                onClick={trySelectedPanelChanges}
-                              >
-                                Try Changes
-                              </Button>
+                            <div className="small text-muted">
+                              {hasPendingPanelChanges ? 'Panel changes are ready to try in this browser.' : 'Change a field to enable Try Changes.'}
                             </div>
                             <div className="small text-muted mt-1">Try Changes updates only this browser. Use the green Save button to write the activity to the database.</div>
                           </div>

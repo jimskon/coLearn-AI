@@ -140,6 +140,7 @@ function parseTestQuestionsFromLines(lines) {
         questionText: String(match?.[1] || '').trim(),
         scores: {},
         multipleChoice: null,
+        sampleResponses: [],
       };
       continue;
     }
@@ -182,6 +183,12 @@ function parseTestQuestionsFromLines(lines) {
       continue;
     }
 
+    const sampleMatch = trimmed.match(/^\\sampleresponses\{([\s\S]*?)\}\s*$/i);
+    if (sampleMatch) {
+      currentQuestion.sampleResponses.push(String(sampleMatch[1] || '').trim());
+      continue;
+    }
+
     if (trimmed === '\\endquestion') {
       finishQuestion();
       continue;
@@ -200,6 +207,39 @@ function parseTestQuestionsFromLines(lines) {
 
   finishQuestion();
   return questions;
+}
+
+function appendReferenceAnswer(feedback, label, answer) {
+  const reference = String(answer || '').trim();
+  if (!reference) return String(feedback || '').trim();
+
+  const prefix = String(label || 'Reference answer').trim();
+  const addition = `${prefix}: ${reference}`;
+  const existing = String(feedback || '').trim();
+  if (!existing) return addition;
+  if (existing.includes(addition)) return existing;
+  return `${existing}\n\n${addition}`;
+}
+
+function getTestReferenceAnswer(sourceQuestion = {}, maxResponsePoints = 0) {
+  const multipleChoice = sourceQuestion?.multipleChoice;
+  if (multipleChoice?.selectionMode !== 'multiple') {
+    if (multipleChoice?.hasChoiceScores) {
+      const fullCreditChoices = (multipleChoice.choices || [])
+        .filter((choice) => Number(choice?.points) === Number(maxResponsePoints))
+        .map((choice) => String(choice.value || '').trim())
+        .filter(Boolean);
+      if (fullCreditChoices.length) {
+        return { label: 'Full-credit answer', answer: fullCreditChoices.join(' or ') };
+      }
+    }
+
+    const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+    if (correctAnswer) return { label: 'Correct answer', answer: correctAnswer };
+  }
+
+  const sample = String(sourceQuestion?.sampleResponses?.[0] || '').trim();
+  return sample ? { label: 'Reference answer', answer: sample } : null;
 }
 
 function redactMultipleChoiceAnswers(lines) {
@@ -1597,7 +1637,12 @@ async function submitGroupResponses(req, res) {
   const instanceId = Number(req.params.instanceId);
   const studentId = Number(req.body?.studentId);
   const groupNum = Number(req.body?.groupNum);
-  const retriesRequired = Number(req.body?.retriesRequired || 1);
+  // An explicit zero is valid: it records AI feedback without making the
+  // group wait for a retry. Only use one when the client omitted the setting.
+  const requestedRetries = Number(req.body?.retriesRequired);
+  const retriesRequired = Number.isFinite(requestedRetries)
+    ? Math.max(0, requestedRetries)
+    : 1;
   const forceOverride = !!req.body?.forceOverride;
 
   const attempt = req.body?.attempt || {};
@@ -1752,6 +1797,9 @@ async function submitGroupResponses(req, res) {
       }
     );
 
+    // forceOverride comes only from the explicit Continue button. The client
+    // exposes that button once the configured retry allowance is exhausted;
+    // therefore \retries{0} permits it on the first rejected submission.
     const shouldAdvance =
       !!forceOverride ||
       (
@@ -2793,6 +2841,34 @@ async function submitTest(req, res) {
       const earned =
         (codeScore || 0) + (runScore || 0) + (responseScore || 0);
       const maxPts = maxCodePts + maxRunPts + maxRespPts;
+
+      // After a test is submitted, incorrect or partially-correct work should
+      // teach from the result. Use the activity's own answer key or sample;
+      // do not ask the grader to invent a "correct" solution.
+      if (maxPts > 0 && earned < maxPts) {
+        const reference = getTestReferenceAnswer(sourceQuestion, maxRespPts);
+        if (reference) {
+          if (maxRespPts > 0) {
+            responseFeedback = appendReferenceAnswer(
+              responseFeedback,
+              reference.label,
+              reference.answer,
+            );
+          } else if (maxCodePts > 0) {
+            codeFeedback = appendReferenceAnswer(
+              codeFeedback,
+              reference.label,
+              reference.answer,
+            );
+          } else if (maxRunPts > 0) {
+            runFeedback = appendReferenceAnswer(
+              runFeedback,
+              reference.label,
+              reference.answer,
+            );
+          }
+        }
+      }
 
       totalEarnedPoints += earned;
       totalMaxPoints += maxPts;

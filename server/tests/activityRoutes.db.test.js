@@ -308,7 +308,7 @@ test('saveActivitySource converts a remote activity into a local one and stores 
 
   const response = await requestJson(creator, `/api/activities/${activity.id}/source`, {
     method: 'PUT',
-    body: { text: contentText },
+    body: { text: contentText, expected_revision: 0 },
   });
 
   assert.equal(response.status, 200);
@@ -350,7 +350,7 @@ test('saveActivitySource updates stored text for an already-local activity', asy
 
   const response = await requestJson(creator, `/api/activities/${activity.id}/source`, {
     method: 'PUT',
-    body: { text: secondText },
+    body: { text: secondText, expected_revision: 0 },
   });
 
   assert.equal(response.status, 200);
@@ -383,7 +383,7 @@ test('saveActivitySource rejects missing text and 404s for missing activity', as
 
   const missing = await requestJson(creator, '/api/activities/999999/source', {
     method: 'PUT',
-    body: { text: '\\title{Missing}' },
+    body: { text: '\\title{Missing}', expected_revision: 0 },
   });
   assert.equal(missing.status, 404);
   assert.deepEqual(missing.body, { error: 'Activity not found' });

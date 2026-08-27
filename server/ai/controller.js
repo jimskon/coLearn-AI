@@ -584,6 +584,7 @@ async function buildStudentResponsePrompt({
     "The submission represents a collaborative group's shared answer, even though one person may be typing.",
     "Decide whether the group's current submission is sufficient to proceed.",
     "Return ONLY JSON matching the schema exactly.",
+    "The instructor feedbackprompt is the complete acceptance contract for this question. Follow it literally; do not add your own criteria.",
     "If the submission is on-topic and sufficient, set accepted=true.",
     "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
     "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
@@ -599,6 +600,7 @@ async function buildStudentResponsePrompt({
     "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
     "If instructor guidance is requirements-only, reject answers that are grammatically coherent but unrelated to the actual code, output, or requested behavior.",
     "When rejecting, base the hint on the exact question text and the current answer. Mention what part of the prompt they should revisit or what relationship/definition they should check.",
+    "When rejecting, identify the exact unmet requirement from the instructor feedbackprompt. Never give a generic completeness comment when the guidance states a specific condition for feedback.",
     requirementsOnly
       ? "This question uses requirements-only grading. If you reject the answer, give a short hint that helps the group try again; do not reveal the final answer."
       : "",
@@ -630,9 +632,11 @@ async function buildStudentResponsePrompt({
     "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
     "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
     "Acceptance rule: if the group has the core answer plus reasonable reasoning, accept it instead of asking for more detail.",
+    "Acceptance rule: treat the instructor feedbackprompt as the complete acceptance contract. Do not add criteria from the sample or your own expectations.",
     "Acceptance rule: as attempts increase, weaken the requirements and let a good-enough answer move on.",
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
+    "Rejection rule: name the exact missing or incorrect requirement from the instructor feedbackprompt. Do not use generic feedback such as saying the response should be more complete or well explained.",
     requirementsOnly
       ? "Requirements-only rule: if you reject, give only a short hint that invites a retry; anchor that hint to the exact question text rather than using a generic message."
       : "",

@@ -171,7 +171,7 @@ exports.getActivitySource = async (req, res) => {
 
 exports.saveActivitySource = async (req, res) => {
   const { id } = req.params;
-  const { text } = req.body || {};
+  const { text, expected_revision: expectedRevisionRaw } = req.body || {};
 
   if (typeof text !== 'string') {
     return res.status(400).json({ error: 'text is required' });
@@ -179,16 +179,21 @@ exports.saveActivitySource = async (req, res) => {
 
   try {
     await ensureActivitySourceSchema();
-    const [rows] = await db.query('SELECT id, title FROM pogil_activities WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT id, title, source_revision FROM pogil_activities WHERE id = ?', [id]);
     if (!rows.length) {
       return res.status(404).json({ error: 'Activity not found' });
+    }
+
+    const expectedRevision = Number(expectedRevisionRaw);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({ error: 'expected_revision is required to save safely.' });
     }
 
     const extractedTitle = extractTitleFromText(text);
     const nextTitle = extractedTitle || rows[0].title;
 
     const localHash = sourceHash(text);
-    await db.query(
+    const [updateResult] = await db.query(
       `UPDATE pogil_activities
           SET content_text = ?,
               source_type = 'local',
@@ -197,9 +202,21 @@ exports.saveActivitySource = async (req, res) => {
               source_revision = source_revision + 1,
               source_origin = 'editor',
               local_source_hash = ?
-        WHERE id = ?`,
-      [text, nextTitle, localHash, id]
+        WHERE id = ? AND source_revision = ?`,
+      [text, nextTitle, localHash, id, expectedRevision]
     );
+
+    if (!updateResult.affectedRows) {
+      const [[current]] = await db.query(
+        'SELECT source_revision, source_updated_at FROM pogil_activities WHERE id = ?',
+        [id],
+      );
+      return res.status(409).json({
+        error: 'This activity changed after you opened it. Reload before saving.',
+        current_revision: current?.source_revision ?? null,
+        current_updated_at: current?.source_updated_at ?? null,
+      });
+    }
 
     const [[saved]] = await db.query(
       `SELECT source_updated_at, source_revision, source_origin,
@@ -283,10 +300,15 @@ exports.importRemoteSource = async (req, res) => {
     );
     if (!activity) return res.status(404).json({ error: 'Activity not found' });
 
+    const expectedRevision = Number(req.body?.expected_revision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({ error: 'expected_revision is required to import safely.' });
+    }
+
     const { remote, remoteText } = await getRemoteActivityStatus(activity);
     const nextTitle = extractTitleFromText(remoteText) || activity.title;
     const syncedHash = sourceHash(remoteText);
-    await db.query(
+    const [updateResult] = await db.query(
       `UPDATE pogil_activities
           SET content_text = ?,
               source_type = 'local',
@@ -299,9 +321,20 @@ exports.importRemoteSource = async (req, res) => {
               remote_updated_at = ?,
               last_synced_hash = ?,
               last_synced_at = NOW(3)
-        WHERE id = ?`,
-      [remoteText, nextTitle, syncedHash, syncedHash, sqlDate(remote.updated_at), syncedHash, id]
+        WHERE id = ? AND source_revision = ?`,
+      [remoteText, nextTitle, syncedHash, syncedHash, sqlDate(remote.updated_at), syncedHash, id, expectedRevision]
     );
+    if (!updateResult.affectedRows) {
+      const [[current]] = await db.query(
+        'SELECT source_revision, source_updated_at FROM pogil_activities WHERE id = ?',
+        [id],
+      );
+      return res.status(409).json({
+        error: 'This activity changed after you opened it. Reload before importing Google changes.',
+        current_revision: current?.source_revision ?? null,
+        current_updated_at: current?.source_updated_at ?? null,
+      });
+    }
     const [[saved]] = await db.query(
       `SELECT source_updated_at, source_revision, source_origin, last_synced_at
          FROM pogil_activities WHERE id = ?`, [id]

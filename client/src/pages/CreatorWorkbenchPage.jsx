@@ -981,6 +981,9 @@ export default function CreatorWorkbenchPage() {
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [remoteError, setRemoteError] = useState('');
   const [visualUndoStack, setVisualUndoStack] = useState([]);
+  const [savedSourceText, setSavedSourceText] = useState('');
+  const [savedSourceRevision, setSavedSourceRevision] = useState(null);
+  const [pendingNavigation, setPendingNavigation] = useState(null);
 
   const autoTimerRef = useRef(null);
   const sourceTextareaRef = useRef(null);
@@ -1005,6 +1008,7 @@ export default function CreatorWorkbenchPage() {
     [activeText],
   );
   const hasProposalErrors = !!proposal?.issues?.some((issue) => issue.severity === 'error');
+  const hasUnsavedChanges = !!activity?.id && rawText !== savedSourceText;
   const advancedPromptText = useMemo(() => buildAdvancedPromptText(advancedDraft), [advancedDraft]);
   const multipleChoiceValidation = useMemo(() => {
     if (!questionInspectorDraft?.multipleChoiceEnabled) return { errors: [] };
@@ -1347,6 +1351,9 @@ export default function CreatorWorkbenchPage() {
             ?? sourceData?.source_updated_at
             ?? activityData?.source_updated_at
             ?? null,
+          source_revision: sourceData?.metadata?.source_revision
+            ?? activityData?.source_revision
+            ?? 0,
         });
         setDraft((previous) => ({
           ...previous,
@@ -1354,6 +1361,8 @@ export default function CreatorWorkbenchPage() {
           mode: String(activityData?.mode || activityData?.activity_type || previous.mode || 'group').trim().toLowerCase(),
         }));
         setRawText(text);
+        setSavedSourceText(text);
+        setSavedSourceRevision(Number(sourceData?.metadata?.source_revision ?? activityData?.source_revision ?? 0));
         compileText(text);
         await loadClassInfo(activityData.class_id);
       } catch (err) {
@@ -1371,6 +1380,16 @@ export default function CreatorWorkbenchPage() {
     autoTimerRef.current = setTimeout(() => compileText(rawText), 250);
     return () => clearTimeout(autoTimerRef.current);
   }, [compileText, proposal, rawText, skulptLoaded]);
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return undefined;
+    const warnBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [hasUnsavedChanges]);
 
   useEffect(() => {
     if (!activity?.id || proposal) return;
@@ -1559,7 +1578,7 @@ export default function CreatorWorkbenchPage() {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify({ text: sourceText }),
+          body: JSON.stringify({ text: sourceText, expected_revision: 0 }),
         });
         const sourceData = await sourceRes.json().catch(() => ({}));
         if (!sourceRes.ok) throw new Error(sourceData?.error || 'The draft was created, but its selected language could not be saved.');
@@ -1567,6 +1586,10 @@ export default function CreatorWorkbenchPage() {
           ?? sourceData?.source_updated_at
           ?? data.source_updated_at
           ?? null;
+        data.source_revision = sourceData?.metadata?.source_revision
+          ?? sourceData?.source_revision
+          ?? data.source_revision
+          ?? 0;
       }
 
       setActivity({ ...data, content_text: sourceText });
@@ -1574,6 +1597,8 @@ export default function CreatorWorkbenchPage() {
         setDraft((previous) => ({ ...previous, title: draftTitle, description: draftDescription }));
       }
       setRawText(sourceText);
+      setSavedSourceText(sourceText);
+      setSavedSourceRevision(Number(data.source_revision ?? 0));
       compileText(sourceText);
       setMessages([{ role: 'assistant', text: useLabBoilerplate ? 'Lab boilerplate created.' : 'Draft created.' }]);
       creatorTutorial.startAfterGenerate();
@@ -1632,6 +1657,8 @@ export default function CreatorWorkbenchPage() {
 
       setActivity({ ...data, mode, content_text: sourceText });
       setRawText(sourceText);
+      setSavedSourceText(sourceText);
+      setSavedSourceRevision(Number(data.source_revision ?? 0));
       compileText(sourceText);
       setMessages([{ role: 'assistant', text: 'Blank activity created without AI generation.' }]);
       setRightMode('edit');
@@ -1663,9 +1690,19 @@ export default function CreatorWorkbenchPage() {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ text: sourceText }),
+        body: JSON.stringify({
+          text: sourceText,
+          expected_revision: Number.isInteger(savedSourceRevision) ? savedSourceRevision : 0,
+        }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 409) {
+        const currentRevision = data?.current_revision;
+        throw new Error(
+          `This activity was saved elsewhere${Number.isInteger(currentRevision) ? ` as revision ${currentRevision}` : ''}. `
+          + 'Your unsaved changes are still in this browser. Copy them, then reload the activity before trying again.'
+        );
+      }
       if (!res.ok) throw new Error(data?.error || `Save failed ${res.status}`);
       setActivity((prev) => ({
         ...(prev || {}),
@@ -1687,6 +1724,8 @@ export default function CreatorWorkbenchPage() {
           ?? prev?.last_synced_at
           ?? null,
       }));
+      setSavedSourceText(sourceText);
+      setSavedSourceRevision(Number(data?.metadata?.source_revision ?? data?.source_revision ?? savedSourceRevision ?? 0));
       setNotice(activity?.sheet_url
         ? 'Saved locally. Open Remote Copy to publish this version to Google.'
         : 'Saved.');
@@ -1748,11 +1787,17 @@ export default function CreatorWorkbenchPage() {
     try {
       const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/import-remote`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        body: JSON.stringify({
+          expected_revision: Number.isInteger(savedSourceRevision) ? savedSourceRevision : 0,
+        }),
       });
       const data = await readJsonResponse(res);
       if (!res.ok) throw new Error(data?.error || 'Could not import the linked Google Doc.');
       setRawText(data.text || '');
+      setSavedSourceText(data.text || '');
+      setSavedSourceRevision(Number(data.source_revision ?? savedSourceRevision ?? 0));
       compileText(data.text || '');
       setActivity((prev) => ({
         ...(prev || {}),
@@ -1911,10 +1956,18 @@ export default function CreatorWorkbenchPage() {
     setRightMode(mode);
   };
 
-  const applyQuestionInspectorChanges = () => {
-    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
-    if (multipleChoiceValidation.errors.length) return;
+  const applyVisualSource = (nextText, label) => {
+    if (nextText !== rawText) {
+      recordVisualEdit(label);
+      setRawText(nextText);
+      setSandboxUrl('');
+      compileText(nextText);
+    }
+    return nextText;
+  };
 
+  const buildQuestionInspectorSource = () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft) return rawText;
     const nextTextWithQuestionEdits = applyQuestionEditsToSource(
       rawText,
       selectedQuestionBlock,
@@ -1924,26 +1977,45 @@ export default function CreatorWorkbenchPage() {
       block?.type === 'question'
       && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
     ));
-    const nextText = applyMultipleChoiceEditsToSource(
+    const nextTextWithMultipleChoiceEdits = applyMultipleChoiceEditsToSource(
       nextTextWithQuestionEdits,
       refreshedQuestion || selectedQuestionBlock,
       questionInspectorDraft,
     );
-    const nextTextWithRubricEdits = applyQuestionScoreEditsToSource(
-      nextText,
+    let nextText = applyQuestionScoreEditsToSource(
+      nextTextWithMultipleChoiceEdits,
       refreshedQuestion || selectedQuestionBlock,
       questionInspectorDraft,
     );
-    if (nextTextWithRubricEdits === rawText) return;
-    recordVisualEdit('updating question settings');
-    setRawText(nextTextWithRubricEdits);
-    compileText(nextTextWithRubricEdits);
-    setNotice('Updated question settings in source.');
-    setTimeout(() => setNotice(''), 1800);
+
+    // Starter-code changes share this inspector. Include them in the same
+    // save so the author never has to remember a second button.
+    const refreshedBlock = parseActivityText(nextText).blocks.find((block) => (
+      block?.type === 'question'
+      && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
+    ));
+    const codeBlock = getQuestionCodeBlock(nextText, refreshedBlock || selectedQuestionBlock);
+    if (codeBlock && String(starterCodeDraft || '') !== String(codeBlock.content || '')) {
+      const lines = String(nextText || '').split('\n');
+      lines.splice(
+        codeBlock.openLine,
+        codeBlock.closeLine - codeBlock.openLine - 1,
+        ...String(starterCodeDraft || '').split('\n'),
+      );
+      nextText = lines.join('\n');
+    }
+
+    return nextText;
+  };
+
+  const applyQuestionInspectorChanges = () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return null;
+    if (multipleChoiceValidation.errors.length) return null;
+    return applyVisualSource(buildQuestionInspectorSource(), 'updating question settings');
   };
 
   const applyStarterCodeChanges = () => {
-    if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return;
+    if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return null;
     const lines = String(rawText || '').split('\n');
     const replacementLines = String(starterCodeDraft || '').split('\n');
     lines.splice(
@@ -1952,13 +2024,7 @@ export default function CreatorWorkbenchPage() {
       ...replacementLines
     );
     const nextText = lines.join('\n');
-    if (nextText === rawText) return;
-    recordVisualEdit(`updating ${selectedQuestionCodeBlock.label} starter code`);
-    setRawText(nextText);
-    setSandboxUrl('');
-    compileText(nextText);
-    setNotice(`Updated ${selectedQuestionCodeBlock.label} starter code.`);
-    setTimeout(() => setNotice(''), 1800);
+    return applyVisualSource(nextText, `updating ${selectedQuestionCodeBlock.label} starter code`);
   };
 
   const removeResponseLines = () => {
@@ -2045,26 +2111,50 @@ export default function CreatorWorkbenchPage() {
   };
 
   const applyQuestionGroupInspectorChanges = () => {
-    if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return;
+    if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return null;
     const nextText = applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
-    if (nextText === rawText) return;
-    recordVisualEdit('updating question group settings');
-    setRawText(nextText);
-    setSandboxUrl('');
-    compileText(nextText);
-    setNotice('Updated question group settings in source.');
-    setTimeout(() => setNotice(''), 1800);
+    return applyVisualSource(nextText, 'updating question group settings');
   };
 
   const applyAiInspectorChanges = () => {
-    if (!selectedAiBlock || !aiInspectorDraft || proposal) return;
+    if (!selectedAiBlock || !aiInspectorDraft || proposal) return null;
     const nextText = applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft);
-    if (nextText === rawText) return;
-    recordVisualEdit('updating AI block settings');
-    setRawText(nextText);
-    compileText(nextText);
-    setNotice('Updated AI block settings in source.');
-    setTimeout(() => setNotice(''), 1800);
+    return applyVisualSource(nextText, 'updating AI block settings');
+  };
+
+  const trySelectedPanelChanges = () => {
+    if (selectedQuestionBlock) return applyQuestionInspectorChanges();
+    if (selectedQuestionGroupBlock) return applyQuestionGroupInspectorChanges();
+    if (selectedAiBlock) return applyAiInspectorChanges();
+    return null;
+  };
+
+  const hasPendingPanelChanges = (() => {
+    if (proposal) return false;
+    if (selectedQuestionBlock && questionInspectorDraft) {
+      return !multipleChoiceValidation.errors.length
+        && buildQuestionInspectorSource() !== rawText;
+    }
+    if (selectedQuestionGroupBlock && questionGroupInspectorDraft) {
+      return applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft) !== rawText;
+    }
+    if (selectedAiBlock && aiInspectorDraft) {
+      return applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft) !== rawText;
+    }
+    return false;
+  })();
+
+  const saveVisualEditorChanges = async () => {
+    if (proposal) return;
+    await saveSource(rawText);
+  };
+
+  const requestNavigation = (destination) => {
+    if (hasUnsavedChanges) {
+      setPendingNavigation(destination);
+      return;
+    }
+    navigate(destination);
   };
 
   const removeQuestionGroup = (groupId, { skipConfirmation = false } = {}) => {
@@ -2351,7 +2441,7 @@ export default function CreatorWorkbenchPage() {
           ref={tutorialRefs.classLink}
           variant="outline-secondary"
           size="sm"
-          onClick={() => navigate(effectiveClassId ? `/class/${effectiveClassId}` : '/manage-classes')}
+          onClick={() => requestNavigation(effectiveClassId ? `/class/${effectiveClassId}` : '/manage-classes')}
         >
           <ArrowLeft className="me-1" /> Class
         </Button>
@@ -2670,6 +2760,11 @@ export default function CreatorWorkbenchPage() {
               ) : null}
               {proposal ? <Badge bg="warning" text="dark">Proposal</Badge> : null}
               {activeIssues.length ? <Badge bg={activeIssues.some((issue) => issue.severity === 'error') ? 'danger' : 'warning'}>{activeIssues.length} issue{activeIssues.length === 1 ? '' : 's'}</Badge> : <Badge bg="success">Clean</Badge>}
+              {activity?.id ? (
+                <Badge bg={hasUnsavedChanges ? 'warning' : 'secondary'} text={hasUnsavedChanges ? 'dark' : undefined}>
+                  {hasUnsavedChanges ? 'Unsaved browser changes' : `Saved · revision ${savedSourceRevision ?? 0}`}
+                </Badge>
+              ) : null}
             </div>
             <div className="d-flex gap-2">
               {activity?.sheet_url ? (
@@ -2677,7 +2772,16 @@ export default function CreatorWorkbenchPage() {
                   Remote Copy
                 </Button>
               ) : null}
-              <Button size="sm" variant="success" onClick={() => saveSource(rawText)} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal}>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={!hasPendingPanelChanges || !!proposal || multipleChoiceValidation.errors.length > 0}
+                onClick={trySelectedPanelChanges}
+                title="Apply the selected panel's changes in this browser without saving to the database"
+              >
+                Try Changes
+              </Button>
+              <Button size="sm" variant="success" onClick={saveVisualEditorChanges} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || !hasUnsavedChanges}>
                 {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
                 Save
               </Button>
@@ -2723,6 +2827,14 @@ export default function CreatorWorkbenchPage() {
                             <X />
                           </Button>
                         </div>
+                        {(selectedQuestionBlock || selectedQuestionGroupBlock || selectedAiBlock) ? (
+                          <div className="border rounded bg-light p-2 mb-3">
+                            <div className="small text-muted">
+                              {hasPendingPanelChanges ? 'Panel changes are ready to try in this browser.' : 'Change a field to enable Try Changes.'}
+                            </div>
+                            <div className="small text-muted mt-1">Try Changes updates only this browser. Use the green Save button to write the activity to the database.</div>
+                          </div>
+                        ) : null}
                         {selectedQuestionGroupBlock ? (
                           <>
                             <div className="text-muted small mb-3 d-flex flex-wrap align-items-center gap-2">
@@ -2783,14 +2895,11 @@ export default function CreatorWorkbenchPage() {
                                 </Form.Group>
                               ) : null}
                               <div className="text-muted small mt-2">
-                                This timer belongs to the section. Groups under the same section share it; Apply writes the timer into the activity markup.
+                                This timer belongs to the section. Groups under the same section share it; Try Changes updates the browser copy only.
                               </div>
                             </div>
 
                             <div className="d-flex gap-2">
-                              <Button size="sm" variant="primary" disabled={!questionGroupInspectorDraft || !!proposal} onClick={applyQuestionGroupInspectorChanges}>
-                                Apply
-                              </Button>
                               <Button
                                 size="sm"
                                 variant="outline-secondary"
@@ -2836,7 +2945,7 @@ export default function CreatorWorkbenchPage() {
                                   onChange={(event) => setStarterCodeDraft(event.target.value)}
                                 />
                                 <Button size="sm" className="mt-2" variant="outline-primary" disabled={!!proposal} onClick={applyStarterCodeChanges}>
-                                  Apply Starter Code
+                                  Try Code Changes
                                 </Button>
                               </div>
                             ) : null}
@@ -2948,9 +3057,6 @@ export default function CreatorWorkbenchPage() {
                               </Form.Group>
 
                               <div className="d-flex gap-2">
-                                <Button size="sm" variant="primary" disabled={!aiInspectorDraft || !!proposal} onClick={applyAiInspectorChanges}>
-                                  Apply
-                                </Button>
                                 <Button
                                   size="sm"
                                   variant="outline-secondary"
@@ -3253,15 +3359,12 @@ export default function CreatorWorkbenchPage() {
                                 )}
                               </div>
                               <div className="text-muted small mt-1">
-                                Written responses are optional for code questions. Leave this blank to omit them; use Apply to set or change the count.
+                                Written responses are optional for code questions. Leave this blank to omit them; Try Changes updates the browser copy only.
                               </div>
                             </Form.Group>
                             ) : null}
 
                             <div className="d-flex gap-2">
-                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal || multipleChoiceValidation.errors.length > 0} onClick={applyQuestionInspectorChanges}>
-                                Apply
-                              </Button>
                               <Button
                                 size="sm"
                                 variant="outline-secondary"
@@ -3654,6 +3757,42 @@ export default function CreatorWorkbenchPage() {
               Import Remote
             </Button>
           </div>
+        </Modal.Footer>
+      </Modal>
+      <Modal show={!!pendingNavigation} onHide={() => setPendingNavigation(null)} centered backdrop="static">
+        <Modal.Header>
+          <Modal.Title>Unsaved activity changes</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          You have changes in this browser that have not been saved to the activity. Save them, discard them, or keep editing.
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="outline-secondary" onClick={() => setPendingNavigation(null)}>Keep Editing</Button>
+          <Button
+            variant="outline-danger"
+            onClick={() => {
+              setRawText(savedSourceText);
+              compileText(savedSourceText);
+              setVisualUndoStack([]);
+              navigate(pendingNavigation);
+            }}
+          >
+            Discard Changes
+          </Button>
+          <Button
+            variant="success"
+            disabled={saveBusy}
+            onClick={async () => {
+              try {
+                await saveSource(rawText);
+                navigate(pendingNavigation);
+              } catch (err) {
+                setError(err?.message || 'Could not save before leaving.');
+              }
+            }}
+          >
+            Save Changes
+          </Button>
         </Modal.Footer>
       </Modal>
       <CreatorTutorialOverlay

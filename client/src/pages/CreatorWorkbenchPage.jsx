@@ -1911,15 +1911,21 @@ export default function CreatorWorkbenchPage() {
     setRightMode(mode);
   };
 
-  const persistVisualSource = async (nextText, label) => {
+  const applyVisualSource = (nextText, label) => {
     if (nextText !== rawText) {
       recordVisualEdit(label);
       setRawText(nextText);
       setSandboxUrl('');
       compileText(nextText);
     }
+    return nextText;
+  };
+
+  // Saving deliberately does not rebuild inspector values.  Call the relevant
+  // apply function first, then persist exactly the source it produced.
+  const saveAppliedVisualSource = async (appliedText) => {
     try {
-      await saveSource(nextText);
+      await saveSource(appliedText);
       setNotice('Saved.');
       setTimeout(() => setNotice(''), 1800);
     } catch (err) {
@@ -1970,14 +1976,20 @@ export default function CreatorWorkbenchPage() {
     return nextText;
   };
 
-  const applyQuestionInspectorChanges = async () => {
-    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
-    if (multipleChoiceValidation.errors.length) return;
-    await persistVisualSource(buildQuestionInspectorSource(), 'updating question settings');
+  const applyQuestionInspectorChanges = () => {
+    if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return null;
+    if (multipleChoiceValidation.errors.length) return null;
+    return applyVisualSource(buildQuestionInspectorSource(), 'updating question settings');
   };
 
-  const applyStarterCodeChanges = async () => {
-    if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return;
+  const saveQuestionInspectorChanges = async () => {
+    const appliedText = applyQuestionInspectorChanges();
+    if (appliedText == null) return;
+    await saveAppliedVisualSource(appliedText);
+  };
+
+  const applyStarterCodeChanges = () => {
+    if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return null;
     const lines = String(rawText || '').split('\n');
     const replacementLines = String(starterCodeDraft || '').split('\n');
     lines.splice(
@@ -1986,7 +1998,13 @@ export default function CreatorWorkbenchPage() {
       ...replacementLines
     );
     const nextText = lines.join('\n');
-    await persistVisualSource(nextText, `updating ${selectedQuestionCodeBlock.label} starter code`);
+    return applyVisualSource(nextText, `updating ${selectedQuestionCodeBlock.label} starter code`);
+  };
+
+  const saveStarterCodeChanges = async () => {
+    const appliedText = applyStarterCodeChanges();
+    if (appliedText == null) return;
+    await saveAppliedVisualSource(appliedText);
   };
 
   const removeResponseLines = () => {
@@ -2072,16 +2090,28 @@ export default function CreatorWorkbenchPage() {
     setTimeout(() => setNotice(''), 2400);
   };
 
-  const applyQuestionGroupInspectorChanges = async () => {
-    if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return;
+  const applyQuestionGroupInspectorChanges = () => {
+    if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return null;
     const nextText = applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
-    await persistVisualSource(nextText, 'updating question group settings');
+    return applyVisualSource(nextText, 'updating question group settings');
   };
 
-  const applyAiInspectorChanges = async () => {
-    if (!selectedAiBlock || !aiInspectorDraft || proposal) return;
+  const saveQuestionGroupInspectorChanges = async () => {
+    const appliedText = applyQuestionGroupInspectorChanges();
+    if (appliedText == null) return;
+    await saveAppliedVisualSource(appliedText);
+  };
+
+  const applyAiInspectorChanges = () => {
+    if (!selectedAiBlock || !aiInspectorDraft || proposal) return null;
     const nextText = applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft);
-    await persistVisualSource(nextText, 'updating AI block settings');
+    return applyVisualSource(nextText, 'updating AI block settings');
+  };
+
+  const saveAiInspectorChanges = async () => {
+    const appliedText = applyAiInspectorChanges();
+    if (appliedText == null) return;
+    await saveAppliedVisualSource(appliedText);
   };
 
   const saveVisualEditorChanges = async () => {
@@ -2091,15 +2121,15 @@ export default function CreatorWorkbenchPage() {
         setError('Fix the multiple-choice settings before saving.');
         return;
       }
-      await persistVisualSource(buildQuestionInspectorSource(), 'updating question settings');
+      await saveQuestionInspectorChanges();
       return;
     }
     if (selectedQuestionGroupBlock && questionGroupInspectorDraft) {
-      await applyQuestionGroupInspectorChanges();
+      await saveQuestionGroupInspectorChanges();
       return;
     }
     if (selectedAiBlock && aiInspectorDraft) {
-      await applyAiInspectorChanges();
+      await saveAiInspectorChanges();
       return;
     }
     await saveSource(rawText);
@@ -2826,7 +2856,7 @@ export default function CreatorWorkbenchPage() {
                             </div>
 
                             <div className="d-flex gap-2">
-                              <Button size="sm" variant="primary" disabled={!questionGroupInspectorDraft || !!proposal || saveBusy} onClick={applyQuestionGroupInspectorChanges}>
+                              <Button size="sm" variant="primary" disabled={!questionGroupInspectorDraft || !!proposal || saveBusy} onClick={saveQuestionGroupInspectorChanges}>
                                 Save Changes
                               </Button>
                               <Button
@@ -2873,7 +2903,7 @@ export default function CreatorWorkbenchPage() {
                                   className="creator-question-code-editor"
                                   onChange={(event) => setStarterCodeDraft(event.target.value)}
                                 />
-                                <Button size="sm" className="mt-2" variant="outline-primary" disabled={!!proposal || saveBusy} onClick={applyStarterCodeChanges}>
+                                <Button size="sm" className="mt-2" variant="outline-primary" disabled={!!proposal || saveBusy} onClick={saveStarterCodeChanges}>
                                   Save Starter Code
                                 </Button>
                               </div>
@@ -2986,7 +3016,7 @@ export default function CreatorWorkbenchPage() {
                               </Form.Group>
 
                               <div className="d-flex gap-2">
-                              <Button size="sm" variant="primary" disabled={!aiInspectorDraft || !!proposal || saveBusy} onClick={applyAiInspectorChanges}>
+                              <Button size="sm" variant="primary" disabled={!aiInspectorDraft || !!proposal || saveBusy} onClick={saveAiInspectorChanges}>
                                   Save Changes
                                 </Button>
                                 <Button
@@ -3297,7 +3327,7 @@ export default function CreatorWorkbenchPage() {
                             ) : null}
 
                             <div className="d-flex gap-2">
-                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal || saveBusy || multipleChoiceValidation.errors.length > 0} onClick={applyQuestionInspectorChanges}>
+                              <Button size="sm" variant="primary" disabled={!questionInspectorDraft || !!proposal || saveBusy || multipleChoiceValidation.errors.length > 0} onClick={saveQuestionInspectorChanges}>
                                 Save Changes
                               </Button>
                               <Button

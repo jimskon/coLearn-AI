@@ -17,6 +17,7 @@ export default function ActivityEditor() {
   const [copySuccess, setCopySuccess] = useState('');
   const [saveStatus, setSaveStatus] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
+  const [sourceRevision, setSourceRevision] = useState(0);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxError, setSandboxError] = useState('');
   const [previewKey, setPreviewKey] = useState(Date.now());
@@ -336,6 +337,7 @@ export default function ActivityEditor() {
         if (!sourceRes.ok) throw new Error(`activity source failed ${sourceRes.status}`);
         const sourceBody = await sourceRes.json();
         const sourceLines = Array.isArray(sourceBody?.lines) ? sourceBody.lines : [];
+        setSourceRevision(Number(sourceBody?.metadata?.source_revision ?? activityData?.source_revision ?? 0));
         await syncActivityIsTest(activityData, sourceLines);
 
         const cached = localStorage.getItem(`activity-${activityId}`);
@@ -415,7 +417,9 @@ export default function ActivityEditor() {
     try {
       const res = await fetch(`${API_BASE_URL}/api/activities/${activityId}/source`);
       if (!res.ok) throw new Error(`activity source failed ${res.status}`);
-      const { lines } = await res.json();
+      const sourceBody = await res.json();
+      const lines = sourceBody?.lines;
+      setSourceRevision(Number(sourceBody?.metadata?.source_revision ?? activity?.source_revision ?? 0));
       await syncActivityIsTest(activity, Array.isArray(lines) ? lines : []);
       const recoveredText = lines.join('\n');
       setRawText(recoveredText);
@@ -431,7 +435,7 @@ export default function ActivityEditor() {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ text: rawText }),
+      body: JSON.stringify({ text: rawText, expected_revision: sourceRevision }),
     });
 
     const body = await res.json().catch(() => ({}));
@@ -444,7 +448,9 @@ export default function ActivityEditor() {
       source_type: 'local',
       title: body?.title || prev?.title,
       content_text: rawText,
+      source_revision: body?.metadata?.source_revision ?? body?.source_revision ?? prev?.source_revision,
     }));
+    setSourceRevision(Number(body?.metadata?.source_revision ?? body?.source_revision ?? sourceRevision));
 
     localStorage.setItem(`activity-${activityId}`, rawText);
     return body;

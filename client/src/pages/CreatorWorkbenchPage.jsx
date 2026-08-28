@@ -213,6 +213,24 @@ function parseActivityText(text) {
   return { blocks, issues, files: collectFileContents(blocks) };
 }
 
+function getComponentSource(sourceText, block) {
+  const meta = block?.sourceMeta;
+  let startLine = null;
+  let endLine = null;
+  if (block?.type === 'question') {
+    startLine = meta?.questionLine;
+    endLine = meta?.endQuestionLine;
+  } else if (block?.type === 'groupIntro') {
+    startLine = meta?.groupLine;
+    endLine = meta?.endGroupLine;
+  } else if (block?.type === 'ai') {
+    startLine = meta?.aiLine;
+    endLine = meta?.endAiLine;
+  }
+  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine <= 0 || endLine < startLine) return '';
+  return String(sourceText || '').split('\n').slice(startLine - 1, endLine).join('\n');
+}
+
 function htmlToEditorText(value) {
   return String(value || '')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -675,6 +693,7 @@ export default function CreatorWorkbenchPage() {
   const autoTimerRef = useRef(null);
   const sourceTextareaRef = useRef(null);
   const sourceGutterRef = useRef(null);
+  const selectedComponentBaselineRef = useRef(null);
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
   const creatorTutorial = useCreatorTutorial({ demoMode: isDemoCreator });
 
@@ -889,6 +908,24 @@ export default function CreatorWorkbenchPage() {
   ), [rawText, selectedQuestionBlock]);
   const selectedQuestionGroupBlock = selectedPreviewBlock?.type === 'groupIntro' ? selectedPreviewBlock : null;
   const selectedAiBlock = selectedPreviewBlock?.type === 'ai' ? selectedPreviewBlock : null;
+  const captureSelectedComponentBaseline = (sourceText, block = selectedPreviewBlock) => {
+    const text = getComponentSource(sourceText, block);
+    selectedComponentBaselineRef.current = text && block?.previewKey
+      ? { previewKey: block.previewKey, text }
+      : null;
+  };
+  const selectedComponentIsCurrent = (block) => {
+    const baseline = selectedComponentBaselineRef.current;
+    if (!block?.previewKey || baseline?.previewKey !== block.previewKey) {
+      setError('This panel is no longer attached to the selected component. Select it again before trying changes.');
+      return false;
+    }
+    if (getComponentSource(rawText, block) !== baseline.text) {
+      setError('This component changed while its panel was open. Your panel edits were not applied; reselect the component and try again.');
+      return false;
+    }
+    return true;
+  };
   const selectedQuestionMoveState = useMemo(() => {
     if (!selectedQuestionBlock) return { index: -1, questions: [] };
     const questions = blocks
@@ -1122,6 +1159,13 @@ export default function CreatorWorkbenchPage() {
       setAiPanelDirty(false);
     }
   }, [selectedAiBlock]);
+
+  useEffect(() => {
+    captureSelectedComponentBaseline(rawText);
+  // A baseline belongs to the user's selection, not to every keystroke in
+  // source mode.  A later source change must therefore invalidate the panel.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPreviewKey]);
 
   useEffect(() => {
     if (!proposal) return;
@@ -1668,7 +1712,13 @@ export default function CreatorWorkbenchPage() {
       recordVisualEdit(label);
       setRawText(nextText);
       setSandboxUrl('');
-      compileText(nextText);
+      const parsed = compileText(nextText);
+      // The replacement has a fresh source range after parsing. Keep the
+      // selection's baseline in step with it so a second Try Changes is safe.
+      captureSelectedComponentBaseline(
+        nextText,
+        findSelectableBlockByPreviewKey(parsed.blocks, selectedPreviewKey),
+      );
     }
     return nextText;
   };
@@ -1692,6 +1742,7 @@ export default function CreatorWorkbenchPage() {
 
   const applyStarterCodeChanges = () => {
     if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return null;
+    if (!selectedComponentIsCurrent(selectedQuestionBlock)) return null;
     const nextText = serializeQuestionComponent(
       rawText,
       selectedQuestionBlock,
@@ -1704,6 +1755,7 @@ export default function CreatorWorkbenchPage() {
 
   const removeResponseLines = () => {
     if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
+    if (!selectedComponentIsCurrent(selectedQuestionBlock)) return;
     const nextText = serializeQuestionComponent(rawText, selectedQuestionBlock, {
       ...questionInspectorDraft,
       responseLines: '',
@@ -1761,6 +1813,7 @@ export default function CreatorWorkbenchPage() {
 
   const applyQuestionRevision = () => {
     if (!selectedQuestionBlock || !questionRevisionProposal?.proposedMarkup || proposal) return;
+    if (!selectedComponentIsCurrent(selectedQuestionBlock)) return;
     const sourceMeta = selectedQuestionBlock.sourceMeta;
     if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
 
@@ -1797,6 +1850,9 @@ export default function CreatorWorkbenchPage() {
   };
 
   const trySelectedPanelChanges = () => {
+    const selectedComponent = selectedQuestionBlock || selectedQuestionGroupBlock || selectedAiBlock;
+    if (selectedComponent && !selectedComponentIsCurrent(selectedComponent)) return null;
+
     let result = null;
     if (selectedQuestionBlock) {
       result = applyQuestionInspectorChanges();

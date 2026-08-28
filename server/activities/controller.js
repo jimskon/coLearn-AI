@@ -10,7 +10,41 @@ const {
 } = require('../utils/activityContent');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureActivitySourceSchema } = require('../utils/activitySourceSchema');
+const { ensureActivityEditLockSchema } = require('../utils/activityEditLockSchema');
 const { validateActivityMarkup } = require('../../shared/activityMarkupValidation.cjs');
+const { randomUUID } = require('crypto');
+
+const EDIT_LEASE_SECONDS = 120;
+
+function editorFromRequest(req) {
+  const user = req.user;
+  const role = String(user?.role || '').toLowerCase();
+  if (!user?.id || !['root', 'creator', 'instructor'].includes(role)) return null;
+  return user;
+}
+
+async function getActivityEditLease(activityId) {
+  const [[lease]] = await db.query(
+    `SELECT l.activity_id, l.user_id, l.lease_token, l.expires_at,
+            u.name AS owner_name, u.email AS owner_email
+       FROM activity_edit_locks l
+       LEFT JOIN users u ON u.id = l.user_id
+      WHERE l.activity_id = ? AND l.expires_at > NOW(3)`,
+    [activityId],
+  );
+  return lease || null;
+}
+
+async function hasValidActivityEditLease(activityId, userId, token) {
+  if (!token) return false;
+  const [[lease]] = await db.query(
+    `SELECT 1 AS valid
+       FROM activity_edit_locks
+      WHERE activity_id = ? AND user_id = ? AND lease_token = ? AND expires_at > NOW(3)`,
+    [activityId, userId, token],
+  );
+  return Boolean(lease?.valid);
+}
 
 function extractTitleFromText(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
@@ -137,6 +171,101 @@ exports.getActivity = async (req, res) => {
   }
 };
 
+exports.acquireActivityEditLease = async (req, res) => {
+  const activityId = Number(req.params.id);
+  const editor = editorFromRequest(req);
+  if (!activityId || !editor) {
+    return res.status(403).json({ error: 'Only signed-in instructors and creators can edit activities.' });
+  }
+
+  try {
+    await ensureActivityEditLockSchema();
+    const [[activity]] = await db.query('SELECT id FROM pogil_activities WHERE id = ?', [activityId]);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    const leaseToken = randomUUID();
+    // This single statement safely replaces an expired lease, or refreshes a
+    // lease for the same person. A live lease belonging to somebody else is
+    // intentionally left untouched.
+    await db.query(
+      `INSERT INTO activity_edit_locks
+          (activity_id, user_id, lease_token, acquired_at, expires_at)
+       VALUES (?, ?, ?, NOW(3), DATE_ADD(NOW(3), INTERVAL ${EDIT_LEASE_SECONDS} SECOND))
+       ON DUPLICATE KEY UPDATE
+         user_id = IF(expires_at <= NOW(3) OR user_id = ?, VALUES(user_id), user_id),
+         lease_token = IF(expires_at <= NOW(3) OR user_id = ?, VALUES(lease_token), lease_token),
+         acquired_at = IF(expires_at <= NOW(3) OR user_id = ?, NOW(3), acquired_at),
+         expires_at = IF(expires_at <= NOW(3) OR user_id = ?,
+           DATE_ADD(NOW(3), INTERVAL ${EDIT_LEASE_SECONDS} SECOND), expires_at)`,
+      [activityId, editor.id, leaseToken, editor.id, editor.id, editor.id, editor.id],
+    );
+
+    const lease = await getActivityEditLease(activityId);
+    if (!lease || Number(lease.user_id) !== Number(editor.id) || lease.lease_token !== leaseToken) {
+      return res.status(423).json({
+        error: `${lease?.owner_name || lease?.owner_email || 'Another instructor'} is editing this activity.`,
+        owner_name: lease?.owner_name || lease?.owner_email || 'Another instructor',
+        expires_at: lease?.expires_at || null,
+      });
+    }
+
+    return res.json({
+      lease_token: leaseToken,
+      expires_at: lease.expires_at,
+      lease_seconds: EDIT_LEASE_SECONDS,
+    });
+  } catch (err) {
+    console.error('acquireActivityEditLease error:', err);
+    return res.status(500).json({ error: 'Could not start this editing session.' });
+  }
+};
+
+exports.heartbeatActivityEditLease = async (req, res) => {
+  const activityId = Number(req.params.id);
+  const editor = editorFromRequest(req);
+  const token = String(req.body?.lease_token || '');
+  if (!activityId || !editor || !token) {
+    return res.status(400).json({ error: 'An activity editing lease is required.' });
+  }
+
+  try {
+    await ensureActivityEditLockSchema();
+    const [result] = await db.query(
+      `UPDATE activity_edit_locks
+          SET expires_at = DATE_ADD(NOW(3), INTERVAL ${EDIT_LEASE_SECONDS} SECOND)
+        WHERE activity_id = ? AND user_id = ? AND lease_token = ? AND expires_at > NOW(3)`,
+      [activityId, editor.id, token],
+    );
+    if (!result.affectedRows) {
+      return res.status(409).json({ error: 'Your editing lease expired or was replaced. Reload before saving.' });
+    }
+    const lease = await getActivityEditLease(activityId);
+    return res.json({ expires_at: lease?.expires_at || null, lease_seconds: EDIT_LEASE_SECONDS });
+  } catch (err) {
+    console.error('heartbeatActivityEditLease error:', err);
+    return res.status(500).json({ error: 'Could not renew the editing session.' });
+  }
+};
+
+exports.releaseActivityEditLease = async (req, res) => {
+  const activityId = Number(req.params.id);
+  const editor = editorFromRequest(req);
+  const token = String(req.body?.lease_token || '');
+  if (!activityId || !editor || !token) return res.status(204).end();
+
+  try {
+    await ensureActivityEditLockSchema();
+    await db.query(
+      'DELETE FROM activity_edit_locks WHERE activity_id = ? AND user_id = ? AND lease_token = ?',
+      [activityId, editor.id, token],
+    );
+    return res.status(204).end();
+  } catch (err) {
+    console.error('releaseActivityEditLease error:', err);
+    return res.status(500).json({ error: 'Could not close the editing session.' });
+  }
+};
+
 exports.getActivitySource = async (req, res) => {
   const { id } = req.params;
 
@@ -172,7 +301,7 @@ exports.getActivitySource = async (req, res) => {
 
 exports.saveActivitySource = async (req, res) => {
   const { id } = req.params;
-  const { text, expected_revision: expectedRevisionRaw } = req.body || {};
+  const { text, expected_revision: expectedRevisionRaw, edit_lease_token: editLeaseToken } = req.body || {};
 
   if (typeof text !== 'string') {
     return res.status(400).json({ error: 'text is required' });
@@ -188,6 +317,7 @@ exports.saveActivitySource = async (req, res) => {
 
   try {
     await ensureActivitySourceSchema();
+    await ensureActivityEditLockSchema();
     const [rows] = await db.query('SELECT id, title, source_revision FROM pogil_activities WHERE id = ?', [id]);
     if (!rows.length) {
       return res.status(404).json({ error: 'Activity not found' });
@@ -196,6 +326,21 @@ exports.saveActivitySource = async (req, res) => {
     const expectedRevision = Number(expectedRevisionRaw);
     if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
       return res.status(400).json({ error: 'expected_revision is required to save safely.' });
+    }
+
+    const activeLease = await getActivityEditLease(id);
+    if (activeLease) {
+      const editor = editorFromRequest(req);
+      const ownsLease = editor
+        && Number(activeLease.user_id) === Number(editor.id)
+        && await hasValidActivityEditLease(id, editor.id, editLeaseToken);
+      if (!ownsLease) {
+        return res.status(423).json({
+          error: `${activeLease.owner_name || activeLease.owner_email || 'Another instructor'} is editing this activity.`,
+          owner_name: activeLease.owner_name || activeLease.owner_email || 'Another instructor',
+          expires_at: activeLease.expires_at,
+        });
+      }
     }
 
     const extractedTitle = extractTitleFromText(text);
@@ -301,6 +446,7 @@ exports.importRemoteSource = async (req, res) => {
   const { id } = req.params;
   try {
     await ensureActivitySourceSchema();
+    await ensureActivityEditLockSchema();
     const [[activity]] = await db.query(
       `SELECT id, title, sheet_url, content_text, source_updated_at,
               source_revision, last_synced_hash
@@ -312,6 +458,21 @@ exports.importRemoteSource = async (req, res) => {
     const expectedRevision = Number(req.body?.expected_revision);
     if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
       return res.status(400).json({ error: 'expected_revision is required to import safely.' });
+    }
+
+    const activeLease = await getActivityEditLease(id);
+    if (activeLease) {
+      const editor = editorFromRequest(req);
+      const ownsLease = editor
+        && Number(activeLease.user_id) === Number(editor.id)
+        && await hasValidActivityEditLease(id, editor.id, req.body?.edit_lease_token);
+      if (!ownsLease) {
+        return res.status(423).json({
+          error: `${activeLease.owner_name || activeLease.owner_email || 'Another instructor'} is editing this activity.`,
+          owner_name: activeLease.owner_name || activeLease.owner_email || 'Another instructor',
+          expires_at: activeLease.expires_at,
+        });
+      }
     }
 
     const { remote, remoteText } = await getRemoteActivityStatus(activity);

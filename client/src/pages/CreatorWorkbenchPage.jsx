@@ -673,6 +673,7 @@ export default function CreatorWorkbenchPage() {
   const [savedSourceText, setSavedSourceText] = useState('');
   const [savedSourceRevision, setSavedSourceRevision] = useState(null);
   const [pendingNavigation, setPendingNavigation] = useState(null);
+  const [editLease, setEditLease] = useState({ status: 'idle' });
 
   // User-facing panel updates go through these wrappers. Loading a selected
   // component uses the raw state setters below, so Try Changes is enabled only
@@ -694,6 +695,7 @@ export default function CreatorWorkbenchPage() {
   const sourceTextareaRef = useRef(null);
   const sourceGutterRef = useRef(null);
   const selectedComponentBaselineRef = useRef(null);
+  const editLeaseTokenRef = useRef('');
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
   const creatorTutorial = useCreatorTutorial({ demoMode: isDemoCreator });
 
@@ -706,6 +708,7 @@ export default function CreatorWorkbenchPage() {
     revision: useRef(null),
   };
   const effectiveClassId = classId || activity?.class_id;
+  const editLockedByAnotherUser = editLease.status === 'locked';
   const activeBlocks = proposal?.blocks || blocks;
   const activeIssues = proposal?.issues || parseIssues;
   const activeText = proposal?.text || rawText;
@@ -823,7 +826,7 @@ export default function CreatorWorkbenchPage() {
   }
 
   function persistVisualCodeChange(_responseKey, code, meta = {}) {
-    if (meta.__broadcastOnly || proposal) return;
+    if (meta.__broadcastOnly || proposal || editLockedByAnotherUser) return;
     const sourceRef = meta.creatorSource;
     const codeBlock = getQuestionCodeBlock(rawText, sourceRef?.questionBlock, sourceRef?.codeType);
     if (!codeBlock) return;
@@ -853,6 +856,7 @@ export default function CreatorWorkbenchPage() {
           className="creator-insert-button"
           aria-label={label}
           title={label}
+          disabled={editLockedByAnotherUser}
           onClick={(event) => {
             event.stopPropagation();
             setInsertTarget(target);
@@ -873,30 +877,30 @@ export default function CreatorWorkbenchPage() {
     setFileContents: updateFileContents,
     infoBubbleSession: infoBubbleSessionRef.current,
     runtimeFeatures,
-    onSelectBlock: proposal ? null : (block) => setSelectedPreviewKey(block?.previewKey || ''),
+    onSelectBlock: proposal || editLockedByAnotherUser ? null : (block) => setSelectedPreviewKey(block?.previewKey || ''),
     onCodeChange: persistVisualCodeChange,
     selectedPreviewKey,
-    renderInsertBeforeQuestion: proposal ? null : (block) => renderInsertionMarker(
+    renderInsertBeforeQuestion: proposal || editLockedByAnotherUser ? null : (block) => renderInsertionMarker(
       `before-question-${block.previewKey}`,
       'Add question before',
       { kind: 'question', block, placement: 'before' }
     ),
-    renderInsertAfterQuestion: proposal ? null : (block) => renderInsertionMarker(
+    renderInsertAfterQuestion: proposal || editLockedByAnotherUser ? null : (block) => renderInsertionMarker(
       `after-question-${block.previewKey}`,
       'Add question after',
       { kind: 'question', block, placement: 'after' }
     ),
-    renderInsertBeforeGroup: proposal ? null : (block) => renderInsertionMarker(
+    renderInsertBeforeGroup: proposal || editLockedByAnotherUser ? null : (block) => renderInsertionMarker(
       `before-group-${block.groupId}`,
       'Add question group before',
       { kind: 'group', block, placement: 'before' }
     ),
-    renderInsertAfterGroup: proposal ? null : (block) => renderInsertionMarker(
+    renderInsertAfterGroup: proposal || editLockedByAnotherUser ? null : (block) => renderInsertionMarker(
       `after-group-${block.groupId}`,
       'Add question group after',
       { kind: 'group', block, placement: 'after' }
     ),
-  }), [activeBlocks, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures, insertStarterQuestion, insertStarterQuestionGroup]);
+  }), [activeBlocks, editLockedByAnotherUser, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures, insertStarterQuestion, insertStarterQuestionGroup]);
 
   const selectedPreviewBlock = useMemo(() => (
     findSelectableBlockByPreviewKey(activeBlocks, selectedPreviewKey)
@@ -964,6 +968,83 @@ export default function CreatorWorkbenchPage() {
   }, [questionRevisionProposal?.proposedMarkup, runtimeFeatures]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
+
+  useEffect(() => {
+    if (!activity?.id || !canManage) {
+      editLeaseTokenRef.current = '';
+      setEditLease({ status: 'idle' });
+      return undefined;
+    }
+
+    let disposed = false;
+    let heartbeatTimer = null;
+    let token = '';
+
+    const renewLease = async () => {
+      if (!token || disposed) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/edit-lease/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ lease_token: token }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || 'The editing lease was lost.');
+        if (!disposed) setEditLease({ status: 'held', expiresAt: data?.expires_at || null });
+      } catch (err) {
+        if (!disposed) {
+          editLeaseTokenRef.current = '';
+          setEditLease({ status: 'error', message: err?.message || 'The editing lease was lost.' });
+        }
+      }
+    };
+
+    const acquireLease = async () => {
+      setEditLease({ status: 'checking' });
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/edit-lease`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (disposed) return;
+        if (res.status === 423) {
+          setEditLease({
+            status: 'locked',
+            ownerName: data?.owner_name || 'Another instructor',
+            expiresAt: data?.expires_at || null,
+          });
+          return;
+        }
+        if (!res.ok) throw new Error(data?.error || 'Could not start the editing session.');
+
+        token = String(data?.lease_token || '');
+        if (!token) throw new Error('Could not start the editing session.');
+        editLeaseTokenRef.current = token;
+        setEditLease({ status: 'held', expiresAt: data?.expires_at || null });
+        heartbeatTimer = window.setInterval(renewLease, 60000);
+      } catch (err) {
+        if (!disposed) setEditLease({ status: 'error', message: err?.message || 'Could not start the editing session.' });
+      }
+    };
+
+    acquireLease();
+    return () => {
+      disposed = true;
+      if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+      if (!token) return;
+      editLeaseTokenRef.current = '';
+      void fetch(`${API_BASE_URL}/api/activities/${activity.id}/edit-lease`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ lease_token: token }),
+      }).catch(() => {});
+    };
+  }, [activity?.id, canManage]);
 
   useEffect(() => {
     if (isDemoCreator && !['gpt-5-mini', 'gpt-4o-mini'].includes(draft.selected_model)) {
@@ -1438,9 +1519,16 @@ export default function CreatorWorkbenchPage() {
         body: JSON.stringify({
           text: sourceText,
           expected_revision: Number.isInteger(savedSourceRevision) ? savedSourceRevision : 0,
+          edit_lease_token: editLeaseTokenRef.current || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 423) {
+        throw new Error(
+          `${data?.owner_name || 'Another instructor'} is editing this activity. `
+          + 'Your browser changes were not saved and are still available here.'
+        );
+      }
       if (res.status === 409) {
         const currentRevision = data?.current_revision;
         throw new Error(
@@ -1525,7 +1613,7 @@ export default function CreatorWorkbenchPage() {
   };
 
   const importRemoteSource = async () => {
-    if (!activity?.id) return;
+    if (!activity?.id || editLockedByAnotherUser) return;
     if (!window.confirm('Replace the local activity markup with the current Google Doc text? This cannot be undone from this dialog.')) return;
     setRemoteBusy(true);
     setRemoteError('');
@@ -1536,6 +1624,7 @@ export default function CreatorWorkbenchPage() {
         credentials: 'include',
         body: JSON.stringify({
           expected_revision: Number.isInteger(savedSourceRevision) ? savedSourceRevision : 0,
+          edit_lease_token: editLeaseTokenRef.current || undefined,
         }),
       });
       const data = await readJsonResponse(res);
@@ -1850,6 +1939,10 @@ export default function CreatorWorkbenchPage() {
   };
 
   const trySelectedPanelChanges = () => {
+    if (editLockedByAnotherUser) {
+      setError(`${editLease.ownerName || 'Another instructor'} is editing this activity. This editor is read-only until the lease is released or expires.`);
+      return null;
+    }
     const selectedComponent = selectedQuestionBlock || selectedQuestionGroupBlock || selectedAiBlock;
     if (selectedComponent && !selectedComponentIsCurrent(selectedComponent)) return null;
 
@@ -2194,6 +2287,17 @@ export default function CreatorWorkbenchPage() {
 
       {notice ? <Alert variant="info" className="py-2 mb-2">{notice}</Alert> : null}
       {error ? <Alert variant="danger" className="py-2 mb-2">{error}</Alert> : null}
+      {editLockedByAnotherUser ? (
+        <Alert variant="warning" className="py-2 mb-2">
+          <strong>Read-only:</strong> {editLease.ownerName || 'Another instructor'} is editing this activity.
+          {' '}Their editing lease expires automatically if they leave; then reload this page to begin editing.
+        </Alert>
+      ) : null}
+      {editLease.status === 'error' ? (
+        <Alert variant="warning" className="py-2 mb-2">
+          Editing protection is unavailable: {editLease.message} Your save will still use revision-conflict protection.
+        </Alert>
+      ) : null}
       {activity?.id && (
         <Alert variant={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} className="py-2 mb-2 d-flex align-items-center gap-2">
           <Badge bg={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} text={isTestDraft ? 'dark' : undefined}>
@@ -2487,7 +2591,7 @@ export default function CreatorWorkbenchPage() {
                 size="sm"
                 variant="outline-secondary"
                 onClick={undoVisualEdit}
-                disabled={!visualUndoStack.length || !!proposal}
+                disabled={!visualUndoStack.length || !!proposal || editLockedByAnotherUser}
                 title={visualUndoStack.length ? `Undo ${visualUndoStack.at(-1)?.label}` : 'Nothing to undo'}
               >
                 <ArrowCounterclockwise className="me-1" /> Undo
@@ -2497,7 +2601,7 @@ export default function CreatorWorkbenchPage() {
                   size="sm"
                   variant="outline-success"
                   onClick={loadLabBoilerplate}
-                  disabled={!activity?.id || !!proposal}
+                  disabled={!activity?.id || !!proposal || editLockedByAnotherUser}
                   title="Replace the current source in the editor with the comprehensive lab example"
                 >
                   <PlusLg className="me-1" /> Lab Boilerplate
@@ -2513,14 +2617,14 @@ export default function CreatorWorkbenchPage() {
             </div>
             <div className="d-flex gap-2">
               {activity?.sheet_url ? (
-                <Button size="sm" variant="outline-secondary" onClick={openRemoteSync} disabled={!!proposal}>
+                <Button size="sm" variant="outline-secondary" onClick={openRemoteSync} disabled={!!proposal || editLockedByAnotherUser}>
                   Remote Copy
                 </Button>
               ) : null}
               <Button
                 size="sm"
                 variant="primary"
-                disabled={!hasPendingPanelChanges || !!proposal || multipleChoiceValidation.errors.length > 0}
+                disabled={!hasPendingPanelChanges || !!proposal || editLockedByAnotherUser || multipleChoiceValidation.errors.length > 0}
                 onClick={trySelectedPanelChanges}
                 title="Rebuild the selected component safely in this browser without saving to the database"
               >
@@ -2530,7 +2634,7 @@ export default function CreatorWorkbenchPage() {
                 size="sm"
                 variant="success"
                 onClick={saveVisualEditorChanges}
-                disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || !hasUnsavedChanges}
+                disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || editLockedByAnotherUser || !hasUnsavedChanges}
                 title={hasMarkupErrors && firstMarkupError
                   ? `Save will explain the markup error at line ${firstMarkupError.line}.`
                   : 'Save this activity to the database'}
@@ -3268,7 +3372,7 @@ export default function CreatorWorkbenchPage() {
                   as="textarea"
                   className="creator-markup-editor"
                   value={activeText}
-                  readOnly={!!proposal}
+                  readOnly={!!proposal || editLockedByAnotherUser}
                   spellCheck={false}
                   ref={sourceTextareaRef}
                   onScroll={() => {
@@ -3513,7 +3617,7 @@ export default function CreatorWorkbenchPage() {
             <Button
               variant="warning"
               onClick={importRemoteSource}
-              disabled={remoteBusy || remoteStatus?.comparison?.state === 'conflict'}
+              disabled={remoteBusy || editLockedByAnotherUser || remoteStatus?.comparison?.state === 'conflict'}
               title={remoteStatus?.comparison?.state === 'conflict' ? 'Resolve the conflict deliberately before importing.' : undefined}
             >
               Import Remote

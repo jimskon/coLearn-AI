@@ -253,6 +253,20 @@ CREATE TABLE `pogil_activities` (
   CONSTRAINT `pogil_activities_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=555 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `activity_edit_locks`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `activity_edit_locks` (
+  `activity_id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `lease_token` char(36) NOT NULL,
+  `acquired_at` datetime(3) NOT NULL,
+  `expires_at` datetime(3) NOT NULL,
+  PRIMARY KEY (`activity_id`),
+  KEY `activity_edit_locks_expires_at_idx` (`expires_at`),
+  CONSTRAINT `activity_edit_locks_activity_fk` FOREIGN KEY (`activity_id`) REFERENCES `pogil_activities` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `pogil_classes`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
 /*!40101 SET character_set_client = utf8mb4 */;

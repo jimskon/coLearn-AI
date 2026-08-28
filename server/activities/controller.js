@@ -10,6 +10,7 @@ const {
 } = require('../utils/activityContent');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureActivitySourceSchema } = require('../utils/activitySourceSchema');
+const { validateActivityMarkup } = require('../../shared/activityMarkupValidation.cjs');
 
 function extractTitleFromText(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
@@ -177,6 +178,14 @@ exports.saveActivitySource = async (req, res) => {
     return res.status(400).json({ error: 'text is required' });
   }
 
+  const markupValidation = validateActivityMarkup(text);
+  if (!markupValidation.valid) {
+    return res.status(400).json({
+      error: 'Activity markup is invalid. Fix the reported structural errors before saving.',
+      issues: markupValidation.issues,
+    });
+  }
+
   try {
     await ensureActivitySourceSchema();
     const [rows] = await db.query('SELECT id, title, source_revision FROM pogil_activities WHERE id = ?', [id]);
@@ -306,6 +315,13 @@ exports.importRemoteSource = async (req, res) => {
     }
 
     const { remote, remoteText } = await getRemoteActivityStatus(activity);
+    const markupValidation = validateActivityMarkup(remoteText);
+    if (!markupValidation.valid) {
+      return res.status(400).json({
+        error: 'The linked Google Doc contains invalid activity markup. Fix its structural errors before importing it.',
+        issues: markupValidation.issues,
+      });
+    }
     const nextTitle = extractTitleFromText(remoteText) || activity.title;
     const syncedHash = sourceHash(remoteText);
     const [updateResult] = await db.query(

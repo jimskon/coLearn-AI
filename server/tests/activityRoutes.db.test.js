@@ -304,6 +304,8 @@ test('saveActivitySource converts a remote activity into a local one and stores 
     '',
     '\\questiongroup{One}',
     '\\question{Saved locally?}',
+    '\\endquestion',
+    '\\endquestiongroup',
   ].join('\n');
 
   const response = await requestJson(creator, `/api/activities/${activity.id}/source`, {
@@ -338,7 +340,7 @@ test('saveActivitySource updates stored text for an already-local activity', asy
   const classId = await createClassRecord();
   const activity = await insertActivity({ classId, createdBy: creator.id });
   const firstText = '\\title{First}\\mode{group}';
-  const secondText = '\\title{Second}\\mode{group}\n\\questiongroup{One}';
+  const secondText = '\\title{Second}\\mode{group}\n\\questiongroup{One}\n\\endquestiongroup';
 
   await db.query(
     `UPDATE pogil_activities

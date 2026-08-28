@@ -40,6 +40,14 @@ import {
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 import { getSectionKeyAtLine, swapSourceRanges } from '../utils/creatorVisualEdits';
 import { validateMultipleChoice } from '../utils/multipleChoice';
+import markupValidator from '../../../shared/activityMarkupValidation.cjs';
+import {
+  serializeAiComponent,
+  serializeQuestionComponent,
+  serializeQuestionGroupComponent,
+} from '../utils/creatorComponentSerialization';
+
+const { validateActivityMarkup } = markupValidator;
 
 const emptyDraft = {
   title: '',
@@ -194,7 +202,14 @@ function parseActivityText(text) {
     : Array.isArray(parsed)
       ? parsed
       : [];
-  const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
+  const parserIssues = Array.isArray(parsed?.issues) ? parsed.issues : [];
+  const structuralIssues = validateActivityMarkup(text).issues.map((issue) => ({
+    ...issue,
+    context: null,
+  }));
+  // The renderer provides detailed display warnings; this shared validator is
+  // authoritative for errors that would make a deterministic visual edit unsafe.
+  const issues = [...parserIssues, ...structuralIssues];
   return { blocks, issues, files: collectFileContents(blocks) };
 }
 
@@ -204,152 +219,6 @@ function htmlToEditorText(value) {
     .replace(/<\/?[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ')
     .trim();
-}
-
-function updateLine(lines, lineNumber, nextValue) {
-  if (!Number.isFinite(lineNumber) || lineNumber <= 0) return false;
-  const index = lineNumber - 1;
-  if (index < 0 || index >= lines.length) return false;
-  lines[index] = nextValue;
-  return true;
-}
-
-function insertLinesAfterAnchors(lines, insertions) {
-  const ordered = [...insertions]
-    .filter((item) => Number.isFinite(item?.anchorLine) && item.anchorLine >= 0 && item.text)
-    .sort((a, b) => a.anchorLine - b.anchorLine);
-
-  let offset = 0;
-  for (const insertion of ordered) {
-    const index = Math.max(0, Math.min(lines.length, insertion.anchorLine + offset));
-    lines.splice(index, 0, insertion.text);
-    offset += 1;
-  }
-}
-
-function applyQuestionEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const requestedResponseLines = String(edits.responseLines ?? '').trim();
-  const responseLineCount = requestedResponseLines
-    ? Math.max(1, Number.parseInt(requestedResponseLines, 10) || 1)
-    : 0;
-  const removedResponseLine = sourceMeta.textResponseLine && responseLineCount === 0
-    ? sourceMeta.textResponseLine
-    : null;
-
-  if (removedResponseLine) lines.splice(removedResponseLine - 1, 1);
-
-  const shiftLine = (line) => (
-    !line || !removedResponseLine || line < removedResponseLine ? line : line - 1
-  );
-  const workingMeta = {
-    ...sourceMeta,
-    questionLine: shiftLine(sourceMeta.questionLine),
-    textResponseLine: removedResponseLine ? null : shiftLine(sourceMeta.textResponseLine),
-    sampleLines: sourceMeta.sampleLines?.map(shiftLine),
-    feedbackLines: sourceMeta.feedbackLines?.map(shiftLine),
-    followupLines: sourceMeta.followupLines?.map(shiftLine),
-  };
-
-  updateLine(lines, workingMeta.questionLine, `\\question{${String(edits.prompt || '').trim()}}`);
-
-  const sampleResponse = String(edits.sampleResponse || '').trim();
-  const feedbackPrompt = String(edits.feedbackPrompt || '').trim();
-  const followupPrompt = String(edits.followupPrompt || '').trim();
-  const insertions = [];
-
-  if (workingMeta.textResponseLine) {
-    updateLine(lines, workingMeta.textResponseLine, `\\textresponse{${responseLineCount}}`);
-  } else if (responseLineCount > 0) {
-    insertions.push({
-      anchorLine: workingMeta.questionLine,
-      text: `\\textresponse{${responseLineCount}}`,
-    });
-  }
-
-  if (Array.isArray(workingMeta.sampleLines) && workingMeta.sampleLines[0]) {
-    updateLine(lines, workingMeta.sampleLines[0], `\\sampleresponses{${sampleResponse}}`);
-  } else if (sampleResponse) {
-    insertions.push({
-      anchorLine: workingMeta.textResponseLine || workingMeta.questionLine,
-      text: `\\sampleresponses{${sampleResponse}}`,
-    });
-  }
-
-  if (Array.isArray(workingMeta.feedbackLines) && workingMeta.feedbackLines[0]) {
-    updateLine(lines, workingMeta.feedbackLines[0], `\\feedbackprompt{${feedbackPrompt}}`);
-  } else if (feedbackPrompt) {
-    insertions.push({
-      anchorLine:
-        workingMeta.sampleLines?.[0] ||
-        workingMeta.textResponseLine ||
-        workingMeta.questionLine,
-      text: `\\feedbackprompt{${feedbackPrompt}}`,
-    });
-  }
-
-  if (Array.isArray(workingMeta.followupLines) && workingMeta.followupLines[0]) {
-    updateLine(lines, workingMeta.followupLines[0], `\\followupprompt{${followupPrompt}}`);
-  } else if (followupPrompt) {
-    insertions.push({
-      anchorLine:
-        workingMeta.feedbackLines?.[0] ||
-        workingMeta.sampleLines?.[0] ||
-        workingMeta.textResponseLine ||
-        workingMeta.questionLine,
-      text: `\\followupprompt{${followupPrompt}}`,
-    });
-  }
-
-  insertLinesAfterAnchors(lines, insertions);
-  return lines.join('\n');
-}
-
-function applyMultipleChoiceEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const existing = block?.multipleChoice?.sourceMeta;
-  const enabled = !!edits.multipleChoiceEnabled;
-
-  if (!enabled) {
-    if (!existing?.multipleChoiceLine || !existing?.endMultipleChoiceLine) return sourceText;
-    lines.splice(
-      existing.multipleChoiceLine - 1,
-      existing.endMultipleChoiceLine - existing.multipleChoiceLine + 1,
-    );
-    return lines.join('\n');
-  }
-
-  const selectionMode = edits.multipleChoiceSelectionMode === 'multiple' ? 'multiple' : 'single';
-  const correctAnswer = selectionMode === 'multiple' ? '' : String(edits.multipleChoiceAnswer || '').trim();
-  const choices = (edits.multipleChoiceChoices || [])
-    .map((choice) => ({
-      value: String(choice?.value ?? choice ?? '').trim(),
-      points: choice?.points,
-    }));
-  const markup = [
-    `\\multiplechoice{${selectionMode === 'multiple' ? 'multiple' : correctAnswer}}`,
-    ...choices.map(({ value, points }) => (
-      `\\choice{${value}}${selectionMode === 'single' && Number.isInteger(points) && points >= 0 ? `{${points}}` : ''}`
-    )),
-    '\\endmultiplechoice',
-  ];
-
-  if (existing?.multipleChoiceLine && existing?.endMultipleChoiceLine) {
-    lines.splice(
-      existing.multipleChoiceLine - 1,
-      existing.endMultipleChoiceLine - existing.multipleChoiceLine + 1,
-      ...markup,
-    );
-  } else {
-    lines.splice(sourceMeta.questionLine, 0, ...markup);
-  }
-  return lines.join('\n');
 }
 
 function buildQuestionInspectorDraft(block) {
@@ -384,106 +253,6 @@ function buildQuestionInspectorDraft(block) {
   };
 }
 
-function getQuestionScoreBlocks(sourceText, block) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return [];
-
-  const lines = String(sourceText || '').split('\n');
-  const start = Math.max(0, Number(sourceMeta.questionLine) - 1);
-  const end = Math.max(start, Number(sourceMeta.endQuestionLine) - 1);
-  const scoreBlocks = [];
-  let current = null;
-
-  for (let index = start; index <= end; index += 1) {
-    const line = lines[index] ?? '';
-    const trimmed = line.trim();
-
-    if (current) {
-      current.lines.push(line);
-      if (trimmed === '\\endscore') {
-        current.closeLine = index + 1;
-        scoreBlocks.push(current);
-        current = null;
-      }
-      continue;
-    }
-
-    const match = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
-    if (match) {
-      const typeRaw = match[2].toLowerCase();
-      current = {
-        type: typeRaw,
-        points: Number.parseInt(match[1], 10),
-        openLine: index + 1,
-        closeLine: null,
-        lines: [line],
-      };
-    }
-  }
-
-  return scoreBlocks;
-}
-
-function applyQuestionScoreEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const scoreBlocks = getQuestionScoreBlocks(sourceText, block);
-  const byType = new Map(scoreBlocks.map((scoreBlock) => [scoreBlock.type, scoreBlock]));
-  const replacementActions = [];
-  const insertionLines = [];
-
-  const bandSpecs = [
-    ['response', 'responseScorePoints', 'responseScoreInstructions'],
-    ['code', 'codeScorePoints', 'codeScoreInstructions'],
-    ['output', 'outputScorePoints', 'outputScoreInstructions'],
-  ];
-
-  for (const [type, pointsKey, instructionsKey] of bandSpecs) {
-    const existing = byType.get(type);
-    const points = Number.parseInt(edits?.[pointsKey], 10);
-    const instructions = String(edits?.[instructionsKey] || '').trim();
-    const shouldKeep = Number.isFinite(points) && points > 0;
-
-    if (existing) {
-      replacementActions.push({
-        start: existing.openLine - 1,
-        end: existing.closeLine - 1,
-        text: shouldKeep
-          ? [
-              `\\score{${points},${type}}`,
-              ...(instructions ? instructions.split('\n') : []),
-              '\\endscore',
-            ]
-          : [],
-      });
-      continue;
-    }
-
-    if (shouldKeep) {
-      insertionLines.push(
-        `\\score{${points},${type}}`,
-        ...(instructions ? instructions.split('\n') : []),
-        '\\endscore'
-      );
-    }
-  }
-
-  replacementActions
-    .sort((left, right) => right.start - left.start)
-    .forEach((action) => {
-      lines.splice(action.start, action.end - action.start + 1, ...action.text);
-    });
-
-  if (insertionLines.length > 0) {
-    const insertAt = Math.max(0, Number(sourceMeta.questionLine));
-    lines.splice(insertAt, 0, ...insertionLines);
-  }
-
-  return lines.join('\n');
-}
-
 function findSectionCommandBeforeLine(sourceText, lineNumber) {
   const lines = String(sourceText || '').split('\n');
   const end = Math.max(0, Math.min(lines.length, Number(lineNumber) - 1));
@@ -510,107 +279,6 @@ function buildQuestionGroupInspectorDraft(block, sourceText) {
     sectionTimerEnabled: Number.isFinite(section?.minutes),
     sectionMinutes: Number.isFinite(section?.minutes) ? String(section.minutes) : '',
   };
-}
-
-function applyQuestionGroupEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.groupLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const title = String(edits.title || '').trim() || 'New Question Group';
-  const retriesRequired = Math.max(0, Number.parseInt(edits.retriesRequired, 10) || 0);
-  updateLine(lines, sourceMeta.groupLine, `\\questiongroup{${title}}`);
-
-  if (sourceMeta.retriesLine) {
-    updateLine(lines, sourceMeta.retriesLine, `\\retries{${retriesRequired}}`);
-  } else {
-    insertLinesAfterAnchors(lines, [{
-      anchorLine: sourceMeta.groupLine,
-      text: `\\retries{${retriesRequired}}`,
-    }]);
-  }
-
-  const section = findSectionCommandBeforeLine(sourceText, sourceMeta.groupLine);
-  const timerEnabled = edits.sectionTimerEnabled === true;
-  const sectionMinutes = Number.parseInt(edits.sectionMinutes, 10);
-  if (timerEnabled && (!Number.isFinite(sectionMinutes) || sectionMinutes <= 0)) return sourceText;
-
-  if (section) {
-    updateLine(
-      lines,
-      section.line,
-      timerEnabled ? `\\section{${section.title}}{${sectionMinutes}}` : `\\section{${section.title}}`
-    );
-  } else if (timerEnabled) {
-    insertLinesAfterAnchors(lines, [{
-      anchorLine: sourceMeta.groupLine - 1,
-      text: `\\section{${title}}{${sectionMinutes}}`,
-    }]);
-  }
-
-  return lines.join('\n');
-}
-
-function applyAiEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.aiLine || !sourceMeta?.endAiLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const model = INLINE_AI_MODEL_OPTIONS.some((option) => option.value === edits.model)
-    ? edits.model
-    : INLINE_AI_DEFAULT_MODEL;
-  const title = String(edits.title || '').trim();
-  const prompt = String(edits.prompt || '').trim();
-  const guardrail = String(edits.guardrail || '').trim();
-  const context = Array.isArray(edits.contextSources)
-    ? edits.contextSources
-    : String(edits.contextSources || '')
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-  const inputRows = Math.max(2, Number.parseInt(edits.inputRows, 10) || 4);
-  const insertions = [];
-
-  updateLine(lines, sourceMeta.aiLine, `\\ai{${String(edits.mode || 'explain').trim().toLowerCase() || 'explain'}}`);
-
-  if (sourceMeta.modelLine) {
-    updateLine(lines, sourceMeta.modelLine, `\\aimodel{${model}}`);
-  } else {
-    insertions.push({ anchorLine: sourceMeta.aiLine, text: `\\aimodel{${model}}` });
-  }
-
-  if (sourceMeta.titleLine) {
-    updateLine(lines, sourceMeta.titleLine, `\\aititle{${title}}`);
-  } else if (title) {
-    insertions.push({ anchorLine: sourceMeta.aiLine, text: `\\aititle{${title}}` });
-  }
-
-  if (sourceMeta.promptLine) {
-    updateLine(lines, sourceMeta.promptLine, `\\aiprompt{${prompt}}`);
-  } else if (prompt) {
-    insertions.push({ anchorLine: sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiprompt{${prompt}}` });
-  }
-
-  if (sourceMeta.guardrailLine) {
-    updateLine(lines, sourceMeta.guardrailLine, `\\aiguardrail{${guardrail}}`);
-  } else if (guardrail) {
-    insertions.push({ anchorLine: sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiguardrail{${guardrail}}` });
-  }
-
-  if (sourceMeta.contextLine) {
-    updateLine(lines, sourceMeta.contextLine, `\\aicontext{${context.join(',')}}`);
-  } else if (context.length) {
-    insertions.push({ anchorLine: sourceMeta.guardrailLine || sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aicontext{${context.join(',')}}` });
-  }
-
-  if (sourceMeta.inputLine) {
-    updateLine(lines, sourceMeta.inputLine, `\\aiinput{${inputRows}}`);
-  } else {
-    insertions.push({ anchorLine: sourceMeta.contextLine || sourceMeta.guardrailLine || sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiinput{${inputRows}}` });
-  }
-
-  insertLinesAfterAnchors(lines, insertions);
-  return lines.join('\n');
 }
 
 function buildAiInspectorDraft(block) {
@@ -1008,6 +676,8 @@ export default function CreatorWorkbenchPage() {
     [activeText],
   );
   const hasProposalErrors = !!proposal?.issues?.some((issue) => issue.severity === 'error');
+  const markupValidation = useMemo(() => validateActivityMarkup(rawText), [rawText]);
+  const hasMarkupErrors = !markupValidation.valid;
   const hasUnsavedChanges = !!activity?.id && rawText !== savedSourceText;
   const advancedPromptText = useMemo(() => buildAdvancedPromptText(advancedDraft), [advancedDraft]);
   const multipleChoiceValidation = useMemo(() => {
@@ -1684,6 +1354,11 @@ export default function CreatorWorkbenchPage() {
 
   const saveSource = async (sourceText = rawText) => {
     if (!activity?.id) throw new Error('Create a draft before saving.');
+    const validation = validateActivityMarkup(sourceText);
+    if (!validation.valid) {
+      const first = validation.issues[0];
+      throw new Error(`Fix the markup before saving: line ${first.line}: ${first.message}`);
+    }
     setSaveBusy(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/source`, {
@@ -1957,6 +1632,12 @@ export default function CreatorWorkbenchPage() {
   };
 
   const applyVisualSource = (nextText, label) => {
+    const validation = validateActivityMarkup(nextText);
+    if (!validation.valid) {
+      const first = validation.issues[0];
+      setError(`Try Changes was not applied. Line ${first.line}: ${first.message}`);
+      return rawText;
+    }
     if (nextText !== rawText) {
       recordVisualEdit(label);
       setRawText(nextText);
@@ -1968,44 +1649,13 @@ export default function CreatorWorkbenchPage() {
 
   const buildQuestionInspectorSource = () => {
     if (!selectedQuestionBlock || !questionInspectorDraft) return rawText;
-    const nextTextWithQuestionEdits = applyQuestionEditsToSource(
+    return serializeQuestionComponent(
       rawText,
       selectedQuestionBlock,
       questionInspectorDraft,
+      selectedQuestionCodeBlock,
+      starterCodeDraft,
     );
-    const refreshedQuestion = parseActivityText(nextTextWithQuestionEdits).blocks.find((block) => (
-      block?.type === 'question'
-      && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
-    ));
-    const nextTextWithMultipleChoiceEdits = applyMultipleChoiceEditsToSource(
-      nextTextWithQuestionEdits,
-      refreshedQuestion || selectedQuestionBlock,
-      questionInspectorDraft,
-    );
-    let nextText = applyQuestionScoreEditsToSource(
-      nextTextWithMultipleChoiceEdits,
-      refreshedQuestion || selectedQuestionBlock,
-      questionInspectorDraft,
-    );
-
-    // Starter-code changes share this inspector. Include them in the same
-    // save so the author never has to remember a second button.
-    const refreshedBlock = parseActivityText(nextText).blocks.find((block) => (
-      block?.type === 'question'
-      && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
-    ));
-    const codeBlock = getQuestionCodeBlock(nextText, refreshedBlock || selectedQuestionBlock);
-    if (codeBlock && String(starterCodeDraft || '') !== String(codeBlock.content || '')) {
-      const lines = String(nextText || '').split('\n');
-      lines.splice(
-        codeBlock.openLine,
-        codeBlock.closeLine - codeBlock.openLine - 1,
-        ...String(starterCodeDraft || '').split('\n'),
-      );
-      nextText = lines.join('\n');
-    }
-
-    return nextText;
   };
 
   const applyQuestionInspectorChanges = () => {
@@ -2016,28 +1666,25 @@ export default function CreatorWorkbenchPage() {
 
   const applyStarterCodeChanges = () => {
     if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return null;
-    const lines = String(rawText || '').split('\n');
-    const replacementLines = String(starterCodeDraft || '').split('\n');
-    lines.splice(
-      selectedQuestionCodeBlock.openLine,
-      selectedQuestionCodeBlock.closeLine - selectedQuestionCodeBlock.openLine - 1,
-      ...replacementLines
+    const nextText = serializeQuestionComponent(
+      rawText,
+      selectedQuestionBlock,
+      questionInspectorDraft || buildQuestionInspectorDraft(selectedQuestionBlock),
+      selectedQuestionCodeBlock,
+      starterCodeDraft,
     );
-    const nextText = lines.join('\n');
     return applyVisualSource(nextText, `updating ${selectedQuestionCodeBlock.label} starter code`);
   };
 
   const removeResponseLines = () => {
     if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
-    const nextText = applyQuestionEditsToSource(rawText, selectedQuestionBlock, {
+    const nextText = serializeQuestionComponent(rawText, selectedQuestionBlock, {
       ...questionInspectorDraft,
       responseLines: '',
-    });
+    }, selectedQuestionCodeBlock, starterCodeDraft);
     if (nextText === rawText) return;
-    recordVisualEdit('removing response lines');
-    setRawText(nextText);
-    setSandboxUrl('');
-    compileText(nextText);
+    const appliedText = applyVisualSource(nextText, 'removing response lines');
+    if (appliedText === rawText) return;
     setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: '' }));
     setNotice('Removed written response lines from this question.');
     setTimeout(() => setNotice(''), 1800);
@@ -2093,16 +1740,11 @@ export default function CreatorWorkbenchPage() {
 
     const lines = String(rawText || '').split('\n');
     const proposedLines = questionRevisionProposal.proposedMarkup.split('\n');
-    lines.splice(
-      sourceMeta.questionLine - 1,
-      sourceMeta.endQuestionLine - sourceMeta.questionLine + 1,
-      ...proposedLines
-    );
+    lines.splice(sourceMeta.questionLine - 1, sourceMeta.endQuestionLine - sourceMeta.questionLine + 1, ...proposedLines);
     const nextText = lines.join('\n');
-    const parsed = compileText(nextText);
-    recordVisualEdit('applying an AI question revision');
-    setRawText(nextText);
-    setSandboxUrl('');
+    const appliedText = applyVisualSource(nextText, 'applying an AI question revision');
+    if (appliedText === rawText) return;
+    const parsed = parseActivityText(appliedText);
     selectInsertedQuestion(parsed, sourceMeta.questionLine);
     setQuestionRevisionProposal(null);
     setQuestionRevisionRequest('');
@@ -2112,13 +1754,19 @@ export default function CreatorWorkbenchPage() {
 
   const applyQuestionGroupInspectorChanges = () => {
     if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return null;
-    const nextText = applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
+    const nextText = serializeQuestionGroupComponent(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
     return applyVisualSource(nextText, 'updating question group settings');
   };
 
   const applyAiInspectorChanges = () => {
     if (!selectedAiBlock || !aiInspectorDraft || proposal) return null;
-    const nextText = applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft);
+    const nextText = serializeAiComponent(
+      rawText,
+      selectedAiBlock,
+      aiInspectorDraft,
+      INLINE_AI_DEFAULT_MODEL,
+      INLINE_AI_MODEL_OPTIONS,
+    );
     return applyVisualSource(nextText, 'updating AI block settings');
   };
 
@@ -2132,14 +1780,19 @@ export default function CreatorWorkbenchPage() {
   const hasPendingPanelChanges = (() => {
     if (proposal) return false;
     if (selectedQuestionBlock && questionInspectorDraft) {
+      const initialDraft = buildQuestionInspectorDraft(selectedQuestionBlock);
+      const questionFieldsChanged = JSON.stringify(questionInspectorDraft) !== JSON.stringify(initialDraft);
+      const codeChanged = !!selectedQuestionCodeBlock
+        && String(starterCodeDraft || '') !== String(selectedQuestionCodeBlock.content || '');
       return !multipleChoiceValidation.errors.length
-        && buildQuestionInspectorSource() !== rawText;
+        && (questionFieldsChanged || codeChanged);
     }
     if (selectedQuestionGroupBlock && questionGroupInspectorDraft) {
-      return applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft) !== rawText;
+      return JSON.stringify(questionGroupInspectorDraft)
+        !== JSON.stringify(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
     }
     if (selectedAiBlock && aiInspectorDraft) {
-      return applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft) !== rawText;
+      return JSON.stringify(aiInspectorDraft) !== JSON.stringify(buildAiInspectorDraft(selectedAiBlock));
     }
     return false;
   })();
@@ -2777,11 +2430,11 @@ export default function CreatorWorkbenchPage() {
                 variant="primary"
                 disabled={!hasPendingPanelChanges || !!proposal || multipleChoiceValidation.errors.length > 0}
                 onClick={trySelectedPanelChanges}
-                title="Apply the selected panel's changes in this browser without saving to the database"
+                title="Rebuild the selected component safely in this browser without saving to the database"
               >
                 Try Changes
               </Button>
-              <Button size="sm" variant="success" onClick={saveVisualEditorChanges} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || !hasUnsavedChanges}>
+              <Button size="sm" variant="success" onClick={saveVisualEditorChanges} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || hasMarkupErrors || !hasUnsavedChanges}>
                 {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
                 Save
               </Button>

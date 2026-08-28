@@ -678,6 +678,7 @@ export default function CreatorWorkbenchPage() {
   const hasProposalErrors = !!proposal?.issues?.some((issue) => issue.severity === 'error');
   const markupValidation = useMemo(() => validateActivityMarkup(rawText), [rawText]);
   const hasMarkupErrors = !markupValidation.valid;
+  const firstMarkupError = markupValidation.issues[0] || null;
   const hasUnsavedChanges = !!activity?.id && rawText !== savedSourceText;
   const advancedPromptText = useMemo(() => buildAdvancedPromptText(advancedDraft), [advancedDraft]);
   const multipleChoiceValidation = useMemo(() => {
@@ -1799,7 +1800,12 @@ export default function CreatorWorkbenchPage() {
 
   const saveVisualEditorChanges = async () => {
     if (proposal) return;
-    await saveSource(rawText);
+    setError('');
+    try {
+      await saveSource(rawText);
+    } catch (err) {
+      setError(err?.message || String(err));
+    }
   };
 
   const requestNavigation = (destination) => {
@@ -2434,7 +2440,15 @@ export default function CreatorWorkbenchPage() {
               >
                 Try Changes
               </Button>
-              <Button size="sm" variant="success" onClick={saveVisualEditorChanges} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || hasMarkupErrors || !hasUnsavedChanges}>
+              <Button
+                size="sm"
+                variant="success"
+                onClick={saveVisualEditorChanges}
+                disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || !hasUnsavedChanges}
+                title={hasMarkupErrors && firstMarkupError
+                  ? `Save will explain the markup error at line ${firstMarkupError.line}.`
+                  : 'Save this activity to the database'}
+              >
                 {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
                 Save
               </Button>

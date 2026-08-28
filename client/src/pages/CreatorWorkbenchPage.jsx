@@ -634,14 +634,17 @@ export default function CreatorWorkbenchPage() {
   const [proposal, setProposal] = useState(null);
   const [sandboxUrl, setSandboxUrl] = useState('');
   const [selectedPreviewKey, setSelectedPreviewKey] = useState('');
-  const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
-  const [questionGroupInspectorDraft, setQuestionGroupInspectorDraft] = useState(null);
+  const [questionInspectorDraft, setQuestionInspectorDraftState] = useState(null);
+  const [questionGroupInspectorDraft, setQuestionGroupInspectorDraftState] = useState(null);
   const [insertTarget, setInsertTarget] = useState(null);
   const [questionRevisionRequest, setQuestionRevisionRequest] = useState('');
   const [questionRevisionBusy, setQuestionRevisionBusy] = useState(false);
   const [questionRevisionProposal, setQuestionRevisionProposal] = useState(null);
   const [starterCodeDraft, setStarterCodeDraft] = useState('');
-  const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
+  const [aiInspectorDraft, setAiInspectorDraftState] = useState(null);
+  const [questionPanelDirty, setQuestionPanelDirty] = useState(false);
+  const [questionGroupPanelDirty, setQuestionGroupPanelDirty] = useState(false);
+  const [aiPanelDirty, setAiPanelDirty] = useState(false);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
   const [showIssuesModal, setShowIssuesModal] = useState(false);
   const [showRemoteSync, setShowRemoteSync] = useState(false);
@@ -652,6 +655,22 @@ export default function CreatorWorkbenchPage() {
   const [savedSourceText, setSavedSourceText] = useState('');
   const [savedSourceRevision, setSavedSourceRevision] = useState(null);
   const [pendingNavigation, setPendingNavigation] = useState(null);
+
+  // User-facing panel updates go through these wrappers. Loading a selected
+  // component uses the raw state setters below, so Try Changes is enabled only
+  // after an author has actually edited a field.
+  const setQuestionInspectorDraft = (updater) => {
+    setQuestionPanelDirty(true);
+    setQuestionInspectorDraftState(updater);
+  };
+  const setQuestionGroupInspectorDraft = (updater) => {
+    setQuestionGroupPanelDirty(true);
+    setQuestionGroupInspectorDraftState(updater);
+  };
+  const setAiInspectorDraft = (updater) => {
+    setAiPanelDirty(true);
+    setAiInspectorDraftState(updater);
+  };
 
   const autoTimerRef = useRef(null);
   const sourceTextareaRef = useRef(null);
@@ -1072,29 +1091,35 @@ export default function CreatorWorkbenchPage() {
 
   useEffect(() => {
     if (!selectedQuestionBlock) {
-      setQuestionInspectorDraft(null);
+      setQuestionInspectorDraftState(null);
+      setQuestionPanelDirty(false);
     } else {
       setShowPreviewInspector(true);
-      setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
+      setQuestionInspectorDraftState(buildQuestionInspectorDraft(selectedQuestionBlock));
+      setQuestionPanelDirty(false);
       setStarterCodeDraft(getQuestionCodeBlock(rawText, selectedQuestionBlock)?.content || '');
     }
   }, [rawText, selectedQuestionBlock]);
 
   useEffect(() => {
     if (!selectedQuestionGroupBlock) {
-      setQuestionGroupInspectorDraft(null);
+      setQuestionGroupInspectorDraftState(null);
+      setQuestionGroupPanelDirty(false);
     } else {
       setShowPreviewInspector(true);
-      setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
+      setQuestionGroupInspectorDraftState(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
+      setQuestionGroupPanelDirty(false);
     }
   }, [rawText, selectedQuestionGroupBlock]);
 
   useEffect(() => {
     if (!selectedAiBlock) {
-      setAiInspectorDraft(null);
+      setAiInspectorDraftState(null);
+      setAiPanelDirty(false);
     } else {
       setShowPreviewInspector(true);
-      setAiInspectorDraft(buildAiInspectorDraft(selectedAiBlock));
+      setAiInspectorDraftState(buildAiInspectorDraft(selectedAiBlock));
+      setAiPanelDirty(false);
     }
   }, [selectedAiBlock]);
 
@@ -1772,28 +1797,33 @@ export default function CreatorWorkbenchPage() {
   };
 
   const trySelectedPanelChanges = () => {
-    if (selectedQuestionBlock) return applyQuestionInspectorChanges();
-    if (selectedQuestionGroupBlock) return applyQuestionGroupInspectorChanges();
-    if (selectedAiBlock) return applyAiInspectorChanges();
-    return null;
+    let result = null;
+    if (selectedQuestionBlock) {
+      result = applyQuestionInspectorChanges();
+      if (result !== null && result !== rawText) setQuestionPanelDirty(false);
+    } else if (selectedQuestionGroupBlock) {
+      result = applyQuestionGroupInspectorChanges();
+      if (result !== null && result !== rawText) setQuestionGroupPanelDirty(false);
+    } else if (selectedAiBlock) {
+      result = applyAiInspectorChanges();
+      if (result !== null && result !== rawText) setAiPanelDirty(false);
+    }
+    return result;
   };
 
   const hasPendingPanelChanges = (() => {
     if (proposal) return false;
     if (selectedQuestionBlock && questionInspectorDraft) {
-      const initialDraft = buildQuestionInspectorDraft(selectedQuestionBlock);
-      const questionFieldsChanged = JSON.stringify(questionInspectorDraft) !== JSON.stringify(initialDraft);
       const codeChanged = !!selectedQuestionCodeBlock
         && String(starterCodeDraft || '') !== String(selectedQuestionCodeBlock.content || '');
       return !multipleChoiceValidation.errors.length
-        && (questionFieldsChanged || codeChanged);
+        && (questionPanelDirty || codeChanged);
     }
     if (selectedQuestionGroupBlock && questionGroupInspectorDraft) {
-      return JSON.stringify(questionGroupInspectorDraft)
-        !== JSON.stringify(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
+      return questionGroupPanelDirty;
     }
     if (selectedAiBlock && aiInspectorDraft) {
-      return JSON.stringify(aiInspectorDraft) !== JSON.stringify(buildAiInspectorDraft(selectedAiBlock));
+      return aiPanelDirty;
     }
     return false;
   })();
@@ -2570,7 +2600,10 @@ export default function CreatorWorkbenchPage() {
                               <Button
                                 size="sm"
                                 variant="outline-secondary"
-                                onClick={() => setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText))}
+                                onClick={() => {
+                                  setQuestionGroupInspectorDraftState(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
+                                  setQuestionGroupPanelDirty(false);
+                                }}
                                 disabled={!selectedQuestionGroupBlock}
                               >
                                 Reset
@@ -2727,7 +2760,10 @@ export default function CreatorWorkbenchPage() {
                                 <Button
                                   size="sm"
                                   variant="outline-secondary"
-                                  onClick={() => setAiInspectorDraft(buildAiInspectorDraft(selectedAiBlock))}
+                                  onClick={() => {
+                                    setAiInspectorDraftState(buildAiInspectorDraft(selectedAiBlock));
+                                    setAiPanelDirty(false);
+                                  }}
                                   disabled={!selectedAiBlock}
                                 >
                                   Reset
@@ -3035,7 +3071,10 @@ export default function CreatorWorkbenchPage() {
                               <Button
                                 size="sm"
                                 variant="outline-secondary"
-                                onClick={() => setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock))}
+                                onClick={() => {
+                                  setQuestionInspectorDraftState(buildQuestionInspectorDraft(selectedQuestionBlock));
+                                  setQuestionPanelDirty(false);
+                                }}
                                 disabled={!selectedQuestionBlock}
                               >
                                 Reset

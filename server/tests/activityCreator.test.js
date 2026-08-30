@@ -11,6 +11,7 @@ const {
   parseQuestionRevisionOutput,
   renderFallbackTemplate,
 } = require('../utils/activityCreator');
+const { validateActivityMarkup } = require('../../shared/activityMarkupValidation.cjs');
 
 test('question revision instructions require learner-facing prompt updates when the task changes', () => {
   const instructions = buildQuestionRevisionInstructions();
@@ -27,6 +28,7 @@ test('question revision instructions require learner-facing prompt updates when 
   assert.match(instructions, /keep \\multiplechoice\{\} blank for survey or opinion questions/i);
   assert.match(instructions, /Never invent a placeholder answer to satisfy the parser/i);
   assert.match(instructions, /\\score\{points,type\}/i);
+  assert.match(instructions, /place the \\ai block between questions/i);
 });
 
 test('test-mode activity generation instructions require explicit scoring rubrics', () => {
@@ -218,6 +220,41 @@ test('normalizeGeneratedDraft repairs missing endquestion markers in generated m
   assert.equal((result.text.match(/^\\endquestion$/gm) || []).length, 2);
   assert.match(result.text, /\\feedbackprompt\{Describe the output in your own words\.\}\n\\endquestion\n\\question\{/);
   assert.match(result.text, /\\feedbackprompt\{Connect the changed input to the new output\.\}\n\\endquestion\n\\endquestiongroup/);
+});
+
+test('normalizeGeneratedDraft moves ai blocks out of question bodies', () => {
+  const raw = [
+    '\\title{AI helper}',
+    '\\mode{group}',
+    '\\studentlevel{Any}',
+    '\\activitycontext{Any}',
+    '\\section{Exploration}',
+    '\\questiongroup{Try it}',
+    '\\question{Draft a plan for your program.}',
+    '\\ai{guided}',
+    '\\aiprompt{Suggest a short Python plan.}',
+    '\\aiguardrail{Keep it beginner-friendly.}',
+    '\\endai',
+    '\\textresponse{3}',
+    '\\feedbackprompt{Explain your plan.}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'AI helper',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [],
+    majorSections: ['Exploration'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.match(result.text, /\\question\{Draft a plan for your program\.\}\n\\textresponse\{3\}\n\\feedbackprompt\{Explain your plan\.\}\n\\endquestion\n\\ai\{guided\}/);
+  assert.match(result.text, /\\endai\n\\endquestiongroup/);
+  assert.equal(validateActivityMarkup(result.text).valid, true);
 });
 
 test('normalizeGeneratedDraft replaces textresponse with python block for code-writing markup prompts', () => {

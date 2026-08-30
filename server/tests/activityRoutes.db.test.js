@@ -304,6 +304,8 @@ test('saveActivitySource converts a remote activity into a local one and stores 
     '',
     '\\questiongroup{One}',
     '\\question{Saved locally?}',
+    '\\endquestion',
+    '\\endquestiongroup',
   ].join('\n');
 
   const response = await requestJson(creator, `/api/activities/${activity.id}/source`, {
@@ -338,7 +340,7 @@ test('saveActivitySource updates stored text for an already-local activity', asy
   const classId = await createClassRecord();
   const activity = await insertActivity({ classId, createdBy: creator.id });
   const firstText = '\\title{First}\\mode{group}';
-  const secondText = '\\title{Second}\\mode{group}\n\\questiongroup{One}';
+  const secondText = '\\title{Second}\\mode{group}\n\\questiongroup{One}\n\\endquestiongroup';
 
   await db.query(
     `UPDATE pogil_activities
@@ -387,6 +389,53 @@ test('saveActivitySource rejects missing text and 404s for missing activity', as
   });
   assert.equal(missing.status, 404);
   assert.deepEqual(missing.body, { error: 'Activity not found' });
+});
+
+test('activity edit leases block another editor, expire safely, and protect saves', async () => {
+  const firstEditor = await createUser('creator', 'First Editor');
+  const secondEditor = await createUser('instructor', 'Second Editor');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: firstEditor.id });
+  const validMarkup = '\\title{Locked}\n\\mode{group}\n\\questiongroup{One}\n\\endquestiongroup';
+
+  const acquired = await requestJson(firstEditor, `/api/activities/${activity.id}/edit-lease`, {
+    method: 'PUT',
+    body: {},
+  });
+  assert.equal(acquired.status, 200);
+  assert.match(acquired.body.lease_token, /^[0-9a-f-]{36}$/i);
+
+  const blocked = await requestJson(secondEditor, `/api/activities/${activity.id}/edit-lease`, {
+    method: 'PUT',
+    body: {},
+  });
+  assert.equal(blocked.status, 423);
+  assert.equal(blocked.body.owner_name, 'First Editor');
+
+  const deniedSave = await requestJson(secondEditor, `/api/activities/${activity.id}/source`, {
+    method: 'PUT',
+    body: { text: validMarkup, expected_revision: 0 },
+  });
+  assert.equal(deniedSave.status, 423);
+
+  const heartbeat = await requestJson(firstEditor, `/api/activities/${activity.id}/edit-lease/heartbeat`, {
+    method: 'POST',
+    body: { lease_token: acquired.body.lease_token },
+  });
+  assert.equal(heartbeat.status, 200);
+
+  const released = await requestJson(firstEditor, `/api/activities/${activity.id}/edit-lease`, {
+    method: 'DELETE',
+    body: { lease_token: acquired.body.lease_token },
+  });
+  assert.equal(released.status, 204);
+
+  const acquiredBySecondEditor = await requestJson(secondEditor, `/api/activities/${activity.id}/edit-lease`, {
+    method: 'PUT',
+    body: {},
+  });
+  assert.equal(acquiredBySecondEditor.status, 200);
+  assert.notEqual(acquiredBySecondEditor.body.lease_token, acquired.body.lease_token);
 });
 
 test('remote source status explains when an activity has no linked Google Doc', async () => {

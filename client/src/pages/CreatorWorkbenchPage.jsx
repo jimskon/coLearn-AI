@@ -33,6 +33,7 @@ import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import {
   INLINE_AI_DEFAULT_MODEL,
+  INLINE_AI_MODE_GUIDE,
   INLINE_AI_MODEL_OPTIONS,
   parseSheetToBlocks,
   renderBlocks,
@@ -40,6 +41,14 @@ import {
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 import { getSectionKeyAtLine, swapSourceRanges } from '../utils/creatorVisualEdits';
 import { validateMultipleChoice } from '../utils/multipleChoice';
+import markupValidator from '../../../shared/activityMarkupValidation.cjs';
+import {
+  serializeAiComponent,
+  serializeQuestionComponent,
+  serializeQuestionGroupComponent,
+} from '../utils/creatorComponentSerialization';
+
+const { validateActivityMarkup } = markupValidator;
 
 const emptyDraft = {
   title: '',
@@ -194,8 +203,33 @@ function parseActivityText(text) {
     : Array.isArray(parsed)
       ? parsed
       : [];
-  const issues = Array.isArray(parsed?.issues) ? parsed.issues : [];
+  const parserIssues = Array.isArray(parsed?.issues) ? parsed.issues : [];
+  const structuralIssues = validateActivityMarkup(text).issues.map((issue) => ({
+    ...issue,
+    context: null,
+  }));
+  // The renderer provides detailed display warnings; this shared validator is
+  // authoritative for errors that would make a deterministic visual edit unsafe.
+  const issues = [...parserIssues, ...structuralIssues];
   return { blocks, issues, files: collectFileContents(blocks) };
+}
+
+function getComponentSource(sourceText, block) {
+  const meta = block?.sourceMeta;
+  let startLine = null;
+  let endLine = null;
+  if (block?.type === 'question') {
+    startLine = meta?.questionLine;
+    endLine = meta?.endQuestionLine;
+  } else if (block?.type === 'groupIntro') {
+    startLine = meta?.groupLine;
+    endLine = meta?.endGroupLine;
+  } else if (block?.type === 'ai') {
+    startLine = meta?.aiLine;
+    endLine = meta?.endAiLine;
+  }
+  if (!Number.isInteger(startLine) || !Number.isInteger(endLine) || startLine <= 0 || endLine < startLine) return '';
+  return String(sourceText || '').split('\n').slice(startLine - 1, endLine).join('\n');
 }
 
 function htmlToEditorText(value) {
@@ -204,152 +238,6 @@ function htmlToEditorText(value) {
     .replace(/<\/?[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ')
     .trim();
-}
-
-function updateLine(lines, lineNumber, nextValue) {
-  if (!Number.isFinite(lineNumber) || lineNumber <= 0) return false;
-  const index = lineNumber - 1;
-  if (index < 0 || index >= lines.length) return false;
-  lines[index] = nextValue;
-  return true;
-}
-
-function insertLinesAfterAnchors(lines, insertions) {
-  const ordered = [...insertions]
-    .filter((item) => Number.isFinite(item?.anchorLine) && item.anchorLine >= 0 && item.text)
-    .sort((a, b) => a.anchorLine - b.anchorLine);
-
-  let offset = 0;
-  for (const insertion of ordered) {
-    const index = Math.max(0, Math.min(lines.length, insertion.anchorLine + offset));
-    lines.splice(index, 0, insertion.text);
-    offset += 1;
-  }
-}
-
-function applyQuestionEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const requestedResponseLines = String(edits.responseLines ?? '').trim();
-  const responseLineCount = requestedResponseLines
-    ? Math.max(1, Number.parseInt(requestedResponseLines, 10) || 1)
-    : 0;
-  const removedResponseLine = sourceMeta.textResponseLine && responseLineCount === 0
-    ? sourceMeta.textResponseLine
-    : null;
-
-  if (removedResponseLine) lines.splice(removedResponseLine - 1, 1);
-
-  const shiftLine = (line) => (
-    !line || !removedResponseLine || line < removedResponseLine ? line : line - 1
-  );
-  const workingMeta = {
-    ...sourceMeta,
-    questionLine: shiftLine(sourceMeta.questionLine),
-    textResponseLine: removedResponseLine ? null : shiftLine(sourceMeta.textResponseLine),
-    sampleLines: sourceMeta.sampleLines?.map(shiftLine),
-    feedbackLines: sourceMeta.feedbackLines?.map(shiftLine),
-    followupLines: sourceMeta.followupLines?.map(shiftLine),
-  };
-
-  updateLine(lines, workingMeta.questionLine, `\\question{${String(edits.prompt || '').trim()}}`);
-
-  const sampleResponse = String(edits.sampleResponse || '').trim();
-  const feedbackPrompt = String(edits.feedbackPrompt || '').trim();
-  const followupPrompt = String(edits.followupPrompt || '').trim();
-  const insertions = [];
-
-  if (workingMeta.textResponseLine) {
-    updateLine(lines, workingMeta.textResponseLine, `\\textresponse{${responseLineCount}}`);
-  } else if (responseLineCount > 0) {
-    insertions.push({
-      anchorLine: workingMeta.questionLine,
-      text: `\\textresponse{${responseLineCount}}`,
-    });
-  }
-
-  if (Array.isArray(workingMeta.sampleLines) && workingMeta.sampleLines[0]) {
-    updateLine(lines, workingMeta.sampleLines[0], `\\sampleresponses{${sampleResponse}}`);
-  } else if (sampleResponse) {
-    insertions.push({
-      anchorLine: workingMeta.textResponseLine || workingMeta.questionLine,
-      text: `\\sampleresponses{${sampleResponse}}`,
-    });
-  }
-
-  if (Array.isArray(workingMeta.feedbackLines) && workingMeta.feedbackLines[0]) {
-    updateLine(lines, workingMeta.feedbackLines[0], `\\feedbackprompt{${feedbackPrompt}}`);
-  } else if (feedbackPrompt) {
-    insertions.push({
-      anchorLine:
-        workingMeta.sampleLines?.[0] ||
-        workingMeta.textResponseLine ||
-        workingMeta.questionLine,
-      text: `\\feedbackprompt{${feedbackPrompt}}`,
-    });
-  }
-
-  if (Array.isArray(workingMeta.followupLines) && workingMeta.followupLines[0]) {
-    updateLine(lines, workingMeta.followupLines[0], `\\followupprompt{${followupPrompt}}`);
-  } else if (followupPrompt) {
-    insertions.push({
-      anchorLine:
-        workingMeta.feedbackLines?.[0] ||
-        workingMeta.sampleLines?.[0] ||
-        workingMeta.textResponseLine ||
-        workingMeta.questionLine,
-      text: `\\followupprompt{${followupPrompt}}`,
-    });
-  }
-
-  insertLinesAfterAnchors(lines, insertions);
-  return lines.join('\n');
-}
-
-function applyMultipleChoiceEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const existing = block?.multipleChoice?.sourceMeta;
-  const enabled = !!edits.multipleChoiceEnabled;
-
-  if (!enabled) {
-    if (!existing?.multipleChoiceLine || !existing?.endMultipleChoiceLine) return sourceText;
-    lines.splice(
-      existing.multipleChoiceLine - 1,
-      existing.endMultipleChoiceLine - existing.multipleChoiceLine + 1,
-    );
-    return lines.join('\n');
-  }
-
-  const selectionMode = edits.multipleChoiceSelectionMode === 'multiple' ? 'multiple' : 'single';
-  const correctAnswer = selectionMode === 'multiple' ? '' : String(edits.multipleChoiceAnswer || '').trim();
-  const choices = (edits.multipleChoiceChoices || [])
-    .map((choice) => ({
-      value: String(choice?.value ?? choice ?? '').trim(),
-      points: choice?.points,
-    }));
-  const markup = [
-    `\\multiplechoice{${selectionMode === 'multiple' ? 'multiple' : correctAnswer}}`,
-    ...choices.map(({ value, points }) => (
-      `\\choice{${value}}${selectionMode === 'single' && Number.isInteger(points) && points >= 0 ? `{${points}}` : ''}`
-    )),
-    '\\endmultiplechoice',
-  ];
-
-  if (existing?.multipleChoiceLine && existing?.endMultipleChoiceLine) {
-    lines.splice(
-      existing.multipleChoiceLine - 1,
-      existing.endMultipleChoiceLine - existing.multipleChoiceLine + 1,
-      ...markup,
-    );
-  } else {
-    lines.splice(sourceMeta.questionLine, 0, ...markup);
-  }
-  return lines.join('\n');
 }
 
 function buildQuestionInspectorDraft(block) {
@@ -384,106 +272,6 @@ function buildQuestionInspectorDraft(block) {
   };
 }
 
-function getQuestionScoreBlocks(sourceText, block) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return [];
-
-  const lines = String(sourceText || '').split('\n');
-  const start = Math.max(0, Number(sourceMeta.questionLine) - 1);
-  const end = Math.max(start, Number(sourceMeta.endQuestionLine) - 1);
-  const scoreBlocks = [];
-  let current = null;
-
-  for (let index = start; index <= end; index += 1) {
-    const line = lines[index] ?? '';
-    const trimmed = line.trim();
-
-    if (current) {
-      current.lines.push(line);
-      if (trimmed === '\\endscore') {
-        current.closeLine = index + 1;
-        scoreBlocks.push(current);
-        current = null;
-      }
-      continue;
-    }
-
-    const match = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
-    if (match) {
-      const typeRaw = match[2].toLowerCase();
-      current = {
-        type: typeRaw,
-        points: Number.parseInt(match[1], 10),
-        openLine: index + 1,
-        closeLine: null,
-        lines: [line],
-      };
-    }
-  }
-
-  return scoreBlocks;
-}
-
-function applyQuestionScoreEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const scoreBlocks = getQuestionScoreBlocks(sourceText, block);
-  const byType = new Map(scoreBlocks.map((scoreBlock) => [scoreBlock.type, scoreBlock]));
-  const replacementActions = [];
-  const insertionLines = [];
-
-  const bandSpecs = [
-    ['response', 'responseScorePoints', 'responseScoreInstructions'],
-    ['code', 'codeScorePoints', 'codeScoreInstructions'],
-    ['output', 'outputScorePoints', 'outputScoreInstructions'],
-  ];
-
-  for (const [type, pointsKey, instructionsKey] of bandSpecs) {
-    const existing = byType.get(type);
-    const points = Number.parseInt(edits?.[pointsKey], 10);
-    const instructions = String(edits?.[instructionsKey] || '').trim();
-    const shouldKeep = Number.isFinite(points) && points > 0;
-
-    if (existing) {
-      replacementActions.push({
-        start: existing.openLine - 1,
-        end: existing.closeLine - 1,
-        text: shouldKeep
-          ? [
-              `\\score{${points},${type}}`,
-              ...(instructions ? instructions.split('\n') : []),
-              '\\endscore',
-            ]
-          : [],
-      });
-      continue;
-    }
-
-    if (shouldKeep) {
-      insertionLines.push(
-        `\\score{${points},${type}}`,
-        ...(instructions ? instructions.split('\n') : []),
-        '\\endscore'
-      );
-    }
-  }
-
-  replacementActions
-    .sort((left, right) => right.start - left.start)
-    .forEach((action) => {
-      lines.splice(action.start, action.end - action.start + 1, ...action.text);
-    });
-
-  if (insertionLines.length > 0) {
-    const insertAt = Math.max(0, Number(sourceMeta.questionLine));
-    lines.splice(insertAt, 0, ...insertionLines);
-  }
-
-  return lines.join('\n');
-}
-
 function findSectionCommandBeforeLine(sourceText, lineNumber) {
   const lines = String(sourceText || '').split('\n');
   const end = Math.max(0, Math.min(lines.length, Number(lineNumber) - 1));
@@ -510,107 +298,6 @@ function buildQuestionGroupInspectorDraft(block, sourceText) {
     sectionTimerEnabled: Number.isFinite(section?.minutes),
     sectionMinutes: Number.isFinite(section?.minutes) ? String(section.minutes) : '',
   };
-}
-
-function applyQuestionGroupEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.groupLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const title = String(edits.title || '').trim() || 'New Question Group';
-  const retriesRequired = Math.max(0, Number.parseInt(edits.retriesRequired, 10) || 0);
-  updateLine(lines, sourceMeta.groupLine, `\\questiongroup{${title}}`);
-
-  if (sourceMeta.retriesLine) {
-    updateLine(lines, sourceMeta.retriesLine, `\\retries{${retriesRequired}}`);
-  } else {
-    insertLinesAfterAnchors(lines, [{
-      anchorLine: sourceMeta.groupLine,
-      text: `\\retries{${retriesRequired}}`,
-    }]);
-  }
-
-  const section = findSectionCommandBeforeLine(sourceText, sourceMeta.groupLine);
-  const timerEnabled = edits.sectionTimerEnabled === true;
-  const sectionMinutes = Number.parseInt(edits.sectionMinutes, 10);
-  if (timerEnabled && (!Number.isFinite(sectionMinutes) || sectionMinutes <= 0)) return sourceText;
-
-  if (section) {
-    updateLine(
-      lines,
-      section.line,
-      timerEnabled ? `\\section{${section.title}}{${sectionMinutes}}` : `\\section{${section.title}}`
-    );
-  } else if (timerEnabled) {
-    insertLinesAfterAnchors(lines, [{
-      anchorLine: sourceMeta.groupLine - 1,
-      text: `\\section{${title}}{${sectionMinutes}}`,
-    }]);
-  }
-
-  return lines.join('\n');
-}
-
-function applyAiEditsToSource(sourceText, block, edits) {
-  const sourceMeta = block?.sourceMeta;
-  if (!sourceMeta?.aiLine || !sourceMeta?.endAiLine) return sourceText;
-
-  const lines = String(sourceText || '').split('\n');
-  const model = INLINE_AI_MODEL_OPTIONS.some((option) => option.value === edits.model)
-    ? edits.model
-    : INLINE_AI_DEFAULT_MODEL;
-  const title = String(edits.title || '').trim();
-  const prompt = String(edits.prompt || '').trim();
-  const guardrail = String(edits.guardrail || '').trim();
-  const context = Array.isArray(edits.contextSources)
-    ? edits.contextSources
-    : String(edits.contextSources || '')
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean);
-  const inputRows = Math.max(2, Number.parseInt(edits.inputRows, 10) || 4);
-  const insertions = [];
-
-  updateLine(lines, sourceMeta.aiLine, `\\ai{${String(edits.mode || 'explain').trim().toLowerCase() || 'explain'}}`);
-
-  if (sourceMeta.modelLine) {
-    updateLine(lines, sourceMeta.modelLine, `\\aimodel{${model}}`);
-  } else {
-    insertions.push({ anchorLine: sourceMeta.aiLine, text: `\\aimodel{${model}}` });
-  }
-
-  if (sourceMeta.titleLine) {
-    updateLine(lines, sourceMeta.titleLine, `\\aititle{${title}}`);
-  } else if (title) {
-    insertions.push({ anchorLine: sourceMeta.aiLine, text: `\\aititle{${title}}` });
-  }
-
-  if (sourceMeta.promptLine) {
-    updateLine(lines, sourceMeta.promptLine, `\\aiprompt{${prompt}}`);
-  } else if (prompt) {
-    insertions.push({ anchorLine: sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiprompt{${prompt}}` });
-  }
-
-  if (sourceMeta.guardrailLine) {
-    updateLine(lines, sourceMeta.guardrailLine, `\\aiguardrail{${guardrail}}`);
-  } else if (guardrail) {
-    insertions.push({ anchorLine: sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiguardrail{${guardrail}}` });
-  }
-
-  if (sourceMeta.contextLine) {
-    updateLine(lines, sourceMeta.contextLine, `\\aicontext{${context.join(',')}}`);
-  } else if (context.length) {
-    insertions.push({ anchorLine: sourceMeta.guardrailLine || sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aicontext{${context.join(',')}}` });
-  }
-
-  if (sourceMeta.inputLine) {
-    updateLine(lines, sourceMeta.inputLine, `\\aiinput{${inputRows}}`);
-  } else {
-    insertions.push({ anchorLine: sourceMeta.contextLine || sourceMeta.guardrailLine || sourceMeta.promptLine || sourceMeta.titleLine || sourceMeta.aiLine, text: `\\aiinput{${inputRows}}` });
-  }
-
-  insertLinesAfterAnchors(lines, insertions);
-  return lines.join('\n');
 }
 
 function buildAiInspectorDraft(block) {
@@ -966,14 +653,17 @@ export default function CreatorWorkbenchPage() {
   const [proposal, setProposal] = useState(null);
   const [sandboxUrl, setSandboxUrl] = useState('');
   const [selectedPreviewKey, setSelectedPreviewKey] = useState('');
-  const [questionInspectorDraft, setQuestionInspectorDraft] = useState(null);
-  const [questionGroupInspectorDraft, setQuestionGroupInspectorDraft] = useState(null);
+  const [questionInspectorDraft, setQuestionInspectorDraftState] = useState(null);
+  const [questionGroupInspectorDraft, setQuestionGroupInspectorDraftState] = useState(null);
   const [insertTarget, setInsertTarget] = useState(null);
   const [questionRevisionRequest, setQuestionRevisionRequest] = useState('');
   const [questionRevisionBusy, setQuestionRevisionBusy] = useState(false);
   const [questionRevisionProposal, setQuestionRevisionProposal] = useState(null);
   const [starterCodeDraft, setStarterCodeDraft] = useState('');
-  const [aiInspectorDraft, setAiInspectorDraft] = useState(null);
+  const [aiInspectorDraft, setAiInspectorDraftState] = useState(null);
+  const [questionPanelDirty, setQuestionPanelDirty] = useState(false);
+  const [questionGroupPanelDirty, setQuestionGroupPanelDirty] = useState(false);
+  const [aiPanelDirty, setAiPanelDirty] = useState(false);
   const [showPreviewInspector, setShowPreviewInspector] = useState(true);
   const [showIssuesModal, setShowIssuesModal] = useState(false);
   const [showRemoteSync, setShowRemoteSync] = useState(false);
@@ -984,10 +674,29 @@ export default function CreatorWorkbenchPage() {
   const [savedSourceText, setSavedSourceText] = useState('');
   const [savedSourceRevision, setSavedSourceRevision] = useState(null);
   const [pendingNavigation, setPendingNavigation] = useState(null);
+  const [editLease, setEditLease] = useState({ status: 'idle' });
+
+  // User-facing panel updates go through these wrappers. Loading a selected
+  // component uses the raw state setters below, so Try Changes is enabled only
+  // after an author has actually edited a field.
+  const setQuestionInspectorDraft = (updater) => {
+    setQuestionPanelDirty(true);
+    setQuestionInspectorDraftState(updater);
+  };
+  const setQuestionGroupInspectorDraft = (updater) => {
+    setQuestionGroupPanelDirty(true);
+    setQuestionGroupInspectorDraftState(updater);
+  };
+  const setAiInspectorDraft = (updater) => {
+    setAiPanelDirty(true);
+    setAiInspectorDraftState(updater);
+  };
 
   const autoTimerRef = useRef(null);
   const sourceTextareaRef = useRef(null);
   const sourceGutterRef = useRef(null);
+  const selectedComponentBaselineRef = useRef(null);
+  const editLeaseTokenRef = useRef('');
   const infoBubbleSessionRef = useRef(createInfoBubbleSession());
   const creatorTutorial = useCreatorTutorial({ demoMode: isDemoCreator });
 
@@ -1000,6 +709,7 @@ export default function CreatorWorkbenchPage() {
     revision: useRef(null),
   };
   const effectiveClassId = classId || activity?.class_id;
+  const editLockedByAnotherUser = editLease.status === 'locked';
   const activeBlocks = proposal?.blocks || blocks;
   const activeIssues = proposal?.issues || parseIssues;
   const activeText = proposal?.text || rawText;
@@ -1008,6 +718,9 @@ export default function CreatorWorkbenchPage() {
     [activeText],
   );
   const hasProposalErrors = !!proposal?.issues?.some((issue) => issue.severity === 'error');
+  const markupValidation = useMemo(() => validateActivityMarkup(rawText), [rawText]);
+  const hasMarkupErrors = !markupValidation.valid;
+  const firstMarkupError = markupValidation.issues[0] || null;
   const hasUnsavedChanges = !!activity?.id && rawText !== savedSourceText;
   const advancedPromptText = useMemo(() => buildAdvancedPromptText(advancedDraft), [advancedDraft]);
   const multipleChoiceValidation = useMemo(() => {
@@ -1114,7 +827,7 @@ export default function CreatorWorkbenchPage() {
   }
 
   function persistVisualCodeChange(_responseKey, code, meta = {}) {
-    if (meta.__broadcastOnly || proposal) return;
+    if (meta.__broadcastOnly || proposal || editLockedByAnotherUser) return;
     const sourceRef = meta.creatorSource;
     const codeBlock = getQuestionCodeBlock(rawText, sourceRef?.questionBlock, sourceRef?.codeType);
     if (!codeBlock) return;
@@ -1144,6 +857,7 @@ export default function CreatorWorkbenchPage() {
           className="creator-insert-button"
           aria-label={label}
           title={label}
+          disabled={editLockedByAnotherUser}
           onClick={(event) => {
             event.stopPropagation();
             setInsertTarget(target);
@@ -1164,30 +878,30 @@ export default function CreatorWorkbenchPage() {
     setFileContents: updateFileContents,
     infoBubbleSession: infoBubbleSessionRef.current,
     runtimeFeatures,
-    onSelectBlock: proposal ? null : (block) => setSelectedPreviewKey(block?.previewKey || ''),
+    onSelectBlock: proposal || editLockedByAnotherUser ? null : (block) => setSelectedPreviewKey(block?.previewKey || ''),
     onCodeChange: persistVisualCodeChange,
     selectedPreviewKey,
-    renderInsertBeforeQuestion: proposal ? null : (block) => renderInsertionMarker(
+    renderInsertBeforeQuestion: proposal || editLockedByAnotherUser ? null : (block) => renderInsertionMarker(
       `before-question-${block.previewKey}`,
       'Add question before',
       { kind: 'question', block, placement: 'before' }
     ),
-    renderInsertAfterQuestion: proposal ? null : (block) => renderInsertionMarker(
+    renderInsertAfterQuestion: proposal || editLockedByAnotherUser ? null : (block) => renderInsertionMarker(
       `after-question-${block.previewKey}`,
       'Add question after',
       { kind: 'question', block, placement: 'after' }
     ),
-    renderInsertBeforeGroup: proposal ? null : (block) => renderInsertionMarker(
+    renderInsertBeforeGroup: proposal || editLockedByAnotherUser ? null : (block) => renderInsertionMarker(
       `before-group-${block.groupId}`,
       'Add question group before',
       { kind: 'group', block, placement: 'before' }
     ),
-    renderInsertAfterGroup: proposal ? null : (block) => renderInsertionMarker(
+    renderInsertAfterGroup: proposal || editLockedByAnotherUser ? null : (block) => renderInsertionMarker(
       `after-group-${block.groupId}`,
       'Add question group after',
       { kind: 'group', block, placement: 'after' }
     ),
-  }), [activeBlocks, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures, insertStarterQuestion, insertStarterQuestionGroup]);
+  }), [activeBlocks, editLockedByAnotherUser, fileContents, proposal, selectedPreviewKey, updateFileContents, infoBubbleSessionRef, runtimeFeatures, insertStarterQuestion, insertStarterQuestionGroup]);
 
   const selectedPreviewBlock = useMemo(() => (
     findSelectableBlockByPreviewKey(activeBlocks, selectedPreviewKey)
@@ -1199,6 +913,24 @@ export default function CreatorWorkbenchPage() {
   ), [rawText, selectedQuestionBlock]);
   const selectedQuestionGroupBlock = selectedPreviewBlock?.type === 'groupIntro' ? selectedPreviewBlock : null;
   const selectedAiBlock = selectedPreviewBlock?.type === 'ai' ? selectedPreviewBlock : null;
+  const captureSelectedComponentBaseline = (sourceText, block = selectedPreviewBlock) => {
+    const text = getComponentSource(sourceText, block);
+    selectedComponentBaselineRef.current = text && block?.previewKey
+      ? { previewKey: block.previewKey, text }
+      : null;
+  };
+  const selectedComponentIsCurrent = (block) => {
+    const baseline = selectedComponentBaselineRef.current;
+    if (!block?.previewKey || baseline?.previewKey !== block.previewKey) {
+      setError('This panel is no longer attached to the selected component. Select it again before trying changes.');
+      return false;
+    }
+    if (getComponentSource(rawText, block) !== baseline.text) {
+      setError('This component changed while its panel was open. Your panel edits were not applied; reselect the component and try again.');
+      return false;
+    }
+    return true;
+  };
   const selectedQuestionMoveState = useMemo(() => {
     if (!selectedQuestionBlock) return { index: -1, questions: [] };
     const questions = blocks
@@ -1237,6 +969,83 @@ export default function CreatorWorkbenchPage() {
   }, [questionRevisionProposal?.proposedMarkup, runtimeFeatures]);
 
   const canManage = user?.role === 'root' || user?.role === 'creator';
+
+  useEffect(() => {
+    if (!activity?.id || !canManage) {
+      editLeaseTokenRef.current = '';
+      setEditLease({ status: 'idle' });
+      return undefined;
+    }
+
+    let disposed = false;
+    let heartbeatTimer = null;
+    let token = '';
+
+    const renewLease = async () => {
+      if (!token || disposed) return;
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/edit-lease/heartbeat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ lease_token: token }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || 'The editing lease was lost.');
+        if (!disposed) setEditLease({ status: 'held', expiresAt: data?.expires_at || null });
+      } catch (err) {
+        if (!disposed) {
+          editLeaseTokenRef.current = '';
+          setEditLease({ status: 'error', message: err?.message || 'The editing lease was lost.' });
+        }
+      }
+    };
+
+    const acquireLease = async () => {
+      setEditLease({ status: 'checking' });
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/edit-lease`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({}),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (disposed) return;
+        if (res.status === 423) {
+          setEditLease({
+            status: 'locked',
+            ownerName: data?.owner_name || 'Another instructor',
+            expiresAt: data?.expires_at || null,
+          });
+          return;
+        }
+        if (!res.ok) throw new Error(data?.error || 'Could not start the editing session.');
+
+        token = String(data?.lease_token || '');
+        if (!token) throw new Error('Could not start the editing session.');
+        editLeaseTokenRef.current = token;
+        setEditLease({ status: 'held', expiresAt: data?.expires_at || null });
+        heartbeatTimer = window.setInterval(renewLease, 60000);
+      } catch (err) {
+        if (!disposed) setEditLease({ status: 'error', message: err?.message || 'Could not start the editing session.' });
+      }
+    };
+
+    acquireLease();
+    return () => {
+      disposed = true;
+      if (heartbeatTimer) window.clearInterval(heartbeatTimer);
+      if (!token) return;
+      editLeaseTokenRef.current = '';
+      void fetch(`${API_BASE_URL}/api/activities/${activity.id}/edit-lease`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ lease_token: token }),
+      }).catch(() => {});
+    };
+  }, [activity?.id, canManage]);
 
   useEffect(() => {
     if (isDemoCreator && !['gpt-5-mini', 'gpt-4o-mini'].includes(draft.selected_model)) {
@@ -1401,31 +1210,44 @@ export default function CreatorWorkbenchPage() {
 
   useEffect(() => {
     if (!selectedQuestionBlock) {
-      setQuestionInspectorDraft(null);
+      setQuestionInspectorDraftState(null);
+      setQuestionPanelDirty(false);
     } else {
       setShowPreviewInspector(true);
-      setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock));
+      setQuestionInspectorDraftState(buildQuestionInspectorDraft(selectedQuestionBlock));
+      setQuestionPanelDirty(false);
       setStarterCodeDraft(getQuestionCodeBlock(rawText, selectedQuestionBlock)?.content || '');
     }
   }, [rawText, selectedQuestionBlock]);
 
   useEffect(() => {
     if (!selectedQuestionGroupBlock) {
-      setQuestionGroupInspectorDraft(null);
+      setQuestionGroupInspectorDraftState(null);
+      setQuestionGroupPanelDirty(false);
     } else {
       setShowPreviewInspector(true);
-      setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
+      setQuestionGroupInspectorDraftState(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
+      setQuestionGroupPanelDirty(false);
     }
   }, [rawText, selectedQuestionGroupBlock]);
 
   useEffect(() => {
     if (!selectedAiBlock) {
-      setAiInspectorDraft(null);
+      setAiInspectorDraftState(null);
+      setAiPanelDirty(false);
     } else {
       setShowPreviewInspector(true);
-      setAiInspectorDraft(buildAiInspectorDraft(selectedAiBlock));
+      setAiInspectorDraftState(buildAiInspectorDraft(selectedAiBlock));
+      setAiPanelDirty(false);
     }
   }, [selectedAiBlock]);
+
+  useEffect(() => {
+    captureSelectedComponentBaseline(rawText);
+  // A baseline belongs to the user's selection, not to every keystroke in
+  // source mode.  A later source change must therefore invalidate the panel.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPreviewKey]);
 
   useEffect(() => {
     if (!proposal) return;
@@ -1684,6 +1506,11 @@ export default function CreatorWorkbenchPage() {
 
   const saveSource = async (sourceText = rawText) => {
     if (!activity?.id) throw new Error('Create a draft before saving.');
+    const validation = validateActivityMarkup(sourceText);
+    if (!validation.valid) {
+      const first = validation.issues[0];
+      throw new Error(`Fix the markup before saving: line ${first.line}: ${first.message}`);
+    }
     setSaveBusy(true);
     try {
       const res = await fetch(`${API_BASE_URL}/api/activities/${activity.id}/source`, {
@@ -1693,9 +1520,16 @@ export default function CreatorWorkbenchPage() {
         body: JSON.stringify({
           text: sourceText,
           expected_revision: Number.isInteger(savedSourceRevision) ? savedSourceRevision : 0,
+          edit_lease_token: editLeaseTokenRef.current || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
+      if (res.status === 423) {
+        throw new Error(
+          `${data?.owner_name || 'Another instructor'} is editing this activity. `
+          + 'Your browser changes were not saved and are still available here.'
+        );
+      }
       if (res.status === 409) {
         const currentRevision = data?.current_revision;
         throw new Error(
@@ -1780,7 +1614,7 @@ export default function CreatorWorkbenchPage() {
   };
 
   const importRemoteSource = async () => {
-    if (!activity?.id) return;
+    if (!activity?.id || editLockedByAnotherUser) return;
     if (!window.confirm('Replace the local activity markup with the current Google Doc text? This cannot be undone from this dialog.')) return;
     setRemoteBusy(true);
     setRemoteError('');
@@ -1791,6 +1625,7 @@ export default function CreatorWorkbenchPage() {
         credentials: 'include',
         body: JSON.stringify({
           expected_revision: Number.isInteger(savedSourceRevision) ? savedSourceRevision : 0,
+          edit_lease_token: editLeaseTokenRef.current || undefined,
         }),
       });
       const data = await readJsonResponse(res);
@@ -1957,55 +1792,36 @@ export default function CreatorWorkbenchPage() {
   };
 
   const applyVisualSource = (nextText, label) => {
+    const validation = validateActivityMarkup(nextText);
+    if (!validation.valid) {
+      const first = validation.issues[0];
+      setError(`Try Changes was not applied. Line ${first.line}: ${first.message}`);
+      return rawText;
+    }
     if (nextText !== rawText) {
       recordVisualEdit(label);
       setRawText(nextText);
       setSandboxUrl('');
-      compileText(nextText);
+      const parsed = compileText(nextText);
+      // The replacement has a fresh source range after parsing. Keep the
+      // selection's baseline in step with it so a second Try Changes is safe.
+      captureSelectedComponentBaseline(
+        nextText,
+        findSelectableBlockByPreviewKey(parsed.blocks, selectedPreviewKey),
+      );
     }
     return nextText;
   };
 
   const buildQuestionInspectorSource = () => {
     if (!selectedQuestionBlock || !questionInspectorDraft) return rawText;
-    const nextTextWithQuestionEdits = applyQuestionEditsToSource(
+    return serializeQuestionComponent(
       rawText,
       selectedQuestionBlock,
       questionInspectorDraft,
+      selectedQuestionCodeBlock,
+      starterCodeDraft,
     );
-    const refreshedQuestion = parseActivityText(nextTextWithQuestionEdits).blocks.find((block) => (
-      block?.type === 'question'
-      && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
-    ));
-    const nextTextWithMultipleChoiceEdits = applyMultipleChoiceEditsToSource(
-      nextTextWithQuestionEdits,
-      refreshedQuestion || selectedQuestionBlock,
-      questionInspectorDraft,
-    );
-    let nextText = applyQuestionScoreEditsToSource(
-      nextTextWithMultipleChoiceEdits,
-      refreshedQuestion || selectedQuestionBlock,
-      questionInspectorDraft,
-    );
-
-    // Starter-code changes share this inspector. Include them in the same
-    // save so the author never has to remember a second button.
-    const refreshedBlock = parseActivityText(nextText).blocks.find((block) => (
-      block?.type === 'question'
-      && block?.sourceMeta?.questionLine === selectedQuestionBlock.sourceMeta?.questionLine
-    ));
-    const codeBlock = getQuestionCodeBlock(nextText, refreshedBlock || selectedQuestionBlock);
-    if (codeBlock && String(starterCodeDraft || '') !== String(codeBlock.content || '')) {
-      const lines = String(nextText || '').split('\n');
-      lines.splice(
-        codeBlock.openLine,
-        codeBlock.closeLine - codeBlock.openLine - 1,
-        ...String(starterCodeDraft || '').split('\n'),
-      );
-      nextText = lines.join('\n');
-    }
-
-    return nextText;
   };
 
   const applyQuestionInspectorChanges = () => {
@@ -2016,28 +1832,27 @@ export default function CreatorWorkbenchPage() {
 
   const applyStarterCodeChanges = () => {
     if (!selectedQuestionCodeBlock || !selectedQuestionBlock || proposal) return null;
-    const lines = String(rawText || '').split('\n');
-    const replacementLines = String(starterCodeDraft || '').split('\n');
-    lines.splice(
-      selectedQuestionCodeBlock.openLine,
-      selectedQuestionCodeBlock.closeLine - selectedQuestionCodeBlock.openLine - 1,
-      ...replacementLines
+    if (!selectedComponentIsCurrent(selectedQuestionBlock)) return null;
+    const nextText = serializeQuestionComponent(
+      rawText,
+      selectedQuestionBlock,
+      questionInspectorDraft || buildQuestionInspectorDraft(selectedQuestionBlock),
+      selectedQuestionCodeBlock,
+      starterCodeDraft,
     );
-    const nextText = lines.join('\n');
     return applyVisualSource(nextText, `updating ${selectedQuestionCodeBlock.label} starter code`);
   };
 
   const removeResponseLines = () => {
     if (!selectedQuestionBlock || !questionInspectorDraft || proposal) return;
-    const nextText = applyQuestionEditsToSource(rawText, selectedQuestionBlock, {
+    if (!selectedComponentIsCurrent(selectedQuestionBlock)) return;
+    const nextText = serializeQuestionComponent(rawText, selectedQuestionBlock, {
       ...questionInspectorDraft,
       responseLines: '',
-    });
+    }, selectedQuestionCodeBlock, starterCodeDraft);
     if (nextText === rawText) return;
-    recordVisualEdit('removing response lines');
-    setRawText(nextText);
-    setSandboxUrl('');
-    compileText(nextText);
+    const appliedText = applyVisualSource(nextText, 'removing response lines');
+    if (appliedText === rawText) return;
     setQuestionInspectorDraft((prev) => ({ ...(prev || {}), responseLines: '' }));
     setNotice('Removed written response lines from this question.');
     setTimeout(() => setNotice(''), 1800);
@@ -2088,21 +1903,17 @@ export default function CreatorWorkbenchPage() {
 
   const applyQuestionRevision = () => {
     if (!selectedQuestionBlock || !questionRevisionProposal?.proposedMarkup || proposal) return;
+    if (!selectedComponentIsCurrent(selectedQuestionBlock)) return;
     const sourceMeta = selectedQuestionBlock.sourceMeta;
     if (!sourceMeta?.questionLine || !sourceMeta?.endQuestionLine) return;
 
     const lines = String(rawText || '').split('\n');
     const proposedLines = questionRevisionProposal.proposedMarkup.split('\n');
-    lines.splice(
-      sourceMeta.questionLine - 1,
-      sourceMeta.endQuestionLine - sourceMeta.questionLine + 1,
-      ...proposedLines
-    );
+    lines.splice(sourceMeta.questionLine - 1, sourceMeta.endQuestionLine - sourceMeta.questionLine + 1, ...proposedLines);
     const nextText = lines.join('\n');
-    const parsed = compileText(nextText);
-    recordVisualEdit('applying an AI question revision');
-    setRawText(nextText);
-    setSandboxUrl('');
+    const appliedText = applyVisualSource(nextText, 'applying an AI question revision');
+    if (appliedText === rawText) return;
+    const parsed = parseActivityText(appliedText);
     selectInsertedQuestion(parsed, sourceMeta.questionLine);
     setQuestionRevisionProposal(null);
     setQuestionRevisionRequest('');
@@ -2112,41 +1923,69 @@ export default function CreatorWorkbenchPage() {
 
   const applyQuestionGroupInspectorChanges = () => {
     if (!selectedQuestionGroupBlock || !questionGroupInspectorDraft || proposal) return null;
-    const nextText = applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
+    const nextText = serializeQuestionGroupComponent(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft);
     return applyVisualSource(nextText, 'updating question group settings');
   };
 
   const applyAiInspectorChanges = () => {
     if (!selectedAiBlock || !aiInspectorDraft || proposal) return null;
-    const nextText = applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft);
+    const nextText = serializeAiComponent(
+      rawText,
+      selectedAiBlock,
+      aiInspectorDraft,
+      INLINE_AI_DEFAULT_MODEL,
+      INLINE_AI_MODEL_OPTIONS,
+    );
     return applyVisualSource(nextText, 'updating AI block settings');
   };
 
   const trySelectedPanelChanges = () => {
-    if (selectedQuestionBlock) return applyQuestionInspectorChanges();
-    if (selectedQuestionGroupBlock) return applyQuestionGroupInspectorChanges();
-    if (selectedAiBlock) return applyAiInspectorChanges();
-    return null;
+    if (editLockedByAnotherUser) {
+      setError(`${editLease.ownerName || 'Another instructor'} is editing this activity. This editor is read-only until the lease is released or expires.`);
+      return null;
+    }
+    const selectedComponent = selectedQuestionBlock || selectedQuestionGroupBlock || selectedAiBlock;
+    if (selectedComponent && !selectedComponentIsCurrent(selectedComponent)) return null;
+
+    let result = null;
+    if (selectedQuestionBlock) {
+      result = applyQuestionInspectorChanges();
+      if (result !== null && result !== rawText) setQuestionPanelDirty(false);
+    } else if (selectedQuestionGroupBlock) {
+      result = applyQuestionGroupInspectorChanges();
+      if (result !== null && result !== rawText) setQuestionGroupPanelDirty(false);
+    } else if (selectedAiBlock) {
+      result = applyAiInspectorChanges();
+      if (result !== null && result !== rawText) setAiPanelDirty(false);
+    }
+    return result;
   };
 
   const hasPendingPanelChanges = (() => {
     if (proposal) return false;
     if (selectedQuestionBlock && questionInspectorDraft) {
-      return !multipleChoiceValidation.errors.length
-        && buildQuestionInspectorSource() !== rawText;
+      const codeChanged = !!selectedQuestionCodeBlock
+        && String(starterCodeDraft || '') !== String(selectedQuestionCodeBlock.content || '');
+      if (multipleChoiceValidation.errors.length) return false;
+      return questionPanelDirty || codeChanged;
     }
     if (selectedQuestionGroupBlock && questionGroupInspectorDraft) {
-      return applyQuestionGroupEditsToSource(rawText, selectedQuestionGroupBlock, questionGroupInspectorDraft) !== rawText;
+      return questionGroupPanelDirty;
     }
     if (selectedAiBlock && aiInspectorDraft) {
-      return applyAiEditsToSource(rawText, selectedAiBlock, aiInspectorDraft) !== rawText;
+      return aiPanelDirty;
     }
     return false;
   })();
 
   const saveVisualEditorChanges = async () => {
     if (proposal) return;
-    await saveSource(rawText);
+    setError('');
+    try {
+      await saveSource(rawText);
+    } catch (err) {
+      setError(err?.message || String(err));
+    }
   };
 
   const requestNavigation = (destination) => {
@@ -2449,6 +2288,17 @@ export default function CreatorWorkbenchPage() {
 
       {notice ? <Alert variant="info" className="py-2 mb-2">{notice}</Alert> : null}
       {error ? <Alert variant="danger" className="py-2 mb-2">{error}</Alert> : null}
+      {editLockedByAnotherUser ? (
+        <Alert variant="warning" className="py-2 mb-2">
+          <strong>Read-only:</strong> {editLease.ownerName || 'Another instructor'} is editing this activity.
+          {' '}Their editing lease expires automatically if they leave; then reload this page to begin editing.
+        </Alert>
+      ) : null}
+      {editLease.status === 'error' ? (
+        <Alert variant="warning" className="py-2 mb-2">
+          Editing protection is unavailable: {editLease.message} Your save will still use revision-conflict protection.
+        </Alert>
+      ) : null}
       {activity?.id && (
         <Alert variant={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} className="py-2 mb-2 d-flex align-items-center gap-2">
           <Badge bg={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} text={isTestDraft ? 'dark' : undefined}>
@@ -2742,7 +2592,7 @@ export default function CreatorWorkbenchPage() {
                 size="sm"
                 variant="outline-secondary"
                 onClick={undoVisualEdit}
-                disabled={!visualUndoStack.length || !!proposal}
+                disabled={!visualUndoStack.length || !!proposal || editLockedByAnotherUser}
                 title={visualUndoStack.length ? `Undo ${visualUndoStack.at(-1)?.label}` : 'Nothing to undo'}
               >
                 <ArrowCounterclockwise className="me-1" /> Undo
@@ -2752,7 +2602,7 @@ export default function CreatorWorkbenchPage() {
                   size="sm"
                   variant="outline-success"
                   onClick={loadLabBoilerplate}
-                  disabled={!activity?.id || !!proposal}
+                  disabled={!activity?.id || !!proposal || editLockedByAnotherUser}
                   title="Replace the current source in the editor with the comprehensive lab example"
                 >
                   <PlusLg className="me-1" /> Lab Boilerplate
@@ -2768,20 +2618,28 @@ export default function CreatorWorkbenchPage() {
             </div>
             <div className="d-flex gap-2">
               {activity?.sheet_url ? (
-                <Button size="sm" variant="outline-secondary" onClick={openRemoteSync} disabled={!!proposal}>
+                <Button size="sm" variant="outline-secondary" onClick={openRemoteSync} disabled={!!proposal || editLockedByAnotherUser}>
                   Remote Copy
                 </Button>
               ) : null}
               <Button
                 size="sm"
                 variant="primary"
-                disabled={!hasPendingPanelChanges || !!proposal || multipleChoiceValidation.errors.length > 0}
+                disabled={!hasPendingPanelChanges || !!proposal || editLockedByAnotherUser || multipleChoiceValidation.errors.length > 0}
                 onClick={trySelectedPanelChanges}
-                title="Apply the selected panel's changes in this browser without saving to the database"
+                title="Rebuild the selected component safely in this browser without saving to the database"
               >
                 Try Changes
               </Button>
-              <Button size="sm" variant="success" onClick={saveVisualEditorChanges} disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || !hasUnsavedChanges}>
+              <Button
+                size="sm"
+                variant="success"
+                onClick={saveVisualEditorChanges}
+                disabled={isDemoCreator || !activity?.id || saveBusy || !!proposal || editLockedByAnotherUser || !hasUnsavedChanges}
+                title={hasMarkupErrors && firstMarkupError
+                  ? `Save will explain the markup error at line ${firstMarkupError.line}.`
+                  : 'Save this activity to the database'}
+              >
                 {saveBusy ? <Spinner animation="border" size="sm" className="me-1" /> : <Save className="me-1" />}
                 Save
               </Button>
@@ -2903,7 +2761,10 @@ export default function CreatorWorkbenchPage() {
                               <Button
                                 size="sm"
                                 variant="outline-secondary"
-                                onClick={() => setQuestionGroupInspectorDraft(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText))}
+                                onClick={() => {
+                                  setQuestionGroupInspectorDraftState(buildQuestionGroupInspectorDraft(selectedQuestionGroupBlock, rawText));
+                                  setQuestionGroupPanelDirty(false);
+                                }}
                                 disabled={!selectedQuestionGroupBlock}
                               >
                                 Reset
@@ -2985,6 +2846,22 @@ export default function CreatorWorkbenchPage() {
                                   <option value="testgen">Testgen</option>
                                   <option value="generate">Generate</option>
                                 </Form.Select>
+                                <div className="border rounded bg-light p-2 mt-2">
+                                  <div className="small fw-semibold mb-1">Mode guide</div>
+                                  <div className="d-flex flex-column gap-2">
+                                    {INLINE_AI_MODE_GUIDE.map((entry) => (
+                                      <div
+                                        key={entry.value}
+                                        className={`d-flex align-items-start gap-2 small ${aiInspectorDraft?.mode === entry.value ? 'fw-semibold' : ''}`}
+                                      >
+                                        <Badge bg={aiInspectorDraft?.mode === entry.value ? 'primary' : 'light'} text={aiInspectorDraft?.mode === entry.value ? undefined : 'dark'} className="border">
+                                          {entry.label}
+                                        </Badge>
+                                        <span className="text-muted">{entry.description}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
                               </Form.Group>
 
                               <Form.Group className="mb-3">
@@ -3060,7 +2937,10 @@ export default function CreatorWorkbenchPage() {
                                 <Button
                                   size="sm"
                                   variant="outline-secondary"
-                                  onClick={() => setAiInspectorDraft(buildAiInspectorDraft(selectedAiBlock))}
+                                  onClick={() => {
+                                    setAiInspectorDraftState(buildAiInspectorDraft(selectedAiBlock));
+                                    setAiPanelDirty(false);
+                                  }}
                                   disabled={!selectedAiBlock}
                                 >
                                   Reset
@@ -3368,7 +3248,10 @@ export default function CreatorWorkbenchPage() {
                               <Button
                                 size="sm"
                                 variant="outline-secondary"
-                                onClick={() => setQuestionInspectorDraft(buildQuestionInspectorDraft(selectedQuestionBlock))}
+                                onClick={() => {
+                                  setQuestionInspectorDraftState(buildQuestionInspectorDraft(selectedQuestionBlock));
+                                  setQuestionPanelDirty(false);
+                                }}
                                 disabled={!selectedQuestionBlock}
                               >
                                 Reset
@@ -3506,7 +3389,7 @@ export default function CreatorWorkbenchPage() {
                   as="textarea"
                   className="creator-markup-editor"
                   value={activeText}
-                  readOnly={!!proposal}
+                  readOnly={!!proposal || editLockedByAnotherUser}
                   spellCheck={false}
                   ref={sourceTextareaRef}
                   onScroll={() => {
@@ -3751,7 +3634,7 @@ export default function CreatorWorkbenchPage() {
             <Button
               variant="warning"
               onClick={importRemoteSource}
-              disabled={remoteBusy || remoteStatus?.comparison?.state === 'conflict'}
+              disabled={remoteBusy || editLockedByAnotherUser || remoteStatus?.comparison?.state === 'conflict'}
               title={remoteStatus?.comparison?.state === 'conflict' ? 'Resolve the conflict deliberately before importing.' : undefined}
             >
               Import Remote

@@ -119,6 +119,9 @@ router.get('/check-access', async (req, res) => {
 
 router.get('/:id/source', controller.getActivitySource);
 router.put('/:id/source', controller.saveActivitySource);
+router.put('/:id/edit-lease', controller.acquireActivityEditLease);
+router.post('/:id/edit-lease/heartbeat', controller.heartbeatActivityEditLease);
+router.delete('/:id/edit-lease', controller.releaseActivityEditLease);
 router.get('/:id/remote-status', controller.getRemoteSourceStatus);
 router.post('/:id/import-remote', controller.importRemoteSource);
 router.post('/:id/sandbox-instance', controller.ensureSandboxInstance);

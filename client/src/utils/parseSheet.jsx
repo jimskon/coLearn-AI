@@ -21,7 +21,7 @@ import {
 import { makeResponseAttrs } from './responseDom';
 import { API_BASE_URL } from '../config';
 
-import { Form, Button, Spinner } from 'react-bootstrap';
+import { Badge, Form, Button, Spinner } from 'react-bootstrap';
 
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
@@ -62,6 +62,29 @@ export const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
 export const INLINE_AI_MODEL_OPTIONS = [
   { value: 'gpt-5-mini', label: 'GPT-5 mini — standard' },
   { value: 'gpt-4o-mini', label: 'GPT-4o mini — fast and economical' },
+];
+
+export const INLINE_AI_MODE_GUIDE = [
+  {
+    value: 'explain',
+    label: 'Explain',
+    description: 'Guide the student with hints and clear reasoning.',
+  },
+  {
+    value: 'critique',
+    label: 'Critique',
+    description: 'Review student work and point out what to improve.',
+  },
+  {
+    value: 'testgen',
+    label: 'Testgen',
+    description: 'Suggest checks or test cases the student can run.',
+  },
+  {
+    value: 'generate',
+    label: 'Generate',
+    description: 'Create the requested deliverable directly.',
+  },
 ];
 
 const normalizeInlineAiModel = (value) => {
@@ -155,15 +178,40 @@ function InlineAiAssistBlock({
   onSelectBlock,
 }) {
   const [inputValue, setInputValue] = useState('');
-  const [responseValue, setResponseValue] = useState('');
+  const [conversation, setConversation] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const historyScrollRef = useRef(null);
 
   const aiSelected = runMode === 'preview' && selectedPreviewKey === aiBlock.previewKey;
+  const modeMeta = INLINE_AI_MODE_GUIDE.find((entry) => entry.value === String(aiBlock.mode || '').toLowerCase())
+    || INLINE_AI_MODE_GUIDE[0];
+
+  useEffect(() => {
+    if (!historyScrollRef.current) return;
+    historyScrollRef.current.scrollTop = historyScrollRef.current.scrollHeight;
+  }, [conversation, busy]);
 
   const submitPrompt = async () => {
     const trimmed = inputValue.trim();
-    if (!trimmed) return;
+    if (!trimmed || busy) return;
+
+    const priorConversation = conversation
+      .filter((entry) => entry?.role === 'user' || entry?.role === 'assistant')
+      .map((entry) => ({
+        role: entry.role,
+        content: String(entry.content || ''),
+      }));
+
+    const turnId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const assistantId = `ai-response-${turnId}`;
+
+    setConversation((previous) => ([
+      ...previous,
+      { id: `user-${turnId}`, role: 'user', content: trimmed },
+      { id: assistantId, role: 'assistant', content: '', pending: true },
+    ]));
+    setInputValue('');
     setBusy(true);
     setError('');
     try {
@@ -184,14 +232,26 @@ function InlineAiAssistBlock({
             ? questionBlock.pythonBlocks.map((block) => block.content || '').join('\n\n').trim()
             : '',
           studentInput: trimmed,
+          conversationHistory: priorConversation,
           activityLanguage,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'AI help failed.');
-      setResponseValue(String(data?.response || '').trim());
+      const responseText = String(data?.response || '').trim() || 'The AI did not return a response.';
+      setConversation((previous) => previous.map((entry) => (
+        entry?.id === assistantId
+          ? { ...entry, content: responseText, pending: false }
+          : entry
+      )));
     } catch (err) {
-      setError(err?.message || 'AI help failed.');
+      const message = err?.message || 'AI help failed.';
+      setError(message);
+      setConversation((previous) => previous.map((entry) => (
+        entry?.id === assistantId
+          ? { ...entry, content: message, pending: false, error: true }
+          : entry
+      )));
     } finally {
       setBusy(false);
     }
@@ -232,6 +292,26 @@ function InlineAiAssistBlock({
           dangerouslySetInnerHTML={{ __html: aiBlock.prompt }}
         />
       ) : null}
+      <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+        <Badge bg="secondary" pill>
+          Mode: {modeMeta.label}
+        </Badge>
+        <div className="small text-muted">{modeMeta.description}</div>
+      </div>
+      <div className="d-flex flex-wrap gap-2 mb-3">
+        {INLINE_AI_MODE_GUIDE.map((entry) => (
+          <Badge
+            key={entry.value}
+            bg={entry.value === modeMeta.value ? 'primary' : 'light'}
+            text={entry.value === modeMeta.value ? undefined : 'dark'}
+            className="border text-wrap"
+            style={{ whiteSpace: 'normal' }}
+          >
+            <span className="fw-semibold">{entry.label}</span>
+            <span className="ms-1">{entry.description}</span>
+          </Badge>
+        ))}
+      </div>
       <Form.Group>
         <Form.Label className="small text-muted mb-1">Query</Form.Label>
         <Form.Control
@@ -254,16 +334,53 @@ function InlineAiAssistBlock({
         <div className="alert alert-danger mt-2 mb-0 py-2 small">{error}</div>
       ) : null}
 
-      <Form.Group className="mt-2 mb-0">
-        <Form.Label className="small text-muted mb-1">Response</Form.Label>
-        <Form.Control
-          as="textarea"
-          rows={Math.max(Math.min((responseValue.split('\n').length || 1) + 1, 8), 3)}
-          readOnly
-          value={responseValue}
-          placeholder="The AI response will appear here."
-        />
-      </Form.Group>
+      <div className="mt-3">
+        <div className="d-flex align-items-center justify-content-between mb-1">
+          <Form.Label className="small text-muted mb-0">Conversation history</Form.Label>
+          <div className="small text-muted">{conversation.length ? `${Math.ceil(conversation.length / 2)} turn${Math.ceil(conversation.length / 2) === 1 ? '' : 's'}` : 'No turns yet'}</div>
+        </div>
+        <div
+          ref={historyScrollRef}
+          className="border rounded p-2 bg-body-tertiary"
+          style={{ maxHeight: '320px', overflowY: 'auto' }}
+        >
+          {conversation.length ? conversation.map((entry) => {
+            const isUser = entry?.role === 'user';
+            const isError = !!entry?.error;
+            return (
+              <div
+                key={entry.id}
+                className={`d-flex mb-2 ${isUser ? 'justify-content-end' : 'justify-content-start'}`}
+              >
+                <div
+                  className={`rounded-3 px-3 py-2 ${isUser
+                    ? 'bg-primary text-white'
+                    : isError
+                      ? 'bg-danger-subtle border border-danger-subtle text-danger-emphasis'
+                      : 'bg-white border'}`}
+                  style={{ maxWidth: '92%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                >
+                  <div className="small text-uppercase fw-semibold opacity-75 mb-1">
+                    {isUser ? 'You' : 'AI'}
+                  </div>
+                  {entry?.pending ? (
+                    <div className="d-flex align-items-center gap-2 small">
+                      <Spinner animation="border" size="sm" />
+                      Thinking...
+                    </div>
+                  ) : (
+                    <div>{String(entry?.content || '')}</div>
+                  )}
+                </div>
+              </div>
+            );
+          }) : (
+            <div className="text-muted small">
+              Your conversation with the AI will stay here as you ask follow-up questions.
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

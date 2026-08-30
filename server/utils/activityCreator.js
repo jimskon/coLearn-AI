@@ -24,7 +24,7 @@ const CREATOR_HOUSE_STYLE_SUMMARY = [
   '- Use \\sampleresponses{...} and \\feedbackprompt{...} with plain text only.',
   '- Wrap runnable Python in \\python ... \\endpython or \\pythonremote ... \\endpythonremote.',
   '- Use \\pythondisplay ... \\endpythondisplay or \\cppdisplay ... \\endcppdisplay for read-only code examples that students should see but not run or edit.',
-  '- Use \\ai{mode} ... \\endai only when it clearly supports the pedagogy.',
+  '- Use \\ai{mode} ... \\endai only when it clearly supports the pedagogy, and keep it between questions rather than inside one.',
   '- For \\mode{assignment}, create a project-style lab assignment with milestone steps and a final assembled solution. Assignment drafts are usually sectionless unless the creator explicitly asks for sections.',
   '- Do not include Markdown fences, prose before the activity, or diagnostics.',
 ].join('\n');
@@ -76,7 +76,7 @@ function buildActivityGenerationInstructions(modeOrFlag) {
     'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
     'If you include multiple-choice questions, use \\multiplechoice{answer} only for questions with a real correct answer. For survey or opinion questions, keep \\multiplechoice{} blank and never invent a placeholder answer to satisfy validation.',
     'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
-    'If you do use an \\ai block, place it directly inside a \\questiongroup (between questions), not inside a \\question. It is a learning tool, not a response: do not add \\textresponse, samples, feedback prompts, scores, or retries for the AI block itself. Keep it tightly scoped, include a guardrail, and use \\aimodel{gpt-5-mini} unless the creator requests the faster \\aimodel{gpt-4o-mini}.',
+    'If you do use an \\ai block, place it directly inside a \\questiongroup (between questions), not inside a \\question. If the model places it inside a question, move the whole AI block so it sits between questions before returning the draft. It is a learning tool, not a response: do not add \\textresponse, samples, feedback prompts, scores, or retries for the AI block itself. Keep it tightly scoped, include a guardrail, and use \\aimodel{gpt-5-mini} unless the creator requests the faster \\aimodel{gpt-4o-mini}.',
     'Use the compact house-style rules below as syntax guidance.',
     'For mode=group, use collaborative prompts and progression.',
     'For mode=playground, write an experimentation-first prompt sequence for instructor-led demonstration and student exploration. Playground work should feel saved and revisitable.',
@@ -473,6 +473,127 @@ function repairGeneratedMarkupClosures(text) {
 
   closeQuestionGroup();
 
+  return repaired.join('\n');
+}
+
+function repairAiBlocksOutsideQuestions(text) {
+  const lines = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .split('\n');
+
+  const repaired = [];
+  let inQuestionGroup = false;
+  let inQuestion = false;
+  let inAiBlock = false;
+  let aiOpenedInsideQuestion = false;
+  let currentAiBlockLines = [];
+  const pendingAiBlocks = [];
+
+  function flushPendingAiBlocks() {
+    while (pendingAiBlocks.length) {
+      repaired.push(...pendingAiBlocks.shift());
+    }
+  }
+
+  function closeAiBlock() {
+    if (!inAiBlock) return;
+
+    if (!currentAiBlockLines.length || currentAiBlockLines[currentAiBlockLines.length - 1].trim() !== '\\endai') {
+      currentAiBlockLines.push('\\endai');
+    }
+
+    if (aiOpenedInsideQuestion) {
+      pendingAiBlocks.push([...currentAiBlockLines]);
+    } else {
+      repaired.push(...currentAiBlockLines);
+    }
+
+    currentAiBlockLines = [];
+    inAiBlock = false;
+    aiOpenedInsideQuestion = false;
+  }
+
+  function closeQuestion() {
+    closeAiBlock();
+    if (inQuestion) {
+      repaired.push('\\endquestion');
+      inQuestion = false;
+      flushPendingAiBlocks();
+    }
+  }
+
+  function closeQuestionGroup() {
+    closeQuestion();
+    if (inQuestionGroup) {
+      repaired.push('\\endquestiongroup');
+      inQuestionGroup = false;
+    }
+  }
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.trim();
+
+    if (trimmed.startsWith('\\section{')) {
+      closeQuestionGroup();
+      repaired.push(rawLine);
+      continue;
+    }
+
+    if (trimmed.startsWith('\\questiongroup{')) {
+      closeQuestionGroup();
+      inQuestionGroup = true;
+      repaired.push(rawLine);
+      continue;
+    }
+
+    if (trimmed.startsWith('\\question{')) {
+      if (!inQuestionGroup) {
+        inQuestionGroup = true;
+        repaired.push('\\questiongroup{Question Group}');
+      }
+      closeQuestion();
+      inQuestion = true;
+      repaired.push(rawLine);
+      continue;
+    }
+
+    if (trimmed.startsWith('\\ai{')) {
+      if (inAiBlock) {
+        closeAiBlock();
+      }
+      currentAiBlockLines = [rawLine];
+      aiOpenedInsideQuestion = inQuestion;
+      inAiBlock = true;
+      continue;
+    }
+
+    if (inAiBlock) {
+      currentAiBlockLines.push(rawLine);
+      if (trimmed === '\\endai') {
+        closeAiBlock();
+      }
+      continue;
+    }
+
+    if (trimmed === '\\endquestion') {
+      closeQuestion();
+      continue;
+    }
+
+    if (trimmed === '\\endquestiongroup') {
+      closeQuestion();
+      if (inQuestionGroup) {
+        repaired.push(rawLine);
+        inQuestionGroup = false;
+      }
+      continue;
+    }
+
+    repaired.push(rawLine);
+  }
+
+  closeQuestionGroup();
   return repaired.join('\n');
 }
 
@@ -877,14 +998,16 @@ function normalizeGeneratedDraft(text, fallbackInput) {
   );
   const plaintextMarkup = coercePlaintextActivityToMarkup(stripped, normalizedFallbackInput);
   const cleaned = repairCodingQuestionsToUsePythonBlocks(
-    repairGeneratedMarkupClosures(
-      normalizePythonTurtleDirectives(
-        applyTimedSectionDirectives(
-          applyRetriesDirective(
-            normalizeLearningObjectivesSection(plaintextMarkup || stripped),
-            normalizedFallbackInput.retriesRequired
-          ),
-          normalizedFallbackInput.timedSections
+    repairAiBlocksOutsideQuestions(
+      repairGeneratedMarkupClosures(
+        normalizePythonTurtleDirectives(
+          applyTimedSectionDirectives(
+            applyRetriesDirective(
+              normalizeLearningObjectivesSection(plaintextMarkup || stripped),
+              normalizedFallbackInput.retriesRequired
+            ),
+            normalizedFallbackInput.timedSections
+          )
         )
       )
     )
@@ -1025,6 +1148,7 @@ async function reviseWithOpenAI({
     'Only include \\info blocks if the creator explicitly asks for them.',
     'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
     'If the activity uses turtle graphics, always wrap the turtle code in \\pythonturtle ... \\endpythonturtle.',
+    'If the revised activity includes an \\ai block, keep it inside a \\questiongroup but outside any \\question body.',
     'Do not put activity commands such as \\pythonturtle, \\python, \\question, or \\section inside \\sampleresponses{...}, \\feedbackprompt{...}, or \\followupprompt{...}.',
     'Keep sample responses and feedback prompts plain text.',
     'Never omit required closing tags such as \\endquestion and \\endquestiongroup.',
@@ -1142,6 +1266,7 @@ function buildQuestionRevisionInstructions() {
     'The creator request is a required specification, not a suggestion. You may revise every part of this question block.',
     'When the request changes what the learner must do, explicitly rewrite the learner-facing \\question{...} text. Do not leave that text unchanged merely because you updated starter code.',
     'Keep the question prompt, code, response type, sample responses, feedback prompts, follow-up prompts, and any \\ai blocks consistent with the requested learning task. Change every dependent part that needs changing.',
+    'Do not leave an \\ai block inside the body of a question. If the revised task needs inline AI support, place the \\ai block between questions inside the surrounding \\questiongroup.',
     'For multiple-choice questions, preserve the author’s intent: use \\multiplechoice{exact correct choice text} only for questions that truly have a correct answer, then list one \\choice{...} line for each option and close with \\endmultiplechoice. Keep \\multiplechoice{} blank for survey or opinion questions and still list the choices. Never invent a placeholder answer to satisfy the parser.',
     'Never use A/B/C letter labels or numeric labels inside \\multiplechoice{...}; the answer text must exactly match one \\choice{...} value.',
     'For new questions, explicitly include \\responsemode{answer} unless the student should write questions, in which case use \\responsemode{questions}.',
@@ -1294,12 +1419,16 @@ async function reviseActivityDraft(input) {
       parseIssues: input.parseIssues,
     });
     const parsed = extractJsonObject(raw);
-    const proposed = stripCodeFences(
-      parsed.proposedDocText ||
-      parsed.proposed_doc_text ||
-      parsed.markup ||
-      ''
-    ).trim();
+    const proposed = repairAiBlocksOutsideQuestions(
+      repairGeneratedMarkupClosures(
+        stripCodeFences(
+          parsed.proposedDocText ||
+          parsed.proposed_doc_text ||
+          parsed.markup ||
+          ''
+        ).trim()
+      )
+    );
 
     if (!proposed.includes('\\title{') || !proposed.includes('\\questiongroup{')) {
       return {

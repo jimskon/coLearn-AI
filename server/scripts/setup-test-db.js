@@ -153,6 +153,17 @@ async function main() {
         MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         MODIFY COLUMN content_text LONGTEXT NULL;
 
+      CREATE TABLE IF NOT EXISTS activity_edit_locks (
+        activity_id INT NOT NULL PRIMARY KEY,
+        user_id INT NOT NULL,
+        lease_token CHAR(36) NOT NULL,
+        acquired_at DATETIME(3) NOT NULL,
+        expires_at DATETIME(3) NOT NULL,
+        KEY activity_edit_locks_expires_at_idx (expires_at),
+        CONSTRAINT activity_edit_locks_activity_fk
+          FOREIGN KEY (activity_id) REFERENCES pogil_activities(id) ON DELETE CASCADE
+      );
+
       CREATE TABLE IF NOT EXISTS activity_instances (
         id INT AUTO_INCREMENT PRIMARY KEY,
         activity_id INT NOT NULL,

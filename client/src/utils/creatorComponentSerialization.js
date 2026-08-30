@@ -45,7 +45,7 @@ function isCodeEnd(line) {
   return /^\\end(python|pythonremote|pythonturtle|cpp|pythondisplay|cppdisplay)\s*$/i.test(String(line || '').trim());
 }
 
-function managedQuestionBodyLines(componentLines) {
+function managedQuestionBodyLines(componentLines, { keepFreeformText = true } = {}) {
   const preserved = [];
   let skipUntil = '';
   let inCode = false;
@@ -79,6 +79,7 @@ function managedQuestionBodyLines(componentLines) {
       continue;
     }
     if (managedQuestionTags.has(commandName(trimmed))) continue;
+    if (!keepFreeformText) continue;
     preserved.push(line);
   }
   return preserved;
@@ -146,7 +147,7 @@ export function serializeQuestionComponent(sourceText, block, edits, selectedCod
     code: scoreLines('code', edits?.codeScorePoints, edits?.codeScoreInstructions),
     output: scoreLines('output', edits?.outputScorePoints, edits?.outputScoreInstructions),
   };
-  const body = managedQuestionBodyLines(component);
+  const body = managedQuestionBodyLines(component, { keepFreeformText: false });
   const existingScoreTypes = new Set();
   for (const line of body) {
     const type = String(line).match(/^__COLEARN_SCORE_(response|code|output)__$/)?.[1];

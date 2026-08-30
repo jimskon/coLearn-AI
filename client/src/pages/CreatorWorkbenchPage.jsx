@@ -33,6 +33,7 @@ import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import {
   INLINE_AI_DEFAULT_MODEL,
+  INLINE_AI_MODE_GUIDE,
   INLINE_AI_MODEL_OPTIONS,
   parseSheetToBlocks,
   renderBlocks,
@@ -2845,6 +2846,22 @@ export default function CreatorWorkbenchPage() {
                                   <option value="testgen">Testgen</option>
                                   <option value="generate">Generate</option>
                                 </Form.Select>
+                                <div className="border rounded bg-light p-2 mt-2">
+                                  <div className="small fw-semibold mb-1">Mode guide</div>
+                                  <div className="d-flex flex-column gap-2">
+                                    {INLINE_AI_MODE_GUIDE.map((entry) => (
+                                      <div
+                                        key={entry.value}
+                                        className={`d-flex align-items-start gap-2 small ${aiInspectorDraft?.mode === entry.value ? 'fw-semibold' : ''}`}
+                                      >
+                                        <Badge bg={aiInspectorDraft?.mode === entry.value ? 'primary' : 'light'} text={aiInspectorDraft?.mode === entry.value ? undefined : 'dark'} className="border">
+                                          {entry.label}
+                                        </Badge>
+                                        <span className="text-muted">{entry.description}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
                               </Form.Group>
 
                               <Form.Group className="mb-3">

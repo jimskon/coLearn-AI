@@ -1966,8 +1966,8 @@ export default function CreatorWorkbenchPage() {
     if (selectedQuestionBlock && questionInspectorDraft) {
       const codeChanged = !!selectedQuestionCodeBlock
         && String(starterCodeDraft || '') !== String(selectedQuestionCodeBlock.content || '');
-      return !multipleChoiceValidation.errors.length
-        && (questionPanelDirty || codeChanged);
+      if (multipleChoiceValidation.errors.length) return false;
+      return questionPanelDirty || codeChanged;
     }
     if (selectedQuestionGroupBlock && questionGroupInspectorDraft) {
       return questionGroupPanelDirty;

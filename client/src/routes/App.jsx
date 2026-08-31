@@ -30,6 +30,7 @@ import DemoInfoRequestsAdminPage from '../pages/DemoInfoRequestsAdminPage';
 import InfoPage from '../pages/InfoPage';
 import ViewTestsPage from '../pages/ViewTestsPage';
 import TestSetupPage from '../pages/TestSetupPage';
+import ActivityLaunchPage from '../pages/ActivityLaunchPage';
 
 function DemoShortcutRedirect({ to }) {
   const { demoPath = '' } = useParams();
@@ -88,6 +89,7 @@ function AppRoutes() {
         <Route path="/admin/users" element={<AdminUsersPage />} />
         <Route path="/admin/logs" element={<AuditLogPage />} />
         <Route path="/courses/:courseId/activities" element={<CourseActivitiesPage />} />
+        <Route path="/launch/:courseId/:activityId" element={<ActivityLaunchPage />} />
         <Route
           path="/run/:instanceId"
           element={

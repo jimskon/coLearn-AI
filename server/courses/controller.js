@@ -412,6 +412,79 @@ async function getCourseActivities(req, res) {
   }
 }
 
+// Resolve a stable course/activity URL without trusting an instance ID from
+// WordPress, Moodle, or the browser. The membership row is the authorization
+// boundary: a student can only be sent to an instance that includes them.
+async function resolveStudentActivityLaunch(req, res) {
+  const courseId = Number(req.params.courseId);
+  const activityId = Number(req.params.activityId);
+  const user = req.user;
+
+  if (!courseId || !activityId) {
+    return res.status(400).json({ error: 'A course and activity are required.' });
+  }
+  if (!user?.id) {
+    return res.status(401).json({ error: 'Please sign in to open this activity.' });
+  }
+
+  try {
+    const [[courseActivity]] = await db.query(
+      `SELECT a.id, a.title
+         FROM courses c
+         JOIN pogil_activities a ON a.class_id = c.class_id
+        WHERE c.id = ? AND a.id = ?`,
+      [courseId, activityId],
+    );
+    if (!courseActivity) {
+      return res.status(404).json({ error: 'This activity is not available in this course.' });
+    }
+
+    if (user.role !== 'student') {
+      return res.json({
+        destination: `/courses/${courseId}/activities`,
+        activity_title: courseActivity.title,
+        message: 'Instructors manage this activity from the course activity list.',
+      });
+    }
+
+    const [[enrollment]] = await db.query(
+      'SELECT 1 AS enrolled FROM course_enrollments WHERE course_id = ? AND student_id = ?',
+      [courseId, user.id],
+    );
+    if (!enrollment) {
+      return res.status(403).json({ error: 'You are not enrolled in the course for this activity.' });
+    }
+
+    const [[instance]] = await db.query(
+      `SELECT ai.id AS instance_id
+         FROM activity_instances ai
+         JOIN group_members gm ON gm.activity_instance_id = ai.id
+        WHERE ai.course_id = ?
+          AND ai.activity_id = ?
+          AND gm.student_id = ?
+          AND COALESCE(ai.group_number, 1) <> 0
+          AND COALESCE(ai.hidden, 0) = 0
+        ORDER BY ai.id DESC
+        LIMIT 1`,
+      [courseId, activityId, user.id],
+    );
+    if (!instance?.instance_id) {
+      return res.status(409).json({
+        error: 'This activity is not ready for you yet. Your instructor may still need to activate it or assign you to a group.',
+      });
+    }
+
+    return res.json({
+      destination: `/run/${Number(instance.instance_id)}`,
+      instance_id: Number(instance.instance_id),
+      activity_title: courseActivity.title,
+    });
+  } catch (err) {
+    console.error('resolveStudentActivityLaunch error:', err);
+    return res.status(500).json({ error: 'Could not open this activity.' });
+  }
+}
+
 
 
 // GET all courses a user is enrolled in
@@ -997,6 +1070,7 @@ module.exports = {
   createCourse,
   deleteCourse,
   getCourseActivities,
+  resolveStudentActivityLaunch,
   getUserEnrollments,
   enrollByCode,
   getCourseEnrollments,

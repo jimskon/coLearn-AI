@@ -195,6 +195,16 @@ export default function CourseActivitiesPage() {
     }
   };
 
+  const copyStudentLaunchLink = async (activity) => {
+    const launchUrl = `${window.location.origin}/launch/${courseId}/${activity.activity_id}`;
+    try {
+      await navigator.clipboard.writeText(launchUrl);
+      alert('Student launch link copied.');
+    } catch (_err) {
+      window.prompt('Copy this student launch link:', launchUrl);
+    }
+  };
+
 
 
   const isInstructorLike =
@@ -280,6 +290,13 @@ export default function CourseActivitiesPage() {
                       })()
                     ) : isInstructorLike ? (
                       <ButtonGroup>
+                        <Button
+                          variant="outline-secondary"
+                          onClick={() => copyStudentLaunchLink(activity)}
+                          title="Copy a login-aware link for WordPress or Moodle"
+                        >
+                          Copy Student Link
+                        </Button>
                         {
                           isTest ? (
                             !activity.has_groups ? (

@@ -559,10 +559,12 @@ async function buildAttemptHistoryContext({
     lines.push('- Do not repeat prior AI feedback wording.');
     lines.push('- Do not raise the bar beyond the question, sample, or instructor guidance.');
     lines.push('- If the question gives a range such as 2-4 items, the lower bound satisfies the quantity requirement.');
-    lines.push('- Attempt 1: give a gentle conceptual hint.');
-    lines.push('- Attempt 2: point to the missing idea or relevant evidence.');
-    lines.push('- Attempt 3: give a more directed hint or sentence starter that names exactly what is missing.');
-    lines.push('- Attempt 4 or later: if the current answer is close enough, accept it; otherwise give a direct sentence-level path forward.');
+    lines.push('- Attempt 1: give a warm, encouraging nudge. Acknowledge what they got right, then ask one focused follow-up question.');
+    lines.push('- Attempt 2: point to the missing idea or relevant evidence. Frame it as a challenge, not a correction — "What about..." or "Can you connect that to..."');
+    lines.push('- Attempt 3: give a more directed hint or sentence starter that names exactly what is missing. Keep tone positive.');
+    lines.push('- Attempt 4 or later: if the current answer is close enough, accept it; otherwise give a single concrete sentence that tells them exactly what to add, then let them try once more.');
+    lines.push('- When rejecting at any stage, start feedback with what the group got right before naming what to refine.');
+    lines.push('- Avoid phrases like "you need to", "this is missing", or "your answer lacks". Prefer "what about", "can you add", "almost there — try adding".');
 
     return lines.join('\n');
   } catch (err) {
@@ -586,6 +588,8 @@ async function buildStudentResponsePrompt({
   historyLimit = 5,
   requirementsOnly = false,
   activityLanguage = 'English',
+  timerRemainingMs = null,
+  timerDurationMs = null,
 }) {
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
   const activityGuide = stripHtml(guidance || "");
@@ -605,15 +609,25 @@ async function buildStudentResponsePrompt({
   const followupRaw = fuParsed.cleaned;
   const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
 
+  // Compute timer pressure level for prompt injection
+  const timerPressure = (() => {
+    if (timerRemainingMs == null) return 'none';
+    if (timerRemainingMs <= 0) return 'expired';
+    if (timerRemainingMs < 2 * 60 * 1000) return 'critical';   // < 2 min
+    if (timerRemainingMs < 5 * 60 * 1000) return 'low';        // < 5 min
+    return 'normal';
+  })();
+
   const sys = [
-    "You are a concise, supportive learning facilitator for an ungraded collaborative activity.",
+    "You are a warm, concise learning facilitator for an ungraded collaborative activity.",
     "The submission represents a collaborative group's shared answer, even though one person may be typing.",
+    "Your role is to coach the group forward — not to gatekeep. Think of yourself as a thoughtful peer nudging them toward understanding, not a grader checking a rubric.",
     "Decide whether the group's current submission is sufficient to proceed.",
     "Return ONLY JSON matching the schema exactly.",
     "The instructor feedbackprompt is the complete acceptance contract for this question. Follow it literally; do not add your own criteria.",
     "If the submission is on-topic and sufficient, set accepted=true.",
     "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
-    "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
+    "If accepted=false, feedback MUST be a short coaching nudge (1–2 sentences). Start with what they got right, then ask one focused question or suggest one small addition. Never frame it as a list of failures.",
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
@@ -621,6 +635,8 @@ async function buildStudentResponsePrompt({
     "As attempts increase, weaken the requirements: prefer a good-enough answer that shows understanding over a perfectly complete one.",
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
+    "When rejecting, use warm, collaborative language. Prefer 'You're on the right track — what about...' or 'Good start. Can you add...' over phrasing like 'you need to' or 'this is missing'.",
+    "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting and use feedback to affirm what they got right.",
     `Write every feedback message in ${feedbackLanguage}. Do not mix languages or mirror the student's answer language if it differs.`,
     "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
     "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
@@ -634,7 +650,15 @@ async function buildStudentResponsePrompt({
       ? "Prefer a conceptual nudge or next-step hint over a direct correction."
       : "",
     "Do NOT mention grading, points, rubrics, or scoring.",
-  ].join("\n");
+    // Timer pressure overrides
+    timerPressure === 'expired'
+      ? "TIMER EXPIRED: The section time has run out. Set accepted=true for any answer that is on-topic. Do not ask for more work."
+      : timerPressure === 'critical'
+      ? "TIME CRITICAL: Less than 2 minutes remain. If the answer shows any reasonable understanding of the question, set accepted=true. Do not request elaboration."
+      : timerPressure === 'low'
+      ? "TIME PRESSURE: About 5 minutes remain. Prefer accepting answers that show understanding even if incomplete. Keep any feedback very brief."
+      : "",
+  ].filter(Boolean).join("\n");
 
   const schema = `Return JSON only:
 {"accepted":true|false,
@@ -663,12 +687,18 @@ async function buildStudentResponsePrompt({
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
     "Rejection rule: name the exact missing or incorrect requirement from the instructor feedbackprompt. Do not use generic feedback such as saying the response should be more complete or well explained.",
+    "Coaching tone rule: feedback should feel like a supportive challenge from a peer, not a checklist from an evaluator. The group should feel encouraged to refine, not pressured to satisfy the AI.",
     requirementsOnly
       ? "Requirements-only rule: if you reject, give only a short hint that invites a retry; anchor that hint to the exact question text rather than using a generic message."
       : "",
+    timerPressure === 'expired' || timerPressure === 'critical'
+      ? "Timer rule: time has run out or is critically low — override other criteria and set accepted=true if the answer is at all on-topic."
+      : timerPressure === 'low'
+      ? "Timer rule: time is running low — be generous and accept answers that show reasonable engagement with the question."
+      : "",
     "",
     schema,
-    "If reasonable, prefer {\"accepted\":true}",
+    "Default to {\"accepted\":true} unless the answer is clearly off-track or incoherent. A partial but engaged answer should move forward.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -1435,6 +1465,8 @@ async function evaluateStudentResponse(req, res) {
     retriesRequired,
     submissionString = "",
     activityLanguage = 'English',
+    timerRemainingMs = null,
+    timerDurationMs = null,
   } = req.body || {};
 
   let accepted = false;
@@ -1561,6 +1593,8 @@ async function evaluateStudentResponse(req, res) {
     historyLimit: 5,
     requirementsOnly: policy.requirementsOnly,
     activityLanguage,
+    timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
+    timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
   });
   const {
     sys,
@@ -1676,6 +1710,8 @@ async function evaluatePythonCode(req, res) {
     followupPrompt = "",
     outputText = "",
     activityLanguage = 'English',
+    timerRemainingMs = null,
+    timerDurationMs = null,
   } = req.body || {};
 
   if (!questionText || !studentCode) {
@@ -1704,6 +1740,8 @@ async function evaluatePythonCode(req, res) {
     lang: "python",
     outputText,
     activityLanguage,
+    timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
+    timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
   });
 
   // ✅ ADD THIS (Step 2 already, but keep it)
@@ -1883,6 +1921,8 @@ async function evaluateCode({
   lang,
   outputText = "",
   activityLanguage = 'English',
+  timerRemainingMs = null,
+  timerDurationMs = null,
 }) {
   // Default: fail-open (don’t block if AI fails)
   const base = { accepted: true, feedback: null };
@@ -1917,6 +1957,15 @@ async function evaluateCode({
     limit: 5,
   });
 
+  // Timer pressure for code evaluation
+  const codeTimerPressure = (() => {
+    if (timerRemainingMs == null) return 'none';
+    if (timerRemainingMs <= 0) return 'expired';
+    if (timerRemainingMs < 2 * 60 * 1000) return 'critical';
+    if (timerRemainingMs < 5 * 60 * 1000) return 'low';
+    return 'normal';
+  })();
+
   const rules = [
     policy.requirementsOnly && "- Judge ONLY whether it meets the stated task; no extras.",
     policy.ignoreSpacing && "- Ignore whitespace/formatting; never mention spacing.",
@@ -1928,6 +1977,14 @@ async function evaluateCode({
     "- Treat this as one collaborative group conversation; do not single out the active typer.",
     "feedbackprompt is meta guidance; do NOT quote it.",
     "Before suggesting to add a line, verify it is not already present (or equivalent) in the code.",
+    "- When rejecting code, use coaching language. Start with what the code does right, then name one specific thing to fix. Prefer 'Almost — try...' over 'Your code is missing...'",
+    codeTimerPressure === 'expired'
+      ? "- TIMER EXPIRED: Section time is up. If the code is on-task and makes a reasonable attempt, set accepted=true."
+      : codeTimerPressure === 'critical'
+      ? "- TIME CRITICAL: Under 2 minutes left. Accept any code that makes a reasonable attempt at the task."
+      : codeTimerPressure === 'low'
+      ? "- TIME PRESSURE: About 5 minutes left. Be generous — accept code that is mostly correct or shows clear intent."
+      : "",
   ].filter(Boolean).join("\n");
 
   const fence =
@@ -2055,6 +2112,8 @@ async function evaluateCppCode(req, res) {
     followupPrompt = "",
     outputText = "",
     activityLanguage = 'English',
+    timerRemainingMs = null,
+    timerDurationMs = null,
   } = req.body || {};
 
   if (!questionText || !studentCode) {
@@ -2087,6 +2146,8 @@ async function evaluateCppCode(req, res) {
     lang: "cpp",
     outputText,
     activityLanguage,
+    timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
+    timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
   });
 
 

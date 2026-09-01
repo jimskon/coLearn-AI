@@ -1345,6 +1345,14 @@ export default function RunActivityPage({
         : 1,
       submissionString: String(submissionString || ""),
       dryRun: !canPersistAIResults,
+
+      // Timer pressure: let AI ease up when time is running low
+      timerRemainingMs:
+        sectionTimer?.visible && !sectionTimer?.paused
+          ? Math.max(0, sectionTimer.remainingMs ?? 0)
+          : null,
+      timerDurationMs:
+        sectionTimer?.visible ? (sectionTimer.durationMs ?? null) : null,
     };
 
     try {
@@ -1403,10 +1411,14 @@ export default function RunActivityPage({
         ? Number(data.retriesRequired)
         : null;
 
+      // If the section timer has expired, never deadlock the group — let them move on
+      const timerExpired =
+        sectionTimer?.visible && (sectionTimer.remainingMs ?? Infinity) <= 0;
+
       return {
         accepted,
-        feedback,
-        canContinue,
+        feedback: timerExpired ? null : feedback,
+        canContinue: timerExpired ? true : canContinue,
         retryCount,
         retriesRequired: retriesRequiredOut,
       };
@@ -2265,6 +2277,14 @@ export default function RunActivityPage({
             retriesRequired,
             submissionString: groupSubmissionString,
             dryRun: !canPersistAIResults,
+
+            // Timer pressure: let AI ease up when time is running low
+            timerRemainingMs:
+              sectionTimer?.visible && !sectionTimer?.paused
+                ? Math.max(0, sectionTimer.remainingMs ?? 0)
+                : null,
+            timerDurationMs:
+              sectionTimer?.visible ? (sectionTimer.durationMs ?? null) : null,
 
             // ✅ new
             outputText,

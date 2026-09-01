@@ -47,6 +47,7 @@ export default function ActivityPythonBlock({
   turtleWidth = 600,
   turtleHeight = 400,
   editable = true,
+  onEditStart,
   includeFiles = [],
 }) {
   const stdinRef = useRef(null);
@@ -399,6 +400,7 @@ export default function ActivityPythonBlock({
             isEditing
               ? handleDoneEditing
               : () => {
+                onEditStart?.();
                 setIsEditing(true);
                 flushPendingRemoteIfAny?.();
               }

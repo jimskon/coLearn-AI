@@ -2502,6 +2502,7 @@ export function renderBlocks(blocks, options = {}) {
             blockIndex={`pyt-${codeKey}-${index}`}
             editable={canEdit}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && viewMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             onCodeChange={(rk, code, extra) => {
 
               // observers in Local mode: keep it client-side only
@@ -2718,6 +2719,7 @@ export function renderBlocks(blocks, options = {}) {
             editable={canEdit}
             runnerEnabled={runtimeFeatures.remoteCpp ?? true}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             onCodeChange={(rk, code, extra) => {
               if (showToggle && codeMode === 'local' && !isActive) {
                 options.onLocalCodeChange?.(rk, code);
@@ -3117,6 +3119,7 @@ export function renderBlocks(blocks, options = {}) {
                   feedback={codeFeedbackShown?.[responseKey] || null}
                   fileContents={fileContents}
                   setFileContents={setFileContents}
+                  onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(responseKey, 'local'); }}
                 />
               </div>
             );

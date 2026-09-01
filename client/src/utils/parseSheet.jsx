@@ -3011,6 +3011,7 @@ export function renderBlocks(blocks, options = {}) {
                   runnerEnabled={py.type === 'pythonremote' ? remotePythonEnabled : true}
                   localOnly={runMode === 'preview'}
                   responseKey={responseKey}
+                  onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(responseKey, 'local'); }}
                   onCodeChange={(rk, code, extra) => {
                     if (showToggle && codeMode === 'local' && !isActive) {
                       options.onLocalCodeChange?.(rk, code);

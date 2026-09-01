@@ -2628,7 +2628,9 @@ export default function RunActivityPage({
         if (feedback && feedback.trim()) {
           const f = feedback.trim();
           answers[`${qid}F1`] = f;
-          setTextFeedbackShown((prev) => ({ ...prev, [qid]: f }));
+          // Store with a 'positive' flag so the UI colours positive feedback green
+          // and negative feedback yellow.
+          setTextFeedbackShown((prev) => ({ ...prev, [qid]: { text: f, positive: accepted } }));
         } else {
           answers[`${qid}F1`] = '';
           setTextFeedbackShown((prev) => {

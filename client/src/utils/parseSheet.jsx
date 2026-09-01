@@ -3300,16 +3300,21 @@ export function renderBlocks(blocks, options = {}) {
                   </>
                 )}
 
-                {textFeedbackShown?.[responseKey] && (
-                  <Alert
-                    variant="warning"
-                    className="mt-2"
-                    style={{ whiteSpace: 'pre-wrap' }}
-                  >
-                    <strong>AI Guidance</strong>
-                    <div>{textFeedbackShown[responseKey]}</div>
-                  </Alert>
-                )}
+                {textFeedbackShown?.[responseKey] && (() => {
+                  const fb = textFeedbackShown[responseKey];
+                  const fbText = typeof fb === 'object' ? fb.text : fb;
+                  const fbVariant = (typeof fb === 'object' && fb.positive) ? 'success' : 'warning';
+                  return (
+                    <Alert
+                      variant={fbVariant}
+                      className="mt-2"
+                      style={{ whiteSpace: 'pre-wrap' }}
+                    >
+                      <strong>AI Guidance</strong>
+                      <div>{fbText}</div>
+                    </Alert>
+                  );
+                })()}
 
                 {renderInfoBubbles(
                   block,

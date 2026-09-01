@@ -2004,11 +2004,6 @@ async function getInstancesForActivityInCourse(req, res) {
 
     const courseName = course?.name || 'Unknown Course';
     const activityTitle = activity?.title || '';
-    const activityType = await inferActivityTypeFromActivity(activity || {});
-    const scheduledTestOnly = activityType === 'test'
-      ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
-      : '';
-
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
 	              group_number,
@@ -2037,7 +2032,6 @@ async function getInstancesForActivityInCourse(req, res) {
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
-         ${scheduledTestOnly}
        ORDER BY group_number`,
       [courseId, activityId]
     );

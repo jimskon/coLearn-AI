@@ -2823,7 +2823,9 @@ export default function RunActivityPage({
         return next;
       });
 
-      if (!isTestMode && forceOverride) {
+      if (!isTestMode) {
+        // Clear feedback for this group whenever it advances — whether the student
+        // used forceOverride or the group was accepted normally (positive feedback).
         const qBlocksForGroup = blocks.filter((b) => b.type === 'question');
         setTextFeedbackShown((prev) => {
           const next = { ...prev };

@@ -158,8 +158,15 @@ export default function useRunActivitySync({
 
         setTextFeedbackShown((prev) => {
           const next = { ...prev };
-          if (txt) next[qid] = txt;
-          else delete next[qid];
+          if (txt) {
+            // Preserve the 'positive' flag that handleSubmit set; socket echoes
+            // arrive after the { text, positive } object is already stored, so
+            // read it from prev rather than overwriting with a bare string.
+            const existingPositive = (typeof prev[qid] === 'object') ? prev[qid].positive : false;
+            next[qid] = { text: txt, positive: existingPositive };
+          } else {
+            delete next[qid];
+          }
           return next;
         });
         return;

@@ -610,7 +610,11 @@ async function recordTestFocusLoss(req, res) {
         await conn.rollback();
         return res.status(404).json({ error: 'Test attempt not found for this student.' });
       }
-      if (Number(instance.is_test) !== 1) {
+      // Accept if the instance has focus enforcement enabled OR the activity DB flag is set.
+      // Activities that declare \mode{test} in content may have is_test=0 in the DB.
+      const isTestInstance =
+        Number(instance.is_test) === 1 || Number(instance.test_focus_enforcement) === 1;
+      if (!isTestInstance) {
         await conn.rollback();
         return res.status(400).json({ error: 'Focus events apply only to tests.' });
       }

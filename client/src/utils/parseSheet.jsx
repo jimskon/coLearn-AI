@@ -2492,7 +2492,7 @@ export function renderBlocks(blocks, options = {}) {
                 onClick={() => options.onToggleViewMode?.(codeKey, viewMode === 'active' ? 'local' : 'active')}
                 title="Switch between following the active student and a private sandbox"
               >
-                {viewMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {viewMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2616,7 +2616,7 @@ export function renderBlocks(blocks, options = {}) {
                 onClick={() => options.onToggleViewMode?.(codeKey, codeMode === 'active' ? 'local' : 'active')}
                 title="Switch between following the active student and a private sandbox"
               >
-                {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2708,7 +2708,7 @@ export function renderBlocks(blocks, options = {}) {
                 className="btn btn-sm btn-outline-secondary"
                 onClick={() => options.onToggleViewMode?.(codeKey, codeMode === 'active' ? 'local' : 'active')}
               >
-                {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2996,7 +2996,7 @@ export function renderBlocks(blocks, options = {}) {
                       className="btn btn-sm btn-outline-secondary"
                       onClick={() => options.onToggleViewMode?.(responseKey, codeMode === 'active' ? 'local' : 'active')}
                     >
-                      {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                      {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
                     </button>
                   </div>
                 )}
@@ -3081,7 +3081,7 @@ export function renderBlocks(blocks, options = {}) {
                         )
                       }
                     >
-                      {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                      {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
                     </button>
                   </div>
                 )}

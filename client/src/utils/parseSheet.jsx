@@ -2628,6 +2628,7 @@ export function renderBlocks(blocks, options = {}) {
             editable={canEdit}
             runnerEnabled={block.type === 'pythonremote' ? remotePythonEnabled : true}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             // 👇 forward meta so the server sees the actual task
             onCodeChange={(rk, code, extra) => {
               // local sandbox -> store locally, no network

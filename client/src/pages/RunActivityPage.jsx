@@ -639,6 +639,7 @@ export default function RunActivityPage({
     handleFileChange,
     handleTextChange,
     handleCodeChange,
+    clearLocalSandbox,
   } = useRunActivityResponses({
     instanceId,
     user,
@@ -647,6 +648,19 @@ export default function RunActivityPage({
     persistResponses: canPersistDrafts,
     emitLiveUpdates: canUseLiveSync,
   });
+
+  // When this student becomes the active student, discard local sandbox edits
+  // and reload from the DB so they see the last-saved version, not stale local state.
+  const prevIsActiveRef = useRef(false);
+  useEffect(() => {
+    const justBecameActive = !prevIsActiveRef.current && isActive;
+    prevIsActiveRef.current = isActive;
+    if (!justBecameActive) return;
+    clearLocalSandbox();
+    loadActivity();
+  // loadActivity is a stable callback from useRunActivityData; clearLocalSandbox from useRunActivityResponses.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   useEffect(() => {
     if (!allowFreeNavigation) return;

@@ -66,6 +66,14 @@ export default function useRunActivityResponses({
     setCodeViewMode((prev) => ({ ...prev, [rk]: next }));
   }, []);
 
+  // Called when this user becomes the active student. Discards any local-sandbox
+  // edits and resets all code blocks back to "Following Active" mode so they
+  // display the DB-saved version loaded by the subsequent loadActivity() call.
+  const clearLocalSandbox = useCallback(() => {
+    setLocalCode({});
+    setCodeViewMode({});
+  }, []);
+
   const updateLocalCode = useCallback((rk, code) => {
     setLastEditTs(Date.now());
     dirtyKeysRef.current.add(rk);
@@ -224,6 +232,7 @@ export default function useRunActivityResponses({
     fileContentsRef,
     codeViewMode,
     localCode,
+    clearLocalSandbox,
     unansweredShown,
     setUnansweredShown,
     submitAlert,

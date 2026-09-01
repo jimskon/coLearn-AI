@@ -1,7 +1,7 @@
 // client/src/pages/RunActivityPage.jsx
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import { Container, Alert, Button, ButtonGroup, Spinner } from 'react-bootstrap';
+import { Container, Alert, Button, ButtonGroup, Spinner, Modal } from 'react-bootstrap';
 import Prism from 'prismjs';
 import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-python';
@@ -383,6 +383,7 @@ export default function RunActivityPage({
   // ✅ add this (prevents repeat auto-submit calls)
   const [autoSubmitted, setAutoSubmitted] = useState(false);
   const [focusWarning, setFocusWarning] = useState(null);
+  const [showFocusModal, setShowFocusModal] = useState(false);
   const focusLossRequestRef = useRef(false);
   const focusAutoSubmitRef = useRef(false);
   const [sectionTimerNowMs, setSectionTimerNowMs] = useState(() => Date.now());
@@ -1149,8 +1150,10 @@ export default function RunActivityPage({
 
     if (!canMonitor) return undefined;
 
-    const recordFocusLoss = async () => {
-      if (!document.hidden || focusLossRequestRef.current || focusAutoSubmitRef.current) return;
+    const recordFocusLoss = async (event) => {
+      // visibilitychange fires twice (hidden + visible); only act when hiding
+      if (event?.type === 'visibilitychange' && !document.hidden) return;
+      if (focusLossRequestRef.current || focusAutoSubmitRef.current) return;
 
       focusLossRequestRef.current = true;
       try {
@@ -1170,12 +1173,13 @@ export default function RunActivityPage({
 
         if (result.action === 'submit') {
           focusAutoSubmitRef.current = true;
-          setFocusWarning('Focus was lost a second time. Your test is being submitted.');
+          setFocusWarning('Your test is being submitted because you left the exam window a second time.');
           await handleSubmit(false);
           return;
         }
 
-        setFocusWarning('Warning: leaving the test window was recorded. Leaving it again will submit your test.');
+        // First violation — show blocking modal
+        setShowFocusModal(true);
       } catch (err) {
         console.warn('Could not record test focus loss:', err);
       } finally {
@@ -1184,7 +1188,11 @@ export default function RunActivityPage({
     };
 
     document.addEventListener('visibilitychange', recordFocusLoss);
-    return () => document.removeEventListener('visibilitychange', recordFocusLoss);
+    window.addEventListener('blur', recordFocusLoss);
+    return () => {
+      document.removeEventListener('visibilitychange', recordFocusLoss);
+      window.removeEventListener('blur', recordFocusLoss);
+    };
     // handleSubmit is a function declaration below, as in the timed-submit effect above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -3280,11 +3288,30 @@ export default function RunActivityPage({
             {submitAlert}
           </Alert>
         )}
+        {/* First focus-loss: blocking modal the student must acknowledge */}
+        <Modal show={showFocusModal} backdrop="static" keyboard={false} centered>
+          <Modal.Header>
+            <Modal.Title>⚠️ Exam Warning</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <p>
+              <strong>You left the exam window.</strong> This has been recorded by your instructor.
+            </p>
+            <p>
+              If you leave the exam window again, your test will be <strong>automatically submitted</strong>.
+            </p>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="warning" onClick={() => setShowFocusModal(false)}>
+              I Understand — Return to Exam
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Second focus-loss: auto-submit banner */}
         {focusWarning && (
           <Alert
-            variant={focusAutoSubmitRef.current ? 'danger' : 'warning'}
-            dismissible={!focusAutoSubmitRef.current}
-            onClose={() => setFocusWarning(null)}
+            variant="danger"
             className="mt-3"
           >
             {focusWarning}

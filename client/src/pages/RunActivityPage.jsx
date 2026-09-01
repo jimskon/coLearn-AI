@@ -975,6 +975,7 @@ export default function RunActivityPage({
     setCodeFeedbackShown,
     setFollowupsShown,
     findQuestionBlockByQid,
+    dirtyKeysRef,
   });
 
 

@@ -20,6 +20,7 @@ export default function useRunActivitySync({
   setCodeFeedbackShown,
   setFollowupsShown,
   findQuestionBlockByQid,
+  dirtyKeysRef,
 }) {
   const [socket, setSocket] = useState(null);
   const activeStudentIdRef = useRef(null);
@@ -141,6 +142,11 @@ export default function useRunActivitySync({
 
     const handleUpdate = ({ responseKey, value, answeredBy }) => {
       if (answeredBy && String(answeredBy) === String(user?.id)) return;
+
+      // Temporarily mark this key dirty so a concurrent loadActivity() call
+      // does not overwrite the fresh socket value with an older DB snapshot
+      // (Race B/D fix). The key auto-clears after 3 s.
+      dirtyKeysRef?.current?.addTemp?.(responseKey, 3000);
 
       setExistingAnswers((prev) => ({
         ...prev,

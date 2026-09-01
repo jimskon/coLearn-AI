@@ -11,7 +11,21 @@ export default function useRunActivityResponses({
   emitLiveUpdates = true,
 }) {
   const codeByKeyRef = useRef(Object.create(null));
-  const dirtyKeysRef = useRef(new Set());
+  // Debounce timers for DB saves — keyed by responseKey. The socket emit still
+  // fires immediately so the observer sees live keystrokes (Race C fix).
+  const saveDebounceRef = useRef(new Map());
+  // Reference-counted dirty tracker: a key stays "dirty" until every concurrent
+  // in-flight save for it has resolved, preventing loadActivity from overwriting
+  // a key that still has an unresolved fetch (Race A fix).
+  const dirtyKeysRef = useRef({
+    _counts: new Map(),
+    add(k)    { this._counts.set(k, (this._counts.get(k) || 0) + 1); },
+    delete(k) { const n = (this._counts.get(k) || 1) - 1; if (n <= 0) { this._counts.delete(k); } else { this._counts.set(k, n); } },
+    has(k)    { return (this._counts.get(k) || 0) > 0; },
+    // Temporarily mark a key dirty for `ms` ms — used by socket handler so
+    // loadActivity doesn't overwrite a freshly socket-received value (Race B/D fix).
+    addTemp(k, ms = 3000) { this.add(k); setTimeout(() => this.delete(k), ms); },
+  });
   const dirtyTextQidsRef = useRef(new Set());
 
   const [followupsShown, setFollowupsShown] = useState({});
@@ -152,27 +166,41 @@ export default function useRunActivityResponses({
       [responseKey]: { ...(prev[responseKey] || {}), response: updatedCode, type: 'text' },
     }));
 
-    if (persistResponses && isActive) {
-      try {
-        await fetch(`${API_BASE_URL}/api/responses/draft`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            question_id: responseKey,
-            activity_instance_id: instanceId,
-            user_id: user?.id,
-            response: updatedCode,
-          }),
-        });
-        dirtyKeysRef.current.delete(responseKey);
-      } catch (err) {
-        console.error('handleCodeChange failed:', err);
-      }
-    }
-
+    // Emit to socket immediately so observer sees live keystrokes
     if (emitLiveUpdates && isActive) {
       meta.socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user?.id });
+    }
+
+    // Debounce the DB write: cancel any pending save for this key and schedule
+    // a new one. This collapses rapid keystrokes into one DB write per burst,
+    // preventing out-of-order responses from landing a stale value (Race C fix).
+    if (persistResponses && isActive) {
+      if (saveDebounceRef.current.has(responseKey)) {
+        clearTimeout(saveDebounceRef.current.get(responseKey));
+      }
+      const timerId = setTimeout(async () => {
+        saveDebounceRef.current.delete(responseKey);
+        // Capture the latest value at fire time, not at schedule time
+        const latestCode = codeByKeyRef.current[responseKey];
+        try {
+          await fetch(`${API_BASE_URL}/api/responses/draft`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              question_id: responseKey,
+              activity_instance_id: instanceId,
+              user_id: user?.id,
+              response: latestCode,
+            }),
+          });
+        } catch (err) {
+          console.error('handleCodeChange DB save failed:', err);
+        } finally {
+          dirtyKeysRef.current.delete(responseKey);
+        }
+      }, 300);
+      saveDebounceRef.current.set(responseKey, timerId);
     }
 
     setCodeFeedbackShown((prev) => ({ ...prev, [responseKey]: null }));

@@ -575,6 +575,35 @@ async function buildAttemptHistoryContext({
   }
 }
 
+const DEFAULT_CLASS_GUIDANCE = "Accept any response that shows the student is engaging with the question and thinking about the concept. Only push back when a response is gibberish, completely off-prompt, contains a clear error, or fails the single core requirement of the question. When pushing back, ask one focused question or suggest one small addition — never list multiple failures. Do not demand completeness, perfect wording, or extra detail beyond what the question asks for. Do not request input validation, error handling, refactoring, or extra features. Do not evaluate variable-name style. If the checker encounters an internal error, allow the group to continue.";
+
+async function fetchClassGuidance(instanceId) {
+  const numericInstanceId = Number(instanceId);
+  if (!Number.isFinite(numericInstanceId) || numericInstanceId <= 0) {
+    return DEFAULT_CLASS_GUIDANCE;
+  }
+
+  try {
+    const [rows] = await db.query(
+      `SELECT pc.ai_guidance
+       FROM activity_instances ai
+       JOIN courses c ON c.id = ai.course_id
+       LEFT JOIN pogil_classes pc ON pc.id = c.class_id
+       WHERE ai.id = ?
+       LIMIT 1`,
+      [numericInstanceId]
+    );
+
+    const value = String(rows?.[0]?.ai_guidance || "").trim();
+    return value || DEFAULT_CLASS_GUIDANCE;
+  } catch (err) {
+    if (AI_DEBUG) {
+      console.warn('[AI_DEBUG] fetchClassGuidance failed:', err?.message || err);
+    }
+    return DEFAULT_CLASS_GUIDANCE;
+  }
+}
+
 async function buildStudentResponsePrompt({
   questionText,
   studentAnswer,
@@ -583,6 +612,7 @@ async function buildStudentResponsePrompt({
   feedbackPrompt = "",
   followupPrompt = "",
   guidance = "",
+  classGuidance = "",
   instanceId,
   qid,
   historyLimit = 5,
@@ -593,6 +623,7 @@ async function buildStudentResponsePrompt({
 }) {
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
   const activityGuide = stripHtml(guidance || "");
+  const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
   const questionGuide = stripHtml(feedbackPrompt || "");
   const historyContext = await buildAttemptHistoryContext({
     instanceId,
@@ -622,6 +653,10 @@ async function buildStudentResponsePrompt({
     "You are a warm, concise learning facilitator for an ungraded collaborative activity.",
     "The submission represents a collaborative group's shared answer, even though one person may be typing.",
     "Your role is to coach the group forward — not to gatekeep. Think of yourself as a thoughtful peer nudging them toward understanding, not a grader checking a rubric.",
+    `Class-level AI policy:\n${classGuide}`,
+    activityGuide
+      ? `Activity-level refinement (takes precedence over class policy where stated):\n${activityGuide}`
+      : "",
     "Decide whether the group's current submission is sufficient to proceed.",
     "Return ONLY JSON matching the schema exactly.",
     "The instructor feedbackprompt is the complete acceptance contract for this question. Follow it literally; do not add your own criteria.",
@@ -1469,6 +1504,8 @@ async function evaluateStudentResponse(req, res) {
     timerDurationMs = null,
   } = req.body || {};
 
+  const classGuidance = await fetchClassGuidance(instanceId);
+
   let accepted = false;
   let feedback =
     "I couldn't interpret that response—please add one concrete sentence answering the question.";
@@ -1588,6 +1625,7 @@ async function evaluateStudentResponse(req, res) {
     feedbackPrompt,
     followupPrompt,
     guidance,
+    classGuidance,
     instanceId,
     qid: qid || req.body?.questionId || req.body?.codeVersion || "",
     historyLimit: 5,
@@ -1726,6 +1764,7 @@ async function evaluatePythonCode(req, res) {
     console.log("[AI_DEBUG] followupPrompt (first 120):", String(req.body?.followupPrompt || "").slice(0, 120));
     console.log("[AI_DEBUG] studentCode (first 200):\n" + String(req.body?.studentCode || "").slice(0, 200));
   }
+  const classGuidance = await fetchClassGuidance(instanceId);
   const result = await evaluateCode({
     questionText,
     studentCode,
@@ -1733,6 +1772,7 @@ async function evaluatePythonCode(req, res) {
     instanceId,
     qid: codeVersion,
     guidance,
+    classGuidance,
     isCodeOnly,
     feedbackPrompt,
     sampleResponse,
@@ -1914,6 +1954,7 @@ async function evaluateCode({
   instanceId = null,
   qid = "",
   guidance = "",
+  classGuidance = "",
   isCodeOnly = false,
   feedbackPrompt = "",
   sampleResponse = "",
@@ -1936,6 +1977,7 @@ async function evaluateCode({
   const parts = combined.split(/\n-{3,}\n/);
   const qGuide = stripHtml(feedbackPrompt || "");
   const aGuide = parts[1] || parts[0] || combined;
+  const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
   const policy = getEffectivePolicy(aGuide, qGuide);
 
   const inferred = detectLangFromCode(studentCode);
@@ -2051,8 +2093,13 @@ ${rules ? "\n" + rules : ""}
       messages: [
         {
           role: "system",
-          content:
+          content: [
             "You are a careful code-evaluation assistant. Accept any correct solution that satisfies the task. Do not overfit to the sample response.",
+            `Class-level AI policy:\n${classGuide}`,
+            aGuide
+              ? `Activity-level refinement (takes precedence over class policy where stated):\n${aGuide}`
+              : "",
+          ].filter(Boolean).join("\n"),
         },
         { role: "user", content: prompt },
       ],
@@ -2132,6 +2179,7 @@ async function evaluateCppCode(req, res) {
     outputText: String(outputText || "").slice(0, 200),
   });
 
+  const classGuidance = await fetchClassGuidance(instanceId);
   const result = await evaluateCode({
     questionText,
     studentCode,
@@ -2139,6 +2187,7 @@ async function evaluateCppCode(req, res) {
     instanceId,
     qid: codeVersion,
     guidance,
+    classGuidance,
     isCodeOnly,
     feedbackPrompt,
     sampleResponse,

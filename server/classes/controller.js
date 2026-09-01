@@ -102,13 +102,14 @@ exports.createClass = async (req, res) => {
     level = null,
     topic_domain = null,
     demo_mode = false,
+    ai_guidance = null,
     createdBy,
   } = req.body;
   try {
     await ensureDemoModeSchema();
     const [result] = await db.query(
-      'INSERT INTO pogil_classes (name, description, level, topic_domain, demo_mode, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, description, level, topic_domain, demo_mode ? 1 : 0, createdBy]
+      'INSERT INTO pogil_classes (name, description, level, topic_domain, demo_mode, ai_guidance, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [name, description, level, topic_domain, demo_mode ? 1 : 0, ai_guidance, createdBy]
     );
     res.status(201).json({
       id: Number(result.insertId),
@@ -117,6 +118,7 @@ exports.createClass = async (req, res) => {
       level,
       topic_domain,
       demo_mode: Boolean(demo_mode),
+      ai_guidance,
       created_by: createdBy,
     });
     void recordAuditEvent('class_created', {
@@ -132,14 +134,29 @@ exports.createClass = async (req, res) => {
 };
 
 exports.updateClass = async (req, res) => {
-  const { name, description, level = null, topic_domain = null, demo_mode = false } = req.body;
+  const {
+    name,
+    description,
+    level = null,
+    topic_domain = null,
+    demo_mode = false,
+    ai_guidance = null,
+  } = req.body;
   try {
     await ensureDemoModeSchema();
     await db.query(
-      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ?, demo_mode = ? WHERE id = ?',
-      [name, description, level, topic_domain, demo_mode ? 1 : 0, req.params.id]
+      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ?, demo_mode = ?, ai_guidance = ? WHERE id = ?',
+      [name, description, level, topic_domain, demo_mode ? 1 : 0, ai_guidance, req.params.id]
     );
-    res.json({ id: req.params.id, name, description, level, topic_domain, demo_mode: Boolean(demo_mode) });
+    res.json({
+      id: req.params.id,
+      name,
+      description,
+      level,
+      topic_domain,
+      demo_mode: Boolean(demo_mode),
+      ai_guidance,
+    });
   } catch (err) {
     console.error("Error updating class:", err);
     res.status(500).json({ error: 'Failed to update class' });
@@ -679,7 +696,7 @@ exports.createCreatorDraft = async (req, res) => {
 
   try {
     const [classes] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      'SELECT id, name, description, level, topic_domain, ai_guidance FROM pogil_classes WHERE id = ?',
       [classId]
     );
 
@@ -788,7 +805,7 @@ exports.reviseCreatorDraft = async (req, res) => {
 
   try {
     const [[classRow]] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      'SELECT id, name, description, level, topic_domain, ai_guidance FROM pogil_classes WHERE id = ?',
       [classId]
     );
 
@@ -863,7 +880,7 @@ exports.reviseCreatorQuestion = async (req, res) => {
 
   try {
     const [[classRow]] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      'SELECT id, name, description, level, topic_domain, ai_guidance FROM pogil_classes WHERE id = ?',
       [classId]
     );
     if (!classRow) return res.status(404).json({ error: 'Class not found' });

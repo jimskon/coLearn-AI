@@ -1857,11 +1857,8 @@ async function evaluateStudentResponse(req, res) {
     //
     // normalizeAIResult already promotes the model's own followupQuestion into
     // `feedback`, so a well-formed follow-up still reaches the group. If the
-    // model produced nothing at all, show nothing.
-    if (accepted && positiveEnabled && !feedback) {
-      feedback = null;
-    }
-
+    // model produced nothing at all, `feedback` simply stays empty and no
+    // guidance box is rendered.
     if (isNone(feedbackPrompt) && !policy.requirementsOnly) {
       feedback = null;
     }

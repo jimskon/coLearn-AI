@@ -268,6 +268,35 @@ async function syncTotalGroupsFromSource(conn, instanceId, activitySource, fallb
 
   try {
     const lines = await loadActivitySourceLines(activitySource || {});
+
+    // countQuestionGroups() reports 1 when it finds no \questiongroup lines at
+    // all. That is a guess, not a measurement, and it is indistinguishable from
+    // a real single-group activity -- so guard on the raw count instead.
+    //
+    // Finding zero groups does not mean the activity has one group; it means we
+    // failed to read the source. loadActivitySourceLines returns [] when the
+    // instance has no sheet_url, and a Google Doc that 403s or redirects comes
+    // back as an error page with no \questiongroup lines rather than throwing.
+    // Writing total_groups = 1 on the strength of that silently freezes every
+    // student past group 1: submit-group rescans only i = 1..total_groups, so
+    // the group they just completed is never counted, completed_groups never
+    // increases, and the client sees no advance. Both Submit and Continue then
+    // appear to do nothing and the student stays on the same question.
+    //
+    // Keep whatever we already knew instead of overwriting it with a guess.
+    const rawGroupCount = (Array.isArray(lines) ? lines : [])
+      .filter((line) => String(line || '').trimStart().startsWith('\\questiongroup'))
+      .length;
+
+    if (rawGroupCount === 0) {
+      console.warn('⚠️ Refusing to rewrite total_groups: no \\questiongroup lines found in activity source.', {
+        instanceId,
+        storedTotalGroups,
+        lineCount: Array.isArray(lines) ? lines.length : 0,
+      });
+      return storedTotalGroups > 0 ? storedTotalGroups : 1;
+    }
+
     const canonicalTotalGroups = countQuestionGroups(lines);
 
     if (instanceId && canonicalTotalGroups !== storedTotalGroups) {

@@ -3,6 +3,12 @@ import { useCallback, useRef } from 'react';
 // A burst of this many loads inside the window is treated as a loop, not as
 // legitimate activity. One submit or one becomes-active transition is a single
 // load, so real usage stays far below this.
+// A real instance row always carries its own id. An error body ({error: ...})
+// and a null parse do not, which is what makes this a reliable discriminator.
+function isLoadedInstance(data) {
+  return !!data && typeof data === 'object' && !Array.isArray(data) && data.id != null;
+}
+
 const RELOAD_BURST_LIMIT = 6;
 const RELOAD_BURST_WINDOW_MS = 4000;
 const RELOAD_BURST_COOLDOWN_MS = 5000;
@@ -88,7 +94,24 @@ export default function useRunActivityData({
       const instanceRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
         credentials: 'include',
       });
-      const instanceData = await instanceRes.json();
+      const instanceData = await instanceRes.json().catch(() => null);
+
+      // Never publish a failed read into `activity`.
+      //
+      // A non-ok response still parses as JSON -- typically {error: "..."} --
+      // and writing that object into activity silently strips every real field.
+      // The visible symptom is chrome derived from those fields blinking out
+      // and back: the submitted/score banner disappears for one render, as does
+      // the section timer, because submitted_at and section_timer_* are simply
+      // absent from the error payload. Keeping the previous good activity is
+      // always better than replacing it with an error body.
+      if (!instanceRes.ok || !isLoadedInstance(instanceData)) {
+        console.warn('[RUN] Ignoring bad activity-instance response; keeping previous state.', {
+          status: instanceRes.status,
+          body: instanceData,
+        });
+        return;
+      }
 
       setActivity(instanceData);
 
@@ -102,10 +125,12 @@ export default function useRunActivityData({
         const updatedRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
           credentials: 'include',
         });
-        const updatedData = await updatedRes.json();
+        const updatedData = await updatedRes.json().catch(() => null);
 
-        setActivity(updatedData);
-        effective = updatedData;
+        if (updatedRes.ok && isLoadedInstance(updatedData)) {
+          setActivity(updatedData);
+          effective = updatedData;
+        }
       }
 
       const activeRes = await fetch(

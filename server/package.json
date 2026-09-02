@@ -7,8 +7,8 @@
     "lint:syntax": "node scripts/check-syntax.js",
     "test:unit": "node --test $(ls tests/*.test.js | grep -v '[.]db[.]test[.]js$')",
     "test:db": "node --test --test-concurrency=1 tests/*.db.test.js",
-    "test": "npm run lint:syntax && npm run test:unit",
-    "test:ci": "npm test && npm run test:db",
+    "test": "npm run lint:syntax && npm run test:unit && npm run test:db",
+    "test:ci": "npm test",
     "start": "node index.js"
   },
   "keywords": [],

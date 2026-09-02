@@ -113,7 +113,25 @@ export default function useRunActivityData({
         return;
       }
 
-      setActivity(instanceData);
+      // MERGE, never replace.
+      //
+      // instanceData is the activity_instances row. It carries no `meta`,
+      // because mode/context/level are parsed out of the sheet further down and
+      // folded in by the setActivity near the end of this function.
+      //
+      // Replacing wholesale therefore publishes a activity that momentarily
+      // claims meta is absent, and activityMode falls back to 'group'. For an
+      // assignment that is not cosmetic: isAssignmentMode gates the
+      // submitted/score banner (so it blinks out), and it is a term of isActive
+      // (so isActive drops to false and then back to true when meta lands).
+      // The isActive effect in RunActivityPage reloads on that false -> true
+      // edge, which starts the next load, which repeats the whole dance -- an
+      // endless reload loop that only appears on assignments, since a group
+      // activity derives isActive from activeStudentId instead.
+      //
+      // Merging keeps the parsed fields from the previous load in place, so the
+      // edge happens once on genuine first load and never again.
+      setActivity((prev) => ({ ...prev, ...instanceData }));
 
       let effective = instanceData;
 
@@ -128,7 +146,8 @@ export default function useRunActivityData({
         const updatedData = await updatedRes.json().catch(() => null);
 
         if (updatedRes.ok && isLoadedInstance(updatedData)) {
-          setActivity(updatedData);
+          // Same reasoning as above: this is a row refresh, not a whole activity.
+          setActivity((prev) => ({ ...prev, ...updatedData }));
           effective = updatedData;
         }
       }

@@ -33,6 +33,19 @@ function normalizeSectionTimerPayload(raw = {}) {
   };
 }
 
+// The mysql driver may hand back a Date or a string depending on config; the
+// client's parseUtcDbDatetime understands the "YYYY-MM-DD HH:MM:SS" UTC form,
+// so normalise to that before sending timer anchors over the wire.
+function normalizeDbDatetime(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? null
+      : value.toISOString().slice(0, 19).replace('T', ' ');
+  }
+  return String(value);
+}
+
 function toDbNowString(date = new Date()) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
@@ -1184,11 +1197,37 @@ async function recordHeartbeat(req, res) {
       };
     }
 
+    // The authoritative timer state as it stands after this heartbeat.
+    //
+    // timerPatch is only populated when the timer CHANGED, and it is announced
+    // once over the socket. A client whose socket was not in the room at that
+    // instant -- still connecting, reconnected after a drop, resumed from sleep
+    // -- would otherwise never learn the timer exists, because every later
+    // heartbeat is a no-op that emits nothing. Returning the full state on
+    // every heartbeat turns it into a reconciliation loop, so a client that
+    // missed the broadcast self-heals on its next beat instead of needing a
+    // page reload.
+    const sectionTimer = timerPatch
+      ? {
+        section_timer_key: timerPatch.section_timer_key,
+        section_timer_duration_minutes: timerPatch.section_timer_duration_minutes,
+        section_timer_started_at: timerPatch.section_timer_started_at,
+        section_timer_paused: currentPaused ? 1 : 0,
+        section_timer_paused_at: normalizeDbDatetime(inst.section_timer_paused_at),
+      }
+      : {
+        section_timer_key: currentKey,
+        section_timer_duration_minutes: currentDuration,
+        section_timer_started_at: normalizeDbDatetime(currentStartedAt),
+        section_timer_paused: currentPaused ? 1 : 0,
+        section_timer_paused_at: normalizeDbDatetime(inst.section_timer_paused_at),
+      };
+
     if (userRow.role !== 'student') {
       if (timerPatch) {
         global.emitInstanceState?.(Number(instanceId), timerPatch);
       }
-      return res.json({ success: true, becameActive: false, ...(timerPatch || {}) });
+      return res.json({ success: true, becameActive: false, sectionTimer, ...(timerPatch || {}) });
     }
 
     const [[isMember]] = await db.query(
@@ -1200,7 +1239,7 @@ async function recordHeartbeat(req, res) {
       if (timerPatch) {
         global.emitInstanceState?.(Number(instanceId), timerPatch);
       }
-      return res.json({ success: true, becameActive: false, ...(timerPatch || {}) });
+      return res.json({ success: true, becameActive: false, sectionTimer, ...(timerPatch || {}) });
     }
 
     await db.query(
@@ -1234,6 +1273,7 @@ async function recordHeartbeat(req, res) {
       global.emitInstanceState?.(Number(instanceId), completedPatch);
       return res.json({
         success: true,
+        sectionTimer,
         becameActive: false,
         activeStudentId: null,
         ...(timerPatch || {}),
@@ -1274,6 +1314,7 @@ async function recordHeartbeat(req, res) {
         });
         return res.json({
           success: true,
+          sectionTimer,
           becameActive: true,
           activeStudentId: newActiveId,
           ...(timerPatch || {}),
@@ -1287,6 +1328,7 @@ async function recordHeartbeat(req, res) {
 
     return res.json({
       success: true,
+      sectionTimer,
       becameActive: false,
       activeStudentId: inst.active_student_id,
       ...(timerPatch || {}),

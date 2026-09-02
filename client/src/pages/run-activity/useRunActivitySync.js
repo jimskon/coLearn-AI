@@ -109,7 +109,7 @@ export default function useRunActivitySync({
     const sendHeartbeat = async () => {
       if (!user?.id || !instanceId || !Array.isArray(groups) || groups.length === 0) return;
       try {
-        await fetch(
+        const res = await fetch(
           `${API_BASE_URL}/api/activity-instances/${instanceId}/heartbeat`,
           {
             method: 'POST',
@@ -122,6 +122,28 @@ export default function useRunActivitySync({
             }),
           }
         );
+
+        // Reconcile the timer from the heartbeat response.
+        //
+        // The server announces a NEW timer once, over the socket. A client that
+        // was not in the room at that moment never hears it, and no later
+        // heartbeat re-announces it, so the timer would stay invisible for that
+        // student until a full page reload. The heartbeat now returns the
+        // current timer state every time, which makes this a 20s self-heal for
+        // any missed broadcast.
+        const data = await res.json().catch(() => null);
+        const timer = data?.sectionTimer;
+        if (timer) {
+          setActivity((prev) => {
+            if (!prev) return prev;
+            // Only replace the object when a field actually differs, otherwise
+            // every heartbeat would re-render the whole activity page.
+            const changed = Object.keys(timer).some(
+              (key) => (prev[key] ?? null) !== (timer[key] ?? null)
+            );
+            return changed ? { ...prev, ...timer } : prev;
+          });
+        }
       } catch { }
     };
     sendHeartbeat();
@@ -135,6 +157,7 @@ export default function useRunActivitySync({
     progressStatus,
     currentTimedSection?.key,
     currentTimedSection?.minutes,
+    setActivity,
   ]);
 
   useEffect(() => {

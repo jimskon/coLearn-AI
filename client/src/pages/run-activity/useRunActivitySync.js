@@ -204,12 +204,27 @@ export default function useRunActivitySync({
       });
     };
 
+    // A completed AI exchange on this instance. Turn rows are append-only and
+    // keyed by qid, so applying one is idempotent: the student who asked and
+    // every observer converge on the same transcript, and a re-delivered event
+    // simply rewrites the row it already has.
+    const handleAiTurn = ({ qid, turn }) => {
+      if (!qid || !turn) return;
+      dirtyKeysRef?.current?.addTemp?.(qid, 3000);
+      setExistingAnswers((prev) => ({
+        ...prev,
+        [qid]: { response: JSON.stringify(turn), type: 'text' },
+      }));
+    };
+
     socket.on('response:update', handleUpdate);
     socket.on('feedback:update', handleFeedbackUpdate);
+    socket.on('ai:turn', handleAiTurn);
 
     return () => {
       socket.off('response:update', handleUpdate);
       socket.off('feedback:update', handleFeedbackUpdate);
+      socket.off('ai:turn', handleAiTurn);
     };
   }, [
     socket,

@@ -1,5 +1,5 @@
 // client/src/pages/RunActivityPage.jsx
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
 import { Container, Alert, Button, ButtonGroup, Spinner, Modal } from 'react-bootstrap';
 import Prism from 'prismjs';
@@ -992,6 +992,19 @@ export default function RunActivityPage({
     dirtyKeysRef,
   });
 
+  // An AI turn the active student just completed. The row is already persisted
+  // server-side and broadcast over the socket; applying it locally as well means
+  // the asker sees their own exchange immediately instead of waiting on the
+  // round trip, and re-applying the socket echo is a no-op because turns are
+  // keyed by qid.
+  const handleAiTurnSaved = useCallback((qid, turn) => {
+    if (!qid || !turn) return;
+    setExistingAnswers((prev) => ({
+      ...prev,
+      [qid]: { response: JSON.stringify(turn), type: 'text' },
+    }));
+  }, []);
+
 
   useEffect(() => {
     if (!canPersistDrafts) return;
@@ -1001,6 +1014,11 @@ export default function RunActivityPage({
       const textToSave = {};
 
       for (const [key, val] of Object.entries(existingAnswers)) {
+        // AI turn rows (1aAI1, 1aAI2, ...) are written authoritatively by the
+        // AI endpoint at the moment the exchange happens. They ride along in
+        // the answers map so the transcript renders, but they must never be
+        // re-saved as drafts or we end up with a second, divergent copy.
+        if (/^\d+[A-Za-z]+AI\d+$/i.test(key)) continue;
         if (val?.type === 'text' && val.response?.trim()) {
           textToSave[key] = val.response.trim();
         }
@@ -3343,6 +3361,8 @@ export default function RunActivityPage({
           />
         ) : (
           <RunActivityWorkspace
+            onAiTurnSaved={handleAiTurnSaved}
+            activeStudentName={activeStudentName}
             activityPaused={activityPaused}
             renderBlocks={renderBlocks}
             preamble={preamble}

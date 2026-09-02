@@ -159,6 +159,17 @@ global.emitResponsePatch = function emitResponsePatch(instanceId, key, value, me
   });
 };
 
+// One completed AI exchange (student prompt + AI reply) on an activity instance.
+// Observers use this to grow the transcript live without refetching.
+global.emitAiTurn = function emitAiTurn(instanceId, baseQid, payload) {
+  global.io.to(roomOfInstance(instanceId)).emit('ai:turn', {
+    instanceId,
+    baseQid,
+    ...payload, // { qid, turn }
+    ts: Date.now(),
+  });
+};
+
 global.emitAIPatch = function emitAIPatch(instanceId, qid, patch) {
   global.io.to(roomOfInstance(instanceId)).emit('ai:patch', {
     instanceId,

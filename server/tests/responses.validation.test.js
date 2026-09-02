@@ -75,27 +75,43 @@ test('bulk-save rejects missing answers', async () => {
   assert.equal(res.status, 400);
 });
 
-test('bulk-save rejects invalid question_id format (underscore suffix)', async () => {
+// A question_id must be digits followed by letters, optionally then more
+// alphanumerics. '2a_state' is VALID (the trailing _state matches the
+// [A-Za-z0-9_]* tail), so these use ids that genuinely cannot parse: one with
+// no leading digits, and one with no letters after the digits.
+test('bulk-save rejects question_id with no leading digits', async () => {
   const res = await post('/api/responses/bulk-save', {
     instanceId: 1,
     userId: 1,
-    answers: { '2a_state': 'bad' },
+    answers: { 'notaqid': 'bad' },
   });
   assert.equal(res.status, 400);
   assert.ok(res.body?.error?.includes('Invalid question_id'));
 });
 
-test('bulk-save rejects question_id with zero numeric suffix (2aF0)', async () => {
-  // isValidQuestionId allows all alphanumeric — 2aF0 is actually valid per the regex.
-  // This test documents the current behaviour rather than asserting a 400.
+test('bulk-save rejects question_id with no letter section', async () => {
   const res = await post('/api/responses/bulk-save', {
     instanceId: 1,
     userId: 1,
-    answers: { '2aF0': 'value' },
+    answers: { '42': 'bad' },
   });
-  // 2aF0 matches /^\d+[A-Za-z]+[A-Za-z0-9_]*$/ so it is valid; route may
-  // return 200 (if DB is available) or 500 (no DB in unit test) but NOT 400.
-  assert.notEqual(res.status, 400);
+  assert.equal(res.status, 400);
+  assert.ok(res.body?.error?.includes('Invalid question_id'));
+});
+
+// Asserted against the validator directly rather than through the route: a
+// question_id that PASSES validation falls through to a DB write, and these
+// unit tests run without a database.
+test('isValidQuestionId accepts AI turn ids and rejects malformed ones', () => {
+  const { isValidQuestionId } = require('../utils/questionId');
+
+  // AI conversation turns are stored under <baseQid>AI<n>.
+  assert.equal(isValidQuestionId('2aAI1'), true);
+  assert.equal(isValidQuestionId('10cAI27'), true);
+
+  assert.equal(isValidQuestionId('notaqid'), false);
+  assert.equal(isValidQuestionId('42'), false);
+  assert.equal(isValidQuestionId(''), false);
 });
 
 test('bulk-save rejects answers array instead of object', async () => {

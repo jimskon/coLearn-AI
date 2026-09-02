@@ -373,6 +373,7 @@ function getHistoryBaseQid(qidRaw) {
   if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
 
   const suffixPatterns = [
+    /^(?<base>\d+[A-Za-z]+)AI\d+$/i,
     /^(?<base>\d+[A-Za-z]+)F\d+$/i,
     /^(?<base>\d+[A-Za-z]+)FA\d+$/i,
     /^(?<base>\d+[A-Za-z]+)FM$/i,

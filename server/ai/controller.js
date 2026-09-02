@@ -169,35 +169,43 @@ function sendAI(res, payload, status = 200) {
   return res.status(status).json({ accepted, feedback, canContinue, retryCount, retriesRequired });
 }
 
-async function assistInlineActivity(req, res) {
-  const {
-    mode = 'explain',
-    model,
-    title = '',
-    assistantPrompt = '',
-    guardrail = '',
-    contextSources = [],
-    questionText = '',
-    sampleResponse = '',
-    studentCode = '',
-    studentInput = '',
-    conversationHistory = [],
-    activityLanguage = 'English',
-  } = req.body || {};
-
+// ---------------------------------------------------------------------------
+// Inline AI help
+//
+// runInlineAiCompletion() holds the prompt construction and the OpenAI call so
+// that both the stateless editor-preview path (assistInlineActivity) and the
+// persisted, active-student-gated activity path (assistActivityAi) behave
+// identically. Only the surrounding bookkeeping differs.
+// ---------------------------------------------------------------------------
+async function runInlineAiCompletion({
+  mode = 'explain',
+  model,
+  title = '',
+  assistantPrompt = '',
+  guardrail = '',
+  contextSources = [],
+  questionText = '',
+  sampleResponse = '',
+  studentCode = '',
+  studentInput = '',
+  conversationHistory = [],
+  activityLanguage = 'English',
+}) {
   const selectedModel = getInlineAiModel(model);
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
 
   const cleanedInput = String(studentInput || '').trim();
   if (!cleanedInput) {
-    return res.status(400).json({ error: 'studentInput is required.' });
+    const err = new Error('studentInput is required.');
+    err.statusCode = 400;
+    throw err;
   }
 
   if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'test-key') {
-    return res.json({
+    return {
       response: 'AI help is not configured on this server yet.',
       demo: true,
-    });
+    };
   }
 
   const modeGuidance = {
@@ -240,42 +248,163 @@ async function assistInlineActivity(req, res) {
     `Student input:\n${cleanedInput}`,
   ].filter(Boolean).join('\n\n');
 
-  try {
-    // GPT-5 mini is a reasoning model.  A 500-token total allowance can be
-    // consumed entirely by reasoning before it emits visible text, which the
-    // API reports as incomplete/max_output_tokens.  Inline classroom help is
-    // short and direct, so use minimal reasoning with room for an answer.
-    const request = {
+  // GPT-5 mini is a reasoning model.  A 500-token total allowance can be
+  // consumed entirely by reasoning before it emits visible text, which the
+  // API reports as incomplete/max_output_tokens.  Inline classroom help is
+  // short and direct, so use minimal reasoning with room for an answer.
+  const request = {
+    model: selectedModel,
+    instructions: system,
+    input: user,
+    text: { format: { type: 'text' } },
+    max_output_tokens: selectedModel === 'gpt-5-mini' ? 1600 : 500,
+  };
+  if (selectedModel === 'gpt-5-mini') {
+    request.reasoning = { effort: 'minimal' };
+  }
+
+  const response = await openai.responses.create(request);
+
+  const outputText = getResponseOutputText(response);
+  if (!outputText) {
+    console.warn('[inline-ai] empty model response', {
       model: selectedModel,
-      instructions: system,
-      input: user,
-      text: { format: { type: 'text' } },
-      max_output_tokens: selectedModel === 'gpt-5-mini' ? 1600 : 500,
-    };
-    if (selectedModel === 'gpt-5-mini') {
-      request.reasoning = { effort: 'minimal' };
-    }
-
-    const response = await openai.responses.create(request);
-
-    const outputText = getResponseOutputText(response);
-    if (!outputText) {
-      console.warn('[inline-ai] empty model response', {
-        model: selectedModel,
-        status: response?.status || null,
-        incompleteReason: response?.incomplete_details?.reason || null,
-        outputItems: Array.isArray(response?.output) ? response.output.length : 0,
-      });
-    }
-    return res.json({
-      response: outputText || 'The AI did not return a response.',
-      demo: false,
+      status: response?.status || null,
+      incompleteReason: response?.incomplete_details?.reason || null,
+      outputItems: Array.isArray(response?.output) ? response.output.length : 0,
     });
+  }
+
+  return {
+    response: outputText || 'The AI did not return a response.',
+    demo: false,
+  };
+}
+
+// Stateless inline AI help. Used by the activity editor preview, where there is
+// no activity instance to attribute or persist a turn against.
+async function assistInlineActivity(req, res) {
+  try {
+    const result = await runInlineAiCompletion(req.body || {});
+    return res.json(result);
   } catch (err) {
+    if (err?.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('assistInlineActivity error:', err);
     return res.status(500).json({ error: 'Inline AI help failed.' });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Activity AI turns
+//
+// A turn is one student prompt plus the AI reply, stored as a single row in
+// `responses` under `<baseQid>AI<n>`. Rows are append-only so the instructor
+// history is a complete audit of AI use, even if the student never submits.
+// ---------------------------------------------------------------------------
+const AI_TURN_QID_RE = /^(\d+[A-Za-z]+)AI(\d+)$/i;
+
+function aiTurnQid(baseQid, index) {
+  return `${baseQid}AI${index}`;
+}
+
+// Highest existing turn index for a base question id on this instance.
+async function getLastAiTurnIndex(instanceId, baseQid) {
+  const [rows] = await db.query(
+    `SELECT question_id FROM responses
+      WHERE activity_instance_id = ? AND question_id REGEXP ?`,
+    [instanceId, `^${baseQid}AI[0-9]+$`]
+  );
+  let max = 0;
+  for (const row of rows) {
+    const m = AI_TURN_QID_RE.exec(String(row.question_id || ''));
+    if (m) max = Math.max(max, parseInt(m[2], 10) || 0);
+  }
+  return max;
+}
+
+// Persisted, gated inline AI help for a live activity instance.
+// Only the instance's current active student may spend a turn; observers and
+// instructors read the transcript but cannot write to it.
+async function assistActivityAi(req, res) {
+  const instanceId = Number(req.body?.instanceId);
+  const userId = Number(req.body?.userId);
+  const baseQid = String(req.body?.questionKey || '').trim();
+
+  if (!Number.isFinite(instanceId) || instanceId <= 0) {
+    return res.status(400).json({ error: 'instanceId is required.' });
+  }
+  if (!Number.isFinite(userId) || userId <= 0) {
+    return res.status(400).json({ error: 'userId is required.' });
+  }
+  if (!/^\d+[A-Za-z]+$/.test(baseQid)) {
+    return res.status(400).json({ error: 'A valid questionKey is required.' });
+  }
+
+  try {
+    // Gate: only the active student may ask. This is enforced server-side so a
+    // stale or tampered client cannot write turns on someone else's behalf.
+    const [instanceRows] = await db.query(
+      `SELECT active_student_id, submitted_at FROM activity_instances WHERE id = ? LIMIT 1`,
+      [instanceId]
+    );
+    const instance = instanceRows?.[0];
+    if (!instance) {
+      return res.status(404).json({ error: 'Activity instance not found.' });
+    }
+    if (Number(instance.active_student_id) !== userId) {
+      return res.status(403).json({
+        error: 'Only the active student can ask the AI.',
+        code: 'NOT_ACTIVE_STUDENT',
+      });
+    }
+    if (instance.submitted_at) {
+      return res.status(409).json({
+        error: 'This activity has already been submitted.',
+        code: 'ALREADY_SUBMITTED',
+      });
+    }
+
+    const prompt = String(req.body?.studentInput || '').trim();
+    if (!prompt) {
+      return res.status(400).json({ error: 'studentInput is required.' });
+    }
+
+    const { response: reply, demo } = await runInlineAiCompletion(req.body || {});
+
+    const index = (await getLastAiTurnIndex(instanceId, baseQid)) + 1;
+    const qid = aiTurnQid(baseQid, index);
+    const turn = {
+      index,
+      prompt,
+      reply,
+      at: new Date().toISOString(),
+      by: userId,
+    };
+
+    await db.query(
+      `INSERT INTO responses
+         (activity_instance_id, question_id, submit_id, response_type, response, answered_by_user_id)
+       VALUES (?, ?, ?, 'text', ?, ?)`,
+      [instanceId, qid, randomUUID(), JSON.stringify(turn), userId]
+    );
+
+    // Push to observers so the transcript grows live for everyone watching.
+    if (typeof global.emitAiTurn === 'function') {
+      global.emitAiTurn(instanceId, baseQid, { qid, turn });
+    }
+
+    return res.json({ response: reply, demo, qid, turn });
+  } catch (err) {
+    if (err?.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('assistActivityAi error:', err);
+    return res.status(500).json({ error: 'Inline AI help failed.' });
+  }
+}
+
 
 function normalizeHistoryQid(qidRaw) {
   const qid = String(qidRaw || '').trim();
@@ -285,6 +414,12 @@ function normalizeHistoryQid(qidRaw) {
   if (/^\d+state$/i.test(qid)) return null;
   if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return null;
   if (/^test(?:Total|Max|Summary)Score$/i.test(qid)) return null;
+
+  // AI conversation turns (1aAI1, 1aAI2, ...) are a record of help the student
+  // asked for, not an attempt at the answer. They must never be folded into the
+  // attempt history that grading sees, or the grader would read the student's
+  // questions to the AI as their submitted work.
+  if (/^\d+[A-Za-z]+AI\d+$/i.test(qid)) return null;
 
   const suffixPatterns = [
     /^(?<base>\d+[A-Za-z]+)F\d+$/i,
@@ -2226,6 +2361,8 @@ async function evaluateCppCode(req, res) {
 
 module.exports = {
   assistInlineActivity,
+  assistActivityAi,
+  runInlineAiCompletion,
   evaluateStudentResponse,
   evaluatePythonCode,
   evaluateCode,

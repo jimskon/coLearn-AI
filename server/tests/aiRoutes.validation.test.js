@@ -45,6 +45,25 @@ const {
 } = require('../ai/controller');
 const db = require('../db');
 
+// Requiring ../db creates a mysql2 pool at import time (db.js:11). This file
+// needs the module in order to stub db.query, but several tests exercise routes
+// that issue a REAL query before the stub is installed. On a machine where MySQL
+// is actually reachable those connections succeed and sit idle in the pool,
+// whose open socket keeps the event loop alive -- so `node --test` finishes every
+// test and then hangs forever instead of exiting.
+//
+// Every *.db.test.js already closes the pool on teardown; this was the one file
+// that did not. That is why the suite appeared to freeze immediately AFTER the
+// AI route tests passed rather than during any of them, and why it only froze on
+// a machine with a working database.
+test.after(async () => {
+  try {
+    await db.end();
+  } catch {
+    // The pool may never have connected; nothing to close.
+  }
+});
+
 function createTestServer() {
   const app = express();
   app.use(express.json());

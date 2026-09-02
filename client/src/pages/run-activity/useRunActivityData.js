@@ -233,7 +233,21 @@ export default function useRunActivityData({
             const text = (entry?.response || '').trim();
             if (!text) continue;
 
-            restoredTextFeedback[qid] = text;
+            // Restore the accepted/needs-revision colour along with the text.
+            //
+            // The UI reads this as {text, positive} and treats a bare string as
+            // not-positive, so storing just the text made every restored answer
+            // render yellow ("needs revision") after a reload -- including ones
+            // the AI had accepted. <qid>FM records which it was, and is already
+            // in this same payload.
+            const marker = (answersData?.[`${qid}FM`]?.response || '')
+              .trim()
+              .toLowerCase();
+
+            restoredTextFeedback[qid] = {
+              text,
+              positive: marker === 'accepted',
+            };
           }
 
           setTextFeedbackShown((prev) => ({ ...prev, ...restoredTextFeedback }));

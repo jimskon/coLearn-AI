@@ -844,7 +844,7 @@ async function buildStudentResponsePrompt({
       ? `Instructor feedbackprompt (meta; do not quote):\n${questionGuide}`
       : "",
     followupRaw && !followupIsNone
-      ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
+      ? `Instructor followupprompt (meta; addressed to you, not to the group -- never quote it verbatim. If you ask a follow-up, rewrite it as a question addressed directly to the group):\n${followupRaw}`
       : "",
     historyContext,
     `Current group submission:\n${stripHtml(studentAnswer)}`,
@@ -1844,8 +1844,22 @@ async function evaluateStudentResponse(req, res) {
       feedback = null;
     }
 
-    if (accepted && positiveEnabled && !feedback && followupRaw && !followupIsNone) {
-      feedback = followupRaw;
+    // Deliberately NOT falling back to the raw instructor followupprompt here.
+    //
+    // \followupprompt is meta addressed to the AI, not to the group -- authors
+    // write it as "Ask the group to explain the role of quotation marks", and it
+    // doubles as a config channel (the No-Positive-feedback override is parsed
+    // out of it). Assigning it to `feedback` published that directive verbatim
+    // to students as "AI Guidance", so they were shown an instruction meant for
+    // someone else. It also only ever happened when the model returned nothing,
+    // which is why the green accepted box appeared exactly when there was no
+    // real feedback to show.
+    //
+    // normalizeAIResult already promotes the model's own followupQuestion into
+    // `feedback`, so a well-formed follow-up still reaches the group. If the
+    // model produced nothing at all, show nothing.
+    if (accepted && positiveEnabled && !feedback) {
+      feedback = null;
     }
 
     if (isNone(feedbackPrompt) && !policy.requirementsOnly) {

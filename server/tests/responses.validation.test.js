@@ -4,6 +4,12 @@ const http   = require('node:http');
 const test   = require('node:test');
 
 const express          = require('express');
+// Force the AI placeholder BEFORE requiring the routes: responses/controller
+// pulls in ai/controller, which builds an OpenAI client at import time. Set
+// unconditionally rather than with ||= so a real key in a developer's .env
+// cannot turn these validation tests into live, billable API calls.
+process.env.OPENAI_API_KEY = 'test-key';
+
 const responsesRoutes  = require('../responses/routes');
 
 // ---------------------------------------------------------------------------

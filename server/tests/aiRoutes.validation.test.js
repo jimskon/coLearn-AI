@@ -2,7 +2,13 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const test = require('node:test');
 
-process.env.OPENAI_API_KEY ||= 'test-key';
+// A NON-placeholder key on purpose. This file intercepts global.fetch (below)
+// so nothing leaves the machine, and it needs the real OpenAI client to be
+// constructed so those interceptions are reached. 'test-key' now selects the
+// stub client, which would bypass the scripted responses these tests rely on.
+// Set unconditionally, not with ||=, so an ambient OPENAI_API_KEY=test-key in
+// the CI environment cannot select the stub out from under these tests.
+process.env.OPENAI_API_KEY = 'live-test-key';
 
 const nativeFetch = global.fetch;
 global.fetch = async (input, init) => {

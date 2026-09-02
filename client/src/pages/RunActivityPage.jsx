@@ -657,8 +657,8 @@ export default function RunActivityPage({
     prevIsActiveRef.current = isActive;
     if (!justBecameActive) return;
     clearLocalSandbox();
-    loadActivity();
-  // loadActivity is a stable callback from useRunActivityData; clearLocalSandbox from useRunActivityResponses.
+    loadActivityRef.current();
+  // Deliberately keyed on isActive alone: this fires on the false -> true edge.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
 
@@ -866,11 +866,28 @@ export default function RunActivityPage({
     loadSkulpt();
   }, []);
 
+  // Keep a live handle to loadActivity WITHOUT making it an effect dependency.
+  //
+  // loadActivity is a useCallback over ~20 dependencies. Listing it below meant
+  // the initial-load effect re-ran whenever any one of them changed identity --
+  // and loadActivity itself calls setActivity, setGroups, setActiveStudentId and
+  // more, so a single load could invalidate its own effect and immediately load
+  // again. The console stack for the runaway showed exactly that shape:
+  // mount -> effect -> loadActivity -> await -> setState -> commit -> effect ->
+  // loadActivity, repeating until the circuit breaker tripped.
+  //
+  // The intent here is "load once for this user and instance", which is what
+  // the primitive dependency list below now expresses literally.
+  const loadActivityRef = useRef(loadActivity);
+  useEffect(() => {
+    loadActivityRef.current = loadActivity;
+  });
+
   useEffect(() => {
     if (user?.id) {
-      loadActivity();
+      loadActivityRef.current();
     }
-  }, [user?.id, instanceId, loadActivity]);
+  }, [user?.id, instanceId]);
 
 
   useEffect(() => {

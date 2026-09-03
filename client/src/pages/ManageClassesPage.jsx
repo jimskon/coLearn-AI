@@ -4,6 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { Table, Button, Form, Container, Modal } from 'react-bootstrap';
+// One copy of the policy text, shared with the server, so the dialog cannot
+// advertise a default the server has stopped applying.
+import defaultClassGuidance from '../../../shared/defaultClassGuidance.cjs';
+
+const { DEFAULT_CLASS_GUIDANCE } = defaultClassGuidance;
 
 export default function ManageClassesPage() {
   const { user } = useUser();
@@ -217,10 +222,35 @@ export default function ManageClassesPage() {
                 name="ai_guidance"
                 value={classForm.ai_guidance}
                 onChange={handleModalFieldChange}
-                placeholder="Accept any response that shows the student is engaging with the question and thinking about the concept. Only push back when a response is gibberish, completely off-prompt, contains a clear error, or fails the single core requirement of the question. When pushing back, ask one focused question or suggest one small addition — never list multiple failures. Do not demand completeness, perfect wording, or extra detail beyond what the question asks for. Do not request input validation, error handling, refactoring, or extra features. Do not evaluate variable-name style. If the checker encounters an internal error, allow the group to continue."
+                placeholder={DEFAULT_CLASS_GUIDANCE}
               />
+              <div className="d-flex align-items-center gap-2 mt-1">
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="p-0"
+                  onClick={() =>
+                    setClassForm((prev) => ({ ...prev, ai_guidance: DEFAULT_CLASS_GUIDANCE }))
+                  }
+                  disabled={(classForm.ai_guidance || '').trim().length > 0}
+                >
+                  Copy the default in to edit it
+                </Button>
+                {(classForm.ai_guidance || '').trim().length > 0 ? (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="p-0 text-muted"
+                    onClick={() => setClassForm((prev) => ({ ...prev, ai_guidance: '' }))}
+                  >
+                    Clear (use system default)
+                  </Button>
+                ) : null}
+              </div>
               <Form.Text className="text-muted">
-                Sets the default AI feedback policy for all activities in this class. Leave blank to use the system default. Individual activities can refine this in their \aicodeguidance field.
+                Sets the default AI feedback policy for all activities in this class. The grey text is
+                the system default, which applies while this box is empty — copy it in if you want to
+                edit it. Individual activities can refine this in their \aicodeguidance field.
               </Form.Text>
             </Form.Group>
             <Form.Group className="mt-3" controlId="classDemoMode">

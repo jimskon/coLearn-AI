@@ -2080,6 +2080,24 @@ async function getInstancesForActivityInCourse(req, res) {
 
     const courseName = course?.name || 'Unknown Course';
     const activityTitle = activity?.title || '';
+
+    // A test roster must not list instances that were never scheduled.
+    //
+    // setupMultipleGroupInstances already treats an unscheduled row as an
+    // abandoned sandbox/preview placeholder rather than a student attempt --
+    // that is exactly why it refuses to let one block setup. The roster has to
+    // agree, otherwise the placeholder is listed beside the real group. It has
+    // no group_members, so it renders as a group whose student is unknown.
+    //
+    // Uses the same derivation as setup (inferActivityTypeFromActivity over the
+    // same columns, which this query already selected but never consulted), so
+    // the two cannot disagree about what counts as a test.
+    const rosterActivityType = await inferActivityTypeFromActivity(activity || {});
+    const unscheduledPlaceholderFilter =
+      rosterActivityType === 'test'
+        ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
+        : '';
+
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
 	              group_number,
@@ -2108,6 +2126,7 @@ async function getInstancesForActivityInCourse(req, res) {
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
+         ${unscheduledPlaceholderFilter}
        ORDER BY group_number`,
       [courseId, activityId]
     );

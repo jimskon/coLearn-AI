@@ -768,7 +768,10 @@ async function buildAttemptHistoryContext({
   }
 }
 
-const DEFAULT_CLASS_GUIDANCE = "Accept any response that shows the student is engaging with the question and thinking about the concept. Only push back when a response is gibberish, completely off-prompt, contains a clear error, or fails the single core requirement of the question. When pushing back, ask one focused question or suggest one small addition — never list multiple failures. Do not demand completeness, perfect wording, or extra detail beyond what the question asks for. Do not request input validation, error handling, refactoring, or extra features. Do not evaluate variable-name style. If the checker encounters an internal error, allow the group to continue.";
+// Shared with the Manage Classes dialog, which shows this same text as the
+// system default. Keeping one copy stops the UI from advertising a policy the
+// server no longer applies.
+const { DEFAULT_CLASS_GUIDANCE } = require('../../shared/defaultClassGuidance.cjs');
 
 async function fetchClassGuidance(instanceId) {
   const numericInstanceId = Number(instanceId);

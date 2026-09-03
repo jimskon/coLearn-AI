@@ -26,6 +26,9 @@ import { Badge, Form, Button, Spinner } from 'react-bootstrap';
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
 import { createDisplayCodeBlock, parseDisplayCodeBlockCommand } from './displayCodeBlocks';
+import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
+
+const { closesBlock, familyOfCloser } = codeBlockFamilies;
 
 
 
@@ -1162,6 +1165,15 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
+    // A display block also closes on any closer from its own family, so
+    // \pythondisplay may end with \endpython. Guarded on a display block being
+    // open so a plain \endpython cannot be hijacked from a regular code block.
+    if (currentDisplayCodeBlock && closesBlock(trimmed, currentDisplayCodeBlock.type)) {
+      finalizeDisplayCodeBlock(lineNo);
+      currentField = 'prompt';
+      continue;
+    }
+
     if (displayCommand?.kind === 'close') {
       if (currentDisplayCodeBlock && currentDisplayCodeBlock.type === displayCommand.type) {
         finalizeDisplayCodeBlock(lineNo);
@@ -1216,8 +1228,8 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    if (trimmed === '\\endcpp') {
-      if (currentField === 'cpp') {
+    if (familyOfCloser(trimmed) === 'cpp') {
+      if (closesBlock(trimmed, currentField)) {
         const lastBlock = blocks.at(-1);
         if (lastBlock?.type === 'cpp' && lastBlock.lines) {
           lastBlock.content = lastBlock.lines.join('\n');
@@ -1419,8 +1431,10 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    if (trimmed === '\\endpython' || trimmed === '\\endpythonturtle' || trimmed === '\\endpythonremote') {
-      if (currentField === 'python' || currentField === 'pythonturtle' || currentField === 'pythonremote') {
+    // Any python-family closer ends any python-family block: \endpython is the
+    // canonical form, the longer historical spellings stay valid on read.
+    if (familyOfCloser(trimmed) === 'python') {
+      if (closesBlock(trimmed, currentField)) {
         const lastBlock = blocks.at(-1);
         if ((lastBlock?.type === 'python' || lastBlock?.type === 'pythonturtle' || lastBlock?.type === 'pythonremote') && lastBlock.lines) {
           lastBlock.content = lastBlock.lines.join('\n');

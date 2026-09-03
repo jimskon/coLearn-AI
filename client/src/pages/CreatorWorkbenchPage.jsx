@@ -42,6 +42,13 @@ import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 import { getSectionKeyAtLine, swapSourceRanges } from '../utils/creatorVisualEdits';
 import { validateMultipleChoice } from '../utils/multipleChoice';
 import markupValidator from '../../../shared/activityMarkupValidation.cjs';
+import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
+import activityStructureDiff from '../../../shared/activityStructureDiff.cjs';
+import llmRevisionPrimer from '../../../shared/llmRevisionPrimer.cjs';
+
+const { closesBlock } = codeBlockFamilies;
+const { diffActivityStructure, describeRemovals } = activityStructureDiff;
+const { buildLlmRevisionPrompt, extractMarkupFromPaste } = llmRevisionPrimer;
 import {
   serializeAiComponent,
   serializeQuestionComponent,
@@ -132,6 +139,20 @@ function upsertLanguageHeader(sourceText, language) {
 
   const modeIndex = lines.findIndex((line) => /^\\mode\{[\s\S]*\}\s*$/.test(line.trim()));
   lines.splice(modeIndex >= 0 ? modeIndex + 1 : 0, 0, `\\language{${normalizedLanguage}}`);
+  return lines.join('\n');
+}
+
+function upsertRetriesHeader(sourceText, retries) {
+  const count = Number.parseInt(retries, 10);
+  if (!Number.isFinite(count) || count < 0) return sourceText;
+  const lines = String(sourceText || '').split('\n');
+  const existingIndex = lines.findIndex((line) => /^\\retries\{\s*\d+\s*\}\s*$/.test(line.trim()));
+  if (existingIndex >= 0) {
+    lines[existingIndex] = `\\retries{${count}}`;
+    return lines.join('\n');
+  }
+  const languageIndex = lines.findIndex((line) => /^\\language\{[\s\S]*\}\s*$/.test(line.trim()));
+  lines.splice(languageIndex >= 0 ? languageIndex + 1 : 0, 0, `\\retries{${count}}`);
   return lines.join('\n');
 }
 
@@ -574,19 +595,25 @@ function getQuestionCodeBlock(sourceText, block, requestedType = '') {
   const startIndex = sourceMeta.questionLine - 1;
   const endIndex = sourceMeta.endQuestionLine - 1;
   const openingPatterns = [
-    ['pythonremote', /^\\pythonremote(?:\{[^}]*\})?\s*$/i, '\\endpythonremote', 'Python Remote'],
-    ['pythonturtle', /^\\pythonturtle(?:\{[^}]*\})?\s*$/i, '\\endpythonturtle', 'Python Turtle'],
-    ['python', /^\\python(?:\{[^}]*\})?\s*$/i, '\\endpython', 'Python'],
-    ['cpp', /^\\cpp(?:\{[^}]*\})?\s*$/i, '\\endcpp', 'C++'],
+    ['pythonremote', /^\\pythonremote(?:\{[^}]*\})?\s*$/i, 'Python Remote'],
+    ['pythonturtle', /^\\pythonturtle(?:\{[^}]*\})?\s*$/i, 'Python Turtle'],
+    ['python', /^\\python(?:\{[^}]*\})?\s*$/i, 'Python'],
+    ['cpp', /^\\cpp(?:\{[^}]*\})?\s*$/i, 'C++'],
   ];
 
   for (let index = startIndex; index <= endIndex; index += 1) {
     const line = lines[index]?.trim();
     const match = openingPatterns.find(([, pattern]) => pattern.test(line));
     if (!match || (requestedType && match[0] !== requestedType)) continue;
-    const [type, , closingTag, label] = match;
+    const [type, , label] = match;
+    // Accept any closer from this block's family rather than one exact tag.
+    // Requiring the exact spelling is what made the inspector return null for a
+    // \pythonremote block closed with \endpython -- and a null here means no
+    // code editor is offered for that question at all.
     const closeIndex = lines.findIndex((candidate, candidateIndex) => (
-      candidateIndex > index && candidateIndex <= endIndex && candidate.trim() === closingTag
+      candidateIndex > index
+      && candidateIndex <= endIndex
+      && closesBlock(candidate.trim(), type)
     ));
     if (closeIndex === -1) return null;
     return {
@@ -648,7 +675,8 @@ export default function CreatorWorkbenchPage() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
 
-  const [revisionRequest, setRevisionRequest] = useState('');
+  const [pastedRevision, setPastedRevision] = useState('');
+  const [copyNotice, setCopyNotice] = useState('');
   const [messages, setMessages] = useState([]);
   const [proposal, setProposal] = useState(null);
   const [sandboxUrl, setSandboxUrl] = useState('');
@@ -1654,74 +1682,121 @@ export default function CreatorWorkbenchPage() {
     }
   };
 
-  const requestRevision = async (requestOverride = null) => {
-    const isAdvancedOnlyRequest = typeof requestOverride === 'string';
-    const requestText = String(isAdvancedOnlyRequest ? requestOverride : revisionRequest).trim();
-    if (!activity?.id || !effectiveClassId) {
-      setError('Create a draft before requesting revisions.');
-      return;
-    }
-    if (!requestText) return;
+  // Revising a whole activity happens outside the app now.
+  //
+  // The in-app version sent the document to a model and wrote back whatever
+  // came out, which failed silently: a response that parsed cleanly and had
+  // lost three sample answers was indistinguishable from one that had not. It
+  // also gave the instructor one blind shot, when what actually works is a
+  // conversation with a model they can see and push back on. So the app does
+  // the two things it is uniquely placed to do -- hand over a correct briefing,
+  // and refuse to write back a result that quietly loses work -- and stays out
+  // of the middle.
+  //
+  // Per-question revision is untouched: it is small enough to review by eye and
+  // cannot damage the rest of the document.
 
+  const copyForLlm = async () => {
     setError('');
-    setNotice('');
-    setProposal(null);
-    setRevisionBusy(true);
-    setMessages((prev) => [...prev, { role: 'user', text: requestText }]);
-    if (!isAdvancedOnlyRequest) setRevisionRequest('');
-
+    const payload = buildLlmRevisionPrompt(rawText);
     try {
-      const parsedNow = compileText(rawText);
-      const res = await fetch(`${API_BASE_URL}/api/classes/${effectiveClassId}/creator-draft/${activity.id}/revise`, {
+      await navigator.clipboard.writeText(payload);
+      setCopyNotice('Copied. Paste it into your LLM, describe the change, then paste the result back below.');
+    } catch (err) {
+      console.error('Clipboard write failed:', err);
+      // Clipboard access is refused in plenty of ordinary situations (an
+      // insecure origin, a browser permission). Falling back to the source
+      // pane beats telling the instructor their browser said no.
+      setRightMode('edit');
+      setCopyNotice('Your browser blocked the clipboard. The markup is in the Source pane -- select all and copy it there.');
+    }
+    setTimeout(() => setCopyNotice(''), 8000);
+  };
+
+  const duplicateActivity = async () => {
+    if (!activity?.id || !classId) return;
+    setError('');
+    setRevisionBusy(true);
+    try {
+      const title = `${activity.title || 'Activity'} (copy)`;
+      const name = `${slugifyActivityName(title) || 'activity_copy'}_${Date.now().toString(36)}`;
+      const sourceText = rawText
+        .replace(/^\\title\{[\s\S]*?\}\s*$/m, `\\title{${markupHeaderValue(title)}}`)
+        .replace(/^\\name\{[\s\S]*?\}\s*$/m, `\\name{${name}}`);
+
+      const response = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          request: appendAdvancedPrompt(requestText, advancedPromptText),
-          doc_text: rawText,
-          selected_model: draft.selected_model,
-          parse_issues: parsedNow.issues,
+          name,
+          title,
+          source_type: 'local',
+          content_text: sourceText,
+          order_index: 0,
+          createdBy: user?.id,
         }),
       });
-      const data = await readJsonResponse(res);
-      if (!res.ok) throw new Error(data?.error || 'Revision request failed.');
-
-      const revisionText = data.proposedDocText || data.proposed_doc_text || '';
-      const proposedText = isAdvancedOnlyRequest
-        ? upsertLanguageHeader(revisionText, advancedDraft.language)
-        : revisionText;
-      if (!proposedText.trim()) throw new Error('Revision returned an empty proposal.');
-      const parsedProposal = parseActivityText(proposedText);
-      setProposal({
-        text: proposedText,
-        summary: Array.isArray(data.summary) ? data.summary : [],
-        warnings: Array.isArray(data.warnings) ? data.warnings : [],
-        issues: parsedProposal.issues,
-        blocks: parsedProposal.blocks,
-        generationStatus: data.generation_status,
-      });
-      setFileContents(parsedProposal.files);
-      setRightMode('preview');
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          text: data.generation_status === 'generated'
-            ? 'Proposed revision ready for review.'
-            : (data.generation_error || 'Returned the current draft unchanged.'),
-        },
-      ]);
+      const data = await readJsonResponse(response);
+      if (!response.ok) throw new Error(data?.error || 'Could not duplicate this activity.');
+      setNotice(`Created "${title}". Opening the copy -- the original is untouched.`);
+      navigate(`/creator/${data.id}`);
     } catch (err) {
-      console.error('Revision failed:', err);
+      console.error('Duplicate failed:', err);
       setError(err?.message || String(err));
-      setMessages((prev) => [...prev, { role: 'assistant', text: err?.message || 'Revision failed.' }]);
     } finally {
       setRevisionBusy(false);
     }
   };
 
+  const reviewPastedRevision = () => {
+    const text = extractMarkupFromPaste(pastedRevision);
+    if (!text) {
+      setError('Paste the revised activity before reviewing it.');
+      return;
+    }
+    setError('');
+    setCopyNotice('');
+
+    const parsed = parseActivityText(text);
+    const diff = diffActivityStructure(rawText, text);
+
+    const summary = [
+      `${diff.counts.after.questions} questions in ${diff.counts.after.groups} groups`
+      + ` (was ${diff.counts.before.questions} in ${diff.counts.before.groups}).`,
+      ...(diff.additions.length ? [`${diff.additions.length} new question(s).`] : []),
+    ];
+    const warnings = diff.hasRemovals
+      ? ['This revision removes:', ...describeRemovals(diff).map((line) => `  • ${line}`)]
+      : [];
+
+    setProposal({
+      text,
+      summary,
+      warnings,
+      issues: parsed.issues,
+      blocks: parsed.blocks,
+      generationStatus: 'pasted',
+    });
+    setFileContents(parsed.files);
+    setPastedRevision('');
+    setRightMode('preview');
+    setMessages((prev) => [...prev, {
+      role: 'assistant',
+      text: diff.hasRemovals
+        ? 'Pasted revision ready to review. It removes content -- check the list before accepting.'
+        : 'Pasted revision ready to review. Nothing was removed.',
+    }]);
+  };
+
   const acceptProposal = async () => {
     if (!proposal?.text || hasProposalErrors) return;
+    // The path that carried the risk: a whole-draft revision replaces every
+    // line, so anything the model quietly dropped goes with it.
+    if (!confirmStructuralRemovals(rawText, proposal.text, 'accepting this revision')) {
+      setError('Revision not applied. Nothing was removed.');
+      return;
+    }
     try {
       setError('');
       await saveSource(proposal.text);
@@ -1791,6 +1866,33 @@ export default function CreatorWorkbenchPage() {
     setRightMode(mode);
   };
 
+  /**
+   * Ask before a write removes authored content. Returns true to proceed.
+   *
+   * Validation asks only whether markup is well formed; this asks whether it
+   * still contains the work. Shared by every path that replaces the document
+   * wholesale, because they all fail the same way: a result that parses
+   * cleanly and is missing three sample answers looks exactly like one that is
+   * not.
+   *
+   * Deliberately window.confirm rather than a styled modal. Its callers are
+   * synchronous and return the text they write; making this async to await a
+   * React modal would ripple through every write path and leave a gate that a
+   * future path could forget to await. Against silent data loss, unbypassable
+   * beats pretty.
+   */
+  const confirmStructuralRemovals = (beforeText, nextText, label) => {
+    if (String(nextText) === String(beforeText)) return true;
+    const diff = diffActivityStructure(beforeText, nextText);
+    if (!diff.hasRemovals) return true;
+    const detail = describeRemovals(diff).map((line) => `  \u2022 ${line}`).join('\n');
+    return window.confirm(
+      `${label ? `This change (${label})` : 'This change'} also removes:\n\n`
+      + `${detail}\n\n`
+      + 'Apply anyway?',
+    );
+  };
+
   const applyVisualSource = (nextText, label) => {
     const validation = validateActivityMarkup(nextText);
     if (!validation.valid) {
@@ -1798,6 +1900,16 @@ export default function CreatorWorkbenchPage() {
       setError(`Try Changes was not applied. Line ${first.line}: ${first.message}`);
       return rawText;
     }
+
+    // Nothing may delete authored content without being told to. Every visual
+    // write funnels through here -- inspector saves, starter-code edits, AI
+    // question revisions, group and AI-block settings -- so one check here
+    // covers all six of them.
+    if (!confirmStructuralRemovals(rawText, nextText, label)) {
+      setError('Change cancelled. Nothing was removed.');
+      return rawText;
+    }
+
     if (nextText !== rawText) {
       recordVisualEdit(label);
       setRawText(nextText);
@@ -2490,7 +2602,7 @@ export default function CreatorWorkbenchPage() {
                       <div className="small text-muted text-uppercase">{message.role === 'user' ? 'You' : 'AI'}</div>
                       <div>{message.text}</div>
                     </div>
-                  )) : <div className="text-muted small">No revision requests yet.</div>}
+                  )) : <div className="text-muted small">Nothing revised yet.</div>}
                 </div>
 
                 {proposal ? (
@@ -2521,7 +2633,7 @@ export default function CreatorWorkbenchPage() {
                 ) : null}
 
                 <Form.Group>
-                  <Form.Label>Model</Form.Label>
+                  <Form.Label>Model for question revisions</Form.Label>
                   <Form.Select
                     value={draft.selected_model}
                     onChange={(event) => handleDraftChange('selected_model', event.target.value)}
@@ -2533,24 +2645,48 @@ export default function CreatorWorkbenchPage() {
                   </Form.Select>
                 </Form.Group>
 
-                <Form.Group ref={tutorialRefs.revision}>
-                  <Form.Label>Revision Request</Form.Label>
+                <div ref={tutorialRefs.revision} className="d-flex flex-column gap-2">
+                  <div className="fw-semibold">Revise the whole activity with an LLM</div>
+                  <div className="text-muted small">
+                    Copy the activity together with a syntax briefing, work on it in whichever
+                    LLM you prefer, then paste the result back here. Nothing is written to the
+                    activity until you have seen what the revision removes.
+                  </div>
+                  <div className="d-flex flex-wrap gap-2">
+                    <Button variant="primary" onClick={copyForLlm} disabled={!!proposal || !rawText.trim()}>
+                      <Stars className="me-2" /> Copy for LLM
+                    </Button>
+                    <Button
+                      variant="outline-secondary"
+                      onClick={duplicateActivity}
+                      disabled={revisionBusy || !!proposal || !activity?.id}
+                    >
+                      {revisionBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <PlusLg className="me-2" />}
+                      Duplicate First
+                    </Button>
+                  </div>
+                  <div className="text-muted small">
+                    <strong>Duplicate First</strong> makes a copy in this class and opens it, so a
+                    big rewrite can be tried and test-run without touching the activity students
+                    are using.
+                  </div>
+                  {copyNotice ? <div className="small text-success">{copyNotice}</div> : null}
                   <Form.Control
                     as="textarea"
                     rows={5}
-                    placeholder="Ask for a specific change to one question, question group, or section. Smaller, targeted requests are much less likely to time out."
-                    value={revisionRequest}
-                    onChange={(event) => setRevisionRequest(event.target.value)}
-                    disabled={revisionBusy || !!proposal}
+                    placeholder="Paste the revised activity back here. Surrounding chatter and code fences are stripped automatically."
+                    value={pastedRevision}
+                    onChange={(event) => setPastedRevision(event.target.value)}
+                    disabled={!!proposal}
                   />
-                  <div className="text-muted small mt-1">
-                    For best results, focus on one question, one group, or one section at a time. Very broad draft-wide changes are more likely to time out.
-                  </div>
-                </Form.Group>
-                <Button variant="primary" onClick={requestRevision} disabled={revisionBusy || !!proposal || !revisionRequest.trim()}>
-                  {revisionBusy ? <Spinner animation="border" size="sm" className="me-2" /> : <Stars className="me-2" />}
-                  Revise Draft
-                </Button>
+                  <Button
+                    variant="success"
+                    onClick={reviewPastedRevision}
+                    disabled={!!proposal || !pastedRevision.trim()}
+                  >
+                    <Check2 className="me-2" /> Review Pasted Revision
+                  </Button>
+                </div>
               </div>
             )}
           </div>
@@ -3535,13 +3671,26 @@ export default function CreatorWorkbenchPage() {
           {activity?.id ? (
             <Button
               variant="primary"
-              disabled={revisionBusy || !!proposal || !advancedPromptText}
+              disabled={!!proposal || editLockedByAnotherUser}
               onClick={() => {
                 setShowAdvanced(false);
-                requestRevision('Apply the selected advanced settings to this activity.');
+                // Language and retries are markup headers, so set them
+                // directly. This used to ask a model to rewrite the whole
+                // activity "applying the advanced settings", which risked the
+                // entire document to change two lines.
+                const withLanguage = upsertLanguageHeader(rawText, advancedDraft.language);
+                const next = upsertRetriesHeader(withLanguage, advancedDraft.submit_retries);
+                if (next === rawText) {
+                  setNotice('Language and retries already match these settings.');
+                  setTimeout(() => setNotice(''), 4000);
+                  return;
+                }
+                applyVisualSource(next, 'applying advanced settings');
+                setNotice('Language and retries updated. Difficulty and info boxes guide new drafts only.');
+                setTimeout(() => setNotice(''), 6000);
               }}
             >
-              <Stars className="me-1" /> Apply to Draft
+              <PencilSquare className="me-1" /> Apply to Draft
             </Button>
           ) : null}
           <Button variant="secondary" onClick={() => setShowAdvanced(false)}>Close</Button>

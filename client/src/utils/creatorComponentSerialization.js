@@ -1,3 +1,5 @@
+import activityGrammar from '../../../shared/activityGrammar.cjs';
+
 /*
  * Deterministic component replacement for the visual editor.
  *
@@ -7,13 +9,9 @@
  * edit from accumulating another \sampleresponses or \feedbackprompt tag.
  */
 
-const managedQuestionTags = new Set([
-  'responsemode',
-  'textresponse',
-  'sampleresponses',
-  'feedbackprompt',
-  'followupprompt',
-]);
+// Question-scope tags the inspector owns. Sourced from the syntax authority so
+// that adding a tag to the language cannot silently make the editor delete it.
+const managedQuestionTags = new Set(activityGrammar.MANAGED_QUESTION_TAGS);
 
 function linesForRange(sourceText, startLine, endLine) {
   const lines = String(sourceText || '').split('\n');
@@ -37,20 +35,77 @@ function commandName(line) {
 }
 
 function isCodeStart(line) {
-  return /^\\(python|pythonremote|pythonturtle|cpp)(?:\{[^}]*\})?\s*$/i.test(String(line || '').trim())
-    || /^\\(python|cpp)display(?:\{[^}]*\})?\s*$/i.test(String(line || '').trim());
+  return activityGrammar.isCodeOpenLine(line);
 }
 
 function isCodeEnd(line) {
-  return /^\\end(python|pythonremote|pythonturtle|cpp|pythondisplay|cppdisplay)\s*$/i.test(String(line || '').trim());
+  return activityGrammar.isCodeCloseLine(line);
 }
 
-function managedQuestionBodyLines(componentLines, { keepFreeformText = true } = {}) {
+const FIELD_TOKEN = (name) => `__COLEARN_FIELD_${name}__`;
+const SCORE_TOKEN = (type) => `__COLEARN_SCORE_${type}__`;
+const FIELD_TOKEN_RE = /^__COLEARN_FIELD_([a-z]+)__$/;
+const SCORE_TOKEN_RE = /^__COLEARN_SCORE_(response|code|output)__$/;
+
+// The order new fields are introduced in, when the question did not have them
+// before. Existing fields keep wherever the author had them.
+const FIELD_ORDER = [
+  'responsemode', 'textresponse', 'multiplechoice',
+  'sampleresponses', 'feedbackprompt', 'followupprompt',
+];
+
+/**
+ * Index of the last source line of a brace-delimited command starting at
+ * startIndex. A tag may be written across several lines --
+ * "\sampleresponses{" / text / "}" -- and treating only its first line as the
+ * command would leave the continuation lines behind to be re-emitted as body
+ * text, duplicating them.
+ */
+function braceSpanEnd(componentLines, startIndex) {
+  let depth = 0;
+  let sawBrace = false;
+  for (let index = startIndex; index < componentLines.length; index += 1) {
+    for (const character of String(componentLines[index] || '')) {
+      if (character === '{') { depth += 1; sawBrace = true; }
+      else if (character === '}') depth -= 1;
+    }
+    if (sawBrace && depth <= 0) return index;
+  }
+  return startIndex;
+}
+
+/** Index of the line that closes a block, or the last body line if unclosed. */
+function blockEnd(componentLines, startIndex, closeTag) {
+  for (let index = startIndex + 1; index < componentLines.length; index += 1) {
+    if (String(componentLines[index] || '').trim().toLowerCase() === closeTag) return index;
+  }
+  return componentLines.length - 2;
+}
+
+/**
+ * Split a question body into lines to keep verbatim and placeholders for the
+ * fields the inspector owns.
+ *
+ * PRESERVE BY DEFAULT. Anything not explicitly recognised is kept exactly as
+ * written. The previous behaviour was the inverse -- only recognised
+ * constructs survived and the rest was dropped -- which meant the visual
+ * editor silently deleted \info, \image, \link, tables, comments and any tag
+ * added to the language after the inspector was written. An editor's job is to
+ * change what was asked and leave everything else alone.
+ *
+ * Managed fields become positional tokens rather than being removed, so a
+ * rewritten field stays where the author put it instead of being hoisted to the
+ * top of the question.
+ */
+function managedQuestionBodyLines(componentLines) {
   const preserved = [];
-  let skipUntil = '';
+  const originalScoreBlocks = {};
   let inCode = false;
 
-  for (let index = 1; index < componentLines.length - 1; index += 1) {
+  // Skip \question{...} itself, however many source lines its braces span.
+  let index = braceSpanEnd(componentLines, 0) + 1;
+
+  for (; index < componentLines.length - 1; index += 1) {
     const line = componentLines[index];
     const trimmed = String(line || '').trim();
 
@@ -64,30 +119,51 @@ function managedQuestionBodyLines(componentLines, { keepFreeformText = true } = 
       preserved.push(line);
       continue;
     }
-    if (skipUntil) {
-      if (trimmed === skipUntil) skipUntil = '';
-      continue;
-    }
-    if (trimmed.startsWith('\\multiplechoice{')) {
-      skipUntil = '\\endmultiplechoice';
-      continue;
-    }
-    if (trimmed.startsWith('\\score{')) {
+
+    const name = commandName(trimmed);
+
+    if (name === 'score') {
       const type = trimmed.match(/^\\score\{\s*\d+\s*,\s*(response|code|output)\s*\}/i)?.[1]?.toLowerCase();
-      if (type) preserved.push(`__COLEARN_SCORE_${type}__`);
-      skipUntil = '\\endscore';
+      const endIndex = blockEnd(componentLines, index, '\\endscore');
+      if (type) {
+        preserved.push(SCORE_TOKEN(type));
+        // Kept so a score the inspector cannot rebuild can be restored verbatim
+        // rather than dropped.
+        originalScoreBlocks[type] = componentLines.slice(index, endIndex + 1);
+      } else {
+        // Unparseable \score header: keep the whole block exactly as written.
+        preserved.push(...componentLines.slice(index, endIndex + 1));
+      }
+      index = endIndex;
       continue;
     }
-    if (managedQuestionTags.has(commandName(trimmed))) continue;
-    if (!keepFreeformText) continue;
+
+    if (name === 'multiplechoice') {
+      preserved.push(FIELD_TOKEN('multiplechoice'));
+      index = blockEnd(componentLines, index, '\\endmultiplechoice');
+      continue;
+    }
+
+    if (managedQuestionTags.has(name)) {
+      preserved.push(FIELD_TOKEN(name));
+      index = braceSpanEnd(componentLines, index);
+      continue;
+    }
+
     preserved.push(line);
   }
-  return preserved;
+
+  return { preserved, originalScoreBlocks };
 }
 
-function scoreLines(type, pointsValue, instructionsValue) {
+/**
+ * Rebuild a \score block from inspector state, or keep the original when the
+ * inspector cannot represent it. Returning [] here used to delete the block and
+ * its instruction text outright whenever points failed to parse or were zero.
+ */
+function scoreLines(type, pointsValue, instructionsValue, originalBlock) {
   const points = Number.parseInt(pointsValue, 10);
-  if (!Number.isFinite(points) || points <= 0) return [];
+  if (!Number.isFinite(points) || points <= 0) return originalBlock ? [...originalBlock] : [];
   const instructions = String(instructionsValue || '').trim();
   return [
     `\\score{${points},${type}}`,
@@ -129,39 +205,74 @@ export function serializeQuestionComponent(sourceText, block, edits, selectedCod
   const followup = String(edits?.followupPrompt || '').trim();
   const mode = String(edits?.responseMode || block?.responseMode || 'answer').trim().toLowerCase() || 'answer';
 
-  const serialized = [`\\question{${prompt}}`];
-  if (mode !== 'answer' || block?.sourceMeta?.responseModeLine) serialized.push(`\\responsemode{${mode}}`);
-  if (!isMultipleChoice && responseCount > 0) serialized.push(`\\textresponse{${responseCount}}`);
-  if (isMultipleChoice) {
-    serialized.push(`\\multiplechoice{${selectionMode === 'multiple' ? 'multiple' : answer}}`);
-    serialized.push(...choices.map(({ value, points }) => (
-      `\\choice{${value}}${selectionMode === 'single' && Number.isInteger(points) && points >= 0 ? `{${points}}` : ''}`
-    )));
-    serialized.push('\\endmultiplechoice');
-  }
-  if (sample || block?.sourceMeta?.sampleLines?.length) serialized.push(`\\sampleresponses{${sample}}`);
-  if (feedback || block?.sourceMeta?.feedbackLines?.length) serialized.push(`\\feedbackprompt{${feedback}}`);
-  if (followup || block?.sourceMeta?.followupLines?.length) serialized.push(`\\followupprompt{${followup}}`);
-  const scores = {
-    response: scoreLines('response', isMultipleChoice ? '' : edits?.responseScorePoints, edits?.responseScoreInstructions),
-    code: scoreLines('code', edits?.codeScorePoints, edits?.codeScoreInstructions),
-    output: scoreLines('output', edits?.outputScorePoints, edits?.outputScoreInstructions),
+  const { preserved: body, originalScoreBlocks } = managedQuestionBodyLines(component);
+
+  const fieldLines = {
+    responsemode: (mode !== 'answer' || meta?.responseModeLine) ? [`\\responsemode{${mode}}`] : [],
+    textresponse: (!isMultipleChoice && responseCount > 0) ? [`\\textresponse{${responseCount}}`] : [],
+    multiplechoice: isMultipleChoice
+      ? [
+        `\\multiplechoice{${selectionMode === 'multiple' ? 'multiple' : answer}}`,
+        ...choices.map(({ value, points }) => (
+          `\\choice{${value}}${selectionMode === 'single' && Number.isInteger(points) && points >= 0 ? `{${points}}` : ''}`
+        )),
+        '\\endmultiplechoice',
+      ]
+      : [],
+    sampleresponses: (sample || meta?.sampleLines?.length) ? [`\\sampleresponses{${sample}}`] : [],
+    feedbackprompt: (feedback || meta?.feedbackLines?.length) ? [`\\feedbackprompt{${feedback}}`] : [],
+    followupprompt: (followup || meta?.followupLines?.length) ? [`\\followupprompt{${followup}}`] : [],
   };
-  const body = managedQuestionBodyLines(component, { keepFreeformText: false });
-  const existingScoreTypes = new Set();
+
+  const scoreBlocks = {
+    response: scoreLines('response', isMultipleChoice ? '' : edits?.responseScorePoints, edits?.responseScoreInstructions, originalScoreBlocks.response),
+    code: scoreLines('code', edits?.codeScorePoints, edits?.codeScoreInstructions, originalScoreBlocks.code),
+    output: scoreLines('output', edits?.outputScorePoints, edits?.outputScoreInstructions, originalScoreBlocks.output),
+  };
+
+  // Substitute each field back where it already was.
+  const placed = new Set();
+  const rebuiltBody = [];
   for (const line of body) {
-    const type = String(line).match(/^__COLEARN_SCORE_(response|code|output)__$/)?.[1];
-    if (type) existingScoreTypes.add(type);
+    const field = String(line).match(FIELD_TOKEN_RE)?.[1];
+    if (field) {
+      // Managed fields are singletons. A question that somehow accumulated two
+      // \sampleresponses collapses to one, kept at the first position -- which
+      // is the duplicate-shedding this serializer has always been responsible
+      // for, now done without discarding the rest of the body with it.
+      if (!placed.has(field)) {
+        rebuiltBody.push(...(fieldLines[field] || []));
+        placed.add(field);
+      }
+      continue;
+    }
+    const scoreType = String(line).match(SCORE_TOKEN_RE)?.[1];
+    if (scoreType) {
+      if (!placed.has(`score:${scoreType}`)) {
+        rebuiltBody.push(...scoreBlocks[scoreType]);
+        placed.add(`score:${scoreType}`);
+      }
+      continue;
+    }
+    rebuiltBody.push(line);
   }
-  for (const type of ['response', 'code', 'output']) {
-    if (!existingScoreTypes.has(type)) serialized.push(...scores[type]);
+
+  // Fields the question did not have before go directly after the prompt, which
+  // is where the editor used to put everything.
+  const introduced = [];
+  for (const field of FIELD_ORDER) {
+    if (!placed.has(field)) introduced.push(...(fieldLines[field] || []));
   }
-  for (const line of body) {
-    const type = String(line).match(/^__COLEARN_SCORE_(response|code|output)__$/)?.[1];
-    if (type) serialized.push(...scores[type]);
-    else serialized.push(line);
+  for (const scoreType of ['response', 'code', 'output']) {
+    if (!placed.has(`score:${scoreType}`)) introduced.push(...scoreBlocks[scoreType]);
   }
-  serialized.push('\\endquestion');
+
+  const serialized = [
+    `\\question{${prompt}}`,
+    ...introduced,
+    ...rebuiltBody,
+    '\\endquestion',
+  ];
 
   return replaceRange(sourceText, meta.questionLine, meta.endQuestionLine, serialized);
 }

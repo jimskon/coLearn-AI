@@ -6,26 +6,29 @@
  * validator: ordinary prose and repeatable blocks (code, choices, files,
  * etc.) remain valid.
  */
+// Tag vocabulary comes from the syntax authority, never restated here.
+const grammar = (typeof require === 'function')
+  ? require('./activityGrammar.cjs')
+  : (typeof globalThis !== 'undefined' ? globalThis.coLearnActivityGrammar : null);
+
+const { closesBlock, canonicalCloserFor } = grammar;
+
 (function attachMarkupValidator(root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.coLearnMarkupValidation = api;
 }(typeof globalThis === 'undefined' ? null : globalThis, function createMarkupValidator() {
-  const ROOT_SINGLETONS = new Set([
-    'title', 'name', 'mode', 'language', 'studentlevel', 'activitycontext', 'aicodeguidance', 'test',
-  ]);
-  const QUESTION_SINGLETONS = new Set([
-    'responsemode', 'textresponse', 'sampleresponses', 'feedbackprompt', 'followupprompt', 'multiplechoice',
-  ]);
-  const AI_SINGLETONS = new Set(['aimodel', 'aititle', 'aiprompt', 'aiguardrail', 'aicontext', 'aiinput']);
-  const CODE_OPENERS = {
-    python: 'endpython',
-    pythonremote: 'endpythonremote',
-    pythonturtle: 'endpythonturtle',
-    cpp: 'endcpp',
-    pythondisplay: 'endpythondisplay',
-    cppdisplay: 'endcppdisplay',
-  };
+  const ROOT_SINGLETONS = new Set(grammar.SINGLETONS.root);
+  // multiplechoice is a container, but at most one may open per question, so the
+  // validator counts it alongside the question-scope singletons.
+  const QUESTION_SINGLETONS = new Set([...grammar.SINGLETONS.question, 'multiplechoice']);
+  const AI_SINGLETONS = new Set(grammar.SINGLETONS.ai);
+  // Kinds only: which closer each accepts is decided by closesBlock().
+  const CODE_OPENERS = Object.fromEntries(
+    Object.values(grammar.CODE_FAMILIES)
+      .flatMap((family) => family.members)
+      .map((member) => [member, grammar.canonicalCloserFor(member).replace(/^\\/, '')]),
+  );
 
   function validateActivityMarkup(text) {
     const issues = [];
@@ -69,7 +72,15 @@
 
       const codeClose = /^\\end(python|pythonremote|pythonturtle|cpp|pythondisplay|cppdisplay)$/i.exec(value);
       if (codeClose) {
-        close(codeClose[1].toLowerCase(), line, `end${codeClose[1]}`);
+        // Any closer from a language family closes any block in that family, so
+        // \endpython closes \pythonremote. Report against the block that is
+        // actually open when they match, which keeps the useful message for a
+        // genuine mismatch (\endcpp while python is open, or a closer arriving
+        // while a question is still on the stack).
+        const openKind = current()?.kind;
+        const label = `end${codeClose[1]}`;
+        const effectiveKind = closesBlock(value, openKind) ? openKind : codeClose[1].toLowerCase();
+        close(effectiveKind, line, label);
         continue;
       }
       if (current() && Object.prototype.hasOwnProperty.call(CODE_OPENERS, current().kind)) {
@@ -181,11 +192,11 @@
     }
 
     for (const item of stack.slice().reverse()) {
-      const end = {
+      // Code blocks advertise the CANONICAL closer for their family, so the fix
+      // we suggest is the form we want written from now on.
+      const end = canonicalCloserFor(item.kind) || {
         questiongroup: '\\endquestiongroup', question: '\\endquestion', multiplechoice: '\\endmultiplechoice',
         ai: '\\endai', score: '\\endscore', file: '\\endfile', list: '\\end{itemize} or \\end{enumerate}',
-        python: '\\endpython', pythonremote: '\\endpythonremote', pythonturtle: '\\endpythonturtle', cpp: '\\endcpp',
-        pythondisplay: '\\endpythondisplay', cppdisplay: '\\endcppdisplay',
       }[item.kind] || 'a matching end tag';
       report(item.line, `Unclosed ${item.kind} block. Add ${end}.`, 'unclosed-block');
     }

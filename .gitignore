@@ -65,3 +65,6 @@ test-results/
 playwright-report/
 
 .pnpm-store/
+
+client/dist-*/
+.commit-msg.txt

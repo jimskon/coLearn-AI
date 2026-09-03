@@ -6,7 +6,8 @@
     "dev": "vite",
     "start": "vite",
     "build": "vite build",
-    "test:ci": "npm run build",
+    "test:ci": "npm run test:unit && npm run build",
+    "test:unit": "node --test scripts/*.test.mjs",
     "test:parser": "node --test scripts/parse-sheet-multiple-choice.test.mjs"
   },
   "dependencies": {

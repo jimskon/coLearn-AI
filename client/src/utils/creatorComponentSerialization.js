@@ -1,3 +1,5 @@
+import activityGrammar from '../../../shared/activityGrammar.cjs';
+
 /*
  * Deterministic component replacement for the visual editor.
  *
@@ -7,13 +9,9 @@
  * edit from accumulating another \sampleresponses or \feedbackprompt tag.
  */
 
-const managedQuestionTags = new Set([
-  'responsemode',
-  'textresponse',
-  'sampleresponses',
-  'feedbackprompt',
-  'followupprompt',
-]);
+// Question-scope tags the inspector owns. Sourced from the syntax authority so
+// that adding a tag to the language cannot silently make the editor delete it.
+const managedQuestionTags = new Set(activityGrammar.MANAGED_QUESTION_TAGS);
 
 function linesForRange(sourceText, startLine, endLine) {
   const lines = String(sourceText || '').split('\n');
@@ -37,12 +35,11 @@ function commandName(line) {
 }
 
 function isCodeStart(line) {
-  return /^\\(python|pythonremote|pythonturtle|cpp)(?:\{[^}]*\})?\s*$/i.test(String(line || '').trim())
-    || /^\\(python|cpp)display(?:\{[^}]*\})?\s*$/i.test(String(line || '').trim());
+  return activityGrammar.isCodeOpenLine(line);
 }
 
 function isCodeEnd(line) {
-  return /^\\end(python|pythonremote|pythonturtle|cpp|pythondisplay|cppdisplay)\s*$/i.test(String(line || '').trim());
+  return activityGrammar.isCodeCloseLine(line);
 }
 
 function managedQuestionBodyLines(componentLines, { keepFreeformText = true } = {}) {

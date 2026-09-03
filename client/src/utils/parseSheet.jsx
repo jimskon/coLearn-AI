@@ -169,19 +169,96 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
   );
 }
 
-function InlineAiAssistBlock({
+// ---------------------------------------------------------------------------
+// Inline AI assistance
+//
+// An AI turn is one student prompt plus the AI's reply. Turns are persisted
+// server-side, append-only, as `responses` rows keyed <baseQid>AI<n>. This
+// component therefore keeps NO conversation state of its own when it is running
+// inside a live activity instance: it renders whatever the answers map says.
+//
+// That is deliberate, and it is what delivers three requirements at once:
+//   * observers (including instructors) see the transcript, because they read
+//     the same answers map the active student writes to;
+//   * a change of active student is a non-event, because the thread lives on
+//     the instance rather than in one student's browser;
+//   * the instructor history report gets the exchanges for free.
+//
+// In the activity editor's preview there is no instance to write to, so the
+// component falls back to local state and the stateless /api/ai/assist route.
+// ---------------------------------------------------------------------------
+
+// Pulls the persisted transcript for one question out of the answers map.
+// Turn rows are <baseQid>AI<n>; anything unparseable is skipped rather than
+// throwing, so one bad row cannot blank out a whole conversation.
+export function readAiTranscript(prefill, baseQid) {
+  if (!prefill || !baseQid) return [];
+
+  const pattern = new RegExp(`^${baseQid}AI(\\d+)$`, 'i');
+  const turns = [];
+
+  for (const [key, entry] of Object.entries(prefill)) {
+    const match = pattern.exec(key);
+    if (!match) continue;
+
+    const raw = entry && typeof entry === 'object' ? entry.response : entry;
+    let parsed;
+    try {
+      parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object') continue;
+    if (!parsed.prompt && !parsed.reply) continue;
+
+    turns.push({ ...parsed, index: Number(match[1]) });
+  }
+
+  turns.sort((a, b) => (a.index || 0) - (b.index || 0));
+  return turns;
+}
+
+// The response key an AI block's turns are stored under. AI blocks attached to
+// a question share that question's key, so several \ai blocks in one question
+// form a single thread and land under the right question in the history report.
+export function aiBaseQidFor(aiBlock, questionBlock) {
+  if (questionBlock?.groupId != null && questionBlock?.id) {
+    return `${questionBlock.groupId}${questionBlock.id}`;
+  }
+  // Standalone (group-level) AI panel: `2ai`, `2aib`, `2aic`, ... Always
+  // digits-then-letters so it satisfies the server's question_id validator.
+  const suffix = aiBlock?.previewKey?.match(/:(\d+)$/)?.[1];
+  const nth = Math.max(1, parseInt(suffix, 10) || 1);
+  return `${aiBlock?.groupId ?? 0}ai${nth > 1 ? String.fromCharCode(96 + nth) : ''}`;
+}
+
+export function InlineAiAssistBlock({
   aiBlock,
   questionBlock,
   activityLanguage = '',
   runMode,
   selectedPreviewKey,
   onSelectBlock,
+  // Live-instance wiring. Absent in the editor preview.
+  baseQid = '',
+  instanceId = null,
+  userId = null,
+  transcript = null,
+  canAsk = true,
+  lockReason = '',
+  onTurnSaved,
 }) {
   const [inputValue, setInputValue] = useState('');
-  const [conversation, setConversation] = useState([]);
+  const [localTurns, setLocalTurns] = useState([]);
+  const [pendingPrompt, setPendingPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const historyScrollRef = useRef(null);
+
+  // Persisted mode needs both an instance to attribute the turn to and a key to
+  // file it under; without either we are in the editor preview.
+  const persisted = Number(instanceId) > 0 && !!baseQid;
+  const turns = persisted ? (transcript || []) : localTurns;
 
   const aiSelected = runMode === 'preview' && selectedPreviewKey === aiBlock.previewKey;
   const modeMeta = INLINE_AI_MODE_GUIDE.find((entry) => entry.value === String(aiBlock.mode || '').toLowerCase())
@@ -190,77 +267,87 @@ function InlineAiAssistBlock({
   useEffect(() => {
     if (!historyScrollRef.current) return;
     historyScrollRef.current.scrollTop = historyScrollRef.current.scrollHeight;
-  }, [conversation, busy]);
+  }, [turns, pendingPrompt, busy]);
 
   const submitPrompt = async () => {
     const trimmed = inputValue.trim();
-    if (!trimmed || busy) return;
+    if (!trimmed || busy || !canAsk) return;
 
-    const priorConversation = conversation
-      .filter((entry) => entry?.role === 'user' || entry?.role === 'assistant')
-      .map((entry) => ({
-        role: entry.role,
-        content: String(entry.content || ''),
-      }));
+    // Replay the thread so the model keeps context across turns and across a
+    // change of active student.
+    const conversationHistory = turns.flatMap((turn) => ([
+      { role: 'user', content: String(turn.prompt || '') },
+      { role: 'assistant', content: String(turn.reply || '') },
+    ])).filter((entry) => entry.content);
 
-    const turnId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const assistantId = `ai-response-${turnId}`;
-
-    setConversation((previous) => ([
-      ...previous,
-      { id: `user-${turnId}`, role: 'user', content: trimmed },
-      { id: assistantId, role: 'assistant', content: '', pending: true },
-    ]));
+    setPendingPrompt(trimmed);
     setInputValue('');
     setBusy(true);
     setError('');
+
+    const payload = {
+      mode: aiBlock.mode,
+      model: aiBlock.model,
+      title: aiBlock.title || 'AI Assistant',
+      assistantPrompt: aiBlock.prompt || '',
+      guardrail: aiBlock.guardrail || '',
+      contextSources: aiBlock.contextSources || [],
+      questionText: questionBlock?.prompt || '',
+      sampleResponse: questionBlock?.samples?.[0] || '',
+      studentCode: Array.isArray(questionBlock?.pythonBlocks)
+        ? questionBlock.pythonBlocks.map((block) => block.content || '').join('\n\n').trim()
+        : '',
+      studentInput: trimmed,
+      conversationHistory,
+      activityLanguage,
+    };
+    if (persisted) {
+      payload.instanceId = instanceId;
+      payload.userId = userId;
+      payload.questionKey = baseQid;
+    }
+
     try {
-      const res = await fetch(`${API_BASE_URL}/api/ai/assist`, {
+      const res = await fetch(`${API_BASE_URL}/api/ai/${persisted ? 'activity-assist' : 'assist'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          mode: aiBlock.mode,
-          model: aiBlock.model,
-          title: aiBlock.title || 'AI Assistant',
-          assistantPrompt: aiBlock.prompt || '',
-          guardrail: aiBlock.guardrail || '',
-          contextSources: aiBlock.contextSources || [],
-          questionText: questionBlock?.prompt || '',
-          sampleResponse: questionBlock?.samples?.[0] || '',
-          studentCode: Array.isArray(questionBlock?.pythonBlocks)
-            ? questionBlock.pythonBlocks.map((block) => block.content || '').join('\n\n').trim()
-            : '',
-          studentInput: trimmed,
-          conversationHistory: priorConversation,
-          activityLanguage,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'AI help failed.');
-      const responseText = String(data?.response || '').trim() || 'The AI did not return a response.';
-      setConversation((previous) => previous.map((entry) => (
-        entry?.id === assistantId
-          ? { ...entry, content: responseText, pending: false }
-          : entry
-      )));
+
+      const replyText = String(data?.response || '').trim() || 'The AI did not return a response.';
+
+      if (persisted) {
+        // The row is already written; hand it up so the answers map reflects it
+        // immediately rather than waiting on the socket echo.
+        const savedTurn = data?.turn || { prompt: trimmed, reply: replyText };
+        onTurnSaved?.(data?.qid || `${baseQid}AI${turns.length + 1}`, savedTurn);
+      } else {
+        setLocalTurns((previous) => ([
+          ...previous,
+          { index: previous.length + 1, prompt: trimmed, reply: replyText },
+        ]));
+      }
     } catch (err) {
       const message = err?.message || 'AI help failed.';
       setError(message);
-      setConversation((previous) => previous.map((entry) => (
-        entry?.id === assistantId
-          ? { ...entry, content: message, pending: false, error: true }
-          : entry
-      )));
+      // Put the text back so a failed turn is not silently lost.
+      setInputValue((current) => current || trimmed);
     } finally {
+      setPendingPrompt('');
       setBusy(false);
     }
   };
+
+  const turnCount = turns.length + (pendingPrompt ? 1 : 0);
 
   return (
     <div
       className="border rounded p-3 my-3"
       data-preview-key={aiBlock.previewKey}
+      data-ai-base-qid={baseQid || undefined}
       onClick={(event) => {
         if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
         if (event.target.closest('textarea, input, button, select, a')) return;
@@ -280,107 +367,148 @@ function InlineAiAssistBlock({
           }
       }
     >
-      {aiBlock.title ? (
-        <h5
-          className="mb-2"
-          dangerouslySetInnerHTML={{ __html: aiBlock.title }}
-        />
-      ) : null}
-      {aiBlock.prompt ? (
-        <div
-          className="mb-3"
-          dangerouslySetInnerHTML={{ __html: aiBlock.prompt }}
-        />
-      ) : null}
-      <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
-        <Badge bg="secondary" pill>
-          Mode: {modeMeta.label}
-        </Badge>
-        <div className="small text-muted">{modeMeta.description}</div>
+      <div className="d-flex align-items-center gap-2 mb-2">
+        {aiBlock.title ? (
+          <h5 className="mb-0" dangerouslySetInnerHTML={{ __html: aiBlock.title }} />
+        ) : (
+          <h5 className="mb-0">AI Coach</h5>
+        )}
+        <Badge bg="secondary" pill className="ms-1">{modeMeta.label}</Badge>
+        {persisted && !canAsk ? (
+          <Badge bg="light" text="dark" className="border">Read only</Badge>
+        ) : null}
+        <span className="ms-auto small text-muted">
+          {turnCount ? `${turnCount} exchange${turnCount === 1 ? '' : 's'}` : 'No questions yet'}
+        </span>
       </div>
-      <div className="d-flex flex-wrap gap-2 mb-3">
-        {INLINE_AI_MODE_GUIDE.map((entry) => (
-          <Badge
-            key={entry.value}
-            bg={entry.value === modeMeta.value ? 'primary' : 'light'}
-            text={entry.value === modeMeta.value ? undefined : 'dark'}
-            className="border text-wrap"
-            style={{ whiteSpace: 'normal' }}
-          >
-            <span className="fw-semibold">{entry.label}</span>
-            <span className="ms-1">{entry.description}</span>
-          </Badge>
-        ))}
-      </div>
-      <Form.Group>
-        <Form.Label className="small text-muted mb-1">Query</Form.Label>
-        <Form.Control
-          as="textarea"
-          rows={Math.max(aiBlock.inputRows || 4, 2)}
-          value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
-          placeholder="Type your AI query here..."
-        />
-      </Form.Group>
 
-      <div className="d-flex justify-content-end mt-2">
-        <Button size="sm" variant="primary" disabled={busy || !inputValue.trim()} onClick={submitPrompt}>
-          {busy ? <Spinner animation="border" size="sm" className="me-2" /> : null}
-          Ask AI
-        </Button>
+      {aiBlock.prompt ? (
+        <div className="mb-2" dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
+      ) : null}
+
+      {/* The full mode guide is an authoring aid; students only need the mode. */}
+      {runMode === 'preview' ? (
+        <div className="d-flex flex-wrap gap-2 mb-3">
+          {INLINE_AI_MODE_GUIDE.map((entry) => (
+            <Badge
+              key={entry.value}
+              bg={entry.value === modeMeta.value ? 'primary' : 'light'}
+              text={entry.value === modeMeta.value ? undefined : 'dark'}
+              className="border text-wrap"
+              style={{ whiteSpace: 'normal' }}
+            >
+              <span className="fw-semibold">{entry.label}</span>
+              <span className="ms-1">{entry.description}</span>
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <div className="small text-muted mb-3">{modeMeta.description}</div>
+      )}
+
+      <div
+        ref={historyScrollRef}
+        className="border rounded p-2 bg-body-tertiary"
+        style={{ maxHeight: '360px', minHeight: '120px', overflowY: 'auto' }}
+      >
+        {turns.length || pendingPrompt ? (
+          <>
+            {turns.map((turn) => (
+              <React.Fragment key={`turn-${turn.index}`}>
+                <div className="d-flex mb-2 justify-content-end">
+                  <div
+                    className="rounded-3 px-3 py-2 bg-primary text-white"
+                    style={{ maxWidth: '92%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  >
+                    <div className="small text-uppercase fw-semibold opacity-75 mb-1">Student</div>
+                    <div>{String(turn.prompt || '')}</div>
+                  </div>
+                </div>
+                <div className="d-flex mb-2 justify-content-start">
+                  <div
+                    className="rounded-3 px-3 py-2 bg-white border"
+                    style={{ maxWidth: '92%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  >
+                    <div className="small text-uppercase fw-semibold opacity-75 mb-1">AI</div>
+                    <div>{String(turn.reply || '')}</div>
+                  </div>
+                </div>
+              </React.Fragment>
+            ))}
+
+            {pendingPrompt ? (
+              <>
+                <div className="d-flex mb-2 justify-content-end">
+                  <div
+                    className="rounded-3 px-3 py-2 bg-primary text-white"
+                    style={{ maxWidth: '92%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  >
+                    <div className="small text-uppercase fw-semibold opacity-75 mb-1">Student</div>
+                    <div>{pendingPrompt}</div>
+                  </div>
+                </div>
+                <div className="d-flex mb-2 justify-content-start">
+                  <div className="rounded-3 px-3 py-2 bg-white border" style={{ maxWidth: '92%' }}>
+                    <div className="small text-uppercase fw-semibold opacity-75 mb-1">AI</div>
+                    <div className="d-flex align-items-center gap-2 small">
+                      <Spinner animation="border" size="sm" />
+                      Thinking...
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <div className="text-muted small">
+            {canAsk
+              ? 'Your conversation with the AI will stay here as you ask follow-up questions.'
+              : 'No questions have been asked yet.'}
+          </div>
+        )}
       </div>
 
       {error ? (
         <div className="alert alert-danger mt-2 mb-0 py-2 small">{error}</div>
       ) : null}
 
-      <div className="mt-3">
-        <div className="d-flex align-items-center justify-content-between mb-1">
-          <Form.Label className="small text-muted mb-0">Conversation history</Form.Label>
-          <div className="small text-muted">{conversation.length ? `${Math.ceil(conversation.length / 2)} turn${Math.ceil(conversation.length / 2) === 1 ? '' : 's'}` : 'No turns yet'}</div>
+      {canAsk ? (
+        <>
+          <Form.Group className="mt-3">
+            <Form.Label className="small text-muted mb-1">Query</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={Math.max(aiBlock.inputRows || 4, 2)}
+              value={inputValue}
+              onChange={(event) => setInputValue(event.target.value)}
+              placeholder="Type your AI query here..."
+              disabled={busy}
+            />
+          </Form.Group>
+          <div className="d-flex align-items-center mt-2">
+            {persisted ? (
+              <span className="small text-muted">
+                Saved with your work and visible to your instructor.
+              </span>
+            ) : null}
+            <Button
+              size="sm"
+              variant="primary"
+              className="ms-auto"
+              disabled={busy || !inputValue.trim()}
+              onClick={submitPrompt}
+            >
+              {busy ? <Spinner animation="border" size="sm" className="me-2" /> : null}
+              Ask AI
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="d-flex align-items-start gap-2 mt-3 small text-muted">
+          <span aria-hidden="true">🔒</span>
+          <span>{lockReason || 'Only the active student can ask the AI.'}</span>
         </div>
-        <div
-          ref={historyScrollRef}
-          className="border rounded p-2 bg-body-tertiary"
-          style={{ maxHeight: '320px', overflowY: 'auto' }}
-        >
-          {conversation.length ? conversation.map((entry) => {
-            const isUser = entry?.role === 'user';
-            const isError = !!entry?.error;
-            return (
-              <div
-                key={entry.id}
-                className={`d-flex mb-2 ${isUser ? 'justify-content-end' : 'justify-content-start'}`}
-              >
-                <div
-                  className={`rounded-3 px-3 py-2 ${isUser
-                    ? 'bg-primary text-white'
-                    : isError
-                      ? 'bg-danger-subtle border border-danger-subtle text-danger-emphasis'
-                      : 'bg-white border'}`}
-                  style={{ maxWidth: '92%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
-                >
-                  <div className="small text-uppercase fw-semibold opacity-75 mb-1">
-                    {isUser ? 'You' : 'AI'}
-                  </div>
-                  {entry?.pending ? (
-                    <div className="d-flex align-items-center gap-2 small">
-                      <Spinner animation="border" size="sm" />
-                      Thinking...
-                    </div>
-                  ) : (
-                    <div>{String(entry?.content || '')}</div>
-                  )}
-                </div>
-              </div>
-            );
-          }) : (
-            <div className="text-muted small">
-              Your conversation with the AI will stay here as you ask follow-up questions.
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -2170,6 +2298,8 @@ export function renderBlocks(blocks, options = {}) {
     // A standalone AI panel is a group-level learning tool, not a question and
     // not a response. It therefore has no grading, retry, or response state.
     if (block.type === 'ai') {
+      if (options.suppressAiBlocks) return null;
+      const aiQid = aiBaseQidFor(block, null);
       return (
         <InlineAiAssistBlock
           key={`group-ai-${block.groupId}-${block.previewKey}`}
@@ -2179,6 +2309,13 @@ export function renderBlocks(blocks, options = {}) {
           runMode={runMode}
           selectedPreviewKey={selectedPreviewKey}
           onSelectBlock={onSelectBlock}
+          baseQid={aiQid}
+          instanceId={options.instanceId}
+          userId={options.answeredBy}
+          transcript={readAiTranscript(options.prefill, aiQid)}
+          canAsk={options.mode === 'run' ? !!isActive && !options.isObserver : true}
+          lockReason={options.aiLockReason}
+          onTurnSaved={options.onAiTurnSaved}
         />
       );
     }
@@ -2492,7 +2629,7 @@ export function renderBlocks(blocks, options = {}) {
                 onClick={() => options.onToggleViewMode?.(codeKey, viewMode === 'active' ? 'local' : 'active')}
                 title="Switch between following the active student and a private sandbox"
               >
-                {viewMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {viewMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2502,6 +2639,7 @@ export function renderBlocks(blocks, options = {}) {
             blockIndex={`pyt-${codeKey}-${index}`}
             editable={canEdit}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && viewMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             onCodeChange={(rk, code, extra) => {
 
               // observers in Local mode: keep it client-side only
@@ -2616,7 +2754,7 @@ export function renderBlocks(blocks, options = {}) {
                 onClick={() => options.onToggleViewMode?.(codeKey, codeMode === 'active' ? 'local' : 'active')}
                 title="Switch between following the active student and a private sandbox"
               >
-                {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2627,6 +2765,7 @@ export function renderBlocks(blocks, options = {}) {
             editable={canEdit}
             runnerEnabled={block.type === 'pythonremote' ? remotePythonEnabled : true}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             // 👇 forward meta so the server sees the actual task
             onCodeChange={(rk, code, extra) => {
               // local sandbox -> store locally, no network
@@ -2708,7 +2847,7 @@ export function renderBlocks(blocks, options = {}) {
                 className="btn btn-sm btn-outline-secondary"
                 onClick={() => options.onToggleViewMode?.(codeKey, codeMode === 'active' ? 'local' : 'active')}
               >
-                {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2718,6 +2857,7 @@ export function renderBlocks(blocks, options = {}) {
             editable={canEdit}
             runnerEnabled={runtimeFeatures.remoteCpp ?? true}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             onCodeChange={(rk, code, extra) => {
               if (showToggle && codeMode === 'local' && !isActive) {
                 options.onLocalCodeChange?.(rk, code);
@@ -2996,7 +3136,7 @@ export function renderBlocks(blocks, options = {}) {
                       className="btn btn-sm btn-outline-secondary"
                       onClick={() => options.onToggleViewMode?.(responseKey, codeMode === 'active' ? 'local' : 'active')}
                     >
-                      {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                      {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
                     </button>
                   </div>
                 )}
@@ -3008,6 +3148,7 @@ export function renderBlocks(blocks, options = {}) {
                   runnerEnabled={py.type === 'pythonremote' ? remotePythonEnabled : true}
                   localOnly={runMode === 'preview'}
                   responseKey={responseKey}
+                  onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(responseKey, 'local'); }}
                   onCodeChange={(rk, code, extra) => {
                     if (showToggle && codeMode === 'local' && !isActive) {
                       options.onLocalCodeChange?.(rk, code);
@@ -3081,7 +3222,7 @@ export function renderBlocks(blocks, options = {}) {
                         )
                       }
                     >
-                      {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                      {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
                     </button>
                   </div>
                 )}
@@ -3117,6 +3258,7 @@ export function renderBlocks(blocks, options = {}) {
                   feedback={codeFeedbackShown?.[responseKey] || null}
                   fileContents={fileContents}
                   setFileContents={setFileContents}
+                  onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(responseKey, 'local'); }}
                 />
               </div>
             );
@@ -3164,7 +3306,11 @@ export function renderBlocks(blocks, options = {}) {
             </div>
           ))}
 
-          {block.aiBlocks?.map((aiBlock, i) => {
+          {(options.suppressAiBlocks ? [] : (block.aiBlocks || [])).map((aiBlock, i) => {
+            // All \ai blocks on a question share the question's response key, so
+            // they read and write one thread and group under that question in
+            // the instructor history report.
+            const aiQid = aiBaseQidFor(aiBlock, block);
             return (
               <InlineAiAssistBlock
                 key={`q-ai-${block.groupId}-${block.id}-${i}`}
@@ -3174,6 +3320,13 @@ export function renderBlocks(blocks, options = {}) {
                 runMode={runMode}
                 selectedPreviewKey={selectedPreviewKey}
                 onSelectBlock={onSelectBlock}
+                baseQid={aiQid}
+                instanceId={options.instanceId}
+                userId={options.answeredBy}
+                transcript={readAiTranscript(options.prefill, aiQid)}
+                canAsk={options.mode === 'run' ? !!isActive && !options.isObserver : true}
+                lockReason={options.aiLockReason}
+                onTurnSaved={options.onAiTurnSaved}
               />
             );
           })}
@@ -3300,16 +3453,21 @@ export function renderBlocks(blocks, options = {}) {
                   </>
                 )}
 
-                {textFeedbackShown?.[responseKey] && (
-                  <Alert
-                    variant="warning"
-                    className="mt-2"
-                    style={{ whiteSpace: 'pre-wrap' }}
-                  >
-                    <strong>AI Guidance</strong>
-                    <div>{textFeedbackShown[responseKey]}</div>
-                  </Alert>
-                )}
+                {textFeedbackShown?.[responseKey] && (() => {
+                  const fb = textFeedbackShown[responseKey];
+                  const fbText = typeof fb === 'object' ? fb.text : fb;
+                  const fbVariant = (typeof fb === 'object' && fb.positive) ? 'success' : 'warning';
+                  return (
+                    <Alert
+                      variant={fbVariant}
+                      className="mt-2"
+                      style={{ whiteSpace: 'pre-wrap' }}
+                    >
+                      <strong>AI Guidance</strong>
+                      <div>{fbText}</div>
+                    </Alert>
+                  );
+                })()}
 
                 {renderInfoBubbles(
                   block,

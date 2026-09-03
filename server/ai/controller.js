@@ -12,7 +12,33 @@ function sha256Hex(s) {
 
 const { gradeTestQuestionHttp, gradeTestQuestion } = require("./grading");
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// When no usable key is configured, hand every caller a stub client instead of
+// a real one. Guarding at the call sites was wrong: it skipped input validation
+// and the pre-model heuristics (gibberish rejection, off-topic fallback, retry
+// bookkeeping) that run before any request is made. Replacing the client leaves
+// all of that intact and substitutes only the network hop.
+//
+// Tests that drive the model swap methods onto __testHooks.openai, which is this
+// same object, so their stubs continue to take precedence.
+function createStubOpenAI() {
+  return {
+    chat: {
+      completions: {
+        // Callers request response_format json_object and JSON.parse the content.
+        create: async () => ({
+          choices: [{ message: { content: '{"accepted":true}' } }],
+        }),
+      },
+    },
+    responses: {
+      create: async () => ({ output_text: '', status: 'completed', output: [] }),
+    },
+  };
+}
+
+const openai = isAiConfigured()
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : createStubOpenAI();
 const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
 const INLINE_AI_ALLOWED_MODELS = new Set([
@@ -154,6 +180,38 @@ function normalizeAIResult(obj) {
   return { accepted, feedback };
 }
 
+// ---------------------------------------------------------------------------
+// AI availability
+//
+// The OpenAI client is constructed with whatever OPENAI_API_KEY is set, so a
+// placeholder like 'test-key' does NOT disable it -- it produces a live request
+// and a 401. runInlineAiCompletion already guarded against that; the evaluation
+// paths did not, so any test that reached them tried to authenticate against
+// the real API and failed the run.
+//
+// A deployment with no key configured is the same situation, and there the
+// right behaviour is to let the group proceed rather than reject their work
+// because the server is misconfigured. Both cases resolve the same way: skip
+// the model, accept, attach no feedback, and say so in the log.
+//
+// Tests that DO want the model path set a non-placeholder key and intercept the
+// network (see tests/aiRoutes.validation.test.js, which uses 'live-test-key').
+// ---------------------------------------------------------------------------
+function isAiConfigured() {
+  const key = process.env.OPENAI_API_KEY;
+  return !!key && key !== 'test-key';
+}
+
+let warnedAiUnconfigured = false;
+function warnAiUnconfigured(where) {
+  if (warnedAiUnconfigured) return;
+  warnedAiUnconfigured = true;
+  console.warn(
+    `[ai] OPENAI_API_KEY is missing or a placeholder; skipping model calls ` +
+    `(first hit: ${where}). Submissions are accepted without AI feedback.`
+  );
+}
+
 function sendAI(res, payload, status = 200) {
   const accepted = payload?.accepted === true;
   const feedback =
@@ -169,35 +227,43 @@ function sendAI(res, payload, status = 200) {
   return res.status(status).json({ accepted, feedback, canContinue, retryCount, retriesRequired });
 }
 
-async function assistInlineActivity(req, res) {
-  const {
-    mode = 'explain',
-    model,
-    title = '',
-    assistantPrompt = '',
-    guardrail = '',
-    contextSources = [],
-    questionText = '',
-    sampleResponse = '',
-    studentCode = '',
-    studentInput = '',
-    conversationHistory = [],
-    activityLanguage = 'English',
-  } = req.body || {};
-
+// ---------------------------------------------------------------------------
+// Inline AI help
+//
+// runInlineAiCompletion() holds the prompt construction and the OpenAI call so
+// that both the stateless editor-preview path (assistInlineActivity) and the
+// persisted, active-student-gated activity path (assistActivityAi) behave
+// identically. Only the surrounding bookkeeping differs.
+// ---------------------------------------------------------------------------
+async function runInlineAiCompletion({
+  mode = 'explain',
+  model,
+  title = '',
+  assistantPrompt = '',
+  guardrail = '',
+  contextSources = [],
+  questionText = '',
+  sampleResponse = '',
+  studentCode = '',
+  studentInput = '',
+  conversationHistory = [],
+  activityLanguage = 'English',
+}) {
   const selectedModel = getInlineAiModel(model);
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
 
   const cleanedInput = String(studentInput || '').trim();
   if (!cleanedInput) {
-    return res.status(400).json({ error: 'studentInput is required.' });
+    const err = new Error('studentInput is required.');
+    err.statusCode = 400;
+    throw err;
   }
 
   if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY === 'test-key') {
-    return res.json({
+    return {
       response: 'AI help is not configured on this server yet.',
       demo: true,
-    });
+    };
   }
 
   const modeGuidance = {
@@ -240,42 +306,163 @@ async function assistInlineActivity(req, res) {
     `Student input:\n${cleanedInput}`,
   ].filter(Boolean).join('\n\n');
 
-  try {
-    // GPT-5 mini is a reasoning model.  A 500-token total allowance can be
-    // consumed entirely by reasoning before it emits visible text, which the
-    // API reports as incomplete/max_output_tokens.  Inline classroom help is
-    // short and direct, so use minimal reasoning with room for an answer.
-    const request = {
+  // GPT-5 mini is a reasoning model.  A 500-token total allowance can be
+  // consumed entirely by reasoning before it emits visible text, which the
+  // API reports as incomplete/max_output_tokens.  Inline classroom help is
+  // short and direct, so use minimal reasoning with room for an answer.
+  const request = {
+    model: selectedModel,
+    instructions: system,
+    input: user,
+    text: { format: { type: 'text' } },
+    max_output_tokens: selectedModel === 'gpt-5-mini' ? 1600 : 500,
+  };
+  if (selectedModel === 'gpt-5-mini') {
+    request.reasoning = { effort: 'minimal' };
+  }
+
+  const response = await openai.responses.create(request);
+
+  const outputText = getResponseOutputText(response);
+  if (!outputText) {
+    console.warn('[inline-ai] empty model response', {
       model: selectedModel,
-      instructions: system,
-      input: user,
-      text: { format: { type: 'text' } },
-      max_output_tokens: selectedModel === 'gpt-5-mini' ? 1600 : 500,
-    };
-    if (selectedModel === 'gpt-5-mini') {
-      request.reasoning = { effort: 'minimal' };
-    }
-
-    const response = await openai.responses.create(request);
-
-    const outputText = getResponseOutputText(response);
-    if (!outputText) {
-      console.warn('[inline-ai] empty model response', {
-        model: selectedModel,
-        status: response?.status || null,
-        incompleteReason: response?.incomplete_details?.reason || null,
-        outputItems: Array.isArray(response?.output) ? response.output.length : 0,
-      });
-    }
-    return res.json({
-      response: outputText || 'The AI did not return a response.',
-      demo: false,
+      status: response?.status || null,
+      incompleteReason: response?.incomplete_details?.reason || null,
+      outputItems: Array.isArray(response?.output) ? response.output.length : 0,
     });
+  }
+
+  return {
+    response: outputText || 'The AI did not return a response.',
+    demo: false,
+  };
+}
+
+// Stateless inline AI help. Used by the activity editor preview, where there is
+// no activity instance to attribute or persist a turn against.
+async function assistInlineActivity(req, res) {
+  try {
+    const result = await runInlineAiCompletion(req.body || {});
+    return res.json(result);
   } catch (err) {
+    if (err?.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
     console.error('assistInlineActivity error:', err);
     return res.status(500).json({ error: 'Inline AI help failed.' });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Activity AI turns
+//
+// A turn is one student prompt plus the AI reply, stored as a single row in
+// `responses` under `<baseQid>AI<n>`. Rows are append-only so the instructor
+// history is a complete audit of AI use, even if the student never submits.
+// ---------------------------------------------------------------------------
+const AI_TURN_QID_RE = /^(\d+[A-Za-z]+)AI(\d+)$/i;
+
+function aiTurnQid(baseQid, index) {
+  return `${baseQid}AI${index}`;
+}
+
+// Highest existing turn index for a base question id on this instance.
+async function getLastAiTurnIndex(instanceId, baseQid) {
+  const [rows] = await db.query(
+    `SELECT question_id FROM responses
+      WHERE activity_instance_id = ? AND question_id REGEXP ?`,
+    [instanceId, `^${baseQid}AI[0-9]+$`]
+  );
+  let max = 0;
+  for (const row of rows) {
+    const m = AI_TURN_QID_RE.exec(String(row.question_id || ''));
+    if (m) max = Math.max(max, parseInt(m[2], 10) || 0);
+  }
+  return max;
+}
+
+// Persisted, gated inline AI help for a live activity instance.
+// Only the instance's current active student may spend a turn; observers and
+// instructors read the transcript but cannot write to it.
+async function assistActivityAi(req, res) {
+  const instanceId = Number(req.body?.instanceId);
+  const userId = Number(req.body?.userId);
+  const baseQid = String(req.body?.questionKey || '').trim();
+
+  if (!Number.isFinite(instanceId) || instanceId <= 0) {
+    return res.status(400).json({ error: 'instanceId is required.' });
+  }
+  if (!Number.isFinite(userId) || userId <= 0) {
+    return res.status(400).json({ error: 'userId is required.' });
+  }
+  if (!/^\d+[A-Za-z]+$/.test(baseQid)) {
+    return res.status(400).json({ error: 'A valid questionKey is required.' });
+  }
+
+  try {
+    // Gate: only the active student may ask. This is enforced server-side so a
+    // stale or tampered client cannot write turns on someone else's behalf.
+    const [instanceRows] = await db.query(
+      `SELECT active_student_id, submitted_at FROM activity_instances WHERE id = ? LIMIT 1`,
+      [instanceId]
+    );
+    const instance = instanceRows?.[0];
+    if (!instance) {
+      return res.status(404).json({ error: 'Activity instance not found.' });
+    }
+    if (Number(instance.active_student_id) !== userId) {
+      return res.status(403).json({
+        error: 'Only the active student can ask the AI.',
+        code: 'NOT_ACTIVE_STUDENT',
+      });
+    }
+    if (instance.submitted_at) {
+      return res.status(409).json({
+        error: 'This activity has already been submitted.',
+        code: 'ALREADY_SUBMITTED',
+      });
+    }
+
+    const prompt = String(req.body?.studentInput || '').trim();
+    if (!prompt) {
+      return res.status(400).json({ error: 'studentInput is required.' });
+    }
+
+    const { response: reply, demo } = await runInlineAiCompletion(req.body || {});
+
+    const index = (await getLastAiTurnIndex(instanceId, baseQid)) + 1;
+    const qid = aiTurnQid(baseQid, index);
+    const turn = {
+      index,
+      prompt,
+      reply,
+      at: new Date().toISOString(),
+      by: userId,
+    };
+
+    await db.query(
+      `INSERT INTO responses
+         (activity_instance_id, question_id, submit_id, response_type, response, answered_by_user_id)
+       VALUES (?, ?, ?, 'text', ?, ?)`,
+      [instanceId, qid, randomUUID(), JSON.stringify(turn), userId]
+    );
+
+    // Push to observers so the transcript grows live for everyone watching.
+    if (typeof global.emitAiTurn === 'function') {
+      global.emitAiTurn(instanceId, baseQid, { qid, turn });
+    }
+
+    return res.json({ response: reply, demo, qid, turn });
+  } catch (err) {
+    if (err?.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
+    console.error('assistActivityAi error:', err);
+    return res.status(500).json({ error: 'Inline AI help failed.' });
+  }
+}
+
 
 function normalizeHistoryQid(qidRaw) {
   const qid = String(qidRaw || '').trim();
@@ -285,6 +472,12 @@ function normalizeHistoryQid(qidRaw) {
   if (/^\d+state$/i.test(qid)) return null;
   if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return null;
   if (/^test(?:Total|Max|Summary)Score$/i.test(qid)) return null;
+
+  // AI conversation turns (1aAI1, 1aAI2, ...) are a record of help the student
+  // asked for, not an attempt at the answer. They must never be folded into the
+  // attempt history that grading sees, or the grader would read the student's
+  // questions to the AI as their submitted work.
+  if (/^\d+[A-Za-z]+AI\d+$/i.test(qid)) return null;
 
   const suffixPatterns = [
     /^(?<base>\d+[A-Za-z]+)F\d+$/i,
@@ -559,10 +752,12 @@ async function buildAttemptHistoryContext({
     lines.push('- Do not repeat prior AI feedback wording.');
     lines.push('- Do not raise the bar beyond the question, sample, or instructor guidance.');
     lines.push('- If the question gives a range such as 2-4 items, the lower bound satisfies the quantity requirement.');
-    lines.push('- Attempt 1: give a gentle conceptual hint.');
-    lines.push('- Attempt 2: point to the missing idea or relevant evidence.');
-    lines.push('- Attempt 3: give a more directed hint or sentence starter that names exactly what is missing.');
-    lines.push('- Attempt 4 or later: if the current answer is close enough, accept it; otherwise give a direct sentence-level path forward.');
+    lines.push('- Attempt 1: give a warm, encouraging nudge. Acknowledge what they got right, then ask one focused follow-up question.');
+    lines.push('- Attempt 2: point to the missing idea or relevant evidence. Frame it as a challenge, not a correction — "What about..." or "Can you connect that to..."');
+    lines.push('- Attempt 3: give a more directed hint or sentence starter that names exactly what is missing. Keep tone positive.');
+    lines.push('- Attempt 4 or later: if the current answer is close enough, accept it; otherwise give a single concrete sentence that tells them exactly what to add, then let them try once more.');
+    lines.push('- When rejecting at any stage, start feedback with what the group got right before naming what to refine.');
+    lines.push('- Avoid phrases like "you need to", "this is missing", or "your answer lacks". Prefer "what about", "can you add", "almost there — try adding".');
 
     return lines.join('\n');
   } catch (err) {
@@ -570,6 +765,35 @@ async function buildAttemptHistoryContext({
       console.warn('[AI_DEBUG] buildAttemptHistoryContext failed:', err?.message || err);
     }
     return '';
+  }
+}
+
+const DEFAULT_CLASS_GUIDANCE = "Accept any response that shows the student is engaging with the question and thinking about the concept. Only push back when a response is gibberish, completely off-prompt, contains a clear error, or fails the single core requirement of the question. When pushing back, ask one focused question or suggest one small addition — never list multiple failures. Do not demand completeness, perfect wording, or extra detail beyond what the question asks for. Do not request input validation, error handling, refactoring, or extra features. Do not evaluate variable-name style. If the checker encounters an internal error, allow the group to continue.";
+
+async function fetchClassGuidance(instanceId) {
+  const numericInstanceId = Number(instanceId);
+  if (!Number.isFinite(numericInstanceId) || numericInstanceId <= 0) {
+    return DEFAULT_CLASS_GUIDANCE;
+  }
+
+  try {
+    const [rows] = await db.query(
+      `SELECT pc.ai_guidance
+       FROM activity_instances ai
+       JOIN courses c ON c.id = ai.course_id
+       LEFT JOIN pogil_classes pc ON pc.id = c.class_id
+       WHERE ai.id = ?
+       LIMIT 1`,
+      [numericInstanceId]
+    );
+
+    const value = String(rows?.[0]?.ai_guidance || "").trim();
+    return value || DEFAULT_CLASS_GUIDANCE;
+  } catch (err) {
+    if (AI_DEBUG) {
+      console.warn('[AI_DEBUG] fetchClassGuidance failed:', err?.message || err);
+    }
+    return DEFAULT_CLASS_GUIDANCE;
   }
 }
 
@@ -581,14 +805,18 @@ async function buildStudentResponsePrompt({
   feedbackPrompt = "",
   followupPrompt = "",
   guidance = "",
+  classGuidance = "",
   instanceId,
   qid,
   historyLimit = 5,
   requirementsOnly = false,
   activityLanguage = 'English',
+  timerRemainingMs = null,
+  timerDurationMs = null,
 }) {
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
   const activityGuide = stripHtml(guidance || "");
+  const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
   const questionGuide = stripHtml(feedbackPrompt || "");
   const historyContext = await buildAttemptHistoryContext({
     instanceId,
@@ -605,15 +833,29 @@ async function buildStudentResponsePrompt({
   const followupRaw = fuParsed.cleaned;
   const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
 
+  // Compute timer pressure level for prompt injection
+  const timerPressure = (() => {
+    if (timerRemainingMs == null) return 'none';
+    if (timerRemainingMs <= 0) return 'expired';
+    if (timerRemainingMs < 2 * 60 * 1000) return 'critical';   // < 2 min
+    if (timerRemainingMs < 5 * 60 * 1000) return 'low';        // < 5 min
+    return 'normal';
+  })();
+
   const sys = [
-    "You are a concise, supportive learning facilitator for an ungraded collaborative activity.",
+    "You are a warm, concise learning facilitator for an ungraded collaborative activity.",
     "The submission represents a collaborative group's shared answer, even though one person may be typing.",
+    "Your role is to coach the group forward — not to gatekeep. Think of yourself as a thoughtful peer nudging them toward understanding, not a grader checking a rubric.",
+    `Class-level AI policy:\n${classGuide}`,
+    activityGuide
+      ? `Activity-level refinement (takes precedence over class policy where stated):\n${activityGuide}`
+      : "",
     "Decide whether the group's current submission is sufficient to proceed.",
     "Return ONLY JSON matching the schema exactly.",
     "The instructor feedbackprompt is the complete acceptance contract for this question. Follow it literally; do not add your own criteria.",
     "If the submission is on-topic and sufficient, set accepted=true.",
     "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
-    "If accepted=false, feedback MUST be a short actionable hint (1–2 sentences).",
+    "If accepted=false, feedback MUST be a short coaching nudge (1–2 sentences). Start with what they got right, then ask one focused question or suggest one small addition. Never frame it as a list of failures.",
     "If accepted=true, feedback must be null unless positive feedback is enabled.",
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
@@ -621,6 +863,8 @@ async function buildStudentResponsePrompt({
     "As attempts increase, weaken the requirements: prefer a good-enough answer that shows understanding over a perfectly complete one.",
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
+    "When rejecting, use warm, collaborative language. Prefer 'You're on the right track — what about...' or 'Good start. Can you add...' over phrasing like 'you need to' or 'this is missing'.",
+    "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting and use feedback to affirm what they got right.",
     `Write every feedback message in ${feedbackLanguage}. Do not mix languages or mirror the student's answer language if it differs.`,
     "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
     "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
@@ -634,7 +878,15 @@ async function buildStudentResponsePrompt({
       ? "Prefer a conceptual nudge or next-step hint over a direct correction."
       : "",
     "Do NOT mention grading, points, rubrics, or scoring.",
-  ].join("\n");
+    // Timer pressure overrides
+    timerPressure === 'expired'
+      ? "TIMER EXPIRED: The section time has run out. Set accepted=true for any answer that is on-topic. Do not ask for more work."
+      : timerPressure === 'critical'
+      ? "TIME CRITICAL: Less than 2 minutes remain. If the answer shows any reasonable understanding of the question, set accepted=true. Do not request elaboration."
+      : timerPressure === 'low'
+      ? "TIME PRESSURE: About 5 minutes remain. Prefer accepting answers that show understanding even if incomplete. Keep any feedback very brief."
+      : "",
+  ].filter(Boolean).join("\n");
 
   const schema = `Return JSON only:
 {"accepted":true|false,
@@ -650,7 +902,7 @@ async function buildStudentResponsePrompt({
       ? `Instructor feedbackprompt (meta; do not quote):\n${questionGuide}`
       : "",
     followupRaw && !followupIsNone
-      ? `Instructor followupprompt (optional; prefer this wording if you choose to ask a follow-up):\n${followupRaw}`
+      ? `Instructor followupprompt (meta; addressed to you, not to the group -- never quote it verbatim. If you ask a follow-up, rewrite it as a question addressed directly to the group):\n${followupRaw}`
       : "",
     historyContext,
     `Current group submission:\n${stripHtml(studentAnswer)}`,
@@ -663,12 +915,18 @@ async function buildStudentResponsePrompt({
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
     "Rejection rule: name the exact missing or incorrect requirement from the instructor feedbackprompt. Do not use generic feedback such as saying the response should be more complete or well explained.",
+    "Coaching tone rule: feedback should feel like a supportive challenge from a peer, not a checklist from an evaluator. The group should feel encouraged to refine, not pressured to satisfy the AI.",
     requirementsOnly
       ? "Requirements-only rule: if you reject, give only a short hint that invites a retry; anchor that hint to the exact question text rather than using a generic message."
       : "",
+    timerPressure === 'expired' || timerPressure === 'critical'
+      ? "Timer rule: time has run out or is critically low — override other criteria and set accepted=true if the answer is at all on-topic."
+      : timerPressure === 'low'
+      ? "Timer rule: time is running low — be generous and accept answers that show reasonable engagement with the question."
+      : "",
     "",
     schema,
-    "If reasonable, prefer {\"accepted\":true}",
+    "Default to {\"accepted\":true} unless the answer is clearly off-track or incoherent. A partial but engaged answer should move forward.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -1435,7 +1693,11 @@ async function evaluateStudentResponse(req, res) {
     retriesRequired,
     submissionString = "",
     activityLanguage = 'English',
+    timerRemainingMs = null,
+    timerDurationMs = null,
   } = req.body || {};
+
+  const classGuidance = await fetchClassGuidance(instanceId);
 
   let accepted = false;
   let feedback =
@@ -1556,11 +1818,14 @@ async function evaluateStudentResponse(req, res) {
     feedbackPrompt,
     followupPrompt,
     guidance,
+    classGuidance,
     instanceId,
     qid: qid || req.body?.questionId || req.body?.codeVersion || "",
     historyLimit: 5,
     requirementsOnly: policy.requirementsOnly,
     activityLanguage,
+    timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
+    timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
   });
   const {
     sys,
@@ -1637,10 +1902,21 @@ async function evaluateStudentResponse(req, res) {
       feedback = null;
     }
 
-    if (accepted && positiveEnabled && !feedback && followupRaw && !followupIsNone) {
-      feedback = followupRaw;
-    }
-
+    // Deliberately NOT falling back to the raw instructor followupprompt here.
+    //
+    // \followupprompt is meta addressed to the AI, not to the group -- authors
+    // write it as "Ask the group to explain the role of quotation marks", and it
+    // doubles as a config channel (the No-Positive-feedback override is parsed
+    // out of it). Assigning it to `feedback` published that directive verbatim
+    // to students as "AI Guidance", so they were shown an instruction meant for
+    // someone else. It also only ever happened when the model returned nothing,
+    // which is why the green accepted box appeared exactly when there was no
+    // real feedback to show.
+    //
+    // normalizeAIResult already promotes the model's own followupQuestion into
+    // `feedback`, so a well-formed follow-up still reaches the group. If the
+    // model produced nothing at all, `feedback` simply stays empty and no
+    // guidance box is rendered.
     if (isNone(feedbackPrompt) && !policy.requirementsOnly) {
       feedback = null;
     }
@@ -1676,6 +1952,8 @@ async function evaluatePythonCode(req, res) {
     followupPrompt = "",
     outputText = "",
     activityLanguage = 'English',
+    timerRemainingMs = null,
+    timerDurationMs = null,
   } = req.body || {};
 
   if (!questionText || !studentCode) {
@@ -1690,6 +1968,7 @@ async function evaluatePythonCode(req, res) {
     console.log("[AI_DEBUG] followupPrompt (first 120):", String(req.body?.followupPrompt || "").slice(0, 120));
     console.log("[AI_DEBUG] studentCode (first 200):\n" + String(req.body?.studentCode || "").slice(0, 200));
   }
+  const classGuidance = await fetchClassGuidance(instanceId);
   const result = await evaluateCode({
     questionText,
     studentCode,
@@ -1697,6 +1976,7 @@ async function evaluatePythonCode(req, res) {
     instanceId,
     qid: codeVersion,
     guidance,
+    classGuidance,
     isCodeOnly,
     feedbackPrompt,
     sampleResponse,
@@ -1704,6 +1984,8 @@ async function evaluatePythonCode(req, res) {
     lang: "python",
     outputText,
     activityLanguage,
+    timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
+    timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
   });
 
   // ✅ ADD THIS (Step 2 already, but keep it)
@@ -1876,6 +2158,7 @@ async function evaluateCode({
   instanceId = null,
   qid = "",
   guidance = "",
+  classGuidance = "",
   isCodeOnly = false,
   feedbackPrompt = "",
   sampleResponse = "",
@@ -1883,6 +2166,8 @@ async function evaluateCode({
   lang,
   outputText = "",
   activityLanguage = 'English',
+  timerRemainingMs = null,
+  timerDurationMs = null,
 }) {
   // Default: fail-open (don’t block if AI fails)
   const base = { accepted: true, feedback: null };
@@ -1896,6 +2181,7 @@ async function evaluateCode({
   const parts = combined.split(/\n-{3,}\n/);
   const qGuide = stripHtml(feedbackPrompt || "");
   const aGuide = parts[1] || parts[0] || combined;
+  const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
   const policy = getEffectivePolicy(aGuide, qGuide);
 
   const inferred = detectLangFromCode(studentCode);
@@ -1917,6 +2203,15 @@ async function evaluateCode({
     limit: 5,
   });
 
+  // Timer pressure for code evaluation
+  const codeTimerPressure = (() => {
+    if (timerRemainingMs == null) return 'none';
+    if (timerRemainingMs <= 0) return 'expired';
+    if (timerRemainingMs < 2 * 60 * 1000) return 'critical';
+    if (timerRemainingMs < 5 * 60 * 1000) return 'low';
+    return 'normal';
+  })();
+
   const rules = [
     policy.requirementsOnly && "- Judge ONLY whether it meets the stated task; no extras.",
     policy.ignoreSpacing && "- Ignore whitespace/formatting; never mention spacing.",
@@ -1928,6 +2223,14 @@ async function evaluateCode({
     "- Treat this as one collaborative group conversation; do not single out the active typer.",
     "feedbackprompt is meta guidance; do NOT quote it.",
     "Before suggesting to add a line, verify it is not already present (or equivalent) in the code.",
+    "- When rejecting code, use coaching language. Start with what the code does right, then name one specific thing to fix. Prefer 'Almost — try...' over 'Your code is missing...'",
+    codeTimerPressure === 'expired'
+      ? "- TIMER EXPIRED: Section time is up. If the code is on-task and makes a reasonable attempt, set accepted=true."
+      : codeTimerPressure === 'critical'
+      ? "- TIME CRITICAL: Under 2 minutes left. Accept any code that makes a reasonable attempt at the task."
+      : codeTimerPressure === 'low'
+      ? "- TIME PRESSURE: About 5 minutes left. Be generous — accept code that is mostly correct or shows clear intent."
+      : "",
   ].filter(Boolean).join("\n");
 
   const fence =
@@ -1994,8 +2297,13 @@ ${rules ? "\n" + rules : ""}
       messages: [
         {
           role: "system",
-          content:
+          content: [
             "You are a careful code-evaluation assistant. Accept any correct solution that satisfies the task. Do not overfit to the sample response.",
+            `Class-level AI policy:\n${classGuide}`,
+            aGuide
+              ? `Activity-level refinement (takes precedence over class policy where stated):\n${aGuide}`
+              : "",
+          ].filter(Boolean).join("\n"),
         },
         { role: "user", content: prompt },
       ],
@@ -2055,6 +2363,8 @@ async function evaluateCppCode(req, res) {
     followupPrompt = "",
     outputText = "",
     activityLanguage = 'English',
+    timerRemainingMs = null,
+    timerDurationMs = null,
   } = req.body || {};
 
   if (!questionText || !studentCode) {
@@ -2073,6 +2383,7 @@ async function evaluateCppCode(req, res) {
     outputText: String(outputText || "").slice(0, 200),
   });
 
+  const classGuidance = await fetchClassGuidance(instanceId);
   const result = await evaluateCode({
     questionText,
     studentCode,
@@ -2080,6 +2391,7 @@ async function evaluateCppCode(req, res) {
     instanceId,
     qid: codeVersion,
     guidance,
+    classGuidance,
     isCodeOnly,
     feedbackPrompt,
     sampleResponse,
@@ -2087,6 +2399,8 @@ async function evaluateCppCode(req, res) {
     lang: "cpp",
     outputText,
     activityLanguage,
+    timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
+    timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
   });
 
 
@@ -2116,6 +2430,8 @@ async function evaluateCppCode(req, res) {
 
 module.exports = {
   assistInlineActivity,
+  assistActivityAi,
+  runInlineAiCompletion,
   evaluateStudentResponse,
   evaluatePythonCode,
   evaluateCode,

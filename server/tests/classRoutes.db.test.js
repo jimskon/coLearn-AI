@@ -43,7 +43,8 @@ async function ensureSchema() {
     ALTER TABLE pogil_classes
       ADD COLUMN IF NOT EXISTS level VARCHAR(255) DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL,
-      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS ai_guidance TEXT DEFAULT NULL
   `);
 }
 
@@ -200,6 +201,9 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
     level: updatedLevel,
     topic_domain: updatedTopicDomain,
     demo_mode: false,
+    // The class-level AI guidance policy layer added this column. The PUT above
+    // does not set it, so the controller echoes back its default.
+    ai_guidance: null,
   });
 
   const fetchOne = await requestJson(`/api/classes/${create.body.id}`);

@@ -17,6 +17,7 @@ export default function ActivityCppBlock({
   onCodeChange,
   timeLimit = 50000,        // currently unused but kept for API compatibility
   editable = true,
+  onEditStart,
   displayOnly = false,
   blockIndex = 0,
   localOnly = false,       // if true, don't send files / remote sync
@@ -705,6 +706,7 @@ export default function ActivityCppBlock({
             setIsEditing((prev) => {
               const next = !prev;
               if (next) {
+                onEditStart?.();
                 flushPendingRemoteIfAny();
               }
               return next;

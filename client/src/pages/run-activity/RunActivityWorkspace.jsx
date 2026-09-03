@@ -1,10 +1,11 @@
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { Alert, Badge, Button, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
 import { collectInfosForTarget } from '../../utils/parseSheet';
 import useRuntimeFeatures from '../../hooks/useRuntimeFeatures';
 import { shouldShowQuestionGradePreview } from './gradeQuestionPreviewUi';
+import { ActivityAiPanel, SplitDivider, collectAiEntries, useSplitPane } from './ActivityAiPanel';
 
 function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   if (!infos?.length) return null;
@@ -92,30 +93,32 @@ export default function RunActivityWorkspace({
   infoBubbleSession,
   suppressStudentTestFeedbackUi = false,
   hideStudentTestSections = false,
+  onAiTurnSaved,
+  activeStudentName = '',
 }) {
   const { features: runtimeFeatures } = useRuntimeFeatures();
   const isTestRunner = isStudent || isCreatorTestRun;
   const isAssessmentMode = isTestMode || isAssignmentMode;
   let globalQuestionCounter = 0;
 
-  return (
-    <div style={{ position: 'relative' }}>
-      {activityPaused && (
-        <div
-          className="d-flex align-items-center justify-content-center"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 20,
-            background: 'rgba(255,255,255,0.45)',
-            backdropFilter: 'grayscale(0.15)',
-          }}
-        >
-          <div className="px-3 py-2 rounded border bg-light text-muted fw-semibold shadow-sm">
-            Paused
-          </div>
-        </div>
-      )}
+  // An activity that uses AI anywhere is laid out as a split pane for its whole
+  // duration, so the panel does not appear and vanish as the student advances.
+  // An activity with no \ai block keeps the single-column layout unchanged.
+  const aiEntries = useMemo(() => collectAiEntries(groups), [groups]);
+  const useSplitLayout = aiEntries.length > 0;
+  const split = useSplitPane(useSplitLayout);
+
+  const completedGroupCount = Number(activity?.completed_groups ?? 0);
+  // Instructors see every group, so "current" for them is the student's
+  // position, not their own scroll.
+  const isGroupRevealed = useCallback(
+    (groupIndex) => (
+      isSandbox || isAssessmentMode || isInstructor || groupIndex <= completedGroupCount
+    ),
+    [isSandbox, isAssessmentMode, isInstructor, completedGroupCount]
+  );
+
+  const workspaceBody = (
       <div
         aria-disabled={activityPaused ? 'true' : undefined}
         style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
@@ -164,6 +167,7 @@ export default function RunActivityWorkspace({
           activityLanguage: activity?.language || activity?.meta?.language || 'English',
           suppressStudentTestFeedbackUi,
           hideStudentTestSections,
+          suppressAiBlocks: useSplitLayout,
         })}
 
         {groups.map((group, index) => {
@@ -220,6 +224,7 @@ export default function RunActivityWorkspace({
                   activityLanguage: activity?.language || activity?.meta?.language || 'English',
                   suppressStudentTestFeedbackUi,
                   hideStudentTestSections,
+                  suppressAiBlocks: useSplitLayout,
                 })}
 
               <p ref={questionGroupAnchorRef}>
@@ -276,6 +281,7 @@ export default function RunActivityWorkspace({
                   isTestMode,
                   suppressStudentTestFeedbackUi,
                   hideStudentTestSections,
+                  suppressAiBlocks: useSplitLayout,
                 });
 
                 if (block.type !== 'question' || !isAssessmentMode) {
@@ -539,6 +545,82 @@ export default function RunActivityWorkspace({
             %)
           </Alert>
         )}
+      </div>
+  );
+
+  const pausedOverlay = activityPaused ? (
+    <div
+      className="d-flex align-items-center justify-content-center"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 20,
+        background: 'rgba(255,255,255,0.45)',
+        backdropFilter: 'grayscale(0.15)',
+      }}
+    >
+      <div className="px-3 py-2 rounded border bg-light text-muted fw-semibold shadow-sm">
+        Paused
+      </div>
+    </div>
+  ) : null;
+
+  if (!useSplitLayout) {
+    return (
+      <div style={{ position: 'relative' }}>
+        {pausedOverlay}
+        {workspaceBody}
+      </div>
+    );
+  }
+
+  // Split layout. The activity column scrolls with the page as it always has;
+  // the divider and the AI panel are sticky so the transcript stays in view
+  // while the student works down the activity.
+  const stickyStyle = {
+    position: 'sticky',
+    top: 80,
+    height: 'calc(100vh - 100px)',
+    alignSelf: 'flex-start',
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      {pausedOverlay}
+      <div ref={split.containerRef} className="d-flex align-items-start">
+        <div style={{ flex: `0 0 ${split.pct}%`, minWidth: 0, paddingRight: 12 }}>
+          {workspaceBody}
+        </div>
+
+        <div style={stickyStyle} className="d-flex">
+          <SplitDivider
+            pct={split.pct}
+            dragging={split.dragging}
+            onStart={() => split.setDragging(true)}
+            onKeyDown={split.handleKeyDown}
+          />
+        </div>
+
+        <div
+          className="border rounded bg-white ms-2"
+          style={{ ...stickyStyle, flex: '1 1 auto', minWidth: 0, overflow: 'hidden' }}
+        >
+          <ActivityAiPanel
+            entries={aiEntries}
+            currentGroupIndex={completedGroupCount}
+            isRevealed={isGroupRevealed}
+            isActive={isActive}
+            isObserver={isObserver}
+            isInstructor={isInstructor}
+            isSubmitted={isSubmitted}
+            activityLanguage={activity?.language || activity?.meta?.language || 'English'}
+            instanceId={instanceId}
+            userId={user?.id}
+            existingAnswers={existingAnswers}
+            onAiTurnSaved={onAiTurnSaved}
+            activeStudentName={activeStudentName}
+          />
+        </div>
       </div>
     </div>
   );

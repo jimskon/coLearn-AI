@@ -20,6 +20,7 @@ export default function useRunActivitySync({
   setCodeFeedbackShown,
   setFollowupsShown,
   findQuestionBlockByQid,
+  dirtyKeysRef,
 }) {
   const [socket, setSocket] = useState(null);
   const activeStudentIdRef = useRef(null);
@@ -142,6 +143,11 @@ export default function useRunActivitySync({
     const handleUpdate = ({ responseKey, value, answeredBy }) => {
       if (answeredBy && String(answeredBy) === String(user?.id)) return;
 
+      // Temporarily mark this key dirty so a concurrent loadActivity() call
+      // does not overwrite the fresh socket value with an older DB snapshot
+      // (Race B/D fix). The key auto-clears after 3 s.
+      dirtyKeysRef?.current?.addTemp?.(responseKey, 3000);
+
       setExistingAnswers((prev) => ({
         ...prev,
         [responseKey]: {
@@ -158,8 +164,15 @@ export default function useRunActivitySync({
 
         setTextFeedbackShown((prev) => {
           const next = { ...prev };
-          if (txt) next[qid] = txt;
-          else delete next[qid];
+          if (txt) {
+            // Preserve the 'positive' flag that handleSubmit set; socket echoes
+            // arrive after the { text, positive } object is already stored, so
+            // read it from prev rather than overwriting with a bare string.
+            const existingPositive = (typeof prev[qid] === 'object') ? prev[qid].positive : false;
+            next[qid] = { text: txt, positive: existingPositive };
+          } else {
+            delete next[qid];
+          }
           return next;
         });
         return;
@@ -191,12 +204,27 @@ export default function useRunActivitySync({
       });
     };
 
+    // A completed AI exchange on this instance. Turn rows are append-only and
+    // keyed by qid, so applying one is idempotent: the student who asked and
+    // every observer converge on the same transcript, and a re-delivered event
+    // simply rewrites the row it already has.
+    const handleAiTurn = ({ qid, turn }) => {
+      if (!qid || !turn) return;
+      dirtyKeysRef?.current?.addTemp?.(qid, 3000);
+      setExistingAnswers((prev) => ({
+        ...prev,
+        [qid]: { response: JSON.stringify(turn), type: 'text' },
+      }));
+    };
+
     socket.on('response:update', handleUpdate);
     socket.on('feedback:update', handleFeedbackUpdate);
+    socket.on('ai:turn', handleAiTurn);
 
     return () => {
       socket.off('response:update', handleUpdate);
       socket.off('feedback:update', handleFeedbackUpdate);
+      socket.off('ai:turn', handleAiTurn);
     };
   }, [
     socket,

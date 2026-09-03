@@ -3,7 +3,10 @@ const http = require('node:http');
 const Module = require('node:module');
 const test = require('node:test');
 
-process.env.OPENAI_API_KEY ||= 'test-key';
+// Unconditional, not ||=: these tests never intend to reach the model, and a
+// real key in a developer's .env would otherwise make them issue live,
+// billable OpenAI calls. 'test-key' selects the stub client.
+process.env.OPENAI_API_KEY = 'test-key';
 
 const express = require('express');
 

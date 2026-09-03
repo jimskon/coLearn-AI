@@ -181,6 +181,9 @@ export default function ManageActivitiesPage() {
   const [downloadSelection, setDownloadSelection] = useState({});
   const [selectedUploadFile, setSelectedUploadFile] = useState(null);
   const [uploadNote, setUploadNote] = useState('');
+  const [uploadBlocked, setUploadBlocked] = useState([]);
+  const [pendingReplaceItems, setPendingReplaceItems] = useState([]);
+  const [uploadBusy, setUploadBusy] = useState(false);
   const [googleImportUrl, setGoogleImportUrl] = useState('');
   const [googleImportMode, setGoogleImportMode] = useState('remote');
   const [googleImportNote, setGoogleImportNote] = useState('');
@@ -327,6 +330,8 @@ export default function ManageActivitiesPage() {
     setNewActivity(emptyUploadActivity);
     setSelectedUploadFile(null);
     setUploadNote('');
+    setUploadBlocked([]);
+    setPendingReplaceItems([]);
     setShowUploadModal(false);
   };
 
@@ -356,14 +361,70 @@ export default function ManageActivitiesPage() {
     await refreshActivities();
   };
 
+  // Like saveActivity, but for bundle-create items: doesn't close the upload
+  // modal or navigate away, since it may run alongside a replace-bundle call
+  // whose blocked-item warning needs the modal to stay open.
+  const createActivityFromBundleItem = async (activity) => {
+    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(activity),
+      credentials: 'include',
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || `Failed to create activity "${activity.title}".`);
+    }
+    return data;
+  };
+
+  // Sends matched-by-id bundle items to the replace endpoint. Activities that
+  // already have student responses come back in `blocked` and are left
+  // unchanged unless their id is included in forceIds.
+  const submitReplaceBundle = async (items, forceIds = []) => {
+    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/replace-bundle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ activities: items, force_ids: forceIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to replace activities.');
+    }
+    return data;
+  };
+
+  const handleForceReplaceBlocked = async () => {
+    if (!pendingReplaceItems.length || !uploadBlocked.length) return;
+    setUploadBusy(true);
+    try {
+      const forceIds = uploadBlocked.map((b) => b.id);
+      const result = await submitReplaceBundle(pendingReplaceItems, forceIds);
+      const replaced = Array.isArray(result.replaced) ? result.replaced : [];
+      setUploadBlocked([]);
+      setPendingReplaceItems([]);
+      setUploadNote(`Replaced ${replaced.length} activit${replaced.length === 1 ? 'y' : 'ies'}.`);
+      await refreshActivities();
+    } catch (err) {
+      console.error('Force replace failed:', err);
+      setUploadNote(err.message || 'Failed to replace activities.');
+    } finally {
+      setUploadBusy(false);
+    }
+  };
+
   const handleUpload = async () => {
     setUploadNote('');
+    setUploadBlocked([]);
+    setPendingReplaceItems([]);
 
     if (!selectedUploadFile) {
       setUploadNote('Choose a local text file or JSON bundle first.');
       return;
     }
 
+    setUploadBusy(true);
     try {
       const raw = await selectedUploadFile.text();
       const filename = selectedUploadFile.name || 'activity.txt';
@@ -382,13 +443,28 @@ export default function ManageActivitiesPage() {
           return;
         }
 
-        for (let index = 0; index < importedItems.length; index += 1) {
-          const item = importedItems[index] || {};
+        // Items whose id matches an activity already in this class are
+        // replaced in place; everything else is created as new.
+        const existingIds = new Set(activities.map((a) => Number(a.id)));
+        const replaceItems = [];
+        const createItems = [];
+
+        importedItems.forEach((item, index) => {
+          const itemId = Number(item?.id);
+          if (itemId && existingIds.has(itemId)) {
+            replaceItems.push(item);
+          } else {
+            createItems.push({ item, index });
+          }
+        });
+
+        let createdCount = 0;
+        for (const { item, index } of createItems) {
           const contentText = String(item.content_text || item.text || '');
           const title = item.title || extractTitleFromMarkup(contentText) || `Imported Activity ${index + 1}`;
           const name = slugifyActivityName(item.name || title || `${fileBase}_${index + 1}`) || `activity_${Date.now()}_${index + 1}`;
 
-          await saveActivity({
+          await createActivityFromBundleItem({
             name,
             title,
             source_type: 'local',
@@ -396,8 +472,26 @@ export default function ManageActivitiesPage() {
             order_index: item.order_index ?? activities.length + index,
             createdBy: user?.id,
           });
+          createdCount += 1;
         }
 
+        let replacedCount = 0;
+        if (replaceItems.length) {
+          const result = await submitReplaceBundle(replaceItems, []);
+          replacedCount = Array.isArray(result.replaced) ? result.replaced.length : 0;
+          const blocked = Array.isArray(result.blocked) ? result.blocked : [];
+          if (blocked.length) {
+            setUploadBlocked(blocked);
+            setPendingReplaceItems(replaceItems);
+          }
+        }
+
+        const parts = [];
+        if (createdCount) parts.push(`Created ${createdCount} activit${createdCount === 1 ? 'y' : 'ies'}.`);
+        if (replacedCount) parts.push(`Replaced ${replacedCount} activit${replacedCount === 1 ? 'y' : 'ies'}.`);
+        setUploadNote(parts.join(' ') || 'Nothing to import.');
+
+        await refreshActivities();
         return;
       }
 
@@ -414,7 +508,9 @@ export default function ManageActivitiesPage() {
       });
     } catch (err) {
       console.error('Local upload failed:', err);
-      setUploadNote('Unable to read that file. Use a plain text activity file or a JSON bundle.');
+      setUploadNote(err.message || 'Unable to read that file. Use a plain text activity file or a JSON bundle.');
+    } finally {
+      setUploadBusy(false);
     }
   };
 
@@ -974,7 +1070,15 @@ export default function ManageActivitiesPage() {
         <Button variant="outline-primary" onClick={openBlankActivityModal}>
           Blank Activity
         </Button>
-        <Button variant="primary" onClick={() => setShowUploadModal(true)}>
+        <Button
+          variant="primary"
+          onClick={() => {
+            setUploadNote('');
+            setUploadBlocked([]);
+            setPendingReplaceItems([]);
+            setShowUploadModal(true);
+          }}
+        >
           Upload
         </Button>
         <Button variant="secondary" onClick={openDownloadPlaceholder}>
@@ -1227,8 +1331,8 @@ export default function ManageActivitiesPage() {
         </Modal.Footer>
       </Modal>
 
-      <Modal show={showUploadModal} onHide={() => setShowUploadModal(false)}>
-        <Modal.Header closeButton>
+      <Modal show={showUploadModal} onHide={() => !uploadBusy && resetUploadState()}>
+        <Modal.Header closeButton={!uploadBusy}>
           <Modal.Title>Upload Activity</Modal.Title>
         </Modal.Header>
         <Modal.Body>
@@ -1238,9 +1342,12 @@ export default function ManageActivitiesPage() {
               type="file"
               accept=".txt,.md,.tex,.json,.zip"
               onChange={(e) => setSelectedUploadFile(e.target.files?.[0] || null)}
+              disabled={uploadBusy}
             />
             <div className="text-muted small mt-2">
-              Upload a single activity text file now, or a JSON activity bundle. Zip support is next.
+              Upload a single activity text file now, or a JSON activity bundle. An activity in the
+              bundle whose id matches one already in this class replaces that activity's content;
+              other items are created as new activities. Zip support is next.
             </div>
           </Form.Group>
           <Form.Group className="mb-2">
@@ -1249,6 +1356,7 @@ export default function ManageActivitiesPage() {
               placeholder="Optional Activity ID override"
               value={newActivity.name}
               onChange={handleUploadFieldChange}
+              disabled={uploadBusy}
             />
           </Form.Group>
           <Form.Group>
@@ -1258,20 +1366,42 @@ export default function ManageActivitiesPage() {
               placeholder="Optional Order Index"
               value={newActivity.order_index}
               onChange={handleUploadFieldChange}
+              disabled={uploadBusy}
             />
           </Form.Group>
           {uploadNote ? (
-            <Alert variant="warning" className="mt-3 mb-0">
+            <Alert variant={uploadBlocked.length ? 'warning' : 'info'} className="mt-3 mb-0">
               {uploadNote}
+            </Alert>
+          ) : null}
+          {uploadBlocked.length ? (
+            <Alert variant="danger" className="mt-3 mb-0">
+              <div className="mb-2">
+                These activities already have student responses and were <strong>not</strong> replaced:
+              </div>
+              <ul className="mb-2">
+                {uploadBlocked.map((b) => (
+                  <li key={b.id}>
+                    {b.title || b.name} ({b.response_count} response{b.response_count === 1 ? '' : 's'})
+                  </li>
+                ))}
+              </ul>
+              <div className="mb-2">
+                Replacing them will not change existing student answers, but the question text and
+                content they already responded to will no longer match what students see going forward.
+              </div>
+              <Button variant="danger" size="sm" onClick={handleForceReplaceBlocked} disabled={uploadBusy}>
+                {uploadBusy ? 'Replacing...' : 'Replace Anyway'}
+              </Button>
             </Alert>
           ) : null}
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowUploadModal(false)}>
+          <Button variant="secondary" onClick={resetUploadState} disabled={uploadBusy}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleUpload}>
-            Upload File
+          <Button variant="primary" onClick={handleUpload} disabled={uploadBusy}>
+            {uploadBusy ? 'Uploading...' : 'Upload File'}
           </Button>
         </Modal.Footer>
       </Modal>

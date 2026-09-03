@@ -1,7 +1,7 @@
 // client/src/pages/RunActivityPage.jsx
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import { Container, Alert, Button, ButtonGroup, Spinner } from 'react-bootstrap';
+import { Container, Alert, Button, ButtonGroup, Spinner, Modal } from 'react-bootstrap';
 import Prism from 'prismjs';
 import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-python';
@@ -383,6 +383,7 @@ export default function RunActivityPage({
   // ✅ add this (prevents repeat auto-submit calls)
   const [autoSubmitted, setAutoSubmitted] = useState(false);
   const [focusWarning, setFocusWarning] = useState(null);
+  const [showFocusModal, setShowFocusModal] = useState(false);
   const focusLossRequestRef = useRef(false);
   const focusAutoSubmitRef = useRef(false);
   const [sectionTimerNowMs, setSectionTimerNowMs] = useState(() => Date.now());
@@ -638,6 +639,7 @@ export default function RunActivityPage({
     handleFileChange,
     handleTextChange,
     handleCodeChange,
+    clearLocalSandbox,
   } = useRunActivityResponses({
     instanceId,
     user,
@@ -646,6 +648,19 @@ export default function RunActivityPage({
     persistResponses: canPersistDrafts,
     emitLiveUpdates: canUseLiveSync,
   });
+
+  // When this student becomes the active student, discard local sandbox edits
+  // and reload from the DB so they see the last-saved version, not stale local state.
+  const prevIsActiveRef = useRef(false);
+  useEffect(() => {
+    const justBecameActive = !prevIsActiveRef.current && isActive;
+    prevIsActiveRef.current = isActive;
+    if (!justBecameActive) return;
+    clearLocalSandbox();
+    loadActivityRef.current();
+  // Deliberately keyed on isActive alone: this fires on the false -> true edge.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   useEffect(() => {
     if (!allowFreeNavigation) return;
@@ -851,11 +866,28 @@ export default function RunActivityPage({
     loadSkulpt();
   }, []);
 
+  // Keep a live handle to loadActivity WITHOUT making it an effect dependency.
+  //
+  // loadActivity is a useCallback over ~20 dependencies. Listing it below meant
+  // the initial-load effect re-ran whenever any one of them changed identity --
+  // and loadActivity itself calls setActivity, setGroups, setActiveStudentId and
+  // more, so a single load could invalidate its own effect and immediately load
+  // again. The console stack for the runaway showed exactly that shape:
+  // mount -> effect -> loadActivity -> await -> setState -> commit -> effect ->
+  // loadActivity, repeating until the circuit breaker tripped.
+  //
+  // The intent here is "load once for this user and instance", which is what
+  // the primitive dependency list below now expresses literally.
+  const loadActivityRef = useRef(loadActivity);
+  useEffect(() => {
+    loadActivityRef.current = loadActivity;
+  });
+
   useEffect(() => {
     if (user?.id) {
-      loadActivity();
+      loadActivityRef.current();
     }
-  }, [user?.id, instanceId, loadActivity]);
+  }, [user?.id, instanceId]);
 
 
   useEffect(() => {
@@ -974,7 +1006,21 @@ export default function RunActivityPage({
     setCodeFeedbackShown,
     setFollowupsShown,
     findQuestionBlockByQid,
+    dirtyKeysRef,
   });
+
+  // An AI turn the active student just completed. The row is already persisted
+  // server-side and broadcast over the socket; applying it locally as well means
+  // the asker sees their own exchange immediately instead of waiting on the
+  // round trip, and re-applying the socket echo is a no-op because turns are
+  // keyed by qid.
+  const handleAiTurnSaved = useCallback((qid, turn) => {
+    if (!qid || !turn) return;
+    setExistingAnswers((prev) => ({
+      ...prev,
+      [qid]: { response: JSON.stringify(turn), type: 'text' },
+    }));
+  }, []);
 
 
   useEffect(() => {
@@ -985,6 +1031,11 @@ export default function RunActivityPage({
       const textToSave = {};
 
       for (const [key, val] of Object.entries(existingAnswers)) {
+        // AI turn rows (1aAI1, 1aAI2, ...) are written authoritatively by the
+        // AI endpoint at the moment the exchange happens. They ride along in
+        // the answers map so the transcript renders, but they must never be
+        // re-saved as drafts or we end up with a second, divergent copy.
+        if (/^\d+[A-Za-z]+AI\d+$/i.test(key)) continue;
         if (val?.type === 'text' && val.response?.trim()) {
           textToSave[key] = val.response.trim();
         }
@@ -1149,8 +1200,10 @@ export default function RunActivityPage({
 
     if (!canMonitor) return undefined;
 
-    const recordFocusLoss = async () => {
-      if (!document.hidden || focusLossRequestRef.current || focusAutoSubmitRef.current) return;
+    const recordFocusLoss = async (event) => {
+      // visibilitychange fires twice (hidden + visible); only act when hiding
+      if (event?.type === 'visibilitychange' && !document.hidden) return;
+      if (focusLossRequestRef.current || focusAutoSubmitRef.current) return;
 
       focusLossRequestRef.current = true;
       try {
@@ -1170,12 +1223,13 @@ export default function RunActivityPage({
 
         if (result.action === 'submit') {
           focusAutoSubmitRef.current = true;
-          setFocusWarning('Focus was lost a second time. Your test is being submitted.');
+          setFocusWarning('Your test is being submitted because you left the exam window a second time.');
           await handleSubmit(false);
           return;
         }
 
-        setFocusWarning('Warning: leaving the test window was recorded. Leaving it again will submit your test.');
+        // First violation — show blocking modal
+        setShowFocusModal(true);
       } catch (err) {
         console.warn('Could not record test focus loss:', err);
       } finally {
@@ -1184,7 +1238,11 @@ export default function RunActivityPage({
     };
 
     document.addEventListener('visibilitychange', recordFocusLoss);
-    return () => document.removeEventListener('visibilitychange', recordFocusLoss);
+    window.addEventListener('blur', recordFocusLoss);
+    return () => {
+      document.removeEventListener('visibilitychange', recordFocusLoss);
+      window.removeEventListener('blur', recordFocusLoss);
+    };
     // handleSubmit is a function declaration below, as in the timed-submit effect above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
@@ -1345,6 +1403,14 @@ export default function RunActivityPage({
         : 1,
       submissionString: String(submissionString || ""),
       dryRun: !canPersistAIResults,
+
+      // Timer pressure: let AI ease up when time is running low
+      timerRemainingMs:
+        sectionTimer?.visible && !sectionTimer?.paused
+          ? Math.max(0, sectionTimer.remainingMs ?? 0)
+          : null,
+      timerDurationMs:
+        sectionTimer?.visible ? (sectionTimer.durationMs ?? null) : null,
     };
 
     try {
@@ -1403,10 +1469,14 @@ export default function RunActivityPage({
         ? Number(data.retriesRequired)
         : null;
 
+      // If the section timer has expired, never deadlock the group — let them move on
+      const timerExpired =
+        sectionTimer?.visible && (sectionTimer.remainingMs ?? Infinity) <= 0;
+
       return {
         accepted,
-        feedback,
-        canContinue,
+        feedback: timerExpired ? null : feedback,
+        canContinue: timerExpired ? true : canContinue,
         retryCount,
         retriesRequired: retriesRequiredOut,
       };
@@ -2266,6 +2336,14 @@ export default function RunActivityPage({
             submissionString: groupSubmissionString,
             dryRun: !canPersistAIResults,
 
+            // Timer pressure: let AI ease up when time is running low
+            timerRemainingMs:
+              sectionTimer?.visible && !sectionTimer?.paused
+                ? Math.max(0, sectionTimer.remainingMs ?? 0)
+                : null,
+            timerDurationMs:
+              sectionTimer?.visible ? (sectionTimer.durationMs ?? null) : null,
+
             // ✅ new
             outputText,
           };
@@ -2608,7 +2686,9 @@ export default function RunActivityPage({
         if (feedback && feedback.trim()) {
           const f = feedback.trim();
           answers[`${qid}F1`] = f;
-          setTextFeedbackShown((prev) => ({ ...prev, [qid]: f }));
+          // Store with a 'positive' flag so the UI colours positive feedback green
+          // and negative feedback yellow.
+          setTextFeedbackShown((prev) => ({ ...prev, [qid]: { text: f, positive: accepted } }));
         } else {
           answers[`${qid}F1`] = '';
           setTextFeedbackShown((prev) => {
@@ -2801,7 +2881,9 @@ export default function RunActivityPage({
         return next;
       });
 
-      if (!isTestMode && forceOverride) {
+      if (!isTestMode) {
+        // Clear feedback for this group whenever it advances — whether the student
+        // used forceOverride or the group was accepted normally (positive feedback).
         const qBlocksForGroup = blocks.filter((b) => b.type === 'question');
         setTextFeedbackShown((prev) => {
           const next = { ...prev };
@@ -3256,11 +3338,30 @@ export default function RunActivityPage({
             {submitAlert}
           </Alert>
         )}
+        {/* First focus-loss: blocking modal the student must acknowledge */}
+        <Modal show={showFocusModal} backdrop="static" keyboard={false} centered>
+          <Modal.Header>
+            <Modal.Title>⚠️ Exam Warning</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <p>
+              <strong>You left the exam window.</strong> This has been recorded by your instructor.
+            </p>
+            <p>
+              If you leave the exam window again, your test will be <strong>automatically submitted</strong>.
+            </p>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="warning" onClick={() => setShowFocusModal(false)}>
+              I Understand — Return to Exam
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Second focus-loss: auto-submit banner */}
         {focusWarning && (
           <Alert
-            variant={focusAutoSubmitRef.current ? 'danger' : 'warning'}
-            dismissible={!focusAutoSubmitRef.current}
-            onClose={() => setFocusWarning(null)}
+            variant="danger"
             className="mt-3"
           >
             {focusWarning}
@@ -3277,6 +3378,8 @@ export default function RunActivityPage({
           />
         ) : (
           <RunActivityWorkspace
+            onAiTurnSaved={handleAiTurnSaved}
+            activeStudentName={activeStudentName}
             activityPaused={activityPaused}
             renderBlocks={renderBlocks}
             preamble={preamble}

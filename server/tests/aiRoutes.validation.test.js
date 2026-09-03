@@ -2,7 +2,13 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const test = require('node:test');
 
-process.env.OPENAI_API_KEY ||= 'test-key';
+// A NON-placeholder key on purpose. This file intercepts global.fetch (below)
+// so nothing leaves the machine, and it needs the real OpenAI client to be
+// constructed so those interceptions are reached. 'test-key' now selects the
+// stub client, which would bypass the scripted responses these tests rely on.
+// Set unconditionally, not with ||=, so an ambient OPENAI_API_KEY=test-key in
+// the CI environment cannot select the stub out from under these tests.
+process.env.OPENAI_API_KEY = 'live-test-key';
 
 const nativeFetch = global.fetch;
 global.fetch = async (input, init) => {
@@ -44,6 +50,25 @@ const {
   __testHooks,
 } = require('../ai/controller');
 const db = require('../db');
+
+// Requiring ../db creates a mysql2 pool at import time (db.js:11). This file
+// needs the module in order to stub db.query, but several tests exercise routes
+// that issue a REAL query before the stub is installed. On a machine where MySQL
+// is actually reachable those connections succeed and sit idle in the pool,
+// whose open socket keeps the event loop alive -- so `node --test` finishes every
+// test and then hangs forever instead of exiting.
+//
+// Every *.db.test.js already closes the pool on teardown; this was the one file
+// that did not. That is why the suite appeared to freeze immediately AFTER the
+// AI route tests passed rather than during any of them, and why it only froze on
+// a machine with a working database.
+test.after(async () => {
+  try {
+    await db.end();
+  } catch {
+    // The pool may never have connected; nothing to close.
+  }
+});
 
 function createTestServer() {
   const app = express();

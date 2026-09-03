@@ -102,13 +102,14 @@ exports.createClass = async (req, res) => {
     level = null,
     topic_domain = null,
     demo_mode = false,
+    ai_guidance = null,
     createdBy,
   } = req.body;
   try {
     await ensureDemoModeSchema();
     const [result] = await db.query(
-      'INSERT INTO pogil_classes (name, description, level, topic_domain, demo_mode, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, description, level, topic_domain, demo_mode ? 1 : 0, createdBy]
+      'INSERT INTO pogil_classes (name, description, level, topic_domain, demo_mode, ai_guidance, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [name, description, level, topic_domain, demo_mode ? 1 : 0, ai_guidance, createdBy]
     );
     res.status(201).json({
       id: Number(result.insertId),
@@ -117,6 +118,7 @@ exports.createClass = async (req, res) => {
       level,
       topic_domain,
       demo_mode: Boolean(demo_mode),
+      ai_guidance,
       created_by: createdBy,
     });
     void recordAuditEvent('class_created', {
@@ -132,14 +134,29 @@ exports.createClass = async (req, res) => {
 };
 
 exports.updateClass = async (req, res) => {
-  const { name, description, level = null, topic_domain = null, demo_mode = false } = req.body;
+  const {
+    name,
+    description,
+    level = null,
+    topic_domain = null,
+    demo_mode = false,
+    ai_guidance = null,
+  } = req.body;
   try {
     await ensureDemoModeSchema();
     await db.query(
-      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ?, demo_mode = ? WHERE id = ?',
-      [name, description, level, topic_domain, demo_mode ? 1 : 0, req.params.id]
+      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ?, demo_mode = ?, ai_guidance = ? WHERE id = ?',
+      [name, description, level, topic_domain, demo_mode ? 1 : 0, ai_guidance, req.params.id]
     );
-    res.json({ id: req.params.id, name, description, level, topic_domain, demo_mode: Boolean(demo_mode) });
+    res.json({
+      id: req.params.id,
+      name,
+      description,
+      level,
+      topic_domain,
+      demo_mode: Boolean(demo_mode),
+      ai_guidance,
+    });
   } catch (err) {
     console.error("Error updating class:", err);
     res.status(500).json({ error: 'Failed to update class' });
@@ -315,6 +332,116 @@ exports.updateActivityForClass = async (req, res) => {
   } catch (err) {
     console.error('Error updating activity:', err);
     res.status(500).json({ error: 'Failed to update activity.' });
+  }
+};
+
+async function countActivityResponses(activityId) {
+  const [[row]] = await db.query(
+    `SELECT COUNT(*) AS cnt
+       FROM responses r
+       JOIN activity_instances ai ON ai.id = r.activity_instance_id
+      WHERE ai.activity_id = ?`,
+    [activityId]
+  );
+  return Number(row?.cnt || 0);
+}
+
+// Replace the content of existing activities from a downloaded JSON bundle
+// (see handleDownloadSelected / handleUpload in ManageActivitiesPage.jsx).
+// Items are matched by id within this class. Any activity that already has
+// student responses is reported back as "blocked" instead of being changed,
+// unless its id is included in force_ids.
+exports.replaceActivitiesBundle = async (req, res) => {
+  const classId = Number(req.params.id);
+  const actorRole = String(req.user?.role || '').toLowerCase();
+  const items = Array.isArray(req.body?.activities) ? req.body.activities : [];
+  const forceIds = new Set(
+    (Array.isArray(req.body?.force_ids) ? req.body.force_ids : []).map((id) => Number(id))
+  );
+
+  if (!classId) return res.status(400).json({ error: 'Invalid class id.' });
+  if (!['root', 'creator', 'instructor'].includes(actorRole)) {
+    return res.status(403).json({ error: 'Only instructors, creators, or root can replace activities.' });
+  }
+  if (!items.length) {
+    return res.status(400).json({ error: 'No activities were provided to replace.' });
+  }
+
+  const replaced = [];
+  const blocked = [];
+  const skipped = [];
+
+  try {
+    await ensureActivitySourceSchema();
+
+    for (const item of items) {
+      const activityId = Number(item?.id);
+      if (!activityId) {
+        skipped.push({ id: null, name: item?.name || null, reason: 'Missing activity id.' });
+        continue;
+      }
+
+      const [[existing]] = await db.query(
+        `SELECT id, name, title FROM pogil_activities WHERE id = ? AND class_id = ?`,
+        [activityId, classId]
+      );
+      if (!existing) {
+        skipped.push({ id: activityId, name: item?.name || null, reason: 'Activity not found in this class.' });
+        continue;
+      }
+
+      const responseCount = await countActivityResponses(activityId);
+      if (responseCount > 0 && !forceIds.has(activityId)) {
+        blocked.push({
+          id: activityId,
+          name: existing.name,
+          title: existing.title,
+          response_count: responseCount,
+        });
+        continue;
+      }
+
+      const title = String(item?.title || existing.title || '').trim() || existing.title;
+      const contentText = String(item?.content_text ?? item?.text ?? '');
+      const sourceType = String(item?.source_type || 'local').toLowerCase() === 'remote' ? 'remote' : 'local';
+      const sheetUrl = sourceType === 'remote' ? (item?.sheet_url || null) : null;
+      const orderIndex = Number.isFinite(Number(item?.order_index)) ? Number(item.order_index) : null;
+      const localHash = sourceType === 'local' ? sourceHash(contentText) : null;
+
+      await db.query(
+        `UPDATE pogil_activities
+            SET title = ?,
+                content_text = ?,
+                source_type = ?,
+                sheet_url = ?,
+                order_index = COALESCE(?, order_index),
+                source_updated_at = NOW(3),
+                source_revision = source_revision + 1,
+                source_origin = 'bundle_replace',
+                local_source_hash = ?,
+                remote_source_hash = CASE WHEN ? = 'remote' THEN remote_source_hash ELSE NULL END
+          WHERE id = ?`,
+        [title, contentText, sourceType, sheetUrl, orderIndex, localHash, sourceType, activityId]
+      );
+
+      replaced.push({ id: activityId, name: existing.name, title, response_count: responseCount });
+    }
+
+    void recordAuditEvent('activities_bundle_replaced', {
+      req,
+      userId: req.user?.id || null,
+      classId,
+      details: {
+        replaced_count: replaced.length,
+        blocked_count: blocked.length,
+        skipped_count: skipped.length,
+      },
+    });
+
+    return res.json({ replaced, blocked, skipped });
+  } catch (err) {
+    console.error('Error replacing activities bundle:', err);
+    return res.status(500).json({ error: 'Failed to replace activities.' });
   }
 };
 
@@ -679,7 +806,7 @@ exports.createCreatorDraft = async (req, res) => {
 
   try {
     const [classes] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      'SELECT id, name, description, level, topic_domain, ai_guidance FROM pogil_classes WHERE id = ?',
       [classId]
     );
 
@@ -788,7 +915,7 @@ exports.reviseCreatorDraft = async (req, res) => {
 
   try {
     const [[classRow]] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      'SELECT id, name, description, level, topic_domain, ai_guidance FROM pogil_classes WHERE id = ?',
       [classId]
     );
 
@@ -863,7 +990,7 @@ exports.reviseCreatorQuestion = async (req, res) => {
 
   try {
     const [[classRow]] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      'SELECT id, name, description, level, topic_domain, ai_guidance FROM pogil_classes WHERE id = ?',
       [classId]
     );
     if (!classRow) return res.status(404).json({ error: 'Class not found' });

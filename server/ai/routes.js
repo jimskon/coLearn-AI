@@ -8,6 +8,7 @@ const {
   gradeTestQuestionHttp,
   evaluateCppCode,
   assistInlineActivity,
+  assistActivityAi,
 } = require('./controller');
 
 const code = require('./code');
@@ -45,6 +46,8 @@ router.post('/evaluate-cpp-code', evaluateCppCode);
 // ✅ Test-mode grading – calls into controller.js
 router.post('/grade-test-question', gradeTestQuestionHttp);
 router.post('/assist', assistInlineActivity);
+// Persisted, active-student-gated AI help inside a live activity instance.
+router.post('/activity-assist', assistActivityAi);
 
 router.post('/code/repair-markup', code.repairMarkup);
 

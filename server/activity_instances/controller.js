@@ -33,6 +33,19 @@ function normalizeSectionTimerPayload(raw = {}) {
   };
 }
 
+// The mysql driver may hand back a Date or a string depending on config; the
+// client's parseUtcDbDatetime understands the "YYYY-MM-DD HH:MM:SS" UTC form,
+// so normalise to that before sending timer anchors over the wire.
+function normalizeDbDatetime(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? null
+      : value.toISOString().slice(0, 19).replace('T', ' ');
+  }
+  return String(value);
+}
+
 function toDbNowString(date = new Date()) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
@@ -255,6 +268,35 @@ async function syncTotalGroupsFromSource(conn, instanceId, activitySource, fallb
 
   try {
     const lines = await loadActivitySourceLines(activitySource || {});
+
+    // countQuestionGroups() reports 1 when it finds no \questiongroup lines at
+    // all. That is a guess, not a measurement, and it is indistinguishable from
+    // a real single-group activity -- so guard on the raw count instead.
+    //
+    // Finding zero groups does not mean the activity has one group; it means we
+    // failed to read the source. loadActivitySourceLines returns [] when the
+    // instance has no sheet_url, and a Google Doc that 403s or redirects comes
+    // back as an error page with no \questiongroup lines rather than throwing.
+    // Writing total_groups = 1 on the strength of that silently freezes every
+    // student past group 1: submit-group rescans only i = 1..total_groups, so
+    // the group they just completed is never counted, completed_groups never
+    // increases, and the client sees no advance. Both Submit and Continue then
+    // appear to do nothing and the student stays on the same question.
+    //
+    // Keep whatever we already knew instead of overwriting it with a guess.
+    const rawGroupCount = (Array.isArray(lines) ? lines : [])
+      .filter((line) => String(line || '').trimStart().startsWith('\\questiongroup'))
+      .length;
+
+    if (rawGroupCount === 0) {
+      console.warn('⚠️ Refusing to rewrite total_groups: no \\questiongroup lines found in activity source.', {
+        instanceId,
+        storedTotalGroups,
+        lineCount: Array.isArray(lines) ? lines.length : 0,
+      });
+      return storedTotalGroups > 0 ? storedTotalGroups : 1;
+    }
+
     const canonicalTotalGroups = countQuestionGroups(lines);
 
     if (instanceId && canonicalTotalGroups !== storedTotalGroups) {
@@ -373,6 +415,7 @@ function getHistoryBaseQid(qidRaw) {
   if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
 
   const suffixPatterns = [
+    /^(?<base>\d+[A-Za-z]+)AI\d+$/i,
     /^(?<base>\d+[A-Za-z]+)F\d+$/i,
     /^(?<base>\d+[A-Za-z]+)FA\d+$/i,
     /^(?<base>\d+[A-Za-z]+)FM$/i,
@@ -610,7 +653,11 @@ async function recordTestFocusLoss(req, res) {
         await conn.rollback();
         return res.status(404).json({ error: 'Test attempt not found for this student.' });
       }
-      if (Number(instance.is_test) !== 1) {
+      // Accept if the instance has focus enforcement enabled OR the activity DB flag is set.
+      // Activities that declare \mode{test} in content may have is_test=0 in the DB.
+      const isTestInstance =
+        Number(instance.is_test) === 1 || Number(instance.test_focus_enforcement) === 1;
+      if (!isTestInstance) {
         await conn.rollback();
         return res.status(400).json({ error: 'Focus events apply only to tests.' });
       }
@@ -1179,11 +1226,37 @@ async function recordHeartbeat(req, res) {
       };
     }
 
+    // The authoritative timer state as it stands after this heartbeat.
+    //
+    // timerPatch is only populated when the timer CHANGED, and it is announced
+    // once over the socket. A client whose socket was not in the room at that
+    // instant -- still connecting, reconnected after a drop, resumed from sleep
+    // -- would otherwise never learn the timer exists, because every later
+    // heartbeat is a no-op that emits nothing. Returning the full state on
+    // every heartbeat turns it into a reconciliation loop, so a client that
+    // missed the broadcast self-heals on its next beat instead of needing a
+    // page reload.
+    const sectionTimer = timerPatch
+      ? {
+        section_timer_key: timerPatch.section_timer_key,
+        section_timer_duration_minutes: timerPatch.section_timer_duration_minutes,
+        section_timer_started_at: timerPatch.section_timer_started_at,
+        section_timer_paused: currentPaused ? 1 : 0,
+        section_timer_paused_at: normalizeDbDatetime(inst.section_timer_paused_at),
+      }
+      : {
+        section_timer_key: currentKey,
+        section_timer_duration_minutes: currentDuration,
+        section_timer_started_at: normalizeDbDatetime(currentStartedAt),
+        section_timer_paused: currentPaused ? 1 : 0,
+        section_timer_paused_at: normalizeDbDatetime(inst.section_timer_paused_at),
+      };
+
     if (userRow.role !== 'student') {
       if (timerPatch) {
         global.emitInstanceState?.(Number(instanceId), timerPatch);
       }
-      return res.json({ success: true, becameActive: false, ...(timerPatch || {}) });
+      return res.json({ success: true, becameActive: false, sectionTimer, ...(timerPatch || {}) });
     }
 
     const [[isMember]] = await db.query(
@@ -1195,7 +1268,7 @@ async function recordHeartbeat(req, res) {
       if (timerPatch) {
         global.emitInstanceState?.(Number(instanceId), timerPatch);
       }
-      return res.json({ success: true, becameActive: false, ...(timerPatch || {}) });
+      return res.json({ success: true, becameActive: false, sectionTimer, ...(timerPatch || {}) });
     }
 
     await db.query(
@@ -1229,6 +1302,7 @@ async function recordHeartbeat(req, res) {
       global.emitInstanceState?.(Number(instanceId), completedPatch);
       return res.json({
         success: true,
+        sectionTimer,
         becameActive: false,
         activeStudentId: null,
         ...(timerPatch || {}),
@@ -1269,6 +1343,7 @@ async function recordHeartbeat(req, res) {
         });
         return res.json({
           success: true,
+          sectionTimer,
           becameActive: true,
           activeStudentId: newActiveId,
           ...(timerPatch || {}),
@@ -1282,6 +1357,7 @@ async function recordHeartbeat(req, res) {
 
     return res.json({
       success: true,
+      sectionTimer,
       becameActive: false,
       activeStudentId: inst.active_student_id,
       ...(timerPatch || {}),
@@ -2004,10 +2080,23 @@ async function getInstancesForActivityInCourse(req, res) {
 
     const courseName = course?.name || 'Unknown Course';
     const activityTitle = activity?.title || '';
-    const activityType = await inferActivityTypeFromActivity(activity || {});
-    const scheduledTestOnly = activityType === 'test'
-      ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
-      : '';
+
+    // A test roster must not list instances that were never scheduled.
+    //
+    // setupMultipleGroupInstances already treats an unscheduled row as an
+    // abandoned sandbox/preview placeholder rather than a student attempt --
+    // that is exactly why it refuses to let one block setup. The roster has to
+    // agree, otherwise the placeholder is listed beside the real group. It has
+    // no group_members, so it renders as a group whose student is unknown.
+    //
+    // Uses the same derivation as setup (inferActivityTypeFromActivity over the
+    // same columns, which this query already selected but never consulted), so
+    // the two cannot disagree about what counts as a test.
+    const rosterActivityType = await inferActivityTypeFromActivity(activity || {});
+    const unscheduledPlaceholderFilter =
+      rosterActivityType === 'test'
+        ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
+        : '';
 
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
@@ -2037,7 +2126,7 @@ async function getInstancesForActivityInCourse(req, res) {
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
-         ${scheduledTestOnly}
+         ${unscheduledPlaceholderFilter}
        ORDER BY group_number`,
       [courseId, activityId]
     );

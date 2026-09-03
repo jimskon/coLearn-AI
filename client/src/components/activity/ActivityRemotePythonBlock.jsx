@@ -14,6 +14,7 @@ export default function ActivityRemotePythonBlock({
   onCodeChange,
   timeLimit = 50000,
   editable = true,
+  onEditStart,
   blockIndex = 0,
   localOnly = false,
   codeFeedbackShown = {},
@@ -670,7 +671,7 @@ export default function ActivityRemotePythonBlock({
           onClick={() => {
             setIsEditing((prev) => {
               const next = !prev;
-              if (next) flushPendingRemoteIfAny();
+              if (next) { onEditStart?.(); flushPendingRemoteIfAny(); }
               return next;
             });
           }}

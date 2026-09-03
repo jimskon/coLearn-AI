@@ -16,6 +16,7 @@ export default function ManageClassesPage() {
     level: '',
     topic_domain: '',
     description: '',
+    ai_guidance: '',
     demo_mode: false,
   };
   const [classForm, setClassForm] = useState(emptyForm);
@@ -45,6 +46,7 @@ export default function ManageClassesPage() {
       level: classRow.level || '',
       topic_domain: classRow.topic_domain || '',
       description: classRow.description || '',
+      ai_guidance: classRow.ai_guidance || '',
       demo_mode: Boolean(classRow.demo_mode),
     });
     setModalError('');
@@ -78,6 +80,7 @@ export default function ManageClassesPage() {
       level: classForm.level.trim() || null,
       topic_domain: classForm.topic_domain.trim() || null,
       description: classForm.description.trim() || null,
+      ai_guidance: classForm.ai_guidance.trim() || null,
       demo_mode: Boolean(classForm.demo_mode),
     };
 
@@ -205,6 +208,20 @@ export default function ManageClassesPage() {
                 onChange={handleModalFieldChange}
                 placeholder="Describe the class"
               />
+            </Form.Group>
+            <Form.Group className="mt-3" controlId="classAiGuidance">
+              <Form.Label>Class AI Guidance</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={4}
+                name="ai_guidance"
+                value={classForm.ai_guidance}
+                onChange={handleModalFieldChange}
+                placeholder="Accept any response that shows the student is engaging with the question and thinking about the concept. Only push back when a response is gibberish, completely off-prompt, contains a clear error, or fails the single core requirement of the question. When pushing back, ask one focused question or suggest one small addition — never list multiple failures. Do not demand completeness, perfect wording, or extra detail beyond what the question asks for. Do not request input validation, error handling, refactoring, or extra features. Do not evaluate variable-name style. If the checker encounters an internal error, allow the group to continue."
+              />
+              <Form.Text className="text-muted">
+                Sets the default AI feedback policy for all activities in this class. Leave blank to use the system default. Individual activities can refine this in their \aicodeguidance field.
+              </Form.Text>
             </Form.Group>
             <Form.Group className="mt-3" controlId="classDemoMode">
               <Form.Check

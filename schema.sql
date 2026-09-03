@@ -278,6 +278,7 @@ CREATE TABLE `pogil_classes` (
   `level` varchar(255) DEFAULT NULL,
   `topic_domain` varchar(255) DEFAULT NULL,
   `demo_mode` tinyint(1) NOT NULL DEFAULT 0,
+  `ai_guidance` text DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `name` (`name`),
   KEY `created_by` (`created_by`),

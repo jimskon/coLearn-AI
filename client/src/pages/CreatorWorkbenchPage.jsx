@@ -43,8 +43,10 @@ import { getSectionKeyAtLine, swapSourceRanges } from '../utils/creatorVisualEdi
 import { validateMultipleChoice } from '../utils/multipleChoice';
 import markupValidator from '../../../shared/activityMarkupValidation.cjs';
 import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
+import activityStructureDiff from '../../../shared/activityStructureDiff.cjs';
 
 const { closesBlock } = codeBlockFamilies;
+const { diffActivityStructure, describeRemovals } = activityStructureDiff;
 import {
   serializeAiComponent,
   serializeQuestionComponent,
@@ -1807,6 +1809,35 @@ export default function CreatorWorkbenchPage() {
       setError(`Try Changes was not applied. Line ${first.line}: ${first.message}`);
       return rawText;
     }
+
+    // Nothing may delete authored content without being told to.
+    //
+    // Every visual write funnels through here -- inspector saves, starter-code
+    // edits, AI question revisions, group and AI-block settings -- so this is
+    // the one place the check has to exist. Validation above only asks whether
+    // the result is well formed; this asks whether it still contains the work.
+    //
+    // Deliberately window.confirm rather than a styled modal: applyVisualSource
+    // is synchronous and returns the text its callers write. Making it async to
+    // await a React modal would ripple through all six call sites and leave a
+    // gate that a future path could forget to await. A gate against silent data
+    // loss is worth more unbypassable than pretty.
+    if (nextText !== rawText) {
+      const diff = diffActivityStructure(rawText, nextText);
+      if (diff.hasRemovals) {
+        const detail = describeRemovals(diff).map((line) => `  \u2022 ${line}`).join('\n');
+        const proceed = window.confirm(
+          `${label ? `This change (${label})` : 'This change'} also removes:\n\n`
+          + `${detail}\n\n`
+          + 'Apply anyway?',
+        );
+        if (!proceed) {
+          setError('Change cancelled. Nothing was removed.');
+          return rawText;
+        }
+      }
+    }
+
     if (nextText !== rawText) {
       recordVisualEdit(label);
       setRawText(nextText);

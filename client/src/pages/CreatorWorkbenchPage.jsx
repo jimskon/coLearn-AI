@@ -1733,6 +1733,12 @@ export default function CreatorWorkbenchPage() {
 
   const acceptProposal = async () => {
     if (!proposal?.text || hasProposalErrors) return;
+    // The path that carried the risk: a whole-draft revision replaces every
+    // line, so anything the model quietly dropped goes with it.
+    if (!confirmStructuralRemovals(rawText, proposal.text, 'accepting this revision')) {
+      setError('Revision not applied. Nothing was removed.');
+      return;
+    }
     try {
       setError('');
       await saveSource(proposal.text);
@@ -1802,6 +1808,33 @@ export default function CreatorWorkbenchPage() {
     setRightMode(mode);
   };
 
+  /**
+   * Ask before a write removes authored content. Returns true to proceed.
+   *
+   * Validation asks only whether markup is well formed; this asks whether it
+   * still contains the work. Shared by every path that replaces the document
+   * wholesale, because they all fail the same way: a result that parses
+   * cleanly and is missing three sample answers looks exactly like one that is
+   * not.
+   *
+   * Deliberately window.confirm rather than a styled modal. Its callers are
+   * synchronous and return the text they write; making this async to await a
+   * React modal would ripple through every write path and leave a gate that a
+   * future path could forget to await. Against silent data loss, unbypassable
+   * beats pretty.
+   */
+  const confirmStructuralRemovals = (beforeText, nextText, label) => {
+    if (String(nextText) === String(beforeText)) return true;
+    const diff = diffActivityStructure(beforeText, nextText);
+    if (!diff.hasRemovals) return true;
+    const detail = describeRemovals(diff).map((line) => `  \u2022 ${line}`).join('\n');
+    return window.confirm(
+      `${label ? `This change (${label})` : 'This change'} also removes:\n\n`
+      + `${detail}\n\n`
+      + 'Apply anyway?',
+    );
+  };
+
   const applyVisualSource = (nextText, label) => {
     const validation = validateActivityMarkup(nextText);
     if (!validation.valid) {
@@ -1810,32 +1843,13 @@ export default function CreatorWorkbenchPage() {
       return rawText;
     }
 
-    // Nothing may delete authored content without being told to.
-    //
-    // Every visual write funnels through here -- inspector saves, starter-code
-    // edits, AI question revisions, group and AI-block settings -- so this is
-    // the one place the check has to exist. Validation above only asks whether
-    // the result is well formed; this asks whether it still contains the work.
-    //
-    // Deliberately window.confirm rather than a styled modal: applyVisualSource
-    // is synchronous and returns the text its callers write. Making it async to
-    // await a React modal would ripple through all six call sites and leave a
-    // gate that a future path could forget to await. A gate against silent data
-    // loss is worth more unbypassable than pretty.
-    if (nextText !== rawText) {
-      const diff = diffActivityStructure(rawText, nextText);
-      if (diff.hasRemovals) {
-        const detail = describeRemovals(diff).map((line) => `  \u2022 ${line}`).join('\n');
-        const proceed = window.confirm(
-          `${label ? `This change (${label})` : 'This change'} also removes:\n\n`
-          + `${detail}\n\n`
-          + 'Apply anyway?',
-        );
-        if (!proceed) {
-          setError('Change cancelled. Nothing was removed.');
-          return rawText;
-        }
-      }
+    // Nothing may delete authored content without being told to. Every visual
+    // write funnels through here -- inspector saves, starter-code edits, AI
+    // question revisions, group and AI-block settings -- so one check here
+    // covers all six of them.
+    if (!confirmStructuralRemovals(rawText, nextText, label)) {
+      setError('Change cancelled. Nothing was removed.');
+      return rawText;
     }
 
     if (nextText !== rawText) {

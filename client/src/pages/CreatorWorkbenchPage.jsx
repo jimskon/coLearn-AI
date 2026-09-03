@@ -42,6 +42,9 @@ import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 import { getSectionKeyAtLine, swapSourceRanges } from '../utils/creatorVisualEdits';
 import { validateMultipleChoice } from '../utils/multipleChoice';
 import markupValidator from '../../../shared/activityMarkupValidation.cjs';
+import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
+
+const { closesBlock } = codeBlockFamilies;
 import {
   serializeAiComponent,
   serializeQuestionComponent,
@@ -574,19 +577,25 @@ function getQuestionCodeBlock(sourceText, block, requestedType = '') {
   const startIndex = sourceMeta.questionLine - 1;
   const endIndex = sourceMeta.endQuestionLine - 1;
   const openingPatterns = [
-    ['pythonremote', /^\\pythonremote(?:\{[^}]*\})?\s*$/i, '\\endpythonremote', 'Python Remote'],
-    ['pythonturtle', /^\\pythonturtle(?:\{[^}]*\})?\s*$/i, '\\endpythonturtle', 'Python Turtle'],
-    ['python', /^\\python(?:\{[^}]*\})?\s*$/i, '\\endpython', 'Python'],
-    ['cpp', /^\\cpp(?:\{[^}]*\})?\s*$/i, '\\endcpp', 'C++'],
+    ['pythonremote', /^\\pythonremote(?:\{[^}]*\})?\s*$/i, 'Python Remote'],
+    ['pythonturtle', /^\\pythonturtle(?:\{[^}]*\})?\s*$/i, 'Python Turtle'],
+    ['python', /^\\python(?:\{[^}]*\})?\s*$/i, 'Python'],
+    ['cpp', /^\\cpp(?:\{[^}]*\})?\s*$/i, 'C++'],
   ];
 
   for (let index = startIndex; index <= endIndex; index += 1) {
     const line = lines[index]?.trim();
     const match = openingPatterns.find(([, pattern]) => pattern.test(line));
     if (!match || (requestedType && match[0] !== requestedType)) continue;
-    const [type, , closingTag, label] = match;
+    const [type, , label] = match;
+    // Accept any closer from this block's family rather than one exact tag.
+    // Requiring the exact spelling is what made the inspector return null for a
+    // \pythonremote block closed with \endpython -- and a null here means no
+    // code editor is offered for that question at all.
     const closeIndex = lines.findIndex((candidate, candidateIndex) => (
-      candidateIndex > index && candidateIndex <= endIndex && candidate.trim() === closingTag
+      candidateIndex > index
+      && candidateIndex <= endIndex
+      && closesBlock(candidate.trim(), type)
     ));
     if (closeIndex === -1) return null;
     return {

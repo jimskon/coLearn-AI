@@ -6,6 +6,10 @@
  * validator: ordinary prose and repeatable blocks (code, choices, files,
  * etc.) remain valid.
  */
+const { closesBlock, canonicalCloserFor } = (typeof require === 'function')
+  ? require('./codeBlockFamilies.cjs')
+  : (typeof globalThis !== 'undefined' ? globalThis.coLearnCodeBlockFamilies : null);
+
 (function attachMarkupValidator(root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -69,7 +73,15 @@
 
       const codeClose = /^\\end(python|pythonremote|pythonturtle|cpp|pythondisplay|cppdisplay)$/i.exec(value);
       if (codeClose) {
-        close(codeClose[1].toLowerCase(), line, `end${codeClose[1]}`);
+        // Any closer from a language family closes any block in that family, so
+        // \endpython closes \pythonremote. Report against the block that is
+        // actually open when they match, which keeps the useful message for a
+        // genuine mismatch (\endcpp while python is open, or a closer arriving
+        // while a question is still on the stack).
+        const openKind = current()?.kind;
+        const label = `end${codeClose[1]}`;
+        const effectiveKind = closesBlock(value, openKind) ? openKind : codeClose[1].toLowerCase();
+        close(effectiveKind, line, label);
         continue;
       }
       if (current() && Object.prototype.hasOwnProperty.call(CODE_OPENERS, current().kind)) {
@@ -181,11 +193,11 @@
     }
 
     for (const item of stack.slice().reverse()) {
-      const end = {
+      // Code blocks advertise the CANONICAL closer for their family, so the fix
+      // we suggest is the form we want written from now on.
+      const end = canonicalCloserFor(item.kind) || {
         questiongroup: '\\endquestiongroup', question: '\\endquestion', multiplechoice: '\\endmultiplechoice',
         ai: '\\endai', score: '\\endscore', file: '\\endfile', list: '\\end{itemize} or \\end{enumerate}',
-        python: '\\endpython', pythonremote: '\\endpythonremote', pythonturtle: '\\endpythonturtle', cpp: '\\endcpp',
-        pythondisplay: '\\endpythondisplay', cppdisplay: '\\endcppdisplay',
       }[item.kind] || 'a matching end tag';
       report(item.line, `Unclosed ${item.kind} block. Add ${end}.`, 'unclosed-block');
     }

@@ -38,6 +38,7 @@ All interactive content must appear inside a `\questiongroup`.
 | `\studentlevel{...}` | Target audience | `\studentlevel{Second Year}` |
 | `\activitycontext{...}` | Introductory paragraph | `\activitycontext{This activity explores...}` |
 | `\aicodeguidance{...}` | Global AI behavior rules | See AI Guidance section below |
+| `\aimode{...}` | Default display behavior for accepted AI-evaluated answers | `\aimode{positive}` |
 | `\language{...}` | Required language for AI feedback and inline AI help | `\language{Swedish}` |
 | `\mode{group}` | Normal in-class group activity. This is also the default when no mode is set. | `\mode{group}` |
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
@@ -52,6 +53,9 @@ Notes:
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
 - `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
+- `\aimode` controls whether an accepted AI-evaluated answer receives an affirmative feedback message. Its values are comma-separated so that new display options can be added later. The default is `no-positive`; an accepted answer advances without an extra AI message. Use `\aimode{positive}` when you want a short affirmative AI message shown in green before the activity advances.
+- A question may include its own `\aimode{...}`; that setting overrides the activity-level setting for that question only. Use `\aimode{no-positive}` in a question to suppress praise when the activity default is `positive`.
+- `\aimode` does not decide whether an answer is correct. The AI evaluator returns either `accepted` or `revise`: accepted answers advance; revise feedback is shown in yellow and asks the student to improve the response. At the retry limit, the activity's retry policy releases the student even if the last result is `revise`.
 - `\language{...}` sets the language that AI feedback and inline AI help must use. It is metadata and is hidden from students in the activity workspace. If omitted, English is used.
 - `\section` is structural only.
 
@@ -92,6 +96,7 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 | `\sampleresponses{...}` | Sample instructor solution (hidden) | `\sampleresponses{Chooses a local optimum.}` |
 | `\feedbackprompt{...}` | AI grading guidance | `\feedbackprompt{Encourage elaboration.}` |
 | `\followupprompt{...}` | Optional AI follow-up hint | `\followupprompt{Why might greedy fail?}` |
+| `\aimode{...}` | Overrides the activity's accepted-answer feedback display for this question | `\aimode{positive}` |
 | `\multiplechoice{...}` | Begins a single-answer multiple-choice block; the optional value is its answer key | `\multiplechoice{Ottawa}` |
 | `\multiplechoice{multiple}` | Begins an ungraded “select all that apply” survey block | `\multiplechoice{multiple}` |
 | `\choice{value}` | Adds a choice to a multiple-choice block | `\choice{Writing code}` |
@@ -103,6 +108,41 @@ Notes:
 - If `\responsemode{...}` is omitted, the default is `answer`.
 - Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
 - Use `\multiplechoice{multiple}` for a multi-select survey. It displays checkboxes, stores all selected choice texts, and has no automatic grading. Do not attach choice points or a `\score` block.
+
+### AI evaluation feedback mode
+
+`\aimode` is a comma-separated list of feedback-display flags. It may appear
+once in the activity preamble and once within a `\question`.
+
+| Value | Meaning |
+|-------|---------|
+| `no-positive` | Default. If the evaluator accepts the answer, advance without displaying a separate praise message. |
+| `positive` | If the evaluator accepts the answer, show its affirmative feedback in green, then allow the group to continue. |
+
+Resolution is question → activity → default. Thus a question-level setting wins
+over the preamble, and an omitted setting means `no-positive`.
+
+```text
+\title{Variables}
+\aimode{positive}
+
+\question{What is an assignment statement?}
+\textresponse{3}
+\feedbackprompt{Accept a reasonable description of storing a value in a variable.}
+\endquestion
+
+\question{Give one example.}
+\aimode{no-positive}
+\textresponse{2}
+\feedbackprompt{Accept any valid Python assignment.}
+\endquestion
+```
+
+`\aimode` is not a grading rubric and never changes an AI decision from
+`revise` to `accepted`. It only controls whether accepted-answer feedback is
+shown. The standards for that decision still follow the course guidance,
+activity `\aicodeguidance`, and the question's `\feedbackprompt`, with the
+question guidance taking precedence.
 
 ---
 

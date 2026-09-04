@@ -75,11 +75,11 @@
   const SINGLETONS = {
     root: [
       'title', 'name', 'mode', 'language', 'studentlevel',
-      'activitycontext', 'aicodeguidance', 'test',
+      'activitycontext', 'aicodeguidance', 'aimode', 'test',
     ],
     question: [
       'responsemode', 'textresponse', 'sampleresponses',
-      'feedbackprompt', 'followupprompt',
+      'feedbackprompt', 'followupprompt', 'aimode',
     ],
     ai: [
       'aimodel', 'aititle', 'aiprompt', 'aiguardrail', 'aicontext', 'aiinput',
@@ -89,7 +89,11 @@
   // Question-scope tags the visual editor's inspector owns: it strips these from
   // the body and re-emits them from its own state. Everything else in a question
   // body must be preserved verbatim.
-  const MANAGED_QUESTION_TAGS = SINGLETONS.question.slice();
+  // `aimode` is deliberately *not* inspector-managed yet. It is valid markup
+  // and must therefore survive a visual-editor edit verbatim, but the current
+  // inspector has no dedicated control for it. Adding it to this list before
+  // that control exists would cause the serializer to remove it.
+  const MANAGED_QUESTION_TAGS = SINGLETONS.question.filter((tag) => tag !== 'aimode');
 
   // ---------------------------------------------------------------------------
   // Tags that may appear inline in prose, or repeat freely within their parent.
@@ -117,6 +121,20 @@
     mode: ['group', 'test', 'assignment', 'demo', 'playground'],
     scoreType: ['response', 'code', 'output'],
     responsemode: ['questions'],
+  };
+
+  // Comma-separated evaluation-display flags. `aimode` may occur once in the
+  // activity preamble and once in an individual question. A question value
+  // overrides the activity value. When neither is supplied, these defaults
+  // apply: no positive accepted-answer message and a revise result for a
+  // non-accepted answer. Additional flags may be added without changing the
+  // markup form.
+  const COMMA_LIST_VALUES = {
+    aimode: {
+      values: ['positive', 'no-positive'],
+      default: ['no-positive'],
+      scopes: ['root', 'question'],
+    },
   };
 
   // ===========================================================================
@@ -231,6 +249,7 @@
     MANAGED_QUESTION_TAGS,
     INLINE_TAGS,
     ENUMS,
+    COMMA_LIST_VALUES,
 
     // Code blocks
     familyOfBlock,

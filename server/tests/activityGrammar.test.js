@@ -95,7 +95,7 @@ test('the vocabulary does not shrink without someone noticing', () => {
   // A tag removed from the grammar becomes a tag the visual editor deletes from
   // question bodies. Removing one should require editing this list deliberately.
   const expected = [
-    'ai', 'aicodeguidance', 'aicontext', 'aiguardrail', 'aiinput', 'aimodel',
+    'ai', 'aicodeguidance', 'aicontext', 'aiguardrail', 'aiinput', 'aimode', 'aimodel',
     'aiprompt', 'aititle', 'activitycontext', 'choice', 'cpp', 'cppdisplay',
     'feedbackprompt', 'file', 'followupprompt', 'image', 'include', 'info',
     'item', 'language', 'link', 'mode', 'mono', 'multiplechoice', 'name',
@@ -107,6 +107,17 @@ test('the vocabulary does not shrink without someone noticing', () => {
   const tags = grammar.allTags();
   const missing = expected.filter((tag) => !tags.has(tag));
   assert.deepEqual(missing, [], `grammar no longer defines: ${missing.join(', ')}`);
+});
+
+test('aimode has a defined comma-list grammar and a conservative default', () => {
+  assert.deepEqual(grammar.COMMA_LIST_VALUES.aimode, {
+    values: ['positive', 'no-positive'],
+    default: ['no-positive'],
+    scopes: ['root', 'question'],
+  });
+  assert.ok(grammar.SINGLETONS.root.includes('aimode'));
+  assert.ok(grammar.SINGLETONS.question.includes('aimode'));
+  assert.equal(grammar.MANAGED_QUESTION_TAGS.includes('aimode'), false);
 });
 
 // ---------------------------------------------------------------------------

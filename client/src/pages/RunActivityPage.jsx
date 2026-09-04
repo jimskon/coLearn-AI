@@ -2610,9 +2610,6 @@ export default function RunActivityPage({
         existingAnswers
       );
 
-      const prevAF = lowerResp(existingAnswers, `${qid}AF`); // "active" or "resolved"
-      const prevFM = lowerResp(existingAnswers, `${qid}FM`); // "accepted" or "needsrevision"
-
       // ✅ Clear old AI comment ONLY on submit (before re-evaluating)
       setTextFeedbackShown((prev) => {
         const next = { ...prev };
@@ -2680,15 +2677,24 @@ export default function RunActivityPage({
           progressAllowed,
         });*/
 
-        // ✅ Default accept unless AI explicitly rejects
+        // `accepted` answers the progression question: retry exhaustion may
+        // deliberately allow the group to advance even though the evaluator
+        // still returned `decision: 'revise'`.  Keep that separate from the
+        // feedback decision.  The latter is persisted in FM and is what a page
+        // reload uses to restore the feedback colour.
+        //
+        // Previously an auto-advanced revise response stored FM='accepted'.
+        // It was yellow live (because autoAdvanced was checked here), but it
+        // became green after refresh because hydration only has the saved FM
+        // marker.  Persist the evaluator decision instead.
         accepted = ai.accepted !== false;
+        const feedbackAccepted = ai?.decision
+          ? ai.decision === 'accepted'
+          : accepted && !ai.autoAdvanced;
         feedback = typeof ai.feedback === 'string' ? ai.feedback : '';
 
-        const newHasFeedback = typeof feedback === 'string' && feedback.trim().length > 0;
-        const becomingAccepted = (prevAF === 'active') && accepted;
-
-        answers[`${qid}AF`] = accepted ? 'resolved' : 'active';
-        answers[`${qid}FM`] = accepted ? 'accepted' : 'needsRevision';
+        answers[`${qid}AF`] = feedbackAccepted ? 'resolved' : 'active';
+        answers[`${qid}FM`] = feedbackAccepted ? 'accepted' : 'needsRevision';
 
         if (feedback && feedback.trim()) {
           const f = feedback.trim();
@@ -2697,7 +2703,7 @@ export default function RunActivityPage({
           // and negative feedback yellow.
           setTextFeedbackShown((prev) => ({
             ...prev,
-            [qid]: { text: f, positive: accepted && !ai.autoAdvanced },
+            [qid]: { text: f, positive: feedbackAccepted },
           }));
         } else {
           answers[`${qid}F1`] = '';

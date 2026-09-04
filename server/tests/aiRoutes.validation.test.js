@@ -263,6 +263,61 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
   assert.equal(typeof response.body.feedback, 'string');
 });
 
+test('lenient activity guidance produces the three-state, non-picky evaluation policy', async () => {
+  const prompt = await buildStudentResponsePrompt({
+    questionText: 'Which class is the superclass, and which classes are specialized?',
+    studentAnswer: 'The hollow arrow points to the superclass.',
+    feedbackPrompt: 'Identify the general class and the specialized classes.',
+    guidance: "Accept anything that is not completely wrong. Don't be picky; accept equivalent wording.",
+    instanceId: 0,
+    qid: '1b',
+    retriesRequired: 2,
+  });
+
+  assert.match(prompt.sys, /LENIENT ACCEPTANCE POLICY/i);
+  assert.match(prompt.sys, /accepted, revise, or blocked/i);
+  assert.match(prompt.user, /"decision":"accepted"\|"revise"\|"blocked"/i);
+  assert.match(prompt.user, /retry policy/i);
+});
+
+test('a close answer automatically advances after its retry allowance', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'revise',
+          feedback: 'Good start — also name the specialized classes.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Which class is the superclass, and which classes are specialized?',
+      studentAnswer: 'The hollow arrow points to the superclass.',
+      feedbackPrompt: 'Identify the general class and the specialized classes.',
+      guidance: "Accept anything that is not completely wrong. Don't be picky; accept equivalent wording.",
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'The hollow arrow points to the superclass.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.autoAdvanced, true);
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.canContinue, true);
+    assert.match(response.body.feedback, /specialized classes/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('response evaluation includes prior attempts in the prompt when history exists', async () => {
   const originalQuery = db.query;
 

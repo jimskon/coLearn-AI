@@ -1468,6 +1468,10 @@ export default function RunActivityPage({
       const retriesRequiredOut = Number.isFinite(Number(data?.retriesRequired))
         ? Number(data.retriesRequired)
         : null;
+      const decision = ['accepted', 'revise', 'blocked'].includes(data?.decision)
+        ? data.decision
+        : (accepted ? 'accepted' : 'blocked');
+      const autoAdvanced = data?.autoAdvanced === true;
 
       // If the section timer has expired, never deadlock the group — let them move on
       const timerExpired =
@@ -1479,6 +1483,8 @@ export default function RunActivityPage({
         canContinue: timerExpired ? true : canContinue,
         retryCount,
         retriesRequired: retriesRequiredOut,
+        decision,
+        autoAdvanced,
       };
 
       // ✅ IMPORTANT: this function MUST NOT write to `answers` here.
@@ -2651,8 +2657,9 @@ export default function RunActivityPage({
           answeredByUserId: user.id,
         });
 
-        // AI acceptance is the progression gate. A zero-retry policy means
-        // no bypass is available, not that rejected work is auto-accepted.
+        // The server treats a close-but-incomplete response as a distinct
+        // "revise" decision. Once its retry allowance is used, it returns it
+        // as accepted so the group advances without an extra bypass click.
         const progressAllowed = ai.accepted === true;
 
         answers[`${qid}S`] = progressAllowed ? 'complete' : 'inprogress';
@@ -2688,7 +2695,10 @@ export default function RunActivityPage({
           answers[`${qid}F1`] = f;
           // Store with a 'positive' flag so the UI colours positive feedback green
           // and negative feedback yellow.
-          setTextFeedbackShown((prev) => ({ ...prev, [qid]: { text: f, positive: accepted } }));
+          setTextFeedbackShown((prev) => ({
+            ...prev,
+            [qid]: { text: f, positive: accepted && !ai.autoAdvanced },
+          }));
         } else {
           answers[`${qid}F1`] = '';
           setTextFeedbackShown((prev) => {

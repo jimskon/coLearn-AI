@@ -276,6 +276,7 @@ test('lenient activity guidance produces the three-state, non-picky evaluation p
 
   assert.match(prompt.sys, /LENIENT ACCEPTANCE POLICY/i);
   assert.match(prompt.sys, /accepted, revise, or blocked/i);
+  assert.match(prompt.sys, /DECISION CONSISTENCY RULE/i);
   assert.match(prompt.user, /"decision":"accepted"\|"revise"\|"blocked"/i);
   assert.match(prompt.user, /retry policy/i);
 });

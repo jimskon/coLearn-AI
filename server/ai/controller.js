@@ -905,6 +905,7 @@ async function buildStudentResponsePrompt({
     concisePositiveFeedback
       ? "When accepted feedback is enabled, make it exactly one short affirmative sentence."
       : "",
+    "DECISION CONSISTENCY RULE: Decide accepted/revise/blocked before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise or decision=blocked.",
     effectiveLenientAcceptance
       ? "LENIENT ACCEPTANCE POLICY: The instructor explicitly does not want picky grading. Accept relevant answers that show basic conceptual understanding even when wording is informal, incomplete, imprecise, or missing a secondary detail. Prefer revise over blocked whenever the group is on track."
       : "",
@@ -1996,6 +1997,7 @@ async function evaluateStudentResponse(req, res) {
       ],
       temperature: 0.2,
       max_tokens: 220,
+      response_format: { type: "json_object" },
     });
 
     const raw = (chat.choices?.[0]?.message?.content ?? "").trim();

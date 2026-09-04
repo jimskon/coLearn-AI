@@ -257,6 +257,9 @@ export function InlineAiAssistBlock({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const historyScrollRef = useRef(null);
+  // Whether the reader is parked at the end of the transcript and wants to
+  // follow it, or has scrolled up and wants to stay where they are.
+  const followTailRef = useRef(true);
 
   // Persisted mode needs both an instance to attribute the turn to and a key to
   // file it under; without either we are in the editor preview.
@@ -267,9 +270,38 @@ export function InlineAiAssistBlock({
   const modeMeta = INLINE_AI_MODE_GUIDE.find((entry) => entry.value === String(aiBlock.mode || '').toLowerCase())
     || INLINE_AI_MODE_GUIDE[0];
 
+  /**
+   * Follow the transcript, but only for a reader who is already at the end of
+   * it.
+   *
+   * This used to scroll to the bottom whenever `turns` changed identity, and
+   * the live transcript arrives as a fresh array on every poll -- so a reader
+   * who scrolled up to copy a code block was yanked back to the end every few
+   * seconds, whether or not anything had actually been said. Scrolling up is
+   * the reader saying "hold still"; nothing arriving from the socket overrides
+   * that. Scrolling back down opts back in.
+   */
+  const TAIL_SLACK_PX = 48;
+
+  const handleHistoryScroll = () => {
+    const el = historyScrollRef.current;
+    if (!el) return;
+    followTailRef.current = (el.scrollHeight - el.scrollTop - el.clientHeight) <= TAIL_SLACK_PX;
+  };
+
+  // On arrival, start at the newest turn -- that is what the reader came for.
   useEffect(() => {
-    if (!historyScrollRef.current) return;
-    historyScrollRef.current.scrollTop = historyScrollRef.current.scrollHeight;
+    const el = historyScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    followTailRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const el = historyScrollRef.current;
+    if (!el || !followTailRef.current) return;
+    el.scrollTop = el.scrollHeight;
   }, [turns, pendingPrompt, busy]);
 
   const submitPrompt = async () => {
@@ -283,6 +315,9 @@ export function InlineAiAssistBlock({
       { role: 'assistant', content: String(turn.reply || '') },
     ])).filter((entry) => entry.content);
 
+    // Asking is an explicit request to see the answer, so rejoin the tail even
+    // if this student had scrolled up to re-read something first.
+    followTailRef.current = true;
     setPendingPrompt(trimmed);
     setInputValue('');
     setBusy(true);
@@ -411,6 +446,7 @@ export function InlineAiAssistBlock({
 
       <div
         ref={historyScrollRef}
+        onScroll={handleHistoryScroll}
         className="border rounded p-2 bg-body-tertiary"
         style={{ maxHeight: '360px', minHeight: '120px', overflowY: 'auto' }}
       >

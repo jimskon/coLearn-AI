@@ -829,6 +829,8 @@ async function buildStudentResponsePrompt({
   feedbackPrompt = "",
   followupPrompt = "",
   guidance = "",
+  activityAiMode = "",
+  questionAiMode = "",
   classGuidance = "",
   instanceId,
   qid,
@@ -863,7 +865,14 @@ async function buildStudentResponsePrompt({
     extractFollowupFromFeedbackPrompt(feedbackPrompt) ||
     "Please answer using one concrete detail from the code or output.";
 
-  const positiveEnabled = isPositiveFeedbackEnabled(guidance, followupPrompt);
+  const positiveEnabled = isPositiveFeedbackEnabled(
+    guidance,
+    followupPrompt,
+    activityAiMode,
+    questionAiMode,
+  );
+  const concisePositiveFeedback =
+    positiveEnabled && resolveAiModeFlags(activityAiMode, questionAiMode).brief;
   const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
   const followupRaw = fuParsed.cleaned;
   const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
@@ -893,6 +902,9 @@ async function buildStudentResponsePrompt({
     "Use decision=blocked only when the answer is blank, incoherent, off-topic, or fundamentally wrong.",
     "For revise or blocked, feedback MUST be a short coaching nudge (1–2 sentences). Start with what they got right when possible, then name one focused next step. Never frame it as a list of failures.",
     "For accepted, feedback must be null unless positive feedback is enabled.",
+    concisePositiveFeedback
+      ? "When accepted feedback is enabled, make it exactly one short affirmative sentence."
+      : "",
     effectiveLenientAcceptance
       ? "LENIENT ACCEPTANCE POLICY: The instructor explicitly does not want picky grading. Accept relevant answers that show basic conceptual understanding even when wording is informal, incomplete, imprecise, or missing a secondary detail. Prefer revise over blocked whenever the group is on track."
       : "",
@@ -1542,7 +1554,46 @@ function parsePositiveFeedbackFromText(text = "") {
   return { hasOff, hasOn, cleaned };
 }
 
-function isPositiveFeedbackEnabled(activityGuidance = "", followupPrompt = "") {
+function parseAiModeFlags(value = "") {
+  const flags = new Set(
+    String(value || '')
+      .split(',')
+      .map((flag) => flag.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return {
+    hasPositive: flags.has('positive'),
+    hasNoPositive: flags.has('no-positive'),
+    brief: flags.has('brief'),
+  };
+}
+
+function resolveAiModeFlags(activityAiMode = "", questionAiMode = "") {
+  const questionMode = parseAiModeFlags(questionAiMode);
+  // A question setting is a complete override, even when it only declares a
+  // presentation flag such as `brief`. This mirrors the markup grammar's
+  // question → activity → default resolution rule.
+  if (questionMode.hasPositive || questionMode.hasNoPositive || questionMode.brief) {
+    return questionMode;
+  }
+  return parseAiModeFlags(activityAiMode);
+}
+
+function isPositiveFeedbackEnabled(
+  activityGuidance = "",
+  followupPrompt = "",
+  activityAiMode = "",
+  questionAiMode = "",
+) {
+  const explicitMode = resolveAiModeFlags(activityAiMode, questionAiMode);
+
+  // The explicit markup is authoritative. Question scope wins over activity
+  // scope, and a missing \aimode defaults to no-positive.
+  if (explicitMode.hasNoPositive) return false;
+  if (explicitMode.hasPositive) return true;
+
+  // Older activities may still use these hidden legacy tokens in guidance.
+  // Honor them only when no explicit \aimode is present.
   const a = parsePositiveFeedbackFromText(activityGuidance);
   const q = parsePositiveFeedbackFromText(followupPrompt);
 
@@ -1554,8 +1605,8 @@ function isPositiveFeedbackEnabled(activityGuidance = "", followupPrompt = "") {
   if (a.hasOff) return false;
   if (a.hasOn) return true;
 
-  // Default = ON
-  return true;
+  // Conservative default: accepted work advances silently.
+  return false;
 }
 
 
@@ -1742,6 +1793,8 @@ async function evaluateStudentResponse(req, res) {
     followupPrompt = "",
     forceFollowup = false,
     guidance = "",
+    activityAiMode = "",
+    questionAiMode = "",
     codeContext = "",
     instanceId,
     groupNum,
@@ -1889,6 +1942,8 @@ async function evaluateStudentResponse(req, res) {
     feedbackPrompt,
     followupPrompt,
     guidance,
+    activityAiMode,
+    questionAiMode,
     classGuidance,
     instanceId,
     qid: qid || req.body?.questionId || req.body?.codeVersion || "",
@@ -2027,6 +2082,8 @@ async function evaluatePythonCode(req, res) {
     codeVersion,
     instanceId = null,
     guidance = "",
+    activityAiMode = "",
+    questionAiMode = "",
     isCodeOnly = false,
     feedbackPrompt = "",
     sampleResponse = "",
@@ -2058,6 +2115,8 @@ async function evaluatePythonCode(req, res) {
     qid: codeVersion,
     guidance,
     classGuidance,
+    activityAiMode,
+    questionAiMode,
     isCodeOnly,
     feedbackPrompt,
     sampleResponse,
@@ -2240,6 +2299,8 @@ async function evaluateCode({
   qid = "",
   guidance = "",
   classGuidance = "",
+  activityAiMode = "",
+  questionAiMode = "",
   isCodeOnly = false,
   feedbackPrompt = "",
   sampleResponse = "",
@@ -2274,7 +2335,14 @@ async function evaluateCode({
   if (effLang === "cpp" || effLang === "c++") langLabel = "C++";
   else if (effLang === "python") langLabel = "Python";
 
-  const positiveEnabled = isPositiveFeedbackEnabled(guidance, followupPrompt);
+  const positiveEnabled = isPositiveFeedbackEnabled(
+    guidance,
+    followupPrompt,
+    activityAiMode,
+    questionAiMode,
+  );
+  const concisePositiveFeedback =
+    positiveEnabled && resolveAiModeFlags(activityAiMode, questionAiMode).brief;
   const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
   const followupRaw = fuParsed.cleaned;
   const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
@@ -2360,6 +2428,7 @@ Rules:
 - Do NOT reject a correct solution just because it uses positive indices instead of negative indices, or vice versa, unless the task explicitly requires one style.
 - When output is provided and it matches the requested result, strongly prefer accepted=true.
 - feedback must be null or brief encouragement when accepted.
+- ${concisePositiveFeedback ? "When accepted feedback is shown, it must be exactly one short affirmative sentence." : "Accepted feedback may be a concise affirmative message when enabled."}
 - if rejected, feedback must be ONE short actionable hint.
 - No style/naming/formatting nits. No extra features beyond the prompt.
 - Use prior group attempts to avoid repeating feedback and to choose the right scaffolding level, but decide accepted=true/false from the current code and output.
@@ -2438,6 +2507,8 @@ async function evaluateCppCode(req, res) {
     codeVersion,
     instanceId = null,
     guidance = "",
+    activityAiMode = "",
+    questionAiMode = "",
     isCodeOnly = false,
     feedbackPrompt = "",
     sampleResponse = "",
@@ -2473,6 +2544,8 @@ async function evaluateCppCode(req, res) {
     qid: codeVersion,
     guidance,
     classGuidance,
+    activityAiMode,
+    questionAiMode,
     isCodeOnly,
     feedbackPrompt,
     sampleResponse,

@@ -131,7 +131,7 @@
   // markup form.
   const COMMA_LIST_VALUES = {
     aimode: {
-      values: ['positive', 'no-positive'],
+      values: ['positive', 'no-positive', 'brief'],
       default: ['no-positive'],
       scopes: ['root', 'question'],
     },

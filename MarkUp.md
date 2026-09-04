@@ -38,7 +38,7 @@ All interactive content must appear inside a `\questiongroup`.
 | `\studentlevel{...}` | Target audience | `\studentlevel{Second Year}` |
 | `\activitycontext{...}` | Introductory paragraph | `\activitycontext{This activity explores...}` |
 | `\aicodeguidance{...}` | Global AI behavior rules | See AI Guidance section below |
-| `\aimode{...}` | Default display behavior for accepted AI-evaluated answers | `\aimode{positive}` |
+| `\aimode{...}` | Default display behavior for accepted AI-evaluated answers | `\aimode{positive, brief}` |
 | `\language{...}` | Required language for AI feedback and inline AI help | `\language{Swedish}` |
 | `\mode{group}` | Normal in-class group activity. This is also the default when no mode is set. | `\mode{group}` |
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
@@ -118,13 +118,14 @@ once in the activity preamble and once within a `\question`.
 |-------|---------|
 | `no-positive` | Default. If the evaluator accepts the answer, advance without displaying a separate praise message. |
 | `positive` | If the evaluator accepts the answer, show its affirmative feedback in green, then allow the group to continue. |
+| `brief` | When used with `positive`, limit the green accepted-answer message to one short sentence. |
 
 Resolution is question → activity → default. Thus a question-level setting wins
 over the preamble, and an omitted setting means `no-positive`.
 
 ```text
 \title{Variables}
-\aimode{positive}
+\aimode{positive, brief}
 
 \question{What is an assignment statement?}
 \textresponse{3}

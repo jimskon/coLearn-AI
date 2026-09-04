@@ -111,7 +111,7 @@ test('the vocabulary does not shrink without someone noticing', () => {
 
 test('aimode has a defined comma-list grammar and a conservative default', () => {
   assert.deepEqual(grammar.COMMA_LIST_VALUES.aimode, {
-    values: ['positive', 'no-positive'],
+    values: ['positive', 'no-positive', 'brief'],
     default: ['no-positive'],
     scopes: ['root', 'question'],
   });

@@ -1389,6 +1389,8 @@ export default function RunActivityPage({
         studentLevel: activity?.studentlevel || 'intro',
       },
       guidance: activity?.aicodeguidance || '',
+      activityAiMode: activity?.meta?.aiMode || 'no-positive',
+      questionAiMode: questionBlock?.aiMode || '',
       activityLanguage: activity?.language || activity?.meta?.language || 'English',
       codeContext,
 
@@ -2334,6 +2336,8 @@ export default function RunActivityPage({
 
             // activity-level policy
             guidance: activity?.aicodeguidance || '',
+            activityAiMode: activity?.meta?.aiMode || 'no-positive',
+            questionAiMode: block?.aiMode || '',
             activityLanguage: activity?.language || activity?.meta?.language || 'English',
             instanceId: Number(instanceId),
             groupNum,

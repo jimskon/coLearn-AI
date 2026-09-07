@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Alert, Badge, Button, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
@@ -109,6 +109,21 @@ export default function RunActivityWorkspace({
   const split = useSplitPane(useSplitLayout);
 
   const completedGroupCount = Number(activity?.completed_groups ?? 0);
+  const previousCompletedGroupCountRef = useRef(completedGroupCount);
+
+  useEffect(() => {
+    const previous = previousCompletedGroupCountRef.current;
+    previousCompletedGroupCountRef.current = completedGroupCount;
+
+    if (completedGroupCount <= previous) return;
+    if (isSandbox || isAssessmentMode) return;
+
+    window.setTimeout(() => {
+      document
+        .querySelector('[data-active-group="true"]')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  }, [completedGroupCount, isSandbox, isAssessmentMode]);
   // Instructors see every group, so "current" for them is the student's
   // position, not their own scroll.
   const isGroupRevealed = useCallback(
@@ -206,6 +221,7 @@ export default function RunActivityWorkspace({
             <div
               key={`group-${index}`}
               className="mb-4"
+              data-active-group={isCurrent ? 'true' : undefined}
               data-current-group={editable ? 'true' : undefined}
               data-sandbox-group={isSandbox ? String(index) : undefined}
             >

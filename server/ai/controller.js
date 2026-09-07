@@ -1573,6 +1573,7 @@ function parseAiModeFlags(value = "") {
     hasPositive: flags.has('positive'),
     hasNoPositive: flags.has('no-positive'),
     brief: flags.has('brief'),
+    lenient: flags.has('lenient'),
   };
 }
 
@@ -1581,7 +1582,12 @@ function resolveAiModeFlags(activityAiMode = "", questionAiMode = "") {
   // A question setting is a complete override, even when it only declares a
   // presentation flag such as `brief`. This mirrors the markup grammar's
   // question → activity → default resolution rule.
-  if (questionMode.hasPositive || questionMode.hasNoPositive || questionMode.brief) {
+  if (
+    questionMode.hasPositive ||
+    questionMode.hasNoPositive ||
+    questionMode.brief ||
+    questionMode.lenient
+  ) {
     return questionMode;
   }
   return parseAiModeFlags(activityAiMode);
@@ -1731,9 +1737,15 @@ function derivePolicyFromGuidance(guidanceText = "") {
   };
 }
 
-function getEffectivePolicy(activityGuide, questionGuide) {
+function getEffectivePolicy(
+  activityGuide,
+  questionGuide,
+  activityAiMode = "",
+  questionAiMode = "",
+) {
   const a = derivePolicyFromGuidance(activityGuide);
   const q = derivePolicyFromGuidance(questionGuide);
+  const aiMode = resolveAiModeFlags(activityAiMode, questionAiMode);
 
   // If question guide is literally "none", interpret as "no followups"
   const qBareNone = /^\s*(none|no\s*follow-?ups?|no\s*follow\s*ups?)\s*$/i.test(
@@ -1768,7 +1780,10 @@ function getEffectivePolicy(activityGuide, questionGuide) {
       "noExtras",
       "do not require extra features|do not require extras"
     ),
-    lenientAcceptance: pick(
+    // `\\aimode{lenient}` is an explicit, deterministic author policy. It
+    // means relevant work may advance even if the model labels it `revise`.
+    // Plain-language guidance remains supported for older activities.
+    lenientAcceptance: aiMode.lenient || pick(
       "lenientAcceptance",
       "don'?t be picky|not\\s+(?:completely|clearly)\\s+wrong|accept\\s+(?:anything|any(?:thing| answer)|equivalent wording|close enough)|accept\\s+(?:a|an)?\\s*(?:somewhat|mostly|reasonably)\\s+(?:on[- ]?track|correct|relevant)"
       + "|\\bbe\\s+permissive\\b|\\b(?:answer|response|work)\\s+is\\s+(?:somewhat|mostly|reasonably)\\s+on[- ]?track\\b|\\bmostly\\s+on[- ]?track\\b[\\s\\S]{0,160}\\bmove\\s+on\\b"
@@ -1870,7 +1885,12 @@ async function evaluateStudentResponse(req, res) {
 
   const activityGuide = stripHtml(guidance || "");
   const questionGuide = stripHtml(feedbackPrompt || "");
-  const policy = getEffectivePolicy(activityGuide, questionGuide);
+  const policy = getEffectivePolicy(
+    activityGuide,
+    questionGuide,
+    activityAiMode,
+    questionAiMode,
+  );
 
   const answerRaw = String(studentAnswer || "").trim();
   const questionAsked = extractStudentQuestion(answerRaw);
@@ -2353,7 +2373,12 @@ async function evaluateCode({
   const qGuide = stripHtml(feedbackPrompt || "");
   const aGuide = parts[1] || parts[0] || combined;
   const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
-  const policy = getEffectivePolicy(aGuide, qGuide);
+  const policy = getEffectivePolicy(
+    aGuide,
+    qGuide,
+    activityAiMode,
+    questionAiMode,
+  );
 
   const inferred = detectLangFromCode(studentCode);
   const effLang = String(lang || inferred || "").toLowerCase();

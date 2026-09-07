@@ -335,6 +335,44 @@ test('lenient guidance immediately accepts a relevant revise result', async () =
   }
 });
 
+test('aimode lenient immediately accepts a relevant revise result without wording heuristics', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'revise',
+          feedback: 'Good start — add a little more detail.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Explain aggregation and composition.',
+      studentAnswer: 'Aggregation can exist independently; composition is owned.',
+      feedbackPrompt: 'Explain the lifetime distinction.',
+      guidance: '',
+      activityAiMode: 'lenient',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 3,
+      submissionString: 'Aggregation can exist independently; composition is owned.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.canContinue, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('response evaluation includes prior attempts in the prompt when history exists', async () => {
   const originalQuery = db.query;
 

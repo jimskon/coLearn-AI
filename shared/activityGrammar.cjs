@@ -123,15 +123,15 @@
     responsemode: ['questions'],
   };
 
-  // Comma-separated evaluation-display flags. `aimode` may occur once in the
+  // Comma-separated AI-evaluation flags. `aimode` may occur once in the
   // activity preamble and once in an individual question. A question value
   // overrides the activity value. When neither is supplied, these defaults
-  // apply: no positive accepted-answer message and a revise result for a
-  // non-accepted answer. Additional flags may be added without changing the
-  // markup form.
+  // apply: no positive accepted-answer message and normal evaluation
+  // strictness. Additional flags may be added without changing the markup
+  // form.
   const COMMA_LIST_VALUES = {
     aimode: {
-      values: ['positive', 'no-positive', 'brief'],
+      values: ['positive', 'no-positive', 'brief', 'lenient'],
       default: ['no-positive'],
       scopes: ['root', 'question'],
     },

@@ -1919,9 +1919,10 @@ async function submitGroupResponses(req, res) {
       }
     );
 
-    // ---- 4) Recompute cached progress from i=1..total_groups using istate ----
+    // ---- 4) Recompute cached progress from DB state ----
     const [[meta]] = await conn.query(
-      `SELECT ai.total_groups, ai.active_rotation_mode, a.sheet_url, a.source_type, a.content_text
+      `SELECT ai.total_groups, ai.completed_groups, ai.active_rotation_mode,
+              a.sheet_url, a.source_type, a.content_text
        FROM activity_instances ai
        JOIN pogil_activities a ON a.id = ai.activity_id
        WHERE ai.id = ?`,
@@ -1932,7 +1933,8 @@ async function submitGroupResponses(req, res) {
       : 0;
     const activeRotationMode = normalizeActiveRotationMode(meta?.active_rotation_mode);
 
-    let completedGroups = 0;
+    const storedCompletedGroups = Math.max(0, Number(meta?.completed_groups ?? 0) || 0);
+    let completedGroupsFromStates = 0;
     if (totalGroups > 0) {
       const [stateRows] = await conn.query(
         `SELECT r.question_id, r.response
@@ -1954,10 +1956,22 @@ async function submitGroupResponses(req, res) {
       );
 
       for (let i = 1; i <= totalGroups; i++) {
-        if (stateMap.get(`${i}state`) === 'complete') completedGroups++;
+        if (stateMap.get(`${i}state`) === 'complete') completedGroupsFromStates++;
         else break; // sequential contract
       }
     }
+
+    // activity_instances.completed_groups is the navigation source of truth.
+    // The response-history state rows are useful for reconstructing progress,
+    // but older live instances may be missing earlier Nstate rows. If this
+    // submit was accepted, advance the DB source of truth at least through the
+    // submitted group instead of letting an incomplete historical state chain
+    // keep the group stuck forever.
+    const acceptedCompletedGroups = shouldAdvance ? groupNum : 0;
+    const completedGroups = Math.min(
+      totalGroups > 0 ? totalGroups : Number.MAX_SAFE_INTEGER,
+      Math.max(storedCompletedGroups, completedGroupsFromStates, acceptedCompletedGroups)
+    );
 
     const progressStatus =
       totalGroups > 0 && completedGroups >= totalGroups ? 'completed' : 'in_progress';

@@ -27,8 +27,17 @@ import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
 import { createDisplayCodeBlock, parseDisplayCodeBlockCommand } from './displayCodeBlocks';
 import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
+import activityGrammar from '../../../shared/activityGrammar.cjs';
 
 const { closesBlock, familyOfCloser } = codeBlockFamilies;
+const AI_MODE_FLAGS = new Set(activityGrammar.COMMA_LIST_VALUES.aimode.values);
+
+function unsupportedAiModeFlags(value = '') {
+  return String(value || '')
+    .split(',')
+    .map((flag) => flag.trim().toLowerCase())
+    .filter((flag) => flag && !AI_MODE_FLAGS.has(flag));
+}
 
 
 
@@ -556,7 +565,7 @@ export function InlineAiAssistBlock({
 // Keeps everything else as-is. Works for any \SomeTag{ ... } (including section*, link, image, etc.)
 function collapseBracedCommands(rawLines) {
   const startsTag = (s) =>
-    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|responsemode|multiplechoice|choice|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
+    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|aimode|mode|text|section\*?|questiongroup|question|responsemode|multiplechoice|choice|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
   const out = [];
   let buf = null;
   let depth = 0;
@@ -822,6 +831,7 @@ export function parseSheetToBlocks(lines, options = {}) {
     groupRetries: {},
     mode: 'group',
     language: 'English',
+    aiMode: 'no-positive',
   };
   let currentQuestion = null;
   let currentField = 'prompt';
@@ -1521,8 +1531,8 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // Start of a header (now always single logical line thanks to collapseBracedCommands)
-    const headerStart = trimmed.match(/^\\(title|name|activitycontext|studentlevel|aicodeguidance|mode|language)\{([\s\S]*?)\}$/);
-    if (headerStart) {
+    const headerStart = trimmed.match(/^\\(title|name|activitycontext|studentlevel|aicodeguidance|aimode|mode|language)\{([\s\S]*?)\}$/);
+    if (headerStart && !currentQuestion) {
       flushCurrentBlock();
       const tag = headerStart[1];
       const content = headerStart[2];
@@ -1540,6 +1550,22 @@ export function parseSheetToBlocks(lines, options = {}) {
 
       if (tag === 'language') {
         meta.language = String(content || '').trim() || 'English';
+      }
+
+      if (tag === 'aimode') {
+        // Keep the authored comma-separated flags intact. The evaluator
+        // resolves `positive` / `no-positive`; unknown future flags (such as
+        // `brief`) survive parsing rather than becoming visible worksheet text.
+        meta.aiMode = String(content || '').trim() || 'no-positive';
+        const invalidFlags = unsupportedAiModeFlags(meta.aiMode);
+        if (invalidFlags.length) {
+          pushIssue(
+            'error',
+            lineNo,
+            `Unsupported \\aimode value${invalidFlags.length === 1 ? '' : 's'}: ${invalidFlags.join(', ')}. Use: ${[...AI_MODE_FLAGS].join(', ')}.`,
+            line,
+          );
+        }
       }
 
       blocks.push({ type: 'header', tag, content: format(content) });
@@ -1742,6 +1768,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         samples: [],
         feedback: [],
         followups: [],
+        aiMode: '',
         responseMode: 'answer',
         aiBlocks: [],
         infos: [],
@@ -1757,6 +1784,7 @@ export function parseSheetToBlocks(lines, options = {}) {
           sampleLines: [],
           feedbackLines: [],
           followupLines: [],
+          aiModeLine: null,
           endQuestionLine: null,
         },
       };
@@ -1924,6 +1952,31 @@ export function parseSheetToBlocks(lines, options = {}) {
       currentQuestion.responseMode = responseMode;
       currentQuestion.sourceMeta.responseMode = responseMode;
       currentQuestion.sourceMeta.responseModeLine = lineNo;
+      continue;
+    }
+
+    if (trimmed.startsWith('\\aimode{')) {
+      if (!currentQuestion) {
+        pushIssue('error', lineNo, '\\aimode must be in the activity preamble or inside a \\question.', line);
+        continue;
+      }
+      const match = trimmed.match(/^\\aimode\{([\s\S]*?)\}\s*$/);
+      const value = String(match?.[1] || '').trim();
+      if (!value) {
+        pushIssue('error', lineNo, '\\aimode requires at least one comma-separated flag, such as \\aimode{positive}.', line);
+        continue;
+      }
+      const invalidFlags = unsupportedAiModeFlags(value);
+      if (invalidFlags.length) {
+        pushIssue(
+          'error',
+          lineNo,
+          `Unsupported \\aimode value${invalidFlags.length === 1 ? '' : 's'}: ${invalidFlags.join(', ')}. Use: ${[...AI_MODE_FLAGS].join(', ')}.`,
+          line,
+        );
+      }
+      currentQuestion.aiMode = value;
+      currentQuestion.sourceMeta.aiModeLine = lineNo;
       continue;
     }
 
@@ -2267,6 +2320,7 @@ const HIDE_FROM_STUDENTS_HEADERS = new Set([
   'studentlevel',
   'mode',
   'language',
+  'aimode',
 ]);
 
 export function renderBlocks(blocks, options = {}) {
@@ -2389,6 +2443,7 @@ export function renderBlocks(blocks, options = {}) {
         activitycontext: 'Context',
         studentlevel: 'Student level',
         language: 'Language',
+        aimode: 'AI feedback mode',
         aicodeguidance: 'AI code guidance',
       };
       const label = labelMap[block.tag] || block.tag;

@@ -263,6 +263,275 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
   assert.equal(typeof response.body.feedback, 'string');
 });
 
+test('lenient activity guidance produces the three-state, non-picky evaluation policy', async () => {
+  const prompt = await buildStudentResponsePrompt({
+    questionText: 'Which class is the superclass, and which classes are specialized?',
+    studentAnswer: 'The hollow arrow points to the superclass.',
+    feedbackPrompt: 'Identify the general class and the specialized classes.',
+    guidance: "Accept anything that is not completely wrong. Don't be picky; accept equivalent wording.",
+    instanceId: 0,
+    qid: '1b',
+    retriesRequired: 2,
+  });
+
+  assert.match(prompt.sys, /LENIENT ACCEPTANCE POLICY/i);
+  assert.match(prompt.sys, /accepted, revise, or blocked/i);
+  assert.match(prompt.sys, /DECISION CONSISTENCY RULE/i);
+  assert.match(prompt.user, /"decision":"accepted"\|"revise"\|"blocked"/i);
+  assert.match(prompt.user, /retry policy/i);
+});
+
+test('permissive question feedback accepts an on-track core answer without optional elaboration', async () => {
+  const prompt = await buildStudentResponsePrompt({
+    questionText: 'What difference in object lifetime separates aggregation and composition?',
+    studentAnswer: 'In composition, parts normally die with the whole; aggregation parts can remain independently.',
+    feedbackPrompt: 'Be permissive. If the answer is mostly on track, give positive feedback, briefly explain anything missing or unclear, and move on.',
+    guidance: '',
+    instanceId: 0,
+    qid: '4a',
+    retriesRequired: 3,
+  });
+
+  assert.match(prompt.sys, /LENIENT ACCEPTANCE POLICY/i);
+  assert.match(prompt.sys, /set decision=accepted and let the group move on/i);
+  assert.match(prompt.user, /must be accepted now; do not spend retries on optional elaboration/i);
+});
+
+test('lenient guidance immediately accepts a relevant revise result', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'revise',
+          feedback: 'Good start — also name the specialized classes.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Which class is the superclass, and which classes are specialized?',
+      studentAnswer: 'The hollow arrow points to the superclass.',
+      feedbackPrompt: 'Identify the general class and the specialized classes.',
+      guidance: "Accept anything that is not completely wrong. Don't be picky; accept equivalent wording.",
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'The hollow arrow points to the superclass.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.autoAdvanced, false);
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.canContinue, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('aimode lenient immediately accepts a relevant revise result without wording heuristics', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'revise',
+          feedback: 'Good start — add a little more detail.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Explain aggregation and composition.',
+      studentAnswer: 'Aggregation can exist independently; composition is owned.',
+      feedbackPrompt: 'Explain the lifetime distinction.',
+      guidance: '',
+      activityAiMode: 'lenient',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 3,
+      submissionString: 'Aggregation can exist independently; composition is owned.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.canContinue, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('accepted feedback is silent unless aimode explicitly enables positive feedback', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'accepted',
+          feedback: 'Excellent reasoning.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Explain the lifetime distinction.',
+      studentAnswer: 'Aggregation parts can exist independently; composition parts normally cannot.',
+      feedbackPrompt: 'positive-feedback',
+      guidance: 'positive-feedback',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 3,
+      submissionString: 'Aggregation parts can exist independently; composition parts normally cannot.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('a table heading ending in a question mark is evaluated, not treated as a student help question', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  let modelCalls = 0;
+  __testHooks.openai.chat.completions.create = async () => {
+    modelCalls += 1;
+    return {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            decision: 'revise',
+            feedback: 'Optional elaboration.',
+          }),
+        },
+      }],
+    };
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Choose aggregation or composition and justify each choice.',
+      studentAnswer: [
+        '### Aggregation or Composition',
+        '| Example | Aggregation or Composition? | Why? |',
+        '| Team and Player | Aggregation | Players can exist independently. |',
+        '| House and Room | Composition | A room depends on the house. |',
+      ].join('\n'),
+      feedbackPrompt: 'Accept reasonable lifetime reasoning.',
+      guidance: '',
+      activityAiMode: 'no-positive,lenient',
+      hasTableResponse: true,
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 3,
+      submissionString: 'table answer',
+      dryRun: true,
+    });
+
+    assert.equal(modelCalls, 1);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.canContinue, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('a nonblank blocked result without a structured serious reason is repaired to revise and accepted by lenient mode', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'blocked',
+          feedback: 'Your reasoning is mostly clear; consider mentioning ownership.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Explain the object-lifetime distinction.',
+      studentAnswer: 'Aggregation parts can remain independently; composition parts depend on the whole.',
+      feedbackPrompt: 'Accept reasonable lifetime reasoning.',
+      guidance: '',
+      activityAiMode: 'lenient,no-positive',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 3,
+      submissionString: 'a relevant explanation',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('a structured fundamentally-wrong block remains blocked in lenient mode', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'blocked',
+          block_reason: 'fundamentally_wrong',
+          feedback: 'This reverses the lifetime relationship between aggregation and composition.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Explain the object-lifetime distinction.',
+      studentAnswer: 'Aggregation deletes all parts while composition always preserves them.',
+      feedbackPrompt: 'Accept reasonable lifetime reasoning.',
+      guidance: '',
+      activityAiMode: 'lenient,no-positive',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 3,
+      submissionString: 'reversed explanation',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'blocked');
+    assert.equal(response.body.accepted, false);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('response evaluation includes prior attempts in the prompt when history exists', async () => {
   const originalQuery = db.query;
 

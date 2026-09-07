@@ -157,6 +157,12 @@ function stripHtml(s = "") {
 
 function normalizeAIResult(obj) {
   const o = (obj && typeof obj === 'object') ? obj : {};
+  const BLOCKED_REASONS = new Set([
+    'blank',
+    'incoherent',
+    'off_topic',
+    'fundamentally_wrong',
+  ]);
 
   const feedbackStr =
     (typeof o.feedback === 'string' && o.feedback.trim()) ? o.feedback.trim()
@@ -167,8 +173,21 @@ function normalizeAIResult(obj) {
 
   const feedback = feedbackStr ? feedbackStr : null;
 
+  const requestedDecision = String(o.decision || '').trim().toLowerCase();
+  const decision = ['accepted', 'revise', 'blocked'].includes(requestedDecision)
+    ? requestedDecision
+    : null;
+  const requestedBlockReason = String(
+    o.block_reason ?? o.blockedReason ?? ''
+  ).trim().toLowerCase();
+  const blockedReason = BLOCKED_REASONS.has(requestedBlockReason)
+    ? requestedBlockReason
+    : null;
+
   let accepted;
-  if (typeof o.accepted === 'boolean') {
+  if (decision) {
+    accepted = decision === 'accepted';
+  } else if (typeof o.accepted === 'boolean') {
     accepted = o.accepted;
   } else if (typeof o.needsRevision === 'boolean') {
     accepted = !o.needsRevision;
@@ -177,7 +196,17 @@ function normalizeAIResult(obj) {
     accepted = feedback ? false : true;
   }
 
-  return { accepted, feedback };
+  // Older model responses only contain accepted=true/false. Preserve their
+  // accepted value, but expose that the three-state decision was absent so the
+  // response evaluator can avoid treating every old-style rejection as a
+  // serious, student-blocking failure.
+  return {
+    accepted,
+    feedback,
+    decision: decision || (accepted ? 'accepted' : 'blocked'),
+    hasExplicitDecision: Boolean(decision),
+    blockedReason,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -223,8 +252,20 @@ function sendAI(res, payload, status = 200) {
     Number.isFinite(Number(payload?.retryCount)) ? Number(payload.retryCount) : null;
   const retriesRequired =
     Number.isFinite(Number(payload?.retriesRequired)) ? Number(payload.retriesRequired) : null;
+  const decision = ['accepted', 'revise', 'blocked'].includes(payload?.decision)
+    ? payload.decision
+    : null;
+  const autoAdvanced = payload?.autoAdvanced === true;
 
-  return res.status(status).json({ accepted, feedback, canContinue, retryCount, retriesRequired });
+  return res.status(status).json({
+    accepted,
+    feedback,
+    canContinue,
+    retryCount,
+    retriesRequired,
+    decision,
+    autoAdvanced,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -808,30 +849,53 @@ async function buildStudentResponsePrompt({
   feedbackPrompt = "",
   followupPrompt = "",
   guidance = "",
+  activityAiMode = "",
+  questionAiMode = "",
   classGuidance = "",
   instanceId,
   qid,
   historyLimit = 5,
   requirementsOnly = false,
+  lenientAcceptance = false,
+  retriesRequired = null,
   activityLanguage = 'English',
   timerRemainingMs = null,
   timerDurationMs = null,
 }) {
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
   const activityGuide = stripHtml(guidance || "");
-  const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
   const questionGuide = stripHtml(feedbackPrompt || "");
+  // The normal route passes the parsed policy, but this helper is also used
+  // directly by validation/tests. Keep the activity's plain-language policy
+  // effective in both paths. Question guidance is allowed to make one prompt
+  // more permissive than the activity default.
+  const effectiveLenientAcceptance =
+    lenientAcceptance ||
+    derivePolicyFromGuidance(activityGuide).lenientAcceptance ||
+    derivePolicyFromGuidance(questionGuide).lenientAcceptance;
+  const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
   const historyContext = await buildAttemptHistoryContext({
     instanceId,
     qid: qid || "",
     limit: historyLimit,
   });
+  const priorAttempts = (historyContext.match(/^Attempt \d+:/gm) || []).length;
+  const retryLimit = Number.isFinite(Number(retriesRequired))
+    ? Math.max(0, Number(retriesRequired))
+    : null;
 
   const followupQ =
     extractFollowupFromFeedbackPrompt(feedbackPrompt) ||
     "Please answer using one concrete detail from the code or output.";
 
-  const positiveEnabled = isPositiveFeedbackEnabled(guidance, followupPrompt);
+  const positiveEnabled = isPositiveFeedbackEnabled(
+    guidance,
+    followupPrompt,
+    activityAiMode,
+    questionAiMode,
+  );
+  const concisePositiveFeedback =
+    positiveEnabled && resolveAiModeFlags(activityAiMode, questionAiMode).brief;
   const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
   const followupRaw = fuParsed.cleaned;
   const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
@@ -853,19 +917,32 @@ async function buildStudentResponsePrompt({
     activityGuide
       ? `Activity-level refinement (takes precedence over class policy where stated):\n${activityGuide}`
       : "",
-    "Decide whether the group's current submission is sufficient to proceed.",
+    "Classify the group's current submission as accepted, revise, or blocked.",
     "Return ONLY JSON matching the schema exactly.",
-    "The instructor feedbackprompt is the complete acceptance contract for this question. Follow it literally; do not add your own criteria.",
-    "If the submission is on-topic and sufficient, set accepted=true.",
-    "If the submission is off-topic, incoherent, or too thin/vague, set accepted=false.",
-    "If accepted=false, feedback MUST be a short coaching nudge (1–2 sentences). Start with what they got right, then ask one focused question or suggest one small addition. Never frame it as a list of failures.",
-    "If accepted=true, feedback must be null unless positive feedback is enabled.",
+    "The instructor feedbackprompt identifies concepts to coach toward; it is not an exact-answer checklist. Do not invent additional criteria.",
+    "Use decision=accepted when the answer is sufficient to proceed.",
+    "Use decision=revise when the answer is relevant and shows some understanding but would benefit from one meaningful correction or addition.",
+    "Use decision=blocked only when the answer is blank, incoherent, off-topic, or fundamentally wrong. When you choose blocked, set block_reason to exactly one of: blank, incoherent, off_topic, fundamentally_wrong. Otherwise set block_reason to null.",
+    "For revise or blocked, feedback MUST be a short coaching nudge (1–2 sentences). Start with what they got right when possible, then name one focused next step. Never frame it as a list of failures.",
+    "For accepted, feedback must be null unless positive feedback is enabled.",
+    concisePositiveFeedback
+      ? "When accepted feedback is enabled, make it exactly one short affirmative sentence."
+      : "",
+    "DECISION CONSISTENCY RULE: Decide accepted/revise/blocked before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise or decision=blocked.",
+    effectiveLenientAcceptance
+      ? "LENIENT ACCEPTANCE POLICY: The instructor explicitly does not want picky grading. If the answer is relevant and demonstrates the core idea, set decision=accepted and let the group move on—even when wording is informal, incomplete, imprecise, or missing a secondary detail. Do not use revise merely to request an optional example, a fuller explanation, improved wording, or an elaboration the prompt did not require."
+      : "",
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
     "If the group has the core answer plus reasonable reasoning, accept it rather than asking for more detail.",
     "As attempts increase, weaken the requirements: prefer a good-enough answer that shows understanding over a perfectly complete one.",
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
+    retryLimit != null
+      ? effectiveLenientAcceptance
+        ? `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). Under the instructor's lenient policy, accept any on-track answer with the core idea rather than spending a retry on optional elaboration.`
+        : `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). On the final allowed attempt, use revise rather than blocked for any relevant answer that shows basic understanding.`
+      : "",
     "When rejecting, use warm, collaborative language. Prefer 'You're on the right track — what about...' or 'Good start. Can you add...' over phrasing like 'you need to' or 'this is missing'.",
     "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting and use feedback to affirm what they got right.",
     `Write every feedback message in ${feedbackLanguage}. Do not mix languages or mirror the student's answer language if it differs.`,
@@ -892,8 +969,9 @@ async function buildStudentResponsePrompt({
   ].filter(Boolean).join("\n");
 
   const schema = `Return JSON only:
-{"accepted":true|false,
- "feedback": null|string}`;
+{"decision":"accepted"|"revise"|"blocked",
+ "feedback": null|string,
+ "block_reason": null|"blank"|"incoherent"|"off_topic"|"fundamentally_wrong"}`;
 
   const user = [
     `Question:\n${stripHtml(questionText)}`,
@@ -913,10 +991,18 @@ async function buildStudentResponsePrompt({
     "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
     "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
     "Acceptance rule: if the group has the core answer plus reasonable reasoning, accept it instead of asking for more detail.",
-    "Acceptance rule: treat the instructor feedbackprompt as the complete acceptance contract. Do not add criteria from the sample or your own expectations.",
+    "Acceptance rule: use the instructor feedbackprompt as guidance for the core idea, not as an exact-answer checklist. Do not add criteria from the sample or your own expectations.",
     "Acceptance rule: as attempts increase, weaken the requirements and let a good-enough answer move on.",
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
+    effectiveLenientAcceptance
+      ? "Lenient acceptance rule: accept anything relevant that is not clearly wrong. Do not reject for spelling, capitalization, informal wording, or a missing secondary detail. A close answer that has the core idea must be accepted; do not keep the group for optional elaboration."
+      : "",
+    retryLimit != null
+      ? effectiveLenientAcceptance
+        ? `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. Under the instructor's lenient policy, an on-track answer with the core idea must be accepted now; do not spend retries on optional elaboration.`
+        : `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. When the group is on track, use revise for a minor omission rather than blocked; after the retry limit, revise answers will be allowed to move on automatically.`
+      : "",
     "Rejection rule: name the exact missing or incorrect requirement from the instructor feedbackprompt. Do not use generic feedback such as saying the response should be more complete or well explained.",
     "Coaching tone rule: feedback should feel like a supportive challenge from a peer, not a checklist from an evaluator. The group should feel encouraged to refine, not pressured to satisfy the AI.",
     requirementsOnly
@@ -929,7 +1015,7 @@ async function buildStudentResponsePrompt({
       : "",
     "",
     schema,
-    "Default to {\"accepted\":true} unless the answer is clearly off-track or incoherent. A partial but engaged answer should move forward.",
+    "Default to decision=accepted unless the answer is clearly off-track or incoherent. A partial but engaged answer should move forward.",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -974,6 +1060,16 @@ function extractStudentQuestion(answerText = "") {
   }
 
   return null;
+}
+
+function isSerializedTableResponse(answerText = "") {
+  // Table snapshots deliberately preserve author-provided column headings.
+  // A heading such as "Why?" is not a student question and must never divert
+  // the response into the AI-help route.
+  return String(answerText || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .some((line) => /^\s*\|.*\|\s*$/.test(line));
 }
 
 function tokenizeHelpfulWords(text = "") {
@@ -1473,9 +1569,10 @@ function dryRunRetryGate({ accepted, retriesRequired }) {
   };
 }
 // ---------- Positive feedback toggles ----------
-// Activity-level default: Positive feedback ON.
-// Per-question override: put "No-Positive-feedback" anywhere in \followupprompt{...}
-// Case-insensitive everywhere.
+// Accepted-answer praise is opt-in.  Only an explicit \aimode{positive}
+// (at activity or question scope) permits it; an omitted \aimode advances
+// accepted work silently.  The old hidden guidance tokens are still stripped
+// from legacy follow-up text below, but they never enable praise.
 
 const POSITIVE_ON_TOKEN = "positive-feedback";
 const POSITIVE_OFF_TOKEN = "no-positive-feedback";
@@ -1497,20 +1594,50 @@ function parsePositiveFeedbackFromText(text = "") {
   return { hasOff, hasOn, cleaned };
 }
 
-function isPositiveFeedbackEnabled(activityGuidance = "", followupPrompt = "") {
-  const a = parsePositiveFeedbackFromText(activityGuidance);
-  const q = parsePositiveFeedbackFromText(followupPrompt);
+function parseAiModeFlags(value = "") {
+  const flags = new Set(
+    String(value || '')
+      .split(',')
+      .map((flag) => flag.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  return {
+    hasPositive: flags.has('positive'),
+    hasNoPositive: flags.has('no-positive'),
+    brief: flags.has('brief'),
+    lenient: flags.has('lenient'),
+  };
+}
 
-  // Question-level overrides always win
-  if (q.hasOff) return false;
-  if (q.hasOn) return true;
+function resolveAiModeFlags(activityAiMode = "", questionAiMode = "") {
+  const questionMode = parseAiModeFlags(questionAiMode);
+  // A question setting is a complete override, even when it only declares a
+  // presentation flag such as `brief`. This mirrors the markup grammar's
+  // question → activity → default resolution rule.
+  if (
+    questionMode.hasPositive ||
+    questionMode.hasNoPositive ||
+    questionMode.brief ||
+    questionMode.lenient
+  ) {
+    return questionMode;
+  }
+  return parseAiModeFlags(activityAiMode);
+}
 
-  // Activity-level applies if question didn't override
-  if (a.hasOff) return false;
-  if (a.hasOn) return true;
+function isPositiveFeedbackEnabled(
+  activityGuidance = "",
+  followupPrompt = "",
+  activityAiMode = "",
+  questionAiMode = "",
+) {
+  const explicitMode = resolveAiModeFlags(activityAiMode, questionAiMode);
 
-  // Default = ON
-  return true;
+  // Question scope wins over activity scope.  `no-positive` is implicit when
+  // neither scope explicitly requests `positive`.
+  if (explicitMode.hasNoPositive) return false;
+  if (explicitMode.hasPositive) return true;
+  return false;
 }
 
 
@@ -1604,6 +1731,12 @@ function derivePolicyFromGuidance(guidanceText = "") {
   const failOpen =
     /fail[- ]open/.test(g) || /doesn'?t have to be perfect/.test(g);
   const noExtras = /do not require extra features|do not require extras/.test(g);
+  const lenientAcceptance =
+    /don'?t be picky|not\s+(?:completely|clearly)\s+wrong|accept\s+(?:anything|any(?:thing| answer)|equivalent wording|close enough)/.test(g) ||
+    /accept\s+(?:a|an)?\s*(?:somewhat|mostly|reasonably)\s+(?:on[- ]?track|correct|relevant)/.test(g) ||
+    /\bbe\s+permissive\b/.test(g) ||
+    /\b(?:answer|response|work)\s+is\s+(?:somewhat|mostly|reasonably)\s+on[- ]?track\b/.test(g) ||
+    /\bmostly\s+on[- ]?track\b[\s\S]{0,160}\bmove\s+on\b/.test(g);
 
   const followupGate = explicitFU
     ? explicitFU.toLowerCase()
@@ -1617,12 +1750,19 @@ function derivePolicyFromGuidance(guidanceText = "") {
     ignoreSpacing,
     failOpen,
     noExtras,
+    lenientAcceptance,
   };
 }
 
-function getEffectivePolicy(activityGuide, questionGuide) {
+function getEffectivePolicy(
+  activityGuide,
+  questionGuide,
+  activityAiMode = "",
+  questionAiMode = "",
+) {
   const a = derivePolicyFromGuidance(activityGuide);
   const q = derivePolicyFromGuidance(questionGuide);
+  const aiMode = resolveAiModeFlags(activityAiMode, questionAiMode);
 
   // If question guide is literally "none", interpret as "no followups"
   const qBareNone = /^\s*(none|no\s*follow-?ups?|no\s*follow\s*ups?)\s*$/i.test(
@@ -1657,6 +1797,14 @@ function getEffectivePolicy(activityGuide, questionGuide) {
       "noExtras",
       "do not require extra features|do not require extras"
     ),
+    // `\\aimode{lenient}` is an explicit, deterministic author policy. It
+    // means relevant work may advance even if the model labels it `revise`.
+    // Plain-language guidance remains supported for older activities.
+    lenientAcceptance: aiMode.lenient || pick(
+      "lenientAcceptance",
+      "don'?t be picky|not\\s+(?:completely|clearly)\\s+wrong|accept\\s+(?:anything|any(?:thing| answer)|equivalent wording|close enough)|accept\\s+(?:a|an)?\\s*(?:somewhat|mostly|reasonably)\\s+(?:on[- ]?track|correct|relevant)"
+      + "|\\bbe\\s+permissive\\b|\\b(?:answer|response|work)\\s+is\\s+(?:somewhat|mostly|reasonably)\\s+on[- ]?track\\b|\\bmostly\\s+on[- ]?track\\b[\\s\\S]{0,160}\\bmove\\s+on\\b"
+    ),
   };
 }
 
@@ -1689,6 +1837,9 @@ async function evaluateStudentResponse(req, res) {
     followupPrompt = "",
     forceFollowup = false,
     guidance = "",
+    activityAiMode = "",
+    questionAiMode = "",
+    hasTableResponse = false,
     codeContext = "",
     instanceId,
     groupNum,
@@ -1703,32 +1854,47 @@ async function evaluateStudentResponse(req, res) {
   const classGuidance = await fetchClassGuidance(instanceId);
 
   let accepted = false;
+  let decision = null;
   let feedback =
     "I couldn't interpret that response—please add one concrete sentence answering the question.";
 
   const applyGateAndSend = async () => {
+    const effectiveDecision = ['accepted', 'revise', 'blocked'].includes(decision)
+      ? decision
+      : (accepted ? 'accepted' : 'blocked');
+    const acceptedForGate = effectiveDecision === 'accepted';
     console.log("[RETRY_IN]", {
       instanceId,
       groupNum,
       answeredByUserId,
       retriesRequired,
-      accepted,
+      accepted: acceptedForGate,
       submissionHash: sha256Hex(String(submissionString ?? "")),
       dryRun: isDryRunAIRequest(req),
     });
 
     const gate = isDryRunAIRequest(req)
-      ? dryRunRetryGate({ accepted, retriesRequired: Number(retriesRequired) })
+      ? dryRunRetryGate({ accepted: acceptedForGate, retriesRequired: Number(retriesRequired) })
       : await applyGroupRetryGate({
           instanceId: Number(instanceId),
           groupNum: Number(groupNum),
           answeredByUserId: Number(answeredByUserId),
           retriesRequired: Number(retriesRequired),
-          accepted,
+          accepted: acceptedForGate,
           submissionString: String(submissionString ?? ""),
         });
 
-    return sendAI(res, { accepted, feedback, ...gate });
+    // A relevant-but-incomplete response earns a focused nudge. Once it has
+    // used the configured retries, it moves on automatically; blank/off-topic
+    // work remains blocked and still requires the explicit Continue choice.
+    const autoAdvanced = effectiveDecision === 'revise' && gate.canContinue === true;
+    return sendAI(res, {
+      accepted: acceptedForGate || autoAdvanced,
+      decision: effectiveDecision,
+      autoAdvanced,
+      feedback,
+      ...gate,
+    });
   };
 
   if (!questionText || studentAnswer == null) {
@@ -1737,10 +1903,17 @@ async function evaluateStudentResponse(req, res) {
 
   const activityGuide = stripHtml(guidance || "");
   const questionGuide = stripHtml(feedbackPrompt || "");
-  const policy = getEffectivePolicy(activityGuide, questionGuide);
+  const policy = getEffectivePolicy(
+    activityGuide,
+    questionGuide,
+    activityAiMode,
+    questionAiMode,
+  );
 
   const answerRaw = String(studentAnswer || "").trim();
-  const questionAsked = extractStudentQuestion(answerRaw);
+  const questionAsked = (hasTableResponse || isSerializedTableResponse(answerRaw))
+    ? null
+    : extractStudentQuestion(answerRaw);
 
   if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid)) {
     accepted = true;
@@ -1821,11 +1994,15 @@ async function evaluateStudentResponse(req, res) {
     feedbackPrompt,
     followupPrompt,
     guidance,
+    activityAiMode,
+    questionAiMode,
     classGuidance,
     instanceId,
     qid: qid || req.body?.questionId || req.body?.codeVersion || "",
     historyLimit: 5,
     requirementsOnly: policy.requirementsOnly,
+    lenientAcceptance: policy.lenientAcceptance,
+    retriesRequired,
     activityLanguage,
     timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
     timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
@@ -1871,6 +2048,7 @@ async function evaluateStudentResponse(req, res) {
       ],
       temperature: 0.2,
       max_tokens: 220,
+      response_format: { type: "json_object" },
     });
 
     const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
@@ -1890,8 +2068,52 @@ async function evaluateStudentResponse(req, res) {
     const norm = normalizeAIResult(obj);
     accepted = norm.accepted;
     feedback = norm.feedback;
+    decision = norm.decision;
+
+    // A serious block must be explicit and explainable. Older evaluator
+    // responses used only accepted:false, which normalize as `blocked` for
+    // compatibility but carry no severity. Treat that as a normal revision
+    // for a nonblank response. The same repair applies when a current model
+    // emits `blocked` without one of the four required serious reasons.
+    // This is structured-contract validation, not keyword matching against
+    // the model's prose feedback.
+    // Requirements-only questions deliberately retain their strict local
+    // guard: an old-style rejection there must not be downgraded to `revise`,
+    // because a zero-retry question auto-advances revise responses.
+    if (
+      decision === 'blocked'
+      && !policy.requirementsOnly
+      && !obviouslyBad
+      && !norm.blockedReason
+    ) {
+      decision = 'revise';
+      accepted = false;
+    }
+
+    // The evaluator's three-state contract defines `revise` as relevant work
+    // that shows some understanding, while `blocked` is reserved for blank,
+    // off-topic, or fundamentally wrong work. An author who explicitly asks
+    // for lenient acceptance has said that work which is not completely wrong
+    // should move on. Enforce that policy here instead of relying on the model
+    // to reconcile it with its default coaching instinct.
+    //
+    // Do not reuse the revision text as green feedback: it may still ask for
+    // optional elaboration. A normal model-accepted response can show positive
+    // feedback; this deterministic policy promotion advances silently.
+    if (policy.lenientAcceptance && decision === 'revise') {
+      accepted = true;
+      decision = 'accepted';
+      feedback = null;
+    }
 
     if (isSoftNitpick(feedback) && !isFatal(feedback)) {
+      // Do not block a group merely to fix wording, formatting, naming, or
+      // another non-conceptual nitpick. This is especially important when the
+      // activity author explicitly asked for generous acceptance.
+      if (decision === 'revise') {
+        decision = 'accepted';
+        accepted = true;
+      }
       feedback = null;
     }
 
@@ -1949,6 +2171,8 @@ async function evaluatePythonCode(req, res) {
     codeVersion,
     instanceId = null,
     guidance = "",
+    activityAiMode = "",
+    questionAiMode = "",
     isCodeOnly = false,
     feedbackPrompt = "",
     sampleResponse = "",
@@ -1980,6 +2204,8 @@ async function evaluatePythonCode(req, res) {
     qid: codeVersion,
     guidance,
     classGuidance,
+    activityAiMode,
+    questionAiMode,
     isCodeOnly,
     feedbackPrompt,
     sampleResponse,
@@ -2162,6 +2388,8 @@ async function evaluateCode({
   qid = "",
   guidance = "",
   classGuidance = "",
+  activityAiMode = "",
+  questionAiMode = "",
   isCodeOnly = false,
   feedbackPrompt = "",
   sampleResponse = "",
@@ -2185,7 +2413,12 @@ async function evaluateCode({
   const qGuide = stripHtml(feedbackPrompt || "");
   const aGuide = parts[1] || parts[0] || combined;
   const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
-  const policy = getEffectivePolicy(aGuide, qGuide);
+  const policy = getEffectivePolicy(
+    aGuide,
+    qGuide,
+    activityAiMode,
+    questionAiMode,
+  );
 
   const inferred = detectLangFromCode(studentCode);
   const effLang = String(lang || inferred || "").toLowerCase();
@@ -2196,7 +2429,14 @@ async function evaluateCode({
   if (effLang === "cpp" || effLang === "c++") langLabel = "C++";
   else if (effLang === "python") langLabel = "Python";
 
-  const positiveEnabled = isPositiveFeedbackEnabled(guidance, followupPrompt);
+  const positiveEnabled = isPositiveFeedbackEnabled(
+    guidance,
+    followupPrompt,
+    activityAiMode,
+    questionAiMode,
+  );
+  const concisePositiveFeedback =
+    positiveEnabled && resolveAiModeFlags(activityAiMode, questionAiMode).brief;
   const fuParsed = parsePositiveFeedbackFromText(followupPrompt);
   const followupRaw = fuParsed.cleaned;
   const followupIsNone = /^(none|no\s*follow-?ups?)$/i.test(followupRaw);
@@ -2282,6 +2522,7 @@ Rules:
 - Do NOT reject a correct solution just because it uses positive indices instead of negative indices, or vice versa, unless the task explicitly requires one style.
 - When output is provided and it matches the requested result, strongly prefer accepted=true.
 - feedback must be null or brief encouragement when accepted.
+- ${concisePositiveFeedback ? "When accepted feedback is shown, it must be exactly one short affirmative sentence." : "Accepted feedback may be a concise affirmative message when enabled."}
 - if rejected, feedback must be ONE short actionable hint.
 - No style/naming/formatting nits. No extra features beyond the prompt.
 - Use prior group attempts to avoid repeating feedback and to choose the right scaffolding level, but decide accepted=true/false from the current code and output.
@@ -2360,6 +2601,8 @@ async function evaluateCppCode(req, res) {
     codeVersion,
     instanceId = null,
     guidance = "",
+    activityAiMode = "",
+    questionAiMode = "",
     isCodeOnly = false,
     feedbackPrompt = "",
     sampleResponse = "",
@@ -2395,6 +2638,8 @@ async function evaluateCppCode(req, res) {
     qid: codeVersion,
     guidance,
     classGuidance,
+    activityAiMode,
+    questionAiMode,
     isCodeOnly,
     feedbackPrompt,
     sampleResponse,

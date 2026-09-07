@@ -1389,6 +1389,9 @@ export default function RunActivityPage({
         studentLevel: activity?.studentlevel || 'intro',
       },
       guidance: activity?.aicodeguidance || '',
+      activityAiMode: activity?.meta?.aiMode || 'no-positive',
+      questionAiMode: questionBlock?.aiMode || '',
+      hasTableResponse: questionBlock?.hasTableResponse === true,
       activityLanguage: activity?.language || activity?.meta?.language || 'English',
       codeContext,
 
@@ -1468,6 +1471,10 @@ export default function RunActivityPage({
       const retriesRequiredOut = Number.isFinite(Number(data?.retriesRequired))
         ? Number(data.retriesRequired)
         : null;
+      const decision = ['accepted', 'revise', 'blocked'].includes(data?.decision)
+        ? data.decision
+        : (accepted ? 'accepted' : 'blocked');
+      const autoAdvanced = data?.autoAdvanced === true;
 
       // If the section timer has expired, never deadlock the group — let them move on
       const timerExpired =
@@ -1479,6 +1486,8 @@ export default function RunActivityPage({
         canContinue: timerExpired ? true : canContinue,
         retryCount,
         retriesRequired: retriesRequiredOut,
+        decision,
+        autoAdvanced,
       };
 
       // ✅ IMPORTANT: this function MUST NOT write to `answers` here.
@@ -2328,6 +2337,8 @@ export default function RunActivityPage({
 
             // activity-level policy
             guidance: activity?.aicodeguidance || '',
+            activityAiMode: activity?.meta?.aiMode || 'no-positive',
+            questionAiMode: block?.aiMode || '',
             activityLanguage: activity?.language || activity?.meta?.language || 'English',
             instanceId: Number(instanceId),
             groupNum,
@@ -2604,9 +2615,6 @@ export default function RunActivityPage({
         existingAnswers
       );
 
-      const prevAF = lowerResp(existingAnswers, `${qid}AF`); // "active" or "resolved"
-      const prevFM = lowerResp(existingAnswers, `${qid}FM`); // "accepted" or "needsrevision"
-
       // ✅ Clear old AI comment ONLY on submit (before re-evaluating)
       setTextFeedbackShown((prev) => {
         const next = { ...prev };
@@ -2651,8 +2659,9 @@ export default function RunActivityPage({
           answeredByUserId: user.id,
         });
 
-        // AI acceptance is the progression gate. A zero-retry policy means
-        // no bypass is available, not that rejected work is auto-accepted.
+        // The server treats a close-but-incomplete response as a distinct
+        // "revise" decision. Once its retry allowance is used, it returns it
+        // as accepted so the group advances without an extra bypass click.
         const progressAllowed = ai.accepted === true;
 
         answers[`${qid}S`] = progressAllowed ? 'complete' : 'inprogress';
@@ -2673,22 +2682,34 @@ export default function RunActivityPage({
           progressAllowed,
         });*/
 
-        // ✅ Default accept unless AI explicitly rejects
+        // `accepted` answers the progression question: retry exhaustion may
+        // deliberately allow the group to advance even though the evaluator
+        // still returned `decision: 'revise'`.  Keep that separate from the
+        // feedback decision.  The latter is persisted in FM and is what a page
+        // reload uses to restore the feedback colour.
+        //
+        // Previously an auto-advanced revise response stored FM='accepted'.
+        // It was yellow live (because autoAdvanced was checked here), but it
+        // became green after refresh because hydration only has the saved FM
+        // marker.  Persist the evaluator decision instead.
         accepted = ai.accepted !== false;
+        const feedbackAccepted = ai?.decision
+          ? ai.decision === 'accepted'
+          : accepted && !ai.autoAdvanced;
         feedback = typeof ai.feedback === 'string' ? ai.feedback : '';
 
-        const newHasFeedback = typeof feedback === 'string' && feedback.trim().length > 0;
-        const becomingAccepted = (prevAF === 'active') && accepted;
-
-        answers[`${qid}AF`] = accepted ? 'resolved' : 'active';
-        answers[`${qid}FM`] = accepted ? 'accepted' : 'needsRevision';
+        answers[`${qid}AF`] = feedbackAccepted ? 'resolved' : 'active';
+        answers[`${qid}FM`] = feedbackAccepted ? 'accepted' : 'needsRevision';
 
         if (feedback && feedback.trim()) {
           const f = feedback.trim();
           answers[`${qid}F1`] = f;
           // Store with a 'positive' flag so the UI colours positive feedback green
           // and negative feedback yellow.
-          setTextFeedbackShown((prev) => ({ ...prev, [qid]: { text: f, positive: accepted } }));
+          setTextFeedbackShown((prev) => ({
+            ...prev,
+            [qid]: { text: f, positive: feedbackAccepted },
+          }));
         } else {
           answers[`${qid}F1`] = '';
           setTextFeedbackShown((prev) => {

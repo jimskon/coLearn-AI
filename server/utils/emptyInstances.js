@@ -87,7 +87,7 @@ async function findAbandonedInstances(conn, { courseId = null, activityId = null
             ai.progress_status,
             ai.test_start_at,
             ai.test_duration_minutes,
-            ai.created_at,
+            ai.start_time,
             c.name  AS course_name,
             a.title AS activity_title
        FROM activity_instances ai

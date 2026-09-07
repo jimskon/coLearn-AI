@@ -92,3 +92,42 @@ test('the delete re-checks the predicate rather than trusting gathered ids', asy
   assert.match(sql, /NOT EXISTS/, 'the predicate must appear inside the delete');
   assert.match(sql, /FROM\s+group_members/, 'membership must be re-checked at delete time');
 });
+
+// ---------------------------------------------------------------------------
+// Columns must actually exist
+//
+// The first run of this against a real database failed on `ai.created_at`,
+// a column this table does not have. A non-DB test suite cannot catch that by
+// executing the query, but it can read the schema and check the names.
+// ---------------------------------------------------------------------------
+
+test('every activity_instances column the module names exists in the schema', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const schema = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'schema.sql'),
+    'utf8',
+  );
+  // Anchored on the table name straight after CREATE TABLE: a looser pattern
+  // matches the first statement that merely REFERENCES this table.
+  const table = schema.match(
+    /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?`activity_instances`\s*\([\s\S]*?\n\)/,
+  );
+  assert.ok(table, 'activity_instances must be defined in schema.sql');
+
+  const declared = new Set(
+    [...table[0].matchAll(/^\s*`([a-z_]+)`\s+\w/gim)].map((m) => m[1]),
+  );
+
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'utils', 'emptyInstances.js'),
+    'utf8',
+  );
+  const referenced = new Set(
+    [...source.matchAll(/\bai\.([a-z_]+)\b/g)].map((m) => m[1]),
+  );
+
+  const missing = [...referenced].filter((column) => !declared.has(column));
+  assert.deepEqual(missing, [], `not columns of activity_instances: ${missing.join(', ')}`);
+});

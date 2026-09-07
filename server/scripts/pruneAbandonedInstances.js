@@ -121,7 +121,7 @@ async function main() {
     if (args.verbose) {
       console.log('');
       printTable(roster.rows, [
-        'id', 'group_number', 'active_rotation_mode', 'progress_status', 'created_at',
+        'id', 'group_number', 'active_rotation_mode', 'progress_status', 'start_time',
       ]);
     }
   }

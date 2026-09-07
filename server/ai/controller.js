@@ -165,6 +165,12 @@ function stripHtml(s = "") {
 
 function normalizeAIResult(obj) {
   const o = (obj && typeof obj === 'object') ? obj : {};
+  const BLOCKED_REASONS = new Set([
+    'blank',
+    'incoherent',
+    'off_topic',
+    'fundamentally_wrong',
+  ]);
 
   const feedbackStr =
     (typeof o.feedback === 'string' && o.feedback.trim()) ? o.feedback.trim()

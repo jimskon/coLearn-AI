@@ -345,6 +345,39 @@ test('keyboard-mash is rejected for ordinary activities before a permissive mode
   }
 });
 
+test('positive mode does not turn keyboard-mash table answers into accepted feedback', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+
+  __testHooks.openai.chat.completions.create = async () => {
+    throw new Error('OpenAI should not be called for all-keyboard-mash answers');
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Translate the visible parts of the C++ Point declaration into UML notation.',
+      studentAnswer: 'asdd\nsadsad\nasdsad\nasdsd\nasdsad',
+      sampleResponse: '-x : double; -y : double; +Point(xVal : double, yVal : double); +GetX() : double; +SetX(xVal : double) : void',
+      feedbackPrompt: 'Require plausible UML notation for each requested item.',
+      guidance: 'Follow-ups: default',
+      activityAiMode: 'positive',
+      hasTableResponse: true,
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 1,
+      submissionString: 'asdd\nsadsad\nasdsad\nasdsd\nasdsad',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.decision, 'revise');
+    assert.match(response.body.feedback, /complete response|re-read/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('lenient activity guidance produces the two-state, non-picky evaluation policy', async () => {
   const prompt = await buildStudentResponsePrompt({
     questionText: 'Which class is the superclass, and which classes are specialized?',
@@ -495,7 +528,7 @@ test('activity-level aimode positive preserves accepted feedback', async () => {
   }
 });
 
-test('activity-level aimode positive supplies a green confirmation when the model omits one', async () => {
+test('activity-level aimode positive does not synthesize generic praise when the model omits feedback', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{ message: { content: JSON.stringify({ decision: 'accepted', feedback: null }) } }],
@@ -519,7 +552,7 @@ test('activity-level aimode positive supplies a green confirmation when the mode
     assert.equal(response.status, 200);
     assert.equal(response.body.decision, 'accepted');
     assert.equal(response.body.accepted, true);
-    assert.equal(response.body.feedback, 'Good work — your response addresses the question.');
+    assert.equal(response.body.feedback, null);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }
@@ -1003,7 +1036,7 @@ test('response evaluation short-circuits when the question is already accepted',
       ]];
     }
 
-    return originalQuery(sql);
+    return [[]];
   };
 
   global.fetch = async (input, init) => {
@@ -1018,7 +1051,7 @@ test('response evaluation short-circuits when the question is already accepted',
     const response = await postJson('/api/ai/evaluate-response', {
       qid: '1a',
       questionText: 'What does the loop do?',
-      studentAnswer: 'I changed my answer, but this question was already accepted.',
+      studentAnswer: 'already accepted answer',
       sampleResponse: 'It repeats until the condition changes.',
       feedbackPrompt: 'Focus on the repetition.',
       guidance: 'Follow-ups: default',
@@ -1026,7 +1059,7 @@ test('response evaluation short-circuits when the question is already accepted',
       groupNum: 1,
       answeredByUserId: 13,
       retriesRequired: 0,
-      submissionString: 'I changed my answer, but this question was already accepted.',
+      submissionString: 'already accepted answer',
     });
 
     assert.equal(response.status, 200);
@@ -1038,15 +1071,96 @@ test('response evaluation short-circuits when the question is already accepted',
   }
 });
 
-test('accepted-history short-circuit honors activity-level positive feedback', async () => {
+test('response evaluation rechecks changed answers after a prior accepted marker', async () => {
+  const originalQuery = db.query;
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  let openAiCalled = false;
+
+  db.query = async (sql) => {
+    if (String(sql).includes('FROM responses')) {
+      return [[
+        {
+          id: 11,
+          question_id: '1a',
+          response_type: 'text',
+          response: 'already accepted answer',
+          answered_by_user_id: 7,
+        },
+        {
+          id: 12,
+          question_id: '1aFM',
+          response_type: 'text',
+          response: 'accepted',
+          answered_by_user_id: 7,
+        },
+      ]];
+    }
+
+    return [[]];
+  };
+
+  __testHooks.openai.chat.completions.create = async () => {
+    openAiCalled = true;
+    return {
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              decision: 'revise',
+              feedback: 'Please answer the question with one concrete detail.',
+              revision_requirement: 'Answer the prompt rather than entering random text.',
+              revision_severity: 'serious',
+            }),
+          },
+        },
+      ],
+    };
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      qid: '1a',
+      questionText: 'What does the loop do?',
+      studentAnswer: 'It runs forever.',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      activityAiMode: 'positive',
+      instanceId: 123,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 1,
+      submissionString: 'It runs forever.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(openAiCalled, true);
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.decision, 'revise');
+    assert.match(response.body.feedback, /concrete detail/i);
+  } finally {
+    db.query = originalQuery;
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('accepted-history short-circuit does not synthesize generic positive feedback', async () => {
   const originalQuery = db.query;
   const originalFetch = global.fetch;
 
-  db.query = async () => [[
-    { question_id: '1aAF', response: 'resolved' },
-    { question_id: '1aFM', response: 'accepted' },
-    { question_id: '1aS', response: 'complete' },
-  ]];
+  db.query = async (sql) => {
+    if (String(sql).includes('FROM responses')) {
+      return [[
+        { question_id: '1a', response: 'already accepted answer' },
+        { question_id: '1aAF', response: 'resolved' },
+        { question_id: '1aFM', response: 'accepted' },
+        { question_id: '1aS', response: 'complete' },
+      ]];
+    }
+
+    return [[]];
+  };
 
   global.fetch = async (input, init) => {
     const url = typeof input === 'string' ? input : input?.url || '';
@@ -1060,7 +1174,7 @@ test('accepted-history short-circuit honors activity-level positive feedback', a
     const response = await postJson('/api/ai/evaluate-response', {
       qid: '1a',
       questionText: 'What does the loop do?',
-      studentAnswer: 'I changed my answer, but this question was already accepted.',
+      studentAnswer: 'already accepted answer',
       sampleResponse: 'It repeats until the condition changes.',
       feedbackPrompt: 'Focus on the repetition.',
       guidance: 'Follow-ups: default',
@@ -1069,13 +1183,13 @@ test('accepted-history short-circuit honors activity-level positive feedback', a
       groupNum: 1,
       answeredByUserId: 13,
       retriesRequired: 0,
-      submissionString: 'I changed my answer, but this question was already accepted.',
+      submissionString: 'already accepted answer',
     });
 
     assert.equal(response.status, 200);
     assert.equal(response.body.accepted, true);
     assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.feedback, 'Good work - your response addresses the question.');
+    assert.equal(response.body.feedback, null);
   } finally {
     db.query = originalQuery;
     global.fetch = originalFetch;

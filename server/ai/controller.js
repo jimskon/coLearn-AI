@@ -619,7 +619,7 @@ function isAcceptedHistoryMarker(questionIdRaw, responseRaw) {
   return /^\d+[A-Za-z]+FM$/i.test(qid) || /^\d+[A-Za-z]+CodeAccepted$/i.test(qid);
 }
 
-async function hasAcceptedHistoryLock(instanceId, qid) {
+async function hasAcceptedHistoryLock(instanceId, qid, currentAnswer = null) {
   const baseQid = normalizeHistoryQid(qid);
   const numericInstanceId = Number(instanceId);
 
@@ -636,10 +636,26 @@ async function hasAcceptedHistoryLock(instanceId, qid) {
       [numericInstanceId]
     );
 
+    let latestAnswer = null;
+    let hasAcceptedMarker = false;
+
     for (const row of rows || []) {
       if (normalizeHistoryQid(row.question_id) !== baseQid) continue;
-      if (isAcceptedHistoryMarker(row.question_id, row.response)) return true;
+      if (String(row.question_id || '').trim().toLowerCase() === baseQid.toLowerCase()) {
+        latestAnswer = String(row.response ?? '');
+      }
+      if (isAcceptedHistoryMarker(row.question_id, row.response)) {
+        hasAcceptedMarker = true;
+      }
     }
+
+    if (!hasAcceptedMarker) return false;
+
+    // The accepted marker is only safe to reuse when it still describes the
+    // exact answer being submitted now. Otherwise a stale `1aFM=accepted`
+    // would let newly typed garbage bypass the AI evaluation path.
+    if (currentAnswer == null) return false;
+    return String(currentAnswer ?? '').trim() === String(latestAnswer ?? '').trim();
   } catch (err) {
     if (AI_DEBUG) {
       console.warn('[AI_DEBUG] hasAcceptedHistoryLock failed:', err?.message || err);
@@ -938,7 +954,7 @@ async function buildStudentResponsePrompt({
     "For revise, revision_requirement MUST name the one specific unmet requirement. feedback MUST be a short coaching nudge (1–2 sentences) tied to that requirement. Never frame it as a list of failures.",
     "For accepted, feedback must be null when positive feedback is disabled.",
     positiveEnabled
-      ? "When positive feedback is enabled and decision=accepted, feedback MUST be one short affirmative sentence confirming what the group did right. Do not ask for more work or suggest a revision."
+      ? "When positive feedback is enabled and decision=accepted, feedback MAY be one short, specific affirmative sentence only for a notably strong answer. For ordinary sufficient answers, use feedback=null. If you do give accepted feedback, name what the group did well; never use generic praise and never ask for more work or suggest a revision."
       : "",
     "DECISION CONSISTENCY RULE: Decide accepted/revise before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. Put that requirement in revision_requirement. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise.",
     effectiveLenientAcceptance
@@ -1714,6 +1730,19 @@ function looksGibberish(ans) {
   if (/^[asdfghjkl]{5,}$/.test(compact) && /([asdfghjkl])([asdfghjkl])\1/.test(compact)) {
     return true;
   }
+
+  const alphaTokens = compact.match(/[a-z]{3,}/g) || [];
+  if (alphaTokens.length > 0) {
+    const keyboardMashTokens = alphaTokens.filter((token) =>
+      /^(?:qwe|wer|ert|rty|tyu|yui|uio|iop|poi|oiu|iuy|uyt|ytr|tre|rew|ewq){1,}$/.test(token) ||
+      (/^[asdfghjkl]+$/.test(token) && !/^(ask|sad|all|add|fall|half|flag|glass|hall|shall|slash)$/.test(token))
+    );
+
+    if (keyboardMashTokens.length === alphaTokens.length) {
+      return true;
+    }
+  }
+
   return a.length < 2;
 }
 
@@ -1936,16 +1965,12 @@ async function evaluateStudentResponse(req, res) {
     ? null
     : extractStudentQuestion(answerRaw);
 
-  if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid)) {
+  if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid, answerRaw)) {
     accepted = true;
-    feedback = isPositiveFeedbackEnabled(
-      guidance,
-      followupPrompt,
-      activityAiMode,
-      questionAiMode,
-    )
-      ? "Good work - your response addresses the question."
-      : null;
+    // Reusing an accepted marker means we are deliberately skipping a fresh AI
+    // judgment. Do not synthesize praise here: any final feedback that belongs
+    // with the accepted answer should already be persisted as F1/FA rows.
+    feedback = null;
     return await applyGateAndSend();
   }
 
@@ -2145,10 +2170,6 @@ async function evaluateStudentResponse(req, res) {
     if (accepted) {
       if (!positiveEnabled) {
         feedback = null;
-      } else if (!feedback) {
-        // Positive feedback is an explicit author choice.  Do not make its
-        // presence depend on whether the model happened to supply prose.
-        feedback = "Good work — your response addresses the question.";
       }
     }
 

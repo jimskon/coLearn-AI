@@ -157,6 +157,12 @@ function stripHtml(s = "") {
 
 function normalizeAIResult(obj) {
   const o = (obj && typeof obj === 'object') ? obj : {};
+  const BLOCKED_REASONS = new Set([
+    'blank',
+    'incoherent',
+    'off_topic',
+    'fundamentally_wrong',
+  ]);
 
   const feedbackStr =
     (typeof o.feedback === 'string' && o.feedback.trim()) ? o.feedback.trim()
@@ -171,6 +177,12 @@ function normalizeAIResult(obj) {
   const decision = ['accepted', 'revise', 'blocked'].includes(requestedDecision)
     ? requestedDecision
     : null;
+  const requestedBlockReason = String(
+    o.block_reason ?? o.blockedReason ?? ''
+  ).trim().toLowerCase();
+  const blockedReason = BLOCKED_REASONS.has(requestedBlockReason)
+    ? requestedBlockReason
+    : null;
 
   let accepted;
   if (decision) {
@@ -184,9 +196,17 @@ function normalizeAIResult(obj) {
     accepted = feedback ? false : true;
   }
 
-  // Older model responses only contain accepted=true/false. Keep accepting
-  // those while treating an old rejection as a genuinely blocked response.
-  return { accepted, feedback, decision: decision || (accepted ? 'accepted' : 'blocked') };
+  // Older model responses only contain accepted=true/false. Preserve their
+  // accepted value, but expose that the three-state decision was absent so the
+  // response evaluator can avoid treating every old-style rejection as a
+  // serious, student-blocking failure.
+  return {
+    accepted,
+    feedback,
+    decision: decision || (accepted ? 'accepted' : 'blocked'),
+    hasExplicitDecision: Boolean(decision),
+    blockedReason,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -902,7 +922,7 @@ async function buildStudentResponsePrompt({
     "The instructor feedbackprompt identifies concepts to coach toward; it is not an exact-answer checklist. Do not invent additional criteria.",
     "Use decision=accepted when the answer is sufficient to proceed.",
     "Use decision=revise when the answer is relevant and shows some understanding but would benefit from one meaningful correction or addition.",
-    "Use decision=blocked only when the answer is blank, incoherent, off-topic, or fundamentally wrong.",
+    "Use decision=blocked only when the answer is blank, incoherent, off-topic, or fundamentally wrong. When you choose blocked, set block_reason to exactly one of: blank, incoherent, off_topic, fundamentally_wrong. Otherwise set block_reason to null.",
     "For revise or blocked, feedback MUST be a short coaching nudge (1–2 sentences). Start with what they got right when possible, then name one focused next step. Never frame it as a list of failures.",
     "For accepted, feedback must be null unless positive feedback is enabled.",
     concisePositiveFeedback
@@ -950,7 +970,8 @@ async function buildStudentResponsePrompt({
 
   const schema = `Return JSON only:
 {"decision":"accepted"|"revise"|"blocked",
- "feedback": null|string}`;
+ "feedback": null|string,
+ "block_reason": null|"blank"|"incoherent"|"off_topic"|"fundamentally_wrong"}`;
 
   const user = [
     `Question:\n${stripHtml(questionText)}`,
@@ -1039,6 +1060,16 @@ function extractStudentQuestion(answerText = "") {
   }
 
   return null;
+}
+
+function isSerializedTableResponse(answerText = "") {
+  // Table snapshots deliberately preserve author-provided column headings.
+  // A heading such as "Why?" is not a student question and must never divert
+  // the response into the AI-help route.
+  return String(answerText || '')
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .some((line) => /^\s*\|.*\|\s*$/.test(line));
 }
 
 function tokenizeHelpfulWords(text = "") {
@@ -1538,9 +1569,10 @@ function dryRunRetryGate({ accepted, retriesRequired }) {
   };
 }
 // ---------- Positive feedback toggles ----------
-// Activity-level default: Positive feedback ON.
-// Per-question override: put "No-Positive-feedback" anywhere in \followupprompt{...}
-// Case-insensitive everywhere.
+// Accepted-answer praise is opt-in.  Only an explicit \aimode{positive}
+// (at activity or question scope) permits it; an omitted \aimode advances
+// accepted work silently.  The old hidden guidance tokens are still stripped
+// from legacy follow-up text below, but they never enable praise.
 
 const POSITIVE_ON_TOKEN = "positive-feedback";
 const POSITIVE_OFF_TOKEN = "no-positive-feedback";
@@ -1601,25 +1633,10 @@ function isPositiveFeedbackEnabled(
 ) {
   const explicitMode = resolveAiModeFlags(activityAiMode, questionAiMode);
 
-  // The explicit markup is authoritative. Question scope wins over activity
-  // scope, and a missing \aimode defaults to no-positive.
+  // Question scope wins over activity scope.  `no-positive` is implicit when
+  // neither scope explicitly requests `positive`.
   if (explicitMode.hasNoPositive) return false;
   if (explicitMode.hasPositive) return true;
-
-  // Older activities may still use these hidden legacy tokens in guidance.
-  // Honor them only when no explicit \aimode is present.
-  const a = parsePositiveFeedbackFromText(activityGuidance);
-  const q = parsePositiveFeedbackFromText(followupPrompt);
-
-  // Question-level overrides always win
-  if (q.hasOff) return false;
-  if (q.hasOn) return true;
-
-  // Activity-level applies if question didn't override
-  if (a.hasOff) return false;
-  if (a.hasOn) return true;
-
-  // Conservative default: accepted work advances silently.
   return false;
 }
 
@@ -1822,6 +1839,7 @@ async function evaluateStudentResponse(req, res) {
     guidance = "",
     activityAiMode = "",
     questionAiMode = "",
+    hasTableResponse = false,
     codeContext = "",
     instanceId,
     groupNum,
@@ -1893,7 +1911,9 @@ async function evaluateStudentResponse(req, res) {
   );
 
   const answerRaw = String(studentAnswer || "").trim();
-  const questionAsked = extractStudentQuestion(answerRaw);
+  const questionAsked = (hasTableResponse || isSerializedTableResponse(answerRaw))
+    ? null
+    : extractStudentQuestion(answerRaw);
 
   if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid)) {
     accepted = true;
@@ -2049,6 +2069,18 @@ async function evaluateStudentResponse(req, res) {
     accepted = norm.accepted;
     feedback = norm.feedback;
     decision = norm.decision;
+
+    // A serious block must be explicit and explainable. Older evaluator
+    // responses used only accepted:false, which normalize as `blocked` for
+    // compatibility but carry no severity. Treat that as a normal revision
+    // for a nonblank response. The same repair applies when a current model
+    // emits `blocked` without one of the four required serious reasons.
+    // This is structured-contract validation, not keyword matching against
+    // the model's prose feedback.
+    if (decision === 'blocked' && !obviouslyBad && !norm.blockedReason) {
+      decision = 'revise';
+      accepted = false;
+    }
 
     // The evaluator's three-state contract defines `revise` as relevant work
     // that shows some understanding, while `blocked` is reserved for blank,

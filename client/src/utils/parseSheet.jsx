@@ -27,8 +27,17 @@ import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
 import { createDisplayCodeBlock, parseDisplayCodeBlockCommand } from './displayCodeBlocks';
 import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
+import activityGrammar from '../../../shared/activityGrammar.cjs';
 
 const { closesBlock, familyOfCloser } = codeBlockFamilies;
+const AI_MODE_FLAGS = new Set(activityGrammar.COMMA_LIST_VALUES.aimode.values);
+
+function unsupportedAiModeFlags(value = '') {
+  return String(value || '')
+    .split(',')
+    .map((flag) => flag.trim().toLowerCase())
+    .filter((flag) => flag && !AI_MODE_FLAGS.has(flag));
+}
 
 
 
@@ -1548,6 +1557,15 @@ export function parseSheetToBlocks(lines, options = {}) {
         // resolves `positive` / `no-positive`; unknown future flags (such as
         // `brief`) survive parsing rather than becoming visible worksheet text.
         meta.aiMode = String(content || '').trim() || 'no-positive';
+        const invalidFlags = unsupportedAiModeFlags(meta.aiMode);
+        if (invalidFlags.length) {
+          pushIssue(
+            'error',
+            lineNo,
+            `Unsupported \\aimode value${invalidFlags.length === 1 ? '' : 's'}: ${invalidFlags.join(', ')}. Use: ${[...AI_MODE_FLAGS].join(', ')}.`,
+            line,
+          );
+        }
       }
 
       blocks.push({ type: 'header', tag, content: format(content) });
@@ -1947,6 +1965,15 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (!value) {
         pushIssue('error', lineNo, '\\aimode requires at least one comma-separated flag, such as \\aimode{positive}.', line);
         continue;
+      }
+      const invalidFlags = unsupportedAiModeFlags(value);
+      if (invalidFlags.length) {
+        pushIssue(
+          'error',
+          lineNo,
+          `Unsupported \\aimode value${invalidFlags.length === 1 ? '' : 's'}: ${invalidFlags.join(', ')}. Use: ${[...AI_MODE_FLAGS].join(', ')}.`,
+          line,
+        );
       }
       currentQuestion.aiMode = value;
       currentQuestion.sourceMeta.aiModeLine = lineNo;

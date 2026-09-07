@@ -1391,6 +1391,7 @@ export default function RunActivityPage({
       guidance: activity?.aicodeguidance || '',
       activityAiMode: activity?.meta?.aiMode || 'no-positive',
       questionAiMode: questionBlock?.aiMode || '',
+      hasTableResponse: questionBlock?.hasTableResponse === true,
       activityLanguage: activity?.language || activity?.meta?.language || 'English',
       codeContext,
 

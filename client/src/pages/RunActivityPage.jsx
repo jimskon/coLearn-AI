@@ -1471,10 +1471,9 @@ export default function RunActivityPage({
       const retriesRequiredOut = Number.isFinite(Number(data?.retriesRequired))
         ? Number(data.retriesRequired)
         : null;
-      const decision = ['accepted', 'revise', 'blocked'].includes(data?.decision)
+      const decision = ['accepted', 'revise'].includes(data?.decision)
         ? data.decision
-        : (accepted ? 'accepted' : 'blocked');
-      const autoAdvanced = data?.autoAdvanced === true;
+        : (accepted ? 'accepted' : 'revise');
 
       // If the section timer has expired, never deadlock the group — let them move on
       const timerExpired =
@@ -1487,7 +1486,6 @@ export default function RunActivityPage({
         retryCount,
         retriesRequired: retriesRequiredOut,
         decision,
-        autoAdvanced,
       };
 
       // ✅ IMPORTANT: this function MUST NOT write to `answers` here.
@@ -2659,10 +2657,10 @@ export default function RunActivityPage({
           answeredByUserId: user.id,
         });
 
-        // The server treats a close-but-incomplete response as a distinct
-        // "revise" decision. Once its retry allowance is used, it returns it
-        // as accepted so the group advances without an extra bypass click.
-        const progressAllowed = ai.accepted === true;
+        // Acceptance and retry permission are deliberately separate.  A
+        // `revise` result remains yellow and incomplete; `canContinue` only
+        // enables the explicit Continue button after the retry allowance.
+        const progressAllowed = ai.decision === 'accepted';
 
         answers[`${qid}S`] = progressAllowed ? 'complete' : 'inprogress';
 
@@ -2682,20 +2680,11 @@ export default function RunActivityPage({
           progressAllowed,
         });*/
 
-        // `accepted` answers the progression question: retry exhaustion may
-        // deliberately allow the group to advance even though the evaluator
-        // still returned `decision: 'revise'`.  Keep that separate from the
-        // feedback decision.  The latter is persisted in FM and is what a page
-        // reload uses to restore the feedback colour.
-        //
-        // Previously an auto-advanced revise response stored FM='accepted'.
-        // It was yellow live (because autoAdvanced was checked here), but it
-        // became green after refresh because hydration only has the saved FM
-        // marker.  Persist the evaluator decision instead.
-        accepted = ai.accepted !== false;
-        const feedbackAccepted = ai?.decision
-          ? ai.decision === 'accepted'
-          : accepted && !ai.autoAdvanced;
+        // The decision is the sole source of truth for both progression and
+        // feedback colour.  `canContinue` is not acceptance; it only unlocks
+        // the explicit bypass button for a revise result.
+        accepted = progressAllowed;
+        const feedbackAccepted = progressAllowed;
         feedback = typeof ai.feedback === 'string' ? ai.feedback : '';
 
         answers[`${qid}AF`] = feedbackAccepted ? 'resolved' : 'active';

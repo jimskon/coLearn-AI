@@ -157,12 +157,6 @@ function stripHtml(s = "") {
 
 function normalizeAIResult(obj) {
   const o = (obj && typeof obj === 'object') ? obj : {};
-  const BLOCKED_REASONS = new Set([
-    'blank',
-    'incoherent',
-    'off_topic',
-    'fundamentally_wrong',
-  ]);
 
   const feedbackStr =
     (typeof o.feedback === 'string' && o.feedback.trim()) ? o.feedback.trim()
@@ -174,19 +168,31 @@ function normalizeAIResult(obj) {
   const feedback = feedbackStr ? feedbackStr : null;
 
   const requestedDecision = String(o.decision || '').trim().toLowerCase();
-  const decision = ['accepted', 'revise', 'blocked'].includes(requestedDecision)
+  // `blocked` is tolerated for older model replies, but it is normalized to
+  // the public `revise` state.  Activities have only two student-facing
+  // outcomes: accepted or revise.
+  const decision = ['accepted', 'revise'].includes(requestedDecision)
     ? requestedDecision
     : null;
-  const requestedBlockReason = String(
+  const legacyBlocked = requestedDecision === 'blocked';
+  const legacyBlockReason = String(
     o.block_reason ?? o.blockedReason ?? ''
   ).trim().toLowerCase();
-  const blockedReason = BLOCKED_REASONS.has(requestedBlockReason)
-    ? requestedBlockReason
-    : null;
+  const revisionRequirement = [
+    o.revision_requirement,
+    o.revisionRequirement,
+    o.missing_requirement,
+    o.missingRequirement,
+  ].find((value) => typeof value === 'string' && value.trim())?.trim() || null;
+  const revisionSeverity = String(
+    o.revision_severity ?? o.revisionSeverity ?? ''
+  ).trim().toLowerCase();
 
   let accepted;
   if (decision) {
     accepted = decision === 'accepted';
+  } else if (legacyBlocked) {
+    accepted = false;
   } else if (typeof o.accepted === 'boolean') {
     accepted = o.accepted;
   } else if (typeof o.needsRevision === 'boolean') {
@@ -197,15 +203,17 @@ function normalizeAIResult(obj) {
   }
 
   // Older model responses only contain accepted=true/false. Preserve their
-  // accepted value, but expose that the three-state decision was absent so the
-  // response evaluator can avoid treating every old-style rejection as a
-  // serious, student-blocking failure.
+  // accepted value while mapping any rejection to the single public revise
+  // state.  A serious revision remains internal policy metadata only.
   return {
     accepted,
     feedback,
-    decision: decision || (accepted ? 'accepted' : 'blocked'),
+    decision: decision || (accepted ? 'accepted' : 'revise'),
     hasExplicitDecision: Boolean(decision),
-    blockedReason,
+    revisionRequirement,
+    seriousRevision:
+      revisionSeverity === 'serious'
+      || ['blank', 'incoherent', 'off_topic', 'fundamentally_wrong'].includes(legacyBlockReason),
   };
 }
 
@@ -252,10 +260,9 @@ function sendAI(res, payload, status = 200) {
     Number.isFinite(Number(payload?.retryCount)) ? Number(payload.retryCount) : null;
   const retriesRequired =
     Number.isFinite(Number(payload?.retriesRequired)) ? Number(payload.retriesRequired) : null;
-  const decision = ['accepted', 'revise', 'blocked'].includes(payload?.decision)
+  const decision = ['accepted', 'revise'].includes(payload?.decision)
     ? payload.decision
     : null;
-  const autoAdvanced = payload?.autoAdvanced === true;
 
   return res.status(status).json({
     accepted,
@@ -264,7 +271,6 @@ function sendAI(res, payload, status = 200) {
     retryCount,
     retriesRequired,
     decision,
-    autoAdvanced,
   });
 }
 
@@ -917,18 +923,17 @@ async function buildStudentResponsePrompt({
     activityGuide
       ? `Activity-level refinement (takes precedence over class policy where stated):\n${activityGuide}`
       : "",
-    "Classify the group's current submission as accepted, revise, or blocked.",
+    "Classify the group's current submission as accepted or revise.",
     "Return ONLY JSON matching the schema exactly.",
     "The instructor feedbackprompt identifies concepts to coach toward; it is not an exact-answer checklist. Do not invent additional criteria.",
     "Use decision=accepted when the answer is sufficient to proceed.",
-    "Use decision=revise when the answer is relevant and shows some understanding but would benefit from one meaningful correction or addition.",
-    "Use decision=blocked only when the answer is blank, incoherent, off-topic, or fundamentally wrong. When you choose blocked, set block_reason to exactly one of: blank, incoherent, off_topic, fundamentally_wrong. Otherwise set block_reason to null.",
-    "For revise or blocked, feedback MUST be a short coaching nudge (1–2 sentences). Start with what they got right when possible, then name one focused next step. Never frame it as a list of failures.",
+    "Use decision=revise only when the answer needs a meaningful correction or addition. A blank, incoherent, off-topic, or fundamentally wrong answer is also revise; there is no third student-facing state.",
+    "For revise, revision_requirement MUST name the one specific unmet requirement. feedback MUST be a short coaching nudge (1–2 sentences) tied to that requirement. Never frame it as a list of failures.",
     "For accepted, feedback must be null unless positive feedback is enabled.",
     concisePositiveFeedback
       ? "When accepted feedback is enabled, make it exactly one short affirmative sentence."
       : "",
-    "DECISION CONSISTENCY RULE: Decide accepted/revise/blocked before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise or decision=blocked.",
+    "DECISION CONSISTENCY RULE: Decide accepted/revise before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. Put that requirement in revision_requirement. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise.",
     effectiveLenientAcceptance
       ? "LENIENT ACCEPTANCE POLICY: The instructor explicitly does not want picky grading. If the answer is relevant and demonstrates the core idea, set decision=accepted and let the group move on—even when wording is informal, incomplete, imprecise, or missing a secondary detail. Do not use revise merely to request an optional example, a fuller explanation, improved wording, or an elaboration the prompt did not require."
       : "",
@@ -941,7 +946,7 @@ async function buildStudentResponsePrompt({
     retryLimit != null
       ? effectiveLenientAcceptance
         ? `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). Under the instructor's lenient policy, accept any on-track answer with the core idea rather than spending a retry on optional elaboration.`
-        : `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). On the final allowed attempt, use revise rather than blocked for any relevant answer that shows basic understanding.`
+        : `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). On the final allowed attempt, use revise for any relevant answer that shows basic understanding.`
       : "",
     "When rejecting, use warm, collaborative language. Prefer 'You're on the right track — what about...' or 'Good start. Can you add...' over phrasing like 'you need to' or 'this is missing'.",
     "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting and use feedback to affirm what they got right.",
@@ -969,9 +974,10 @@ async function buildStudentResponsePrompt({
   ].filter(Boolean).join("\n");
 
   const schema = `Return JSON only:
-{"decision":"accepted"|"revise"|"blocked",
+{"decision":"accepted"|"revise",
  "feedback": null|string,
- "block_reason": null|"blank"|"incoherent"|"off_topic"|"fundamentally_wrong"}`;
+ "revision_requirement": null|string,
+ "revision_severity":"normal"|"serious"}`;
 
   const user = [
     `Question:\n${stripHtml(questionText)}`,
@@ -1001,7 +1007,7 @@ async function buildStudentResponsePrompt({
     retryLimit != null
       ? effectiveLenientAcceptance
         ? `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. Under the instructor's lenient policy, an on-track answer with the core idea must be accepted now; do not spend retries on optional elaboration.`
-        : `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. When the group is on track, use revise for a minor omission rather than blocked; after the retry limit, revise answers will be allowed to move on automatically.`
+        : `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. When the group is on track, use revise for a minor omission; after the retry limit, a revise result will offer the group a Continue choice.`
       : "",
     "Rejection rule: name the exact missing or incorrect requirement from the instructor feedbackprompt. Do not use generic feedback such as saying the response should be more complete or well explained.",
     "Coaching tone rule: feedback should feel like a supportive challenge from a peer, not a checklist from an evaluator. The group should feel encouraged to refine, not pressured to satisfy the AI.",
@@ -1854,14 +1860,16 @@ async function evaluateStudentResponse(req, res) {
   const classGuidance = await fetchClassGuidance(instanceId);
 
   let accepted = false;
-  let decision = null;
+  let decision = 'revise';
+  let seriousRevision = false;
   let feedback =
     "I couldn't interpret that response—please add one concrete sentence answering the question.";
 
   const applyGateAndSend = async () => {
-    const effectiveDecision = ['accepted', 'revise', 'blocked'].includes(decision)
-      ? decision
-      : (accepted ? 'accepted' : 'blocked');
+    // Keep the public two-state result internally consistent for every path:
+    // model evaluation, deterministic question-list scoring, accepted-history
+    // short-circuits, and error fallbacks all set `accepted`.
+    const effectiveDecision = accepted === true ? 'accepted' : 'revise';
     const acceptedForGate = effectiveDecision === 'accepted';
     console.log("[RETRY_IN]", {
       instanceId,
@@ -1884,14 +1892,9 @@ async function evaluateStudentResponse(req, res) {
           submissionString: String(submissionString ?? ""),
         });
 
-    // A relevant-but-incomplete response earns a focused nudge. Once it has
-    // used the configured retries, it moves on automatically; blank/off-topic
-    // work remains blocked and still requires the explicit Continue choice.
-    const autoAdvanced = effectiveDecision === 'revise' && gate.canContinue === true;
     return sendAI(res, {
-      accepted: acceptedForGate || autoAdvanced,
+      accepted: acceptedForGate,
       decision: effectiveDecision,
-      autoAdvanced,
       feedback,
       ...gate,
     });
@@ -2069,38 +2072,33 @@ async function evaluateStudentResponse(req, res) {
     accepted = norm.accepted;
     feedback = norm.feedback;
     decision = norm.decision;
+    seriousRevision = norm.seriousRevision || obviouslyBad;
 
-    // A serious block must be explicit and explainable. Older evaluator
-    // responses used only accepted:false, which normalize as `blocked` for
-    // compatibility but carry no severity. Treat that as a normal revision
-    // for a nonblank response. The same repair applies when a current model
-    // emits `blocked` without one of the four required serious reasons.
-    // This is structured-contract validation, not keyword matching against
-    // the model's prose feedback.
-    // Requirements-only questions deliberately retain their strict local
-    // guard: an old-style rejection there must not be downgraded to `revise`,
-    // because a zero-retry question auto-advances revise responses.
+    // A revise decision is only valid when the evaluator can name the
+    // substantive requirement that remains unmet.  This is a structured
+    // contract check—not a phrase match against the prose feedback.  A legacy
+    // or malformed model reply that merely says `accepted: false` cannot leave
+    // a non-requirements-only group stuck on a vague yellow message.
     if (
-      decision === 'blocked'
+      decision === 'revise'
       && !policy.requirementsOnly
       && !obviouslyBad
-      && !norm.blockedReason
+      && !norm.revisionRequirement
     ) {
-      decision = 'revise';
-      accepted = false;
+      decision = 'accepted';
+      accepted = true;
+      feedback = null;
     }
 
-    // The evaluator's three-state contract defines `revise` as relevant work
-    // that shows some understanding, while `blocked` is reserved for blank,
-    // off-topic, or fundamentally wrong work. An author who explicitly asks
-    // for lenient acceptance has said that work which is not completely wrong
-    // should move on. Enforce that policy here instead of relying on the model
-    // to reconcile it with its default coaching instinct.
+    // An author who explicitly asks for lenient acceptance has said that
+    // relevant work which is not completely wrong should move on. Enforce that
+    // policy here instead of relying on the model to reconcile it with its
+    // default coaching instinct.
     //
     // Do not reuse the revision text as green feedback: it may still ask for
     // optional elaboration. A normal model-accepted response can show positive
     // feedback; this deterministic policy promotion advances silently.
-    if (policy.lenientAcceptance && decision === 'revise') {
+    if (policy.lenientAcceptance && decision === 'revise' && !seriousRevision) {
       accepted = true;
       decision = 'accepted';
       feedback = null;

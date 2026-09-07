@@ -55,7 +55,7 @@ Notes:
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
 - `\aimode` controls AI feedback display and acceptance behavior. Its values are comma-separated so that new options can be added later. The default is `no-positive`; an accepted answer advances without an extra AI message. Use `\aimode{positive}` when you want a short affirmative AI message shown in green before the activity advances.
 - A question may include its own `\aimode{...}`; that setting overrides the activity-level setting for that question only. Use `\aimode{no-positive}` in a question to suppress praise when the activity default is `positive`.
-- `\aimode{lenient}` is an explicit acceptance policy: relevant work with the core idea advances even if the AI would otherwise suggest a revision. Blank, off-topic, incoherent, and fundamentally wrong work remains blocked. It is useful for exploratory or discussion questions where coaching should not hold students back.
+- `\aimode{lenient}` is an explicit acceptance policy: relevant work with the core idea advances even if the AI would otherwise suggest a revision. Work that is blank, off-topic, incoherent, or fundamentally wrong receives a yellow revision message; after the configured retries, the group may explicitly continue without addressing it. It is useful for exploratory or discussion questions where coaching should not hold students back.
 - `\language{...}` sets the language that AI feedback and inline AI help must use. It is metadata and is hidden from students in the activity workspace. If omitted, English is used.
 - `\section` is structural only.
 
@@ -119,7 +119,7 @@ once in the activity preamble and once within a `\question`.
 | `no-positive` | Default. If the evaluator accepts the answer, advance without displaying a separate praise message. |
 | `positive` | If the evaluator accepts the answer, show its affirmative feedback in green, then allow the group to continue. |
 | `brief` | When used with `positive`, limit the green accepted-answer message to one short sentence. |
-| `lenient` | Let relevant, on-track work move on; only blank, off-topic, incoherent, or fundamentally wrong work is held back. |
+| `lenient` | Let relevant, on-track work move on even if it needs minor refinement. A serious revision remains yellow and follows the normal retry/Continue policy. |
 
 Resolution is question → activity → default. Thus a question-level setting wins
 over the preamble, and an omitted setting means `no-positive`.
@@ -141,10 +141,13 @@ over the preamble, and an omitted setting means `no-positive`.
 ```
 
 `\aimode{lenient}` is the one acceptance-policy flag: it deterministically
-promotes the AI's `revise` result to `accepted`, but never promotes `blocked`.
-Other `\aimode` flags only control presentation. The normal standard still
-follows course guidance, activity `\aicodeguidance`, and the question's
-`\feedbackprompt`, with question guidance taking precedence.
+promotes a normal, relevant `revise` result to `accepted`. There are only two
+student-facing decisions: `accepted` and `revise`. A `revise` result is yellow;
+after the configured retries, `canContinue` enables the explicit Continue
+button without changing the decision or its color. Other `\aimode` flags only
+control presentation. The normal standard still follows course guidance,
+activity `\aicodeguidance`, and the question's `\feedbackprompt`, with question
+guidance taking precedence.
 
 ---
 

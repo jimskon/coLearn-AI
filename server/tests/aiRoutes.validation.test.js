@@ -263,7 +263,7 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
   assert.equal(typeof response.body.feedback, 'string');
 });
 
-test('lenient activity guidance produces the three-state, non-picky evaluation policy', async () => {
+test('lenient activity guidance produces the two-state, non-picky evaluation policy', async () => {
   const prompt = await buildStudentResponsePrompt({
     questionText: 'Which class is the superclass, and which classes are specialized?',
     studentAnswer: 'The hollow arrow points to the superclass.',
@@ -275,9 +275,9 @@ test('lenient activity guidance produces the three-state, non-picky evaluation p
   });
 
   assert.match(prompt.sys, /LENIENT ACCEPTANCE POLICY/i);
-  assert.match(prompt.sys, /accepted, revise, or blocked/i);
+  assert.match(prompt.sys, /accepted or revise/i);
   assert.match(prompt.sys, /DECISION CONSISTENCY RULE/i);
-  assert.match(prompt.user, /"decision":"accepted"\|"revise"\|"blocked"/i);
+  assert.match(prompt.user, /"decision":"accepted"\|"revise"/i);
   assert.match(prompt.user, /retry policy/i);
 });
 
@@ -326,7 +326,6 @@ test('lenient guidance immediately accepts a relevant revise result', async () =
 
     assert.equal(response.status, 200);
     assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.autoAdvanced, false);
     assert.equal(response.body.accepted, true);
     assert.equal(response.body.canContinue, true);
     assert.equal(response.body.feedback, null);
@@ -409,6 +408,46 @@ test('accepted feedback is silent unless aimode explicitly enables positive feed
   }
 });
 
+test('a revise result stays yellow even when retries allow the explicit Continue choice', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'revise',
+          revision_requirement: 'State what happens for grade = 90.',
+          revision_severity: 'normal',
+          feedback: 'Good start. Also state what happens when grade is 90.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What happens for grade = 95 and grade = 90?',
+      studentAnswer: 'It prints Excellent! for 95.',
+      feedbackPrompt: 'Require both cases.',
+      guidance: '',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'It prints Excellent! for 95.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, true);
+    assert.equal(response.body.feedback, 'Good start. Also state what happens when grade is 90.');
+    assert.equal(Object.hasOwn(response.body, 'autoAdvanced'), false);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('a table heading ending in a question mark is evaluated, not treated as a student help question', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   let modelCalls = 0;
@@ -458,7 +497,7 @@ test('a table heading ending in a question mark is evaluated, not treated as a s
   }
 });
 
-test('a nonblank blocked result without a structured serious reason is repaired to revise and accepted by lenient mode', async () => {
+test('a legacy blocked result without a serious reason is normalized and accepted by lenient mode', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -495,14 +534,15 @@ test('a nonblank blocked result without a structured serious reason is repaired 
   }
 });
 
-test('a structured fundamentally-wrong block remains blocked in lenient mode', async () => {
+test('a structured serious revise result remains a revise result in lenient mode', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
       message: {
         content: JSON.stringify({
-          decision: 'blocked',
-          block_reason: 'fundamentally_wrong',
+          decision: 'revise',
+          revision_requirement: 'Correct the reversed lifetime relationship.',
+          revision_severity: 'serious',
           feedback: 'This reverses the lifetime relationship between aggregation and composition.',
         }),
       },
@@ -525,7 +565,7 @@ test('a structured fundamentally-wrong block remains blocked in lenient mode', a
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'blocked');
+    assert.equal(response.body.decision, 'revise');
     assert.equal(response.body.accepted, false);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;

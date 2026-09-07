@@ -1781,7 +1781,13 @@ async function submitGroupResponses(req, res) {
 
     const submittedStatusEntries = Object.entries(answers).filter(([qidRaw]) => {
       const qid = String(qidRaw || '').trim();
-      return new RegExp(`^${groupNum}[A-Za-z][A-Za-z0-9_]*S$`).test(qid);
+      // Status rows are question-level completion markers such as 2aS or 12bS.
+      // Do not require the numeric prefix to match the current group number here:
+      // older/imported activities and visual-editor rewrites can legitimately
+      // submit question ids whose prefix reflects the parsed question group, while
+      // groupNum is the current navigation position. Requiring both to match made
+      // accepted AI feedback save correctly but still leave the group blocked.
+      return /^\d+[A-Za-z][A-Za-z0-9_]*S$/.test(qid);
     });
 
     const payloadEntries = [];

@@ -2548,8 +2548,8 @@ export default function RunActivityPage({
       const el = container.querySelector(`textarea[data-response-key="${qid}"]`);
 
       const baseAnswer =
-        String(existingAnswers?.[qid]?.response ?? '').trim() ||
-        String(container.querySelector(`[data-response-key="${qid}"]`)?.value ?? '').trim();
+        String(container.querySelector(`[data-response-key="${qid}"]`)?.value ?? '').trim() ||
+        String(existingAnswers?.[qid]?.response ?? '').trim();
 
 
       // ---- Gather table inputs & save them ----

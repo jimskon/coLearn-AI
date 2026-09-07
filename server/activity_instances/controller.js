@@ -453,6 +453,16 @@ function isAcceptedQuestionState(latestByQid, baseQid) {
   return false;
 }
 
+function isFinalAiFeedbackEntry(qidRaw, baseQid) {
+  const qid = String(qidRaw || '').trim();
+  if (!qid || !baseQid) return false;
+
+  return new RegExp(
+    `^${baseQid}(?:F\\d+|FA\\d+|FM|AF|S|CodeFeedback|RunFeedback|ResponseFeedback)$`,
+    'i'
+  ).test(qid);
+}
+
 // ========== DOC PARSING ==========
 function parseGoogleDocHTML(html) {
   const dom = new JSDOM(html);
@@ -1812,13 +1822,19 @@ async function submitGroupResponses(req, res) {
     }
 
     for (const [baseQid, group] of groupEntriesByBase.entries()) {
+      const finalFeedbackEntries = group.entries.filter(([qid]) =>
+        isFinalAiFeedbackEntry(qid, baseQid)
+      );
+
       if (isAcceptedQuestionState(latestByQid, baseQid)) {
+        payloadEntries.push(...finalFeedbackEntries);
         continue;
       }
 
       const currentBaseValue = String(group.baseValue ?? '');
       const previousBaseValue = String(latestByQid.get(baseQid) ?? '');
       if (currentBaseValue === previousBaseValue) {
+        payloadEntries.push(...finalFeedbackEntries);
         continue;
       }
 

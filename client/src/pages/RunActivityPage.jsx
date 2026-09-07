@@ -2900,20 +2900,6 @@ export default function RunActivityPage({
         return next;
       });
 
-      if (!isTestMode) {
-        // Clear feedback for this group whenever it advances — whether the student
-        // used forceOverride or the group was accepted normally (positive feedback).
-        const qBlocksForGroup = blocks.filter((b) => b.type === 'question');
-        setTextFeedbackShown((prev) => {
-          const next = { ...prev };
-          qBlocksForGroup.forEach((b) => {
-            const qid = `${b.groupId}${b.id}`;
-            delete next[qid];
-          });
-          return next;
-        });
-      }
-
       if (submitGroupIndex + 1 === groups.length) {
         await fetch(`${API_BASE_URL}/api/responses/mark-complete`, {
           method: 'POST',

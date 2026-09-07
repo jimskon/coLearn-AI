@@ -830,7 +830,10 @@ export function parseSheetToBlocks(lines, options = {}) {
     retriesDefault: 0,
     groupRetries: {},
     mode: 'group',
-    language: 'English',
+    // Empty means the author did not say. Filling this in with 'English'
+    // would make an unset activity indistinguishable from one that chose
+    // English, and the deployment default could never apply.
+    language: '',
     aiMode: 'no-positive',
   };
   let currentQuestion = null;
@@ -1549,7 +1552,7 @@ export function parseSheetToBlocks(lines, options = {}) {
       }
 
       if (tag === 'language') {
-        meta.language = String(content || '').trim() || 'English';
+        meta.language = String(content || '').trim();
       }
 
       if (tag === 'aimode') {

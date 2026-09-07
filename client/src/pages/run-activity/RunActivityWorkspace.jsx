@@ -179,7 +179,7 @@ export default function RunActivityWorkspace({
           onFileChange: handleFileChange,
           infoBubbleSession,
           runtimeFeatures,
-          activityLanguage: activity?.language || activity?.meta?.language || 'English',
+          activityLanguage: activity?.language || activity?.meta?.language || '',
           suppressStudentTestFeedbackUi,
           hideStudentTestSections,
           suppressAiBlocks: useSplitLayout,
@@ -237,7 +237,7 @@ export default function RunActivityWorkspace({
                   unansweredShown,
                   infoBubbleSession,
                   runtimeFeatures,
-                  activityLanguage: activity?.language || activity?.meta?.language || 'English',
+                  activityLanguage: activity?.language || activity?.meta?.language || '',
                   suppressStudentTestFeedbackUi,
                   hideStudentTestSections,
                   suppressAiBlocks: useSplitLayout,
@@ -629,7 +629,7 @@ export default function RunActivityWorkspace({
             isObserver={isObserver}
             isInstructor={isInstructor}
             isSubmitted={isSubmitted}
-            activityLanguage={activity?.language || activity?.meta?.language || 'English'}
+            activityLanguage={activity?.language || activity?.meta?.language || ''}
             instanceId={instanceId}
             userId={user?.id}
             existingAnswers={existingAnswers}

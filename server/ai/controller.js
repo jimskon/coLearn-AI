@@ -1,5 +1,9 @@
 // server/ai/controller.js
 const OpenAI = require("openai");
+const {
+  resolveActivityLanguage,
+  configuredDefaultLanguage,
+} = require('../../shared/activityLanguage.cjs');
 require("dotenv").config();
 
 const { randomUUID } = require('crypto');
@@ -59,12 +63,12 @@ function getInlineAiModel(value) {
   return INLINE_AI_ALLOWED_MODELS.has(model) ? model : INLINE_AI_DEFAULT_MODEL;
 }
 
+// An activity that names no language falls through to the deployment default
+// (DEFAULT_ACTIVITY_LANGUAGE) and only then to English. Read from the
+// environment per call rather than captured at module load, so a restart is
+// the only thing needed to change it -- and so tests can set it.
 function getActivityFeedbackLanguage(value) {
-  const language = stripHtml(String(value || ''))
-    .replace(/[{}\r\n]+/g, ' ')
-    .trim()
-    .slice(0, 80);
-  return language || 'English';
+  return resolveActivityLanguage(value, configuredDefaultLanguage());
 }
 
 function normalizeInlineAiConversationHistory(value) {
@@ -307,7 +311,7 @@ async function runInlineAiCompletion({
   studentCode = '',
   studentInput = '',
   conversationHistory = [],
-  activityLanguage = 'English',
+  activityLanguage = '',
 }) {
   const selectedModel = getInlineAiModel(model);
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
@@ -893,7 +897,7 @@ async function buildStudentResponsePrompt({
   requirementsOnly = false,
   lenientAcceptance = false,
   retriesRequired = null,
-  activityLanguage = 'English',
+  activityLanguage = '',
   timerRemainingMs = null,
   timerDurationMs = null,
 }) {
@@ -1384,7 +1388,7 @@ async function buildStudentQuestionHelpPrompt({
   feedbackPrompt = "",
   guidance = "",
   questionAsked = "",
-  activityLanguage = 'English',
+  activityLanguage = '',
 }) {
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
   const activityGuide = stripHtml(guidance || "");
@@ -1905,7 +1909,7 @@ async function evaluateStudentResponse(req, res) {
     answeredByUserId,
     retriesRequired,
     submissionString = "",
-    activityLanguage = 'English',
+    activityLanguage = '',
     timerRemainingMs = null,
     timerDurationMs = null,
   } = req.body || {};
@@ -2234,7 +2238,7 @@ async function evaluatePythonCode(req, res) {
     sampleResponse = "",
     followupPrompt = "",
     outputText = "",
-    activityLanguage = 'English',
+    activityLanguage = '',
     timerRemainingMs = null,
     timerDurationMs = null,
   } = req.body || {};
@@ -2452,7 +2456,7 @@ async function evaluateCode({
   followupPrompt = "",
   lang,
   outputText = "",
-  activityLanguage = 'English',
+  activityLanguage = '',
   timerRemainingMs = null,
   timerDurationMs = null,
 }) {
@@ -2664,7 +2668,7 @@ async function evaluateCppCode(req, res) {
     sampleResponse = "",
     followupPrompt = "",
     outputText = "",
-    activityLanguage = 'English',
+    activityLanguage = '',
     timerRemainingMs = null,
     timerDurationMs = null,
   } = req.body || {};

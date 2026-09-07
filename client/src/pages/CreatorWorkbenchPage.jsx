@@ -81,7 +81,10 @@ const creatorModelOptions = [
 ];
 
 const emptyAdvancedDraft = {
-  language: 'English',
+  // Filled from the deployment default once /api/runtime/config answers. A
+  // literal here would quietly stamp every new activity English on a
+  // Swedish-language deployment.
+  language: '',
   include_timing: false,
   timed_section_minutes: {},
   submit_retries: '3',
@@ -128,8 +131,8 @@ function markupHeaderValue(value) {
     .trim();
 }
 
-function upsertLanguageHeader(sourceText, language) {
-  const normalizedLanguage = markupHeaderValue(language) || 'English';
+function upsertLanguageHeader(sourceText, language, fallbackLanguage = 'English') {
+  const normalizedLanguage = markupHeaderValue(language) || fallbackLanguage;
   const lines = String(sourceText || '').split('\n');
   const existingIndex = lines.findIndex((line) => /^\\language\{[\s\S]*\}\s*$/.test(line.trim()));
   if (existingIndex >= 0) {
@@ -663,7 +666,12 @@ export default function CreatorWorkbenchPage() {
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
   const [fileContents, setFileContents] = useState({});
-  const { features: runtimeFeatures } = useRuntimeFeatures();
+  const { features: runtimeFeatures, defaults: runtimeDefaults } = useRuntimeFeatures();
+
+  // What a new activity is stamped with when the author does not choose. The
+  // server owns this (DEFAULT_ACTIVITY_LANGUAGE); 'English' only covers the
+  // moment before the runtime config has answered.
+  const defaultLanguage = markupHeaderValue(runtimeDefaults?.language) || 'English';
   const [skulptLoaded, setSkulptLoaded] = useState(false);
 
   const [rightMode, setRightMode] = useState('preview');
@@ -1407,7 +1415,7 @@ export default function CreatorWorkbenchPage() {
           use_timed_sections: useTimedSections,
           timed_sections: isSectionlessDraft ? [] : timedSections,
           retries_required: retriesRequired,
-          language: markupHeaderValue(advancedDraft.language) || 'English',
+          language: markupHeaderValue(advancedDraft.language) || defaultLanguage,
           description: appendAdvancedPrompt(draftDescription, advancedPromptText),
           createdBy: user?.id,
         }),
@@ -1418,11 +1426,11 @@ export default function CreatorWorkbenchPage() {
       // The language setting is activity metadata, not merely a generation
       // instruction.  Preserve it in the source even if a model or an older
       // server response supplies a different (usually English) header.
-      const selectedLanguage = markupHeaderValue(advancedDraft.language) || 'English';
+      const selectedLanguage = markupHeaderValue(advancedDraft.language) || defaultLanguage;
       const generatedSourceText = data.content_text || '';
       let sourceText = useLabBoilerplate
-        ? upsertLanguageHeader(labBoilerplateSource, selectedLanguage)
-        : upsertLanguageHeader(generatedSourceText, selectedLanguage);
+        ? upsertLanguageHeader(labBoilerplateSource, selectedLanguage, defaultLanguage)
+        : upsertLanguageHeader(generatedSourceText, selectedLanguage, defaultLanguage);
       if (useLabBoilerplate || sourceText !== generatedSourceText) {
         const sourceRes = await fetch(`${API_BASE_URL}/api/activities/${data.id}/source`, {
           method: 'PUT',
@@ -1481,7 +1489,7 @@ export default function CreatorWorkbenchPage() {
       `\\title{${title}}`,
       `\\name{${name}}`,
       `\\mode{${mode}}`,
-      `\\language{${markupHeaderValue(advancedDraft.language) || 'English'}}`,
+      `\\language{${markupHeaderValue(advancedDraft.language) || defaultLanguage}}`,
       '',
       '% Paste or write your activity markup below.',
       '',
@@ -3632,8 +3640,12 @@ export default function CreatorWorkbenchPage() {
             <Form.Control
               value={advancedDraft.language}
               onChange={(event) => setAdvancedDraft((prev) => ({ ...prev, language: event.target.value }))}
-              placeholder="English"
+              placeholder={defaultLanguage}
             />
+            <Form.Text className="text-muted">
+              Leave blank to use this server's default ({defaultLanguage}). Setting it
+              writes \language&#123;…&#125; into the activity, which overrides the default.
+            </Form.Text>
           </Form.Group>
 
           <Form.Group className="mb-3">
@@ -3678,7 +3690,7 @@ export default function CreatorWorkbenchPage() {
                 // directly. This used to ask a model to rewrite the whole
                 // activity "applying the advanced settings", which risked the
                 // entire document to change two lines.
-                const withLanguage = upsertLanguageHeader(rawText, advancedDraft.language);
+                const withLanguage = upsertLanguageHeader(rawText, advancedDraft.language, defaultLanguage);
                 const next = upsertRetriesHeader(withLanguage, advancedDraft.submit_retries);
                 if (next === rawText) {
                   setNotice('Language and retries already match these settings.');

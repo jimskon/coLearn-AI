@@ -2074,20 +2074,24 @@ async function evaluateStudentResponse(req, res) {
     decision = norm.decision;
     seriousRevision = norm.seriousRevision || obviouslyBad;
 
-    // A revise decision is only valid when the evaluator can name the
-    // substantive requirement that remains unmet.  This is a structured
-    // contract check—not a phrase match against the prose feedback.  A legacy
-    // or malformed model reply that merely says `accepted: false` cannot leave
-    // a non-requirements-only group stuck on a vague yellow message.
+    // A revise decision must name the substantive requirement that remains
+    // unmet.  Do not turn an unstructured rejection into acceptance: older or
+    // malformed model replies often omit this field, and doing so would let
+    // plainly incorrect work pass. Instead retain the revise decision and use
+    // a question-anchored fallback message. Treat it as serious so `lenient`
+    // cannot promote an evaluator reply that failed the contract.
     if (
       decision === 'revise'
       && !policy.requirementsOnly
       && !obviouslyBad
       && !norm.revisionRequirement
     ) {
-      decision = 'accepted';
-      accepted = true;
-      feedback = null;
+      accepted = false;
+      decision = 'revise';
+      seriousRevision = true;
+      if (!feedback || isGenericRequirementsFeedback(feedback)) {
+        feedback = buildQuestionAnchoredHint(questionText, answerRaw);
+      }
     }
 
     // An author who explicitly asks for lenient acceptance has said that

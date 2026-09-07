@@ -344,6 +344,8 @@ test('lenient guidance immediately accepts a relevant revise result', async () =
         content: JSON.stringify({
           decision: 'revise',
           feedback: 'Good start — also name the specialized classes.',
+          revision_requirement: 'Name the specialized classes.',
+          revision_severity: 'normal',
         }),
       },
     }],
@@ -381,6 +383,8 @@ test('aimode lenient immediately accepts a relevant revise result without wordin
         content: JSON.stringify({
           decision: 'revise',
           feedback: 'Good start — add a little more detail.',
+          revision_requirement: 'Add the remaining lifetime detail.',
+          revision_severity: 'normal',
         }),
       },
     }],
@@ -498,6 +502,8 @@ test('a table heading ending in a question mark is evaluated, not treated as a s
           content: JSON.stringify({
             decision: 'revise',
             feedback: 'Optional elaboration.',
+            revision_requirement: 'Add the optional lifetime detail.',
+            revision_severity: 'normal',
           }),
         },
       }],
@@ -536,7 +542,7 @@ test('a table heading ending in a question mark is evaluated, not treated as a s
   }
 });
 
-test('a legacy blocked result without a serious reason is normalized and accepted by lenient mode', async () => {
+test('an unstructured legacy rejection stays revise even in lenient mode', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -565,9 +571,9 @@ test('a legacy blocked result without a serious reason is normalized and accepte
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.accepted, true);
-    assert.equal(response.body.feedback, null);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.match(response.body.feedback, /ownership/i);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }

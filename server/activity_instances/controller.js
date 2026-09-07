@@ -2038,7 +2038,9 @@ async function submitGroupResponses(req, res) {
     });
 
     return res.json({
-      success: true, completed_groups: completedGroups, progress_status: progressStatus,
+      success: true,
+      completed_groups: completedGroups,
+      progress_status: progressStatus,
       ...(emitPatch && Object.prototype.hasOwnProperty.call(emitPatch, 'activeStudentId')
         ? { activeStudentId: emitPatch.activeStudentId }
         : {}),

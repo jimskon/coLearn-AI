@@ -263,7 +263,122 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
   assert.equal(typeof response.body.feedback, 'string');
 });
 
-test('lenient activity guidance produces the three-state, non-picky evaluation policy', async () => {
+test('a revise decision retains feedback when the author uses feedbackprompt none', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'revise',
+          feedback: 'The bottom compartment should list operations or methods.',
+          revision_requirement: 'Identify the bottom UML compartment as operations or methods.',
+          revision_severity: 'normal',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What is recorded in the top, middle, and bottom compartments of a UML class box?',
+      studentAnswer: 'top: class name; middle: attributes; bottom: love',
+      sampleResponse: 'Top: class name. Middle: attributes. Bottom: operations.',
+      feedbackPrompt: 'none',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 15,
+      retriesRequired: 1,
+      submissionString: 'uml-box-wrong-bottom',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.canContinue, false);
+    assert.match(response.body.feedback, /bottom compartment/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('keyboard-mash is rejected for ordinary activities before a permissive model can accept it', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  let modelCalls = 0;
+  __testHooks.openai.chat.completions.create = async () => {
+    modelCalls += 1;
+    return {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            decision: 'accepted',
+            feedback: 'This deliberately permissive mock must not be reached.',
+          }),
+        },
+      }],
+    };
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Which information belongs to an object rather than its class?',
+      studentAnswer: 'sdsad',
+      feedbackPrompt: 'Distinguish the class blueprint from object-specific values.',
+      guidance: 'Accept equivalent wording and do not be picky.',
+      activityAiMode: 'positive',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 1,
+      submissionString: 'sdsad',
+      dryRun: true,
+    });
+
+    assert.equal(modelCalls, 0);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, false);
+    assert.match(response.body.feedback, /complete response|relevant idea/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('positive mode does not turn keyboard-mash table answers into accepted feedback', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+
+  __testHooks.openai.chat.completions.create = async () => {
+    throw new Error('OpenAI should not be called for all-keyboard-mash answers');
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Translate the visible parts of the C++ Point declaration into UML notation.',
+      studentAnswer: 'asdd\nsadsad\nasdsad\nasdsd\nasdsad',
+      sampleResponse: '-x : double; -y : double; +Point(xVal : double, yVal : double); +GetX() : double; +SetX(xVal : double) : void',
+      feedbackPrompt: 'Require plausible UML notation for each requested item.',
+      guidance: 'Follow-ups: default',
+      activityAiMode: 'positive',
+      hasTableResponse: true,
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 1,
+      submissionString: 'asdd\nsadsad\nasdsad\nasdsd\nasdsad',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.decision, 'revise');
+    assert.match(response.body.feedback, /complete response|re-read/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('lenient activity guidance produces the two-state, non-picky evaluation policy', async () => {
   const prompt = await buildStudentResponsePrompt({
     questionText: 'Which class is the superclass, and which classes are specialized?',
     studentAnswer: 'The hollow arrow points to the superclass.',
@@ -275,9 +390,9 @@ test('lenient activity guidance produces the three-state, non-picky evaluation p
   });
 
   assert.match(prompt.sys, /LENIENT ACCEPTANCE POLICY/i);
-  assert.match(prompt.sys, /accepted, revise, or blocked/i);
+  assert.match(prompt.sys, /accepted or revise/i);
   assert.match(prompt.sys, /DECISION CONSISTENCY RULE/i);
-  assert.match(prompt.user, /"decision":"accepted"\|"revise"\|"blocked"/i);
+  assert.match(prompt.user, /"decision":"accepted"\|"revise"/i);
   assert.match(prompt.user, /retry policy/i);
 });
 
@@ -297,7 +412,7 @@ test('permissive question feedback accepts an on-track core answer without optio
   assert.match(prompt.user, /must be accepted now; do not spend retries on optional elaboration/i);
 });
 
-test('lenient guidance immediately accepts a relevant revise result', async () => {
+test('lenient guidance does not override a revise result', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -305,6 +420,8 @@ test('lenient guidance immediately accepts a relevant revise result', async () =
         content: JSON.stringify({
           decision: 'revise',
           feedback: 'Good start — also name the specialized classes.',
+          revision_requirement: 'Name the specialized classes.',
+          revision_severity: 'normal',
         }),
       },
     }],
@@ -325,17 +442,16 @@ test('lenient guidance immediately accepts a relevant revise result', async () =
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.autoAdvanced, false);
-    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
     assert.equal(response.body.canContinue, true);
-    assert.equal(response.body.feedback, null);
+    assert.match(response.body.feedback, /specialized classes/i);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }
 });
 
-test('aimode lenient immediately accepts a relevant revise result without wording heuristics', async () => {
+test('aimode lenient does not override a revise result without wording heuristics', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -343,6 +459,8 @@ test('aimode lenient immediately accepts a relevant revise result without wordin
         content: JSON.stringify({
           decision: 'revise',
           feedback: 'Good start — add a little more detail.',
+          revision_requirement: 'Add the remaining lifetime detail.',
+          revision_severity: 'normal',
         }),
       },
     }],
@@ -364,16 +482,16 @@ test('aimode lenient immediately accepts a relevant revise result without wordin
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.accepted, true);
-    assert.equal(response.body.canContinue, true);
-    assert.equal(response.body.feedback, null);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, false);
+    assert.match(response.body.feedback, /concrete detail|lifetime/i);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }
 });
 
-test('accepted feedback is silent unless aimode explicitly enables positive feedback', async () => {
+test('activity-level aimode positive preserves accepted feedback', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -392,6 +510,37 @@ test('accepted feedback is silent unless aimode explicitly enables positive feed
       studentAnswer: 'Aggregation parts can exist independently; composition parts normally cannot.',
       feedbackPrompt: 'positive-feedback',
       guidance: 'positive-feedback',
+      activityAiMode: 'positive',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 3,
+      submissionString: 'Aggregation parts can exist independently; composition parts normally cannot.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.feedback, 'Excellent reasoning.');
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('activity-level aimode positive does not synthesize generic praise when the model omits feedback', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{ message: { content: JSON.stringify({ decision: 'accepted', feedback: null }) } }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Explain the lifetime distinction.',
+      studentAnswer: 'Aggregation parts can exist independently; composition parts normally cannot.',
+      feedbackPrompt: 'none',
+      guidance: 'Accept correct answers.',
+      activityAiMode: 'positive',
       instanceId: 0,
       groupNum: 1,
       answeredByUserId: 13,
@@ -409,6 +558,46 @@ test('accepted feedback is silent unless aimode explicitly enables positive feed
   }
 });
 
+test('a revise result stays yellow even when retries allow the explicit Continue choice', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'revise',
+          revision_requirement: 'State what happens for grade = 90.',
+          revision_severity: 'normal',
+          feedback: 'Good start. Also state what happens when grade is 90.',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What happens for grade = 95 and grade = 90?',
+      studentAnswer: 'It prints Excellent! for 95.',
+      feedbackPrompt: 'Require both cases.',
+      guidance: '',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'It prints Excellent! for 95.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, true);
+    assert.equal(response.body.feedback, 'Good start. Also state what happens when grade is 90.');
+    assert.equal(Object.hasOwn(response.body, 'autoAdvanced'), false);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('a table heading ending in a question mark is evaluated, not treated as a student help question', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   let modelCalls = 0;
@@ -420,6 +609,8 @@ test('a table heading ending in a question mark is evaluated, not treated as a s
           content: JSON.stringify({
             decision: 'revise',
             feedback: 'Optional elaboration.',
+            revision_requirement: 'Add the optional lifetime detail.',
+            revision_severity: 'normal',
           }),
         },
       }],
@@ -449,16 +640,16 @@ test('a table heading ending in a question mark is evaluated, not treated as a s
 
     assert.equal(modelCalls, 1);
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.accepted, true);
-    assert.equal(response.body.canContinue, true);
-    assert.equal(response.body.feedback, null);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, false);
+    assert.equal(response.body.feedback, 'Optional elaboration.');
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }
 });
 
-test('a nonblank blocked result without a structured serious reason is repaired to revise and accepted by lenient mode', async () => {
+test('an unstructured legacy rejection stays revise even in lenient mode', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -487,22 +678,23 @@ test('a nonblank blocked result without a structured serious reason is repaired 
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.accepted, true);
-    assert.equal(response.body.feedback, null);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.match(response.body.feedback, /ownership/i);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }
 });
 
-test('a structured fundamentally-wrong block remains blocked in lenient mode', async () => {
+test('a structured serious revise result remains a revise result in lenient mode', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
       message: {
         content: JSON.stringify({
-          decision: 'blocked',
-          block_reason: 'fundamentally_wrong',
+          decision: 'revise',
+          revision_requirement: 'Correct the reversed lifetime relationship.',
+          revision_severity: 'serious',
           feedback: 'This reverses the lifetime relationship between aggregation and composition.',
         }),
       },
@@ -525,7 +717,7 @@ test('a structured fundamentally-wrong block remains blocked in lenient mode', a
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'blocked');
+    assert.equal(response.body.decision, 'revise');
     assert.equal(response.body.accepted, false);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
@@ -844,7 +1036,7 @@ test('response evaluation short-circuits when the question is already accepted',
       ]];
     }
 
-    return originalQuery(sql);
+    return [[]];
   };
 
   global.fetch = async (input, init) => {
@@ -859,7 +1051,7 @@ test('response evaluation short-circuits when the question is already accepted',
     const response = await postJson('/api/ai/evaluate-response', {
       qid: '1a',
       questionText: 'What does the loop do?',
-      studentAnswer: 'I changed my answer, but this question was already accepted.',
+      studentAnswer: 'already accepted answer',
       sampleResponse: 'It repeats until the condition changes.',
       feedbackPrompt: 'Focus on the repetition.',
       guidance: 'Follow-ups: default',
@@ -867,11 +1059,136 @@ test('response evaluation short-circuits when the question is already accepted',
       groupNum: 1,
       answeredByUserId: 13,
       retriesRequired: 0,
-      submissionString: 'I changed my answer, but this question was already accepted.',
+      submissionString: 'already accepted answer',
     });
 
     assert.equal(response.status, 200);
     assert.equal(response.body.accepted, true);
+    assert.equal(response.body.feedback, null);
+  } finally {
+    db.query = originalQuery;
+    global.fetch = originalFetch;
+  }
+});
+
+test('response evaluation rechecks changed answers after a prior accepted marker', async () => {
+  const originalQuery = db.query;
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  let openAiCalled = false;
+
+  db.query = async (sql) => {
+    if (String(sql).includes('FROM responses')) {
+      return [[
+        {
+          id: 11,
+          question_id: '1a',
+          response_type: 'text',
+          response: 'already accepted answer',
+          answered_by_user_id: 7,
+        },
+        {
+          id: 12,
+          question_id: '1aFM',
+          response_type: 'text',
+          response: 'accepted',
+          answered_by_user_id: 7,
+        },
+      ]];
+    }
+
+    return [[]];
+  };
+
+  __testHooks.openai.chat.completions.create = async () => {
+    openAiCalled = true;
+    return {
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              decision: 'revise',
+              feedback: 'Please answer the question with one concrete detail.',
+              revision_requirement: 'Answer the prompt rather than entering random text.',
+              revision_severity: 'serious',
+            }),
+          },
+        },
+      ],
+    };
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      qid: '1a',
+      questionText: 'What does the loop do?',
+      studentAnswer: 'It runs forever.',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      activityAiMode: 'positive',
+      instanceId: 123,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 1,
+      submissionString: 'It runs forever.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(openAiCalled, true);
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.decision, 'revise');
+    assert.match(response.body.feedback, /concrete detail/i);
+  } finally {
+    db.query = originalQuery;
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('accepted-history short-circuit does not synthesize generic positive feedback', async () => {
+  const originalQuery = db.query;
+  const originalFetch = global.fetch;
+
+  db.query = async (sql) => {
+    if (String(sql).includes('FROM responses')) {
+      return [[
+        { question_id: '1a', response: 'already accepted answer' },
+        { question_id: '1aAF', response: 'resolved' },
+        { question_id: '1aFM', response: 'accepted' },
+        { question_id: '1aS', response: 'complete' },
+      ]];
+    }
+
+    return [[]];
+  };
+
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    if (url.includes('api.openai.com')) {
+      throw new Error('OpenAI should not be called for an accepted question');
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      qid: '1a',
+      questionText: 'What does the loop do?',
+      studentAnswer: 'already accepted answer',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      activityAiMode: 'positive',
+      instanceId: 123,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'already accepted answer',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.decision, 'accepted');
     assert.equal(response.body.feedback, null);
   } finally {
     db.query = originalQuery;

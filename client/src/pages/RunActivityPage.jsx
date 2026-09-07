@@ -1347,8 +1347,26 @@ export default function RunActivityPage({
     } = {}
   ) {
     // ✅ TEST MODE: no AI feedback at all
-    if (isTestMode) return { accepted: true, feedback: null };
-    if (!canRunAI) return { accepted: true, feedback: null };
+    if (isTestMode) {
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
+    }
+    if (!canRunAI) {
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
+    }
 
     const qid = `${questionBlock.groupId}${questionBlock.id}`;
     const qText = getQuestionText(questionBlock, qid);
@@ -1360,7 +1378,14 @@ export default function RunActivityPage({
       isNoAI(questionBlock?.feedback?.[0])
     ) {
       console.log('[EVAL SKIP] AI disabled for question', { qid });
-      return { accepted: true, feedback: null };
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
     }
 
     const codeContext = [
@@ -1455,7 +1480,9 @@ export default function RunActivityPage({
         throw e;
       }
 
-      const accepted = data?.accepted !== false;
+      // Fail closed: only an explicit server acceptance completes a question.
+      // A malformed response must not become a silent pass.
+      const accepted = data?.accepted === true;
 
       const feedback =
         typeof data?.feedback === 'string' && data.feedback.trim()
@@ -1471,10 +1498,9 @@ export default function RunActivityPage({
       const retriesRequiredOut = Number.isFinite(Number(data?.retriesRequired))
         ? Number(data.retriesRequired)
         : null;
-      const decision = ['accepted', 'revise', 'blocked'].includes(data?.decision)
+      const decision = ['accepted', 'revise'].includes(data?.decision)
         ? data.decision
-        : (accepted ? 'accepted' : 'blocked');
-      const autoAdvanced = data?.autoAdvanced === true;
+        : (accepted ? 'accepted' : 'revise');
 
       // If the section timer has expired, never deadlock the group — let them move on
       const timerExpired =
@@ -1482,12 +1508,15 @@ export default function RunActivityPage({
 
       return {
         accepted,
-        feedback: timerExpired ? null : feedback,
+        // A timer expiring must not hide revision guidance.  It only means the
+        // student may explicitly continue despite a revise decision.  Hiding
+        // the message here created the confusing "blocked with no feedback"
+        // state for an incorrect answer.
+        feedback,
         canContinue: timerExpired ? true : canContinue,
         retryCount,
         retriesRequired: retriesRequiredOut,
         decision,
-        autoAdvanced,
       };
 
       // ✅ IMPORTANT: this function MUST NOT write to `answers` here.
@@ -1506,12 +1535,15 @@ export default function RunActivityPage({
         msg: err?.message,
       });
 
-      // Policy: don't deadlock on AI failure
+      // Do not silently pass work when evaluation is unavailable. Preserve the
+      // normal revise state and let the existing explicit Continue workflow
+      // handle a temporary outage.
       return {
-        accepted: true,
-        feedback: '(AI unavailable; continuing)',
-        canContinue: false,
-        done: true,
+        accepted: false,
+        decision: 'revise',
+        feedback: 'AI feedback is temporarily unavailable. Please try again or continue when that option is available.',
+        canContinue: true,
+        done: false,
         retryCount: null,
         retriesRequired: null,
         skipped: false,
@@ -2541,8 +2573,8 @@ export default function RunActivityPage({
       const el = container.querySelector(`textarea[data-response-key="${qid}"]`);
 
       const baseAnswer =
-        String(existingAnswers?.[qid]?.response ?? '').trim() ||
-        String(container.querySelector(`[data-response-key="${qid}"]`)?.value ?? '').trim();
+        String(container.querySelector(`[data-response-key="${qid}"]`)?.value ?? '').trim() ||
+        String(existingAnswers?.[qid]?.response ?? '').trim();
 
 
       // ---- Gather table inputs & save them ----
@@ -2659,10 +2691,10 @@ export default function RunActivityPage({
           answeredByUserId: user.id,
         });
 
-        // The server treats a close-but-incomplete response as a distinct
-        // "revise" decision. Once its retry allowance is used, it returns it
-        // as accepted so the group advances without an extra bypass click.
-        const progressAllowed = ai.accepted === true;
+        // Acceptance and retry permission are deliberately separate.  A
+        // `revise` result remains yellow and incomplete; `canContinue` only
+        // enables the explicit Continue button after the retry allowance.
+        const progressAllowed = ai.decision === 'accepted';
 
         answers[`${qid}S`] = progressAllowed ? 'complete' : 'inprogress';
 
@@ -2682,20 +2714,11 @@ export default function RunActivityPage({
           progressAllowed,
         });*/
 
-        // `accepted` answers the progression question: retry exhaustion may
-        // deliberately allow the group to advance even though the evaluator
-        // still returned `decision: 'revise'`.  Keep that separate from the
-        // feedback decision.  The latter is persisted in FM and is what a page
-        // reload uses to restore the feedback colour.
-        //
-        // Previously an auto-advanced revise response stored FM='accepted'.
-        // It was yellow live (because autoAdvanced was checked here), but it
-        // became green after refresh because hydration only has the saved FM
-        // marker.  Persist the evaluator decision instead.
-        accepted = ai.accepted !== false;
-        const feedbackAccepted = ai?.decision
-          ? ai.decision === 'accepted'
-          : accepted && !ai.autoAdvanced;
+        // The decision is the sole source of truth for both progression and
+        // feedback colour.  `canContinue` is not acceptance; it only unlocks
+        // the explicit bypass button for a revise result.
+        accepted = progressAllowed;
+        const feedbackAccepted = progressAllowed;
         feedback = typeof ai.feedback === 'string' ? ai.feedback : '';
 
         answers[`${qid}AF`] = feedbackAccepted ? 'resolved' : 'active';
@@ -2856,6 +2879,21 @@ export default function RunActivityPage({
         Number.isFinite(resultCompletedGroups) &&
         resultCompletedGroups > priorCompletedGroups;
 
+      console.log('[GROUP SUBMIT PROGRESS]', {
+        instanceId,
+        submitGroupIndex,
+        groupNum,
+        parsedGroups: Array.isArray(groups) ? groups.length : null,
+        priorCompletedGroups,
+        resultCompletedGroups,
+        advancedByServer,
+        progressStatus: result?.progress_status || null,
+        activeStudentId: result?.activeStudentId ?? null,
+        canAdvance,
+        blocked,
+        unanswered: attempt.unanswered,
+      });
+
        setActivity((prev) => (
         prev
           ? {
@@ -2901,20 +2939,6 @@ export default function RunActivityPage({
         delete next[submitGroupIndex];
         return next;
       });
-
-      if (!isTestMode) {
-        // Clear feedback for this group whenever it advances — whether the student
-        // used forceOverride or the group was accepted normally (positive feedback).
-        const qBlocksForGroup = blocks.filter((b) => b.type === 'question');
-        setTextFeedbackShown((prev) => {
-          const next = { ...prev };
-          qBlocksForGroup.forEach((b) => {
-            const qid = `${b.groupId}${b.id}`;
-            delete next[qid];
-          });
-          return next;
-        });
-      }
 
       if (submitGroupIndex + 1 === groups.length) {
         await fetch(`${API_BASE_URL}/api/responses/mark-complete`, {

@@ -25,8 +25,16 @@ function createStubOpenAI() {
     chat: {
       completions: {
         // Callers request response_format json_object and JSON.parse the content.
+        // An unavailable evaluator must never silently approve an answer. It
+        // returns the normal revise shape so the retry gate can offer the
+        // explicit Continue option instead of treating an outage as success.
         create: async () => ({
-          choices: [{ message: { content: '{"accepted":true}' } }],
+          choices: [{ message: { content: JSON.stringify({
+            decision: 'revise',
+            feedback: 'AI feedback is temporarily unavailable. Please review your response and try again, or continue when that option is available.',
+            revision_requirement: 'Provide a response that addresses the question.',
+            revision_severity: 'normal',
+          }) } }],
         }),
       },
     },
@@ -174,19 +182,31 @@ function normalizeAIResult(obj) {
   const feedback = feedbackStr ? feedbackStr : null;
 
   const requestedDecision = String(o.decision || '').trim().toLowerCase();
-  const decision = ['accepted', 'revise', 'blocked'].includes(requestedDecision)
+  // `blocked` is tolerated for older model replies, but it is normalized to
+  // the public `revise` state.  Activities have only two student-facing
+  // outcomes: accepted or revise.
+  const decision = ['accepted', 'revise'].includes(requestedDecision)
     ? requestedDecision
     : null;
-  const requestedBlockReason = String(
+  const legacyBlocked = requestedDecision === 'blocked';
+  const legacyBlockReason = String(
     o.block_reason ?? o.blockedReason ?? ''
   ).trim().toLowerCase();
-  const blockedReason = BLOCKED_REASONS.has(requestedBlockReason)
-    ? requestedBlockReason
-    : null;
+  const revisionRequirement = [
+    o.revision_requirement,
+    o.revisionRequirement,
+    o.missing_requirement,
+    o.missingRequirement,
+  ].find((value) => typeof value === 'string' && value.trim())?.trim() || null;
+  const revisionSeverity = String(
+    o.revision_severity ?? o.revisionSeverity ?? ''
+  ).trim().toLowerCase();
 
   let accepted;
   if (decision) {
     accepted = decision === 'accepted';
+  } else if (legacyBlocked) {
+    accepted = false;
   } else if (typeof o.accepted === 'boolean') {
     accepted = o.accepted;
   } else if (typeof o.needsRevision === 'boolean') {
@@ -197,15 +217,17 @@ function normalizeAIResult(obj) {
   }
 
   // Older model responses only contain accepted=true/false. Preserve their
-  // accepted value, but expose that the three-state decision was absent so the
-  // response evaluator can avoid treating every old-style rejection as a
-  // serious, student-blocking failure.
+  // accepted value while mapping any rejection to the single public revise
+  // state.  A serious revision remains internal policy metadata only.
   return {
     accepted,
     feedback,
-    decision: decision || (accepted ? 'accepted' : 'blocked'),
+    decision: decision || (accepted ? 'accepted' : 'revise'),
     hasExplicitDecision: Boolean(decision),
-    blockedReason,
+    revisionRequirement,
+    seriousRevision:
+      revisionSeverity === 'serious'
+      || ['blank', 'incoherent', 'off_topic', 'fundamentally_wrong'].includes(legacyBlockReason),
   };
 }
 
@@ -218,10 +240,9 @@ function normalizeAIResult(obj) {
 // paths did not, so any test that reached them tried to authenticate against
 // the real API and failed the run.
 //
-// A deployment with no key configured is the same situation, and there the
-// right behaviour is to let the group proceed rather than reject their work
-// because the server is misconfigured. Both cases resolve the same way: skip
-// the model, accept, attach no feedback, and say so in the log.
+// A deployment with no key configured must not silently accept work. The stub
+// preserves the normal revise/Continue workflow and clearly tells the group
+// that feedback is unavailable.
 //
 // Tests that DO want the model path set a non-placeholder key and intercept the
 // network (see tests/aiRoutes.validation.test.js, which uses 'live-test-key').
@@ -237,7 +258,7 @@ function warnAiUnconfigured(where) {
   warnedAiUnconfigured = true;
   console.warn(
     `[ai] OPENAI_API_KEY is missing or a placeholder; skipping model calls ` +
-    `(first hit: ${where}). Submissions are accepted without AI feedback.`
+    `(first hit: ${where}). Submissions will remain in revise state until explicitly continued.`
   );
 }
 
@@ -252,10 +273,9 @@ function sendAI(res, payload, status = 200) {
     Number.isFinite(Number(payload?.retryCount)) ? Number(payload.retryCount) : null;
   const retriesRequired =
     Number.isFinite(Number(payload?.retriesRequired)) ? Number(payload.retriesRequired) : null;
-  const decision = ['accepted', 'revise', 'blocked'].includes(payload?.decision)
+  const decision = ['accepted', 'revise'].includes(payload?.decision)
     ? payload.decision
     : null;
-  const autoAdvanced = payload?.autoAdvanced === true;
 
   return res.status(status).json({
     accepted,
@@ -264,7 +284,6 @@ function sendAI(res, payload, status = 200) {
     retryCount,
     retriesRequired,
     decision,
-    autoAdvanced,
   });
 }
 
@@ -606,7 +625,7 @@ function isAcceptedHistoryMarker(questionIdRaw, responseRaw) {
   return /^\d+[A-Za-z]+FM$/i.test(qid) || /^\d+[A-Za-z]+CodeAccepted$/i.test(qid);
 }
 
-async function hasAcceptedHistoryLock(instanceId, qid) {
+async function hasAcceptedHistoryLock(instanceId, qid, currentAnswer = null) {
   const baseQid = normalizeHistoryQid(qid);
   const numericInstanceId = Number(instanceId);
 
@@ -623,10 +642,26 @@ async function hasAcceptedHistoryLock(instanceId, qid) {
       [numericInstanceId]
     );
 
+    let latestAnswer = null;
+    let hasAcceptedMarker = false;
+
     for (const row of rows || []) {
       if (normalizeHistoryQid(row.question_id) !== baseQid) continue;
-      if (isAcceptedHistoryMarker(row.question_id, row.response)) return true;
+      if (String(row.question_id || '').trim().toLowerCase() === baseQid.toLowerCase()) {
+        latestAnswer = String(row.response ?? '');
+      }
+      if (isAcceptedHistoryMarker(row.question_id, row.response)) {
+        hasAcceptedMarker = true;
+      }
     }
+
+    if (!hasAcceptedMarker) return false;
+
+    // The accepted marker is only safe to reuse when it still describes the
+    // exact answer being submitted now. Otherwise a stale `1aFM=accepted`
+    // would let newly typed garbage bypass the AI evaluation path.
+    if (currentAnswer == null) return false;
+    return String(currentAnswer ?? '').trim() === String(latestAnswer ?? '').trim();
   } catch (err) {
     if (AI_DEBUG) {
       console.warn('[AI_DEBUG] hasAcceptedHistoryLock failed:', err?.message || err);
@@ -917,18 +952,17 @@ async function buildStudentResponsePrompt({
     activityGuide
       ? `Activity-level refinement (takes precedence over class policy where stated):\n${activityGuide}`
       : "",
-    "Classify the group's current submission as accepted, revise, or blocked.",
+    "Classify the group's current submission as accepted or revise.",
     "Return ONLY JSON matching the schema exactly.",
     "The instructor feedbackprompt identifies concepts to coach toward; it is not an exact-answer checklist. Do not invent additional criteria.",
     "Use decision=accepted when the answer is sufficient to proceed.",
-    "Use decision=revise when the answer is relevant and shows some understanding but would benefit from one meaningful correction or addition.",
-    "Use decision=blocked only when the answer is blank, incoherent, off-topic, or fundamentally wrong. When you choose blocked, set block_reason to exactly one of: blank, incoherent, off_topic, fundamentally_wrong. Otherwise set block_reason to null.",
-    "For revise or blocked, feedback MUST be a short coaching nudge (1–2 sentences). Start with what they got right when possible, then name one focused next step. Never frame it as a list of failures.",
-    "For accepted, feedback must be null unless positive feedback is enabled.",
-    concisePositiveFeedback
-      ? "When accepted feedback is enabled, make it exactly one short affirmative sentence."
+    "Use decision=revise only when the answer needs a meaningful correction or addition. A blank, incoherent, off-topic, or fundamentally wrong answer is also revise; there is no third student-facing state.",
+    "For revise, revision_requirement MUST name the one specific unmet requirement. feedback MUST be a short coaching nudge (1–2 sentences) tied to that requirement. Never frame it as a list of failures.",
+    "For accepted, feedback must be null when positive feedback is disabled.",
+    positiveEnabled
+      ? "When positive feedback is enabled and decision=accepted, feedback MAY be one short, specific affirmative sentence only for a notably strong answer. For ordinary sufficient answers, use feedback=null. If you do give accepted feedback, name what the group did well; never use generic praise and never ask for more work or suggest a revision."
       : "",
-    "DECISION CONSISTENCY RULE: Decide accepted/revise/blocked before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise or decision=blocked.",
+    "DECISION CONSISTENCY RULE: Decide accepted/revise before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. Put that requirement in revision_requirement. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise.",
     effectiveLenientAcceptance
       ? "LENIENT ACCEPTANCE POLICY: The instructor explicitly does not want picky grading. If the answer is relevant and demonstrates the core idea, set decision=accepted and let the group move on—even when wording is informal, incomplete, imprecise, or missing a secondary detail. Do not use revise merely to request an optional example, a fuller explanation, improved wording, or an elaboration the prompt did not require."
       : "",
@@ -941,7 +975,7 @@ async function buildStudentResponsePrompt({
     retryLimit != null
       ? effectiveLenientAcceptance
         ? `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). Under the instructor's lenient policy, accept any on-track answer with the core idea rather than spending a retry on optional elaboration.`
-        : `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). On the final allowed attempt, use revise rather than blocked for any relevant answer that shows basic understanding.`
+        : `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). On the final allowed attempt, use revise for any relevant answer that shows basic understanding.`
       : "",
     "When rejecting, use warm, collaborative language. Prefer 'You're on the right track — what about...' or 'Good start. Can you add...' over phrasing like 'you need to' or 'this is missing'.",
     "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting and use feedback to affirm what they got right.",
@@ -969,9 +1003,10 @@ async function buildStudentResponsePrompt({
   ].filter(Boolean).join("\n");
 
   const schema = `Return JSON only:
-{"decision":"accepted"|"revise"|"blocked",
+{"decision":"accepted"|"revise",
  "feedback": null|string,
- "block_reason": null|"blank"|"incoherent"|"off_topic"|"fundamentally_wrong"}`;
+ "revision_requirement": null|string,
+ "revision_severity":"normal"|"serious"}`;
 
   const user = [
     `Question:\n${stripHtml(questionText)}`,
@@ -1001,7 +1036,7 @@ async function buildStudentResponsePrompt({
     retryLimit != null
       ? effectiveLenientAcceptance
         ? `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. Under the instructor's lenient policy, an on-track answer with the core idea must be accepted now; do not spend retries on optional elaboration.`
-        : `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. When the group is on track, use revise for a minor omission rather than blocked; after the retry limit, revise answers will be allowed to move on automatically.`
+        : `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. When the group is on track, use revise for a minor omission; after the retry limit, a revise result will offer the group a Continue choice.`
       : "",
     "Rejection rule: name the exact missing or incorrect requirement from the instructor feedbackprompt. Do not use generic feedback such as saying the response should be more complete or well explained.",
     "Coaching tone rule: feedback should feel like a supportive challenge from a peer, not a checklist from an evaluator. The group should feel encouraged to refine, not pressured to satisfy the AI.",
@@ -1690,6 +1725,30 @@ function looksGibberish(ans) {
   if (GIBBERISH_PATTERNS.some((r) => r.test(a))) return true;
   if (/^(true|false)$/i.test(a)) return false;
   if (/^[\d\s.+\-*/%()=<>!]+$/.test(a)) return false;
+
+  // High-confidence keyboard mashes that frequently occur while students are
+  // testing a form. Keep this deliberately narrow: ordinary short answers,
+  // identifiers, and acronyms must still go to the evaluator.
+  const compact = a.toLowerCase();
+  if (/^(?:qwe|wer|ert|rty|tyu|yui|uio|iop|poi|oiu|iuy|uyt|ytr|tre|rew|ewq){2,}$/.test(compact)) {
+    return true;
+  }
+  if (/^[asdfghjkl]{5,}$/.test(compact) && /([asdfghjkl])([asdfghjkl])\1/.test(compact)) {
+    return true;
+  }
+
+  const alphaTokens = compact.match(/[a-z]{3,}/g) || [];
+  if (alphaTokens.length > 0) {
+    const keyboardMashTokens = alphaTokens.filter((token) =>
+      /^(?:qwe|wer|ert|rty|tyu|yui|uio|iop|poi|oiu|iuy|uyt|ytr|tre|rew|ewq){1,}$/.test(token) ||
+      (/^[asdfghjkl]+$/.test(token) && !/^(ask|sad|all|add|fall|half|flag|glass|hall|shall|slash)$/.test(token))
+    );
+
+    if (keyboardMashTokens.length === alphaTokens.length) {
+      return true;
+    }
+  }
+
   return a.length < 2;
 }
 
@@ -1854,14 +1913,16 @@ async function evaluateStudentResponse(req, res) {
   const classGuidance = await fetchClassGuidance(instanceId);
 
   let accepted = false;
-  let decision = null;
+  let decision = 'revise';
+  let seriousRevision = false;
   let feedback =
     "I couldn't interpret that response—please add one concrete sentence answering the question.";
 
   const applyGateAndSend = async () => {
-    const effectiveDecision = ['accepted', 'revise', 'blocked'].includes(decision)
-      ? decision
-      : (accepted ? 'accepted' : 'blocked');
+    // Keep the public two-state result internally consistent for every path:
+    // model evaluation, deterministic question-list scoring, accepted-history
+    // short-circuits, and error fallbacks all set `accepted`.
+    const effectiveDecision = accepted === true ? 'accepted' : 'revise';
     const acceptedForGate = effectiveDecision === 'accepted';
     console.log("[RETRY_IN]", {
       instanceId,
@@ -1884,14 +1945,9 @@ async function evaluateStudentResponse(req, res) {
           submissionString: String(submissionString ?? ""),
         });
 
-    // A relevant-but-incomplete response earns a focused nudge. Once it has
-    // used the configured retries, it moves on automatically; blank/off-topic
-    // work remains blocked and still requires the explicit Continue choice.
-    const autoAdvanced = effectiveDecision === 'revise' && gate.canContinue === true;
     return sendAI(res, {
-      accepted: acceptedForGate || autoAdvanced,
+      accepted: acceptedForGate,
       decision: effectiveDecision,
-      autoAdvanced,
       feedback,
       ...gate,
     });
@@ -1915,8 +1971,11 @@ async function evaluateStudentResponse(req, res) {
     ? null
     : extractStudentQuestion(answerRaw);
 
-  if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid)) {
+  if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid, answerRaw)) {
     accepted = true;
+    // Reusing an accepted marker means we are deliberately skipping a fresh AI
+    // judgment. Do not synthesize praise here: any final feedback that belongs
+    // with the accepted answer should already be persisted as F1/FA rows.
     feedback = null;
     return await applyGateAndSend();
   }
@@ -2018,12 +2077,18 @@ async function evaluateStudentResponse(req, res) {
 
   const historyContext = promptParts.historyContext;
 
+  // Garbage is never an acceptable answer, regardless of optional activity
+  // guidance or presentation flags such as \aimode{positive}. This guard is
+  // intentionally before the model call so a transient model error or a
+  // permissive model response cannot advance keyboard mashing.
+  if (!answerRaw || looksGibberish(answerRaw)) {
+    accepted = false;
+    decision = 'revise';
+    feedback = 'That does not look like a complete response yet. Re-read the question and state one relevant idea.';
+    return await applyGateAndSend();
+  }
+
   if (policy.requirementsOnly) {
-    if (!answerRaw || looksGibberish(answerRaw)) {
-      accepted = false;
-      feedback = followupQ;
-      return await applyGateAndSend();
-    }
 
     console.log("[REQ_ONLY]", {
       qidHint,
@@ -2033,8 +2098,8 @@ async function evaluateStudentResponse(req, res) {
       mode: "use-ai",
     });
 
-    // For requirements-only questions, still let AI judge the meaning.
-    // We only short-circuit obvious blank/gibberish answers locally.
+    // For requirements-only questions, still let AI judge the meaning after
+    // the universal blank/gibberish safeguard above.
   }
 
   const obviouslyBad = !answerRaw || looksGibberish(answerRaw);
@@ -2069,53 +2134,38 @@ async function evaluateStudentResponse(req, res) {
     accepted = norm.accepted;
     feedback = norm.feedback;
     decision = norm.decision;
+    seriousRevision = norm.seriousRevision || obviouslyBad;
 
-    // A serious block must be explicit and explainable. Older evaluator
-    // responses used only accepted:false, which normalize as `blocked` for
-    // compatibility but carry no severity. Treat that as a normal revision
-    // for a nonblank response. The same repair applies when a current model
-    // emits `blocked` without one of the four required serious reasons.
-    // This is structured-contract validation, not keyword matching against
-    // the model's prose feedback.
-    // Requirements-only questions deliberately retain their strict local
-    // guard: an old-style rejection there must not be downgraded to `revise`,
-    // because a zero-retry question auto-advances revise responses.
+    // A revise decision must name the substantive requirement that remains
+    // unmet.  Do not turn an unstructured rejection into acceptance: older or
+    // malformed model replies often omit this field, and doing so would let
+    // plainly incorrect work pass. Instead retain the revise decision and use
+    // a question-anchored fallback message. Treat it as serious so `lenient`
+    // cannot promote an evaluator reply that failed the contract.
     if (
-      decision === 'blocked'
+      decision === 'revise'
       && !policy.requirementsOnly
       && !obviouslyBad
-      && !norm.blockedReason
+      && !norm.revisionRequirement
     ) {
-      decision = 'revise';
       accepted = false;
-    }
-
-    // The evaluator's three-state contract defines `revise` as relevant work
-    // that shows some understanding, while `blocked` is reserved for blank,
-    // off-topic, or fundamentally wrong work. An author who explicitly asks
-    // for lenient acceptance has said that work which is not completely wrong
-    // should move on. Enforce that policy here instead of relying on the model
-    // to reconcile it with its default coaching instinct.
-    //
-    // Do not reuse the revision text as green feedback: it may still ask for
-    // optional elaboration. A normal model-accepted response can show positive
-    // feedback; this deterministic policy promotion advances silently.
-    if (policy.lenientAcceptance && decision === 'revise') {
-      accepted = true;
-      decision = 'accepted';
-      feedback = null;
-    }
-
-    if (isSoftNitpick(feedback) && !isFatal(feedback)) {
-      // Do not block a group merely to fix wording, formatting, naming, or
-      // another non-conceptual nitpick. This is especially important when the
-      // activity author explicitly asked for generous acceptance.
-      if (decision === 'revise') {
-        decision = 'accepted';
-        accepted = true;
+      decision = 'revise';
+      seriousRevision = true;
+      if (!feedback || isGenericRequirementsFeedback(feedback)) {
+        feedback = buildQuestionAnchoredHint(questionText, answerRaw);
       }
-      feedback = null;
     }
+
+    // `lenient` is an instruction to the evaluator, not a post-processing
+    // override. The prompt tells the model to accept close, relevant work;
+    // once it nevertheless returns `revise`, preserve that decision. A broad
+    // server-side promotion here made incorrect work pass whenever the model
+    // called the needed correction "normal."
+
+    // Do not infer acceptance from the wording of the feedback. The evaluator
+    // owns the accepted/revise decision; this avoids accidentally advancing a
+    // wrong answer just because its feedback happened to mention formatting,
+    // naming, or another soft concern.
 
     if (!accepted && (!feedback || isGenericRequirementsFeedback(feedback))) {
       feedback = policy.requirementsOnly
@@ -2123,8 +2173,10 @@ async function evaluateStudentResponse(req, res) {
         : "Add one more concrete detail that directly answers the prompt.";
     }
 
-    if (accepted && !positiveEnabled) {
-      feedback = null;
+    if (accepted) {
+      if (!positiveEnabled) {
+        feedback = null;
+      }
     }
 
     // Deliberately NOT falling back to the raw instructor followupprompt here.
@@ -2142,7 +2194,11 @@ async function evaluateStudentResponse(req, res) {
     // `feedback`, so a well-formed follow-up still reaches the group. If the
     // model produced nothing at all, `feedback` simply stays empty and no
     // guidance box is rendered.
-    if (isNone(feedbackPrompt) && !policy.requirementsOnly) {
+    // `none` means there is no author-supplied follow-up prompt. It must not
+    // erase feedback for a revise decision: a student who is blocked needs to
+    // know the concrete reason. Accepted feedback is already suppressed above
+    // unless the author explicitly opted into `positive`.
+    if (accepted && !positiveEnabled && isNone(feedbackPrompt) && !policy.requirementsOnly) {
       feedback = null;
     }
 

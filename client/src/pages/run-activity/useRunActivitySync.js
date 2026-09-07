@@ -182,6 +182,26 @@ export default function useRunActivitySync({
       if (mAF) {
         return;
       }
+
+      const mFM = String(responseKey || '').match(/^(.*)FM$/);
+      if (mFM) {
+        const qid = mFM[1];
+        const positive = String(value ?? '').trim().toLowerCase() === 'accepted';
+
+        setTextFeedbackShown((prev) => {
+          const current = prev[qid];
+          if (!current) return prev;
+
+          return {
+            ...prev,
+            [qid]: {
+              text: typeof current === 'object' ? current.text : current,
+              positive,
+            },
+          };
+        });
+        return;
+      }
     };
 
     const handleFeedbackUpdate = ({ responseKey, feedback, followup }) => {

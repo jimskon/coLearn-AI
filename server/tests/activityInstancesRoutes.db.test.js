@@ -708,7 +708,7 @@ test('submit-group advances progress, rotates active student in submit mode, and
   assert.equal(drafts.length, 0);
 });
 
-test('submit-group only stores changed questions and freezes accepted ones', async () => {
+test('submit-group freezes accepted answers but persists final AI feedback', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');
   const studentB = await createUser('student');
@@ -752,7 +752,7 @@ test('submit-group only stores changed questions and freezes accepted ones', asy
         unanswered: [],
         answers: {
           '1a': 'new attempt that should be ignored',
-          '1aF1': 'ignored feedback',
+          '1aF1': 'final feedback',
           '1aFM': 'accepted',
           '1aAF': 'resolved',
           '1aS': 'complete',
@@ -782,9 +782,14 @@ test('submit-group only stores changed questions and freezes accepted ones', asy
   const latest = (qid) => [...rows].reverse().find((row) => row.question_id === qid)?.response ?? null;
 
   assert.equal(count('1a'), 1);
-  assert.equal(count('1aF1'), 0);
-  assert.equal(count('1aFM'), 1);
+  assert.equal(count('1aF1'), 1);
+  assert.equal(count('1aFM'), 2);
+  assert.equal(count('1aAF'), 2);
+  assert.equal(count('1aS'), 1);
   assert.equal(latest('1a'), 'already accepted');
+  assert.equal(latest('1aF1'), 'final feedback');
+  assert.equal(latest('1aFM'), 'accepted');
+  assert.equal(latest('1aAF'), 'resolved');
 
   assert.equal(count('1b'), 2);
   assert.equal(count('1bF1'), 1);

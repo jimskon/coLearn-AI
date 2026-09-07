@@ -168,6 +168,11 @@ export default function ManageActivitiesPage() {
 
   const [classInfo, setClassInfo] = useState(null);
   const [activities, setActivities] = useState([]);
+  // Which row was just saved, so Update can show that it did something. Without
+  // this, a successful update changes nothing on screen -- the fields already
+  // hold the new values, because they are what you typed -- and the button is
+  // indistinguishable from a dead one. Only failure produced an alert.
+  const [savedActivityName, setSavedActivityName] = useState('');
   const [newActivity, setNewActivity] = useState(emptyUploadActivity);
 
   const [showGoogleModal, setShowGoogleModal] = useState(false);
@@ -637,6 +642,10 @@ export default function ManageActivitiesPage() {
           activityRow.name === updated.name ? { ...activityRow, ...updated } : activityRow
         )
       );
+      setSavedActivityName(activity.name);
+      setTimeout(() => {
+        setSavedActivityName((current) => (current === activity.name ? '' : current));
+      }, 2500);
     } else {
       const err = await res.text();
       console.error('Update failed:', err);
@@ -1026,7 +1035,7 @@ export default function ManageActivitiesPage() {
                     size="sm"
                     onClick={() => handleUpdate(activity)}
                   >
-                    Update
+                    {savedActivityName === activity.name ? 'Saved \u2713' : 'Update'}
                   </Button>
                   <Button
                     variant="info"

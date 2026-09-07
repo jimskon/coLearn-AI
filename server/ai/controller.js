@@ -2030,6 +2030,22 @@ async function evaluateStudentResponse(req, res) {
     feedback = norm.feedback;
     decision = norm.decision;
 
+    // The evaluator's three-state contract defines `revise` as relevant work
+    // that shows some understanding, while `blocked` is reserved for blank,
+    // off-topic, or fundamentally wrong work. An author who explicitly asks
+    // for lenient acceptance has said that work which is not completely wrong
+    // should move on. Enforce that policy here instead of relying on the model
+    // to reconcile it with its default coaching instinct.
+    //
+    // Do not reuse the revision text as green feedback: it may still ask for
+    // optional elaboration. A normal model-accepted response can show positive
+    // feedback; this deterministic policy promotion advances silently.
+    if (policy.lenientAcceptance && decision === 'revise') {
+      accepted = true;
+      decision = 'accepted';
+      feedback = null;
+    }
+
     if (isSoftNitpick(feedback) && !isFatal(feedback)) {
       // Do not block a group merely to fix wording, formatting, naming, or
       // another non-conceptual nitpick. This is especially important when the

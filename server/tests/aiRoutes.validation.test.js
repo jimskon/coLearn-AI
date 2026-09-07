@@ -297,7 +297,7 @@ test('permissive question feedback accepts an on-track core answer without optio
   assert.match(prompt.user, /must be accepted now; do not spend retries on optional elaboration/i);
 });
 
-test('a close answer automatically advances after its retry allowance', async () => {
+test('lenient guidance immediately accepts a relevant revise result', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -325,11 +325,11 @@ test('a close answer automatically advances after its retry allowance', async ()
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'revise');
-    assert.equal(response.body.autoAdvanced, true);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.autoAdvanced, false);
     assert.equal(response.body.accepted, true);
     assert.equal(response.body.canContinue, true);
-    assert.match(response.body.feedback, /specialized classes/i);
+    assert.equal(response.body.feedback, null);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }

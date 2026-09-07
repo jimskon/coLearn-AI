@@ -936,9 +936,9 @@ async function buildStudentResponsePrompt({
     "Use decision=accepted when the answer is sufficient to proceed.",
     "Use decision=revise only when the answer needs a meaningful correction or addition. A blank, incoherent, off-topic, or fundamentally wrong answer is also revise; there is no third student-facing state.",
     "For revise, revision_requirement MUST name the one specific unmet requirement. feedback MUST be a short coaching nudge (1–2 sentences) tied to that requirement. Never frame it as a list of failures.",
-    "For accepted, feedback must be null unless positive feedback is enabled.",
-    concisePositiveFeedback
-      ? "When accepted feedback is enabled, make it exactly one short affirmative sentence."
+    "For accepted, feedback must be null when positive feedback is disabled.",
+    positiveEnabled
+      ? "When positive feedback is enabled and decision=accepted, feedback MUST be one short affirmative sentence confirming what the group did right. Do not ask for more work or suggest a revision."
       : "",
     "DECISION CONSISTENCY RULE: Decide accepted/revise before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. Put that requirement in revision_requirement. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise.",
     effectiveLenientAcceptance
@@ -2135,8 +2135,14 @@ async function evaluateStudentResponse(req, res) {
         : "Add one more concrete detail that directly answers the prompt.";
     }
 
-    if (accepted && !positiveEnabled) {
-      feedback = null;
+    if (accepted) {
+      if (!positiveEnabled) {
+        feedback = null;
+      } else if (!feedback) {
+        // Positive feedback is an explicit author choice.  Do not make its
+        // presence depend on whether the model happened to supply prose.
+        feedback = "Good work — your response addresses the question.";
+      }
     }
 
     // Deliberately NOT falling back to the raw instructor followupprompt here.
@@ -2158,7 +2164,7 @@ async function evaluateStudentResponse(req, res) {
     // erase feedback for a revise decision: a student who is blocked needs to
     // know the concrete reason. Accepted feedback is already suppressed above
     // unless the author explicitly opted into `positive`.
-    if (accepted && isNone(feedbackPrompt) && !policy.requirementsOnly) {
+    if (accepted && !positiveEnabled && isNone(feedbackPrompt) && !policy.requirementsOnly) {
       feedback = null;
     }
 

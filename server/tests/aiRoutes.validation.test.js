@@ -458,7 +458,7 @@ test('aimode lenient does not override a revise result without wording heuristic
   }
 });
 
-test('accepted feedback is silent unless aimode explicitly enables positive feedback', async () => {
+test('activity-level aimode positive preserves accepted feedback', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -477,6 +477,7 @@ test('accepted feedback is silent unless aimode explicitly enables positive feed
       studentAnswer: 'Aggregation parts can exist independently; composition parts normally cannot.',
       feedbackPrompt: 'positive-feedback',
       guidance: 'positive-feedback',
+      activityAiMode: 'positive',
       instanceId: 0,
       groupNum: 1,
       answeredByUserId: 13,
@@ -488,7 +489,37 @@ test('accepted feedback is silent unless aimode explicitly enables positive feed
     assert.equal(response.status, 200);
     assert.equal(response.body.decision, 'accepted');
     assert.equal(response.body.accepted, true);
-    assert.equal(response.body.feedback, null);
+    assert.equal(response.body.feedback, 'Excellent reasoning.');
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
+test('activity-level aimode positive supplies a green confirmation when the model omits one', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{ message: { content: JSON.stringify({ decision: 'accepted', feedback: null }) } }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Explain the lifetime distinction.',
+      studentAnswer: 'Aggregation parts can exist independently; composition parts normally cannot.',
+      feedbackPrompt: 'none',
+      guidance: 'Accept correct answers.',
+      activityAiMode: 'positive',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 3,
+      submissionString: 'Aggregation parts can exist independently; composition parts normally cannot.',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.feedback, 'Good work — your response addresses the question.');
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }

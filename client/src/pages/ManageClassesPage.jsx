@@ -166,24 +166,27 @@ export default function ManageClassesPage() {
         </tbody>
       </Table>
 
-      {/*
-        scrollable because this dialog outgrew the viewport. It gained the Class
-        AI Guidance textarea, its two links and a help paragraph, and without
-        scrolling everything below Description is simply cut off on a short
-        window -- no scrollbar, no indication anything is missing, so the field
-        reads as having been removed. The footer buttons can go the same way.
-      */}
-      <Modal
-        show={showClassModal}
-        onHide={() => !isSaving && setShowClassModal(false)}
-        centered
-        scrollable
-      >
+      <Modal show={showClassModal} onHide={() => !isSaving && setShowClassModal(false)} centered>
         <Modal.Header closeButton={!isSaving}>
           <Modal.Title>{classForm.id ? 'Update Class' : 'Create Class'}</Modal.Title>
         </Modal.Header>
         <Form onSubmit={handleSaveClass}>
-          <Modal.Body>
+          {/*
+            The body scrolls itself rather than via Modal's `scrollable` prop.
+            This dialog outgrew the window when it gained the Class AI Guidance
+            textarea, its two links and a help paragraph -- everything below
+            Description was clipped with no scrollbar, so the field read as
+            having been removed.
+
+            `scrollable` is the obvious fix and it is wrong here: it puts
+            overflow:hidden on .modal-content and expects .modal-body to be a
+            flex child of it, but this dialog has a <form> in between. The form
+            does not flex, the body collapses to nothing, and the whole dialog
+            renders as an empty sliver -- which looks exactly like the modal
+            failing to open. Constraining the body directly does not care what
+            wraps it.
+          */}
+          <Modal.Body style={{ maxHeight: '70vh', overflowY: 'auto' }}>
             <Form.Group className="mb-3" controlId="className">
               <Form.Label>Class Name</Form.Label>
               <Form.Control

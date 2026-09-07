@@ -166,7 +166,19 @@ export default function ManageClassesPage() {
         </tbody>
       </Table>
 
-      <Modal show={showClassModal} onHide={() => !isSaving && setShowClassModal(false)} centered>
+      {/*
+        scrollable because this dialog outgrew the viewport. It gained the Class
+        AI Guidance textarea, its two links and a help paragraph, and without
+        scrolling everything below Description is simply cut off on a short
+        window -- no scrollbar, no indication anything is missing, so the field
+        reads as having been removed. The footer buttons can go the same way.
+      */}
+      <Modal
+        show={showClassModal}
+        onHide={() => !isSaving && setShowClassModal(false)}
+        centered
+        scrollable
+      >
         <Modal.Header closeButton={!isSaving}>
           <Modal.Title>{classForm.id ? 'Update Class' : 'Create Class'}</Modal.Title>
         </Modal.Header>

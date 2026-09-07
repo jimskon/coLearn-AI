@@ -412,8 +412,6 @@ function getHistoryBaseQid(qidRaw) {
   if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return null;
   if (/^test(?:Total|Max|Summary)Score$/i.test(qid)) return null;
 
-  if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
-
   const suffixPatterns = [
     /^(?<base>\d+[A-Za-z]+)AI\d+$/i,
     /^(?<base>\d+[A-Za-z]+)F\d+$/i,
@@ -439,6 +437,8 @@ function getHistoryBaseQid(qidRaw) {
     const match = qid.match(pattern);
     if (match?.groups?.base) return match.groups.base;
   }
+
+  if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
 
   return null;
 }

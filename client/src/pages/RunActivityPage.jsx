@@ -1455,7 +1455,9 @@ export default function RunActivityPage({
         throw e;
       }
 
-      const accepted = data?.accepted !== false;
+      // Fail closed: only an explicit server acceptance completes a question.
+      // A malformed response must not become a silent pass.
+      const accepted = data?.accepted === true;
 
       const feedback =
         typeof data?.feedback === 'string' && data.feedback.trim()
@@ -1508,12 +1510,15 @@ export default function RunActivityPage({
         msg: err?.message,
       });
 
-      // Policy: don't deadlock on AI failure
+      // Do not silently pass work when evaluation is unavailable. Preserve the
+      // normal revise state and let the existing explicit Continue workflow
+      // handle a temporary outage.
       return {
-        accepted: true,
-        feedback: '(AI unavailable; continuing)',
-        canContinue: false,
-        done: true,
+        accepted: false,
+        decision: 'revise',
+        feedback: 'AI feedback is temporarily unavailable. Please try again or continue when that option is available.',
+        canContinue: true,
+        done: false,
         retryCount: null,
         retriesRequired: null,
         skipped: false,

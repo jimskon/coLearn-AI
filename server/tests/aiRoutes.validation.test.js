@@ -302,6 +302,49 @@ test('a revise decision retains feedback when the author uses feedbackprompt non
   }
 });
 
+test('keyboard-mash is rejected for ordinary activities before a permissive model can accept it', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  let modelCalls = 0;
+  __testHooks.openai.chat.completions.create = async () => {
+    modelCalls += 1;
+    return {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            decision: 'accepted',
+            feedback: 'This deliberately permissive mock must not be reached.',
+          }),
+        },
+      }],
+    };
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'Which information belongs to an object rather than its class?',
+      studentAnswer: 'sdsad',
+      feedbackPrompt: 'Distinguish the class blueprint from object-specific values.',
+      guidance: 'Accept equivalent wording and do not be picky.',
+      activityAiMode: 'positive',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 1,
+      submissionString: 'sdsad',
+      dryRun: true,
+    });
+
+    assert.equal(modelCalls, 0);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, false);
+    assert.match(response.body.feedback, /complete response|relevant idea/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('lenient activity guidance produces the two-state, non-picky evaluation policy', async () => {
   const prompt = await buildStudentResponsePrompt({
     questionText: 'Which class is the superclass, and which classes are specialized?',
@@ -336,7 +379,7 @@ test('permissive question feedback accepts an on-track core answer without optio
   assert.match(prompt.user, /must be accepted now; do not spend retries on optional elaboration/i);
 });
 
-test('lenient guidance immediately accepts a relevant revise result', async () => {
+test('lenient guidance does not override a revise result', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -366,16 +409,16 @@ test('lenient guidance immediately accepts a relevant revise result', async () =
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
     assert.equal(response.body.canContinue, true);
-    assert.equal(response.body.feedback, null);
+    assert.match(response.body.feedback, /specialized classes/i);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }
 });
 
-test('aimode lenient immediately accepts a relevant revise result without wording heuristics', async () => {
+test('aimode lenient does not override a revise result without wording heuristics', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({
     choices: [{
@@ -406,10 +449,10 @@ test('aimode lenient immediately accepts a relevant revise result without wordin
     });
 
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.accepted, true);
-    assert.equal(response.body.canContinue, true);
-    assert.equal(response.body.feedback, null);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, false);
+    assert.match(response.body.feedback, /concrete detail|lifetime/i);
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }
@@ -533,10 +576,10 @@ test('a table heading ending in a question mark is evaluated, not treated as a s
 
     assert.equal(modelCalls, 1);
     assert.equal(response.status, 200);
-    assert.equal(response.body.decision, 'accepted');
-    assert.equal(response.body.accepted, true);
-    assert.equal(response.body.canContinue, true);
-    assert.equal(response.body.feedback, null);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.canContinue, false);
+    assert.equal(response.body.feedback, 'Optional elaboration.');
   } finally {
     __testHooks.openai.chat.completions.create = originalCreate;
   }

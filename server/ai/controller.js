@@ -25,8 +25,16 @@ function createStubOpenAI() {
     chat: {
       completions: {
         // Callers request response_format json_object and JSON.parse the content.
+        // An unavailable evaluator must never silently approve an answer. It
+        // returns the normal revise shape so the retry gate can offer the
+        // explicit Continue option instead of treating an outage as success.
         create: async () => ({
-          choices: [{ message: { content: '{"accepted":true}' } }],
+          choices: [{ message: { content: JSON.stringify({
+            decision: 'revise',
+            feedback: 'AI feedback is temporarily unavailable. Please review your response and try again, or continue when that option is available.',
+            revision_requirement: 'Provide a response that addresses the question.',
+            revision_severity: 'normal',
+          }) } }],
         }),
       },
     },
@@ -226,10 +234,9 @@ function normalizeAIResult(obj) {
 // paths did not, so any test that reached them tried to authenticate against
 // the real API and failed the run.
 //
-// A deployment with no key configured is the same situation, and there the
-// right behaviour is to let the group proceed rather than reject their work
-// because the server is misconfigured. Both cases resolve the same way: skip
-// the model, accept, attach no feedback, and say so in the log.
+// A deployment with no key configured must not silently accept work. The stub
+// preserves the normal revise/Continue workflow and clearly tells the group
+// that feedback is unavailable.
 //
 // Tests that DO want the model path set a non-placeholder key and intercept the
 // network (see tests/aiRoutes.validation.test.js, which uses 'live-test-key').
@@ -245,7 +252,7 @@ function warnAiUnconfigured(where) {
   warnedAiUnconfigured = true;
   console.warn(
     `[ai] OPENAI_API_KEY is missing or a placeholder; skipping model calls ` +
-    `(first hit: ${where}). Submissions are accepted without AI feedback.`
+    `(first hit: ${where}). Submissions will remain in revise state until explicitly continued.`
   );
 }
 
@@ -1696,6 +1703,17 @@ function looksGibberish(ans) {
   if (GIBBERISH_PATTERNS.some((r) => r.test(a))) return true;
   if (/^(true|false)$/i.test(a)) return false;
   if (/^[\d\s.+\-*/%()=<>!]+$/.test(a)) return false;
+
+  // High-confidence keyboard mashes that frequently occur while students are
+  // testing a form. Keep this deliberately narrow: ordinary short answers,
+  // identifiers, and acronyms must still go to the evaluator.
+  const compact = a.toLowerCase();
+  if (/^(?:qwe|wer|ert|rty|tyu|yui|uio|iop|poi|oiu|iuy|uyt|ytr|tre|rew|ewq){2,}$/.test(compact)) {
+    return true;
+  }
+  if (/^[asdfghjkl]{5,}$/.test(compact) && /([asdfghjkl])([asdfghjkl])\1/.test(compact)) {
+    return true;
+  }
   return a.length < 2;
 }
 
@@ -2021,12 +2039,18 @@ async function evaluateStudentResponse(req, res) {
 
   const historyContext = promptParts.historyContext;
 
+  // Garbage is never an acceptable answer, regardless of optional activity
+  // guidance or presentation flags such as \aimode{positive}. This guard is
+  // intentionally before the model call so a transient model error or a
+  // permissive model response cannot advance keyboard mashing.
+  if (!answerRaw || looksGibberish(answerRaw)) {
+    accepted = false;
+    decision = 'revise';
+    feedback = 'That does not look like a complete response yet. Re-read the question and state one relevant idea.';
+    return await applyGateAndSend();
+  }
+
   if (policy.requirementsOnly) {
-    if (!answerRaw || looksGibberish(answerRaw)) {
-      accepted = false;
-      feedback = followupQ;
-      return await applyGateAndSend();
-    }
 
     console.log("[REQ_ONLY]", {
       qidHint,
@@ -2036,8 +2060,8 @@ async function evaluateStudentResponse(req, res) {
       mode: "use-ai",
     });
 
-    // For requirements-only questions, still let AI judge the meaning.
-    // We only short-circuit obvious blank/gibberish answers locally.
+    // For requirements-only questions, still let AI judge the meaning after
+    // the universal blank/gibberish safeguard above.
   }
 
   const obviouslyBad = !answerRaw || looksGibberish(answerRaw);
@@ -2094,30 +2118,16 @@ async function evaluateStudentResponse(req, res) {
       }
     }
 
-    // An author who explicitly asks for lenient acceptance has said that
-    // relevant work which is not completely wrong should move on. Enforce that
-    // policy here instead of relying on the model to reconcile it with its
-    // default coaching instinct.
-    //
-    // Do not reuse the revision text as green feedback: it may still ask for
-    // optional elaboration. A normal model-accepted response can show positive
-    // feedback; this deterministic policy promotion advances silently.
-    if (policy.lenientAcceptance && decision === 'revise' && !seriousRevision) {
-      accepted = true;
-      decision = 'accepted';
-      feedback = null;
-    }
+    // `lenient` is an instruction to the evaluator, not a post-processing
+    // override. The prompt tells the model to accept close, relevant work;
+    // once it nevertheless returns `revise`, preserve that decision. A broad
+    // server-side promotion here made incorrect work pass whenever the model
+    // called the needed correction "normal."
 
-    if (isSoftNitpick(feedback) && !isFatal(feedback)) {
-      // Do not block a group merely to fix wording, formatting, naming, or
-      // another non-conceptual nitpick. This is especially important when the
-      // activity author explicitly asked for generous acceptance.
-      if (decision === 'revise') {
-        decision = 'accepted';
-        accepted = true;
-      }
-      feedback = null;
-    }
+    // Do not infer acceptance from the wording of the feedback. The evaluator
+    // owns the accepted/revise decision; this avoids accidentally advancing a
+    // wrong answer just because its feedback happened to mention formatting,
+    // naming, or another soft concern.
 
     if (!accepted && (!feedback || isGenericRequirementsFeedback(feedback))) {
       feedback = policy.requirementsOnly

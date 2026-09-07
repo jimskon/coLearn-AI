@@ -40,6 +40,7 @@ CREATE TABLE `activity_instances` (
   `completed_groups` int(11) NOT NULL DEFAULT 0,
   `progress_status` enum('not_started','in_progress','completed') NOT NULL DEFAULT 'not_started',
   `active_rotation_mode` varchar(16) NOT NULL DEFAULT 'submit',
+  `sandbox_owner_id` int(11) DEFAULT NULL,
   `section_timer_key` varchar(64) DEFAULT NULL,
   `section_timer_duration_minutes` int(11) DEFAULT NULL,
   `section_timer_started_at` datetime DEFAULT NULL,

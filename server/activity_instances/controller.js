@@ -5,6 +5,7 @@ const { authorize } = require('../utils/googleAuth');
 const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
 const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
+const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
@@ -1534,10 +1535,15 @@ async function setupMultipleGroupInstances(req, res) {
     const existingAttemptCondition = isTest
       ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
       : '';
+    // Excluding sandboxes explicitly as well as by group_number. A sandbox from
+    // an older build still holds a real number, and one sitting on number 1
+    // makes this refuse to create groups at all -- "Groups already exist for
+    // this activity" for an activity with no groups.
     const [[existingAttempt]] = await conn.query(
       `SELECT id
          FROM activity_instances
         WHERE course_id = ? AND activity_id = ? AND group_number = 1
+          AND COALESCE(active_rotation_mode, '') <> 'sandbox'
           ${existingAttemptCondition}
         LIMIT 1`,
       [courseId, activityId],
@@ -1598,21 +1604,25 @@ async function setupMultipleGroupInstances(req, res) {
       computedTotalGroups = 1;
     }
 
-    // 🔥 IMPORTANT: you said you want to back out if group 1 exists.
-    // That means you should NOT be deleting old instances anymore.
-    // You can either delete this whole block, or keep it as dead code.
-    // I'd remove it to avoid accidental overwrites.
-
-    // Remove existing instances + members for this course+activity
-    // const [oldInstances] = await conn.query(
-    //   `SELECT id FROM activity_instances WHERE course_id = ? AND activity_id = ?`,
-    //   [courseId, activityId]
-    // );
-    // const instanceIds = oldInstances.map(r => r.id);
-    // if (instanceIds.length > 0) {
-    //   await conn.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
-    //   await conn.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
-    // }
+    // Clear the previous run's leftovers before numbering this one.
+    //
+    // Groups are numbered 1..N from scratch on every setup, so a class set up
+    // once for 24 test-takers and again as 6 groups of 5 keeps 18 rows nobody
+    // will ever open. They have no members, so they render on the roster as
+    // groups whose students are unknown -- the empty cards an instructor then
+    // has to delete by hand, one button at a time.
+    //
+    // The delete that used to live here removed every instance for the course
+    // and activity, student work included, which is why it was commented out
+    // rather than fixed. This one removes only instances that satisfy the
+    // shared abandoned test -- no members, no responses, no drafts, never
+    // submitted, never graded, no progress -- so it cannot reach anything a
+    // student touched. The predicate is re-checked inside the DELETE, so a
+    // group joined mid-setup survives.
+    const prunedAbandoned = await deleteAbandonedInstances(conn, { courseId, activityId });
+    if (prunedAbandoned) {
+      console.log('[SETUP] pruned abandoned instances', { courseId, activityId, prunedAbandoned });
+    }
 
     async function insertInstance({ group_number }) {
       const [instanceResult] = await conn.query(
@@ -2136,6 +2146,12 @@ async function getInstancesForActivityInCourse(req, res) {
         ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
         : '';
 
+    // A Test Run opens a private sandbox instance for its author and takes the
+    // next free group number to do it. That is not a group, and listing it
+    // beside the real ones is how an author's own preview ends up looking like
+    // a student's abandoned attempt.
+    const sandboxFilter = "AND COALESCE(active_rotation_mode, '') <> 'sandbox'";
+
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
 	              group_number,
@@ -2164,6 +2180,7 @@ async function getInstancesForActivityInCourse(req, res) {
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
+         ${sandboxFilter}
          ${unscheduledPlaceholderFilter}
        ORDER BY group_number`,
       [courseId, activityId]

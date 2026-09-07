@@ -328,7 +328,9 @@ export default function useRunActivityData({
         const activitycontext = stripHtml(activityContextBlock?.content || '');
         const studentlevel = stripHtml(studentLevelBlock?.content || '');
         const aicodeguidance = stripHtml(aiCodeGuideBlock?.content || '');
-        const language = stripHtml(languageBlock?.content || meta.language || 'English') || 'English';
+        // Left empty when the activity names no language, so the server can
+        // apply DEFAULT_ACTIVITY_LANGUAGE. Defaulting here would hide the gap.
+        const language = stripHtml(languageBlock?.content || meta.language || '');
 
         setActivity((prev) => ({
           ...prev,

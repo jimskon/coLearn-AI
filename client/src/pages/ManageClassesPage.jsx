@@ -44,14 +44,33 @@ export default function ManageClassesPage() {
     setShowClassModal(true);
   };
 
+  // Every field is forced to a string before it reaches the form.
+  //
+  // `|| ''` only guards null and undefined -- it passes anything else straight
+  // through, and the dialog then calls .trim() on ai_guidance. A value that is
+  // not a string (a Buffer serialised as {type:'Buffer',data:[...]} when the
+  // column is BLOB rather than TEXT, for instance) has no .trim, the render
+  // throws, and React unmounts the subtree. The dialog simply never appears,
+  // with nothing on screen to say why. Create Class was unaffected because it
+  // starts from '' and never reaches that call.
+  const asText = (value) => {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    // A Buffer that has been through JSON, which is how a BLOB column arrives.
+    if (Array.isArray(value?.data)) {
+      try { return new TextDecoder().decode(new Uint8Array(value.data)); } catch { return ''; }
+    }
+    return String(value);
+  };
+
   const openEditModal = (classRow) => {
     setClassForm({
       id: classRow.id,
-      name: classRow.name || '',
-      level: classRow.level || '',
-      topic_domain: classRow.topic_domain || '',
-      description: classRow.description || '',
-      ai_guidance: classRow.ai_guidance || '',
+      name: asText(classRow.name),
+      level: asText(classRow.level),
+      topic_domain: asText(classRow.topic_domain),
+      description: asText(classRow.description),
+      ai_guidance: asText(classRow.ai_guidance),
       demo_mode: Boolean(classRow.demo_mode),
     });
     setModalError('');
@@ -171,7 +190,22 @@ export default function ManageClassesPage() {
           <Modal.Title>{classForm.id ? 'Update Class' : 'Create Class'}</Modal.Title>
         </Modal.Header>
         <Form onSubmit={handleSaveClass}>
-          <Modal.Body>
+          {/*
+            The body scrolls itself rather than via Modal's `scrollable` prop.
+            This dialog outgrew the window when it gained the Class AI Guidance
+            textarea, its two links and a help paragraph -- everything below
+            Description was clipped with no scrollbar, so the field read as
+            having been removed.
+
+            `scrollable` is the obvious fix and it is wrong here: it puts
+            overflow:hidden on .modal-content and expects .modal-body to be a
+            flex child of it, but this dialog has a <form> in between. The form
+            does not flex, the body collapses to nothing, and the whole dialog
+            renders as an empty sliver -- which looks exactly like the modal
+            failing to open. Constraining the body directly does not care what
+            wraps it.
+          */}
+          <Modal.Body style={{ maxHeight: '70vh', overflowY: 'auto' }}>
             <Form.Group className="mb-3" controlId="className">
               <Form.Label>Class Name</Form.Label>
               <Form.Control
@@ -232,11 +266,11 @@ export default function ManageClassesPage() {
                   onClick={() =>
                     setClassForm((prev) => ({ ...prev, ai_guidance: DEFAULT_CLASS_GUIDANCE }))
                   }
-                  disabled={(classForm.ai_guidance || '').trim().length > 0}
+                  disabled={String(classForm.ai_guidance || '').trim().length > 0}
                 >
                   Copy the default in to edit it
                 </Button>
-                {(classForm.ai_guidance || '').trim().length > 0 ? (
+                {String(classForm.ai_guidance || '').trim().length > 0 ? (
                   <Button
                     variant="link"
                     size="sm"

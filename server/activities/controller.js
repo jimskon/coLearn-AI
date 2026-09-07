@@ -1,5 +1,7 @@
 // server/activities/controller.js
 const db = require('../db');
+const { deleteAbandonedSandboxes } = require('../utils/emptyInstances');
+const { ensureSandboxOwnerSchema } = require('../utils/sandboxOwnerSchema');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const {
   loadActivitySourceById,
@@ -555,6 +557,18 @@ exports.ensureSandboxInstance = async (req, res) => {
     return res.status(403).json({ error: 'Only instructors and creators can open the sandbox.' });
   }
 
+  // Before anything reads sandbox_owner_id. Migration 021 adds it too; doing it
+  // here as well means the code and the schema can deploy in either order.
+  try {
+    await ensureSandboxOwnerSchema();
+  } catch (err) {
+    console.error('ensureSandboxOwnerSchema failed:', err);
+    return res.status(500).json({
+      error: 'Could not prepare the sandbox. The activity_instances table is missing sandbox_owner_id '
+        + 'and it could not be added automatically -- run migrations/021.',
+    });
+  }
+
   const conn = await db.getConnection();
   const lockName = `activitySandbox:${activityId}:${userId}`;
 
@@ -592,41 +606,71 @@ exports.ensureSandboxInstance = async (req, res) => {
 
     const courseId = Number(course.id);
 
+    // Find this author's sandbox by sandbox_owner_id, not active_student_id.
+    //
+    // active_student_id is a rotation slot, not an identity: it is cleared to
+    // NULL when the author leaves the sandbox, and on group submit. Matching on
+    // it meant the reuse lookup missed every time after the first visit, so a
+    // single activity collected one abandoned sandbox instance per Test Run --
+    // dozens of them, each taking a group number and appearing on the roster as
+    // a group whose student is unknown.
     const [[existing]] = await conn.query(
       `SELECT id AS instance_id
          FROM activity_instances
         WHERE activity_id = ?
           AND course_id = ?
-          AND active_student_id = ?
+          AND sandbox_owner_id = ?
           AND active_rotation_mode = 'sandbox'
         ORDER BY id ASC
         LIMIT 1`,
       [activityId, courseId, userId]
     );
 
+    // Opening a Test Run is also when the previous ones get tidied. Bounded to
+    // this author's own abandoned sandboxes for this activity, so a colleague
+    // with a sandbox open right now is untouched.
+    const sweptExisting = await deleteAbandonedSandboxes(conn, {
+      courseId,
+      activityId,
+      ownerId: userId,
+      exceptId: existing?.instance_id || null,
+    });
+    if (sweptExisting) {
+      console.log('[SANDBOX] swept abandoned sandboxes', { activityId, courseId, userId, sweptExisting });
+    }
+
     if (existing?.instance_id) {
       return res.json({ instanceId: Number(existing.instance_id), created: false });
     }
 
-    const [[nextRow]] = await conn.query(
-      `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_group_number
-         FROM activity_instances
-        WHERE activity_id = ? AND course_id = ?`,
-      [activityId, courseId]
-    );
-
+    // group_number 0 means "not a group", which is the convention the other
+    // sandbox endpoint already uses and which every roster query already
+    // filters on. Taking MAX+1 instead made the sandbox a real group number,
+    // and three separate things count those: the setup gate refuses to create
+    // groups when number 1 exists, new groups are numbered after the highest,
+    // and smart-add looks for a group with space. So a hidden sandbox at
+    // number 1 silently blocked group setup for the whole activity, which is
+    // the leftover that outlived hiding it from the roster.
     const [result] = await conn.query(
       `INSERT INTO activity_instances
          (activity_id, course_id, status, group_number, total_groups, completed_groups,
-          progress_status, active_student_id, active_rotation_mode)
-       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, 'sandbox')`,
-      [activityId, courseId, Number(nextRow?.next_group_number) || 1, userId]
+          progress_status, active_student_id, sandbox_owner_id, active_rotation_mode)
+       VALUES (?, ?, 'in_progress', 0, 0, 0, 'not_started', ?, ?, 'sandbox')`,
+      [activityId, courseId, userId, userId]
     );
 
     return res.status(201).json({ instanceId: Number(result.insertId), created: true });
   } catch (err) {
     console.error('ensureSandboxInstance error:', err);
-    return res.status(500).json({ error: 'Failed to open activity sandbox.' });
+    // "Failed to open activity sandbox." on its own sent us hunting through
+    // three sandbox endpoints for what was a missing column. Name the cause.
+    const detail = err?.code === 'ER_BAD_FIELD_ERROR'
+      ? ' The database is missing a column this build expects; run the pending migrations.'
+      : '';
+    return res.status(500).json({
+      error: `Failed to open activity sandbox.${detail}`,
+      code: err?.code || null,
+    });
   } finally {
     try {
       await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);

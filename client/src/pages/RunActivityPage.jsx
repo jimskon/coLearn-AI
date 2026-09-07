@@ -1417,7 +1417,7 @@ export default function RunActivityPage({
       activityAiMode: activity?.meta?.aiMode || 'no-positive',
       questionAiMode: questionBlock?.aiMode || '',
       hasTableResponse: questionBlock?.hasTableResponse === true,
-      activityLanguage: activity?.language || activity?.meta?.language || 'English',
+      activityLanguage: activity?.language || activity?.meta?.language || '',
       codeContext,
 
       // ✅ retry gate inputs
@@ -2371,7 +2371,7 @@ export default function RunActivityPage({
             guidance: activity?.aicodeguidance || '',
             activityAiMode: activity?.meta?.aiMode || 'no-positive',
             questionAiMode: block?.aiMode || '',
-            activityLanguage: activity?.language || activity?.meta?.language || 'English',
+            activityLanguage: activity?.language || activity?.meta?.language || '',
             instanceId: Number(instanceId),
             groupNum,
             answeredByUserId: Number(user?.id),

@@ -25,9 +25,14 @@ async function isTestActivity(conn, activityId) {
 async function createNewTestInstance(conn, activityId, courseId) {
   // next group_number
   const [[{ next_num }]] = await conn.query(
+    // Sandboxes are not groups. Counting them made the first real group come
+    // out numbered 13 on an activity whose author had previewed it a dozen
+    // times.
     `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_num
        FROM activity_instances
-      WHERE activity_id = ? AND course_id = ?`,
+      WHERE activity_id = ? AND course_id = ?
+        AND COALESCE(active_rotation_mode, '') <> 'sandbox'
+        AND COALESCE(group_number, 1) <> 0`,
     [activityId, courseId]
   );
 
@@ -117,6 +122,10 @@ async function pickGroupWithSpace(conn, activityId, courseId, maxSize = 4) {
       FROM activity_instances ai
       LEFT JOIN group_members gm ON gm.activity_instance_id = ai.id
      WHERE ai.activity_id = ? AND ai.course_id = ? AND ai.status = 'in_progress'
+       -- An author's sandbox looks like an empty group with room to spare, so
+       -- without this a real student could be added straight into it.
+       AND COALESCE(ai.active_rotation_mode, '') <> 'sandbox'
+       AND COALESCE(ai.group_number, 1) <> 0
      GROUP BY ai.id
      ORDER BY size ASC, ai.group_number ASC
     `,
@@ -131,9 +140,14 @@ async function pickGroupWithSpace(conn, activityId, courseId, maxSize = 4) {
 
 async function createNewGroup(conn, activityId, courseId) {
   const [[{ next_num }]] = await conn.query(
+    // Sandboxes are not groups. Counting them made the first real group come
+    // out numbered 13 on an activity whose author had previewed it a dozen
+    // times.
     `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_num
        FROM activity_instances
-      WHERE activity_id = ? AND course_id = ?`,
+      WHERE activity_id = ? AND course_id = ?
+        AND COALESCE(active_rotation_mode, '') <> 'sandbox'
+        AND COALESCE(group_number, 1) <> 0`,
     [activityId, courseId]
   );
 

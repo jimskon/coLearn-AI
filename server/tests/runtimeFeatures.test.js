@@ -34,5 +34,10 @@ test('getRuntimeFeatureConfig wraps features for API responses', () => {
       remoteCpp: false,
       remotePython: true,
     },
+    // Deployment defaults ride alongside the switches: values the client needs
+    // before it has parsed an activity. Unset here, so language is English.
+    defaults: {
+      language: 'English',
+    },
   });
 });

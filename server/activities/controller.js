@@ -643,19 +643,20 @@ exports.ensureSandboxInstance = async (req, res) => {
       return res.json({ instanceId: Number(existing.instance_id), created: false });
     }
 
-    const [[nextRow]] = await conn.query(
-      `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_group_number
-         FROM activity_instances
-        WHERE activity_id = ? AND course_id = ?`,
-      [activityId, courseId]
-    );
-
+    // group_number 0 means "not a group", which is the convention the other
+    // sandbox endpoint already uses and which every roster query already
+    // filters on. Taking MAX+1 instead made the sandbox a real group number,
+    // and three separate things count those: the setup gate refuses to create
+    // groups when number 1 exists, new groups are numbered after the highest,
+    // and smart-add looks for a group with space. So a hidden sandbox at
+    // number 1 silently blocked group setup for the whole activity, which is
+    // the leftover that outlived hiding it from the roster.
     const [result] = await conn.query(
       `INSERT INTO activity_instances
          (activity_id, course_id, status, group_number, total_groups, completed_groups,
           progress_status, active_student_id, sandbox_owner_id, active_rotation_mode)
-       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, ?, 'sandbox')`,
-      [activityId, courseId, Number(nextRow?.next_group_number) || 1, userId, userId]
+       VALUES (?, ?, 'in_progress', 0, 0, 0, 'not_started', ?, ?, 'sandbox')`,
+      [activityId, courseId, userId, userId]
     );
 
     return res.status(201).json({ instanceId: Number(result.insertId), created: true });

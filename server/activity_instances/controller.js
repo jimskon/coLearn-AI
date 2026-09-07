@@ -1535,10 +1535,15 @@ async function setupMultipleGroupInstances(req, res) {
     const existingAttemptCondition = isTest
       ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
       : '';
+    // Excluding sandboxes explicitly as well as by group_number. A sandbox from
+    // an older build still holds a real number, and one sitting on number 1
+    // makes this refuse to create groups at all -- "Groups already exist for
+    // this activity" for an activity with no groups.
     const [[existingAttempt]] = await conn.query(
       `SELECT id
          FROM activity_instances
         WHERE course_id = ? AND activity_id = ? AND group_number = 1
+          AND COALESCE(active_rotation_mode, '') <> 'sandbox'
           ${existingAttemptCondition}
         LIMIT 1`,
       [courseId, activityId],

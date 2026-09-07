@@ -1,6 +1,7 @@
 // server/activities/controller.js
 const db = require('../db');
 const { deleteAbandonedSandboxes } = require('../utils/emptyInstances');
+const { ensureSandboxOwnerSchema } = require('../utils/sandboxOwnerSchema');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const {
   loadActivitySourceById,
@@ -556,6 +557,18 @@ exports.ensureSandboxInstance = async (req, res) => {
     return res.status(403).json({ error: 'Only instructors and creators can open the sandbox.' });
   }
 
+  // Before anything reads sandbox_owner_id. Migration 021 adds it too; doing it
+  // here as well means the code and the schema can deploy in either order.
+  try {
+    await ensureSandboxOwnerSchema();
+  } catch (err) {
+    console.error('ensureSandboxOwnerSchema failed:', err);
+    return res.status(500).json({
+      error: 'Could not prepare the sandbox. The activity_instances table is missing sandbox_owner_id '
+        + 'and it could not be added automatically -- run migrations/021.',
+    });
+  }
+
   const conn = await db.getConnection();
   const lockName = `activitySandbox:${activityId}:${userId}`;
 
@@ -648,7 +661,15 @@ exports.ensureSandboxInstance = async (req, res) => {
     return res.status(201).json({ instanceId: Number(result.insertId), created: true });
   } catch (err) {
     console.error('ensureSandboxInstance error:', err);
-    return res.status(500).json({ error: 'Failed to open activity sandbox.' });
+    // "Failed to open activity sandbox." on its own sent us hunting through
+    // three sandbox endpoints for what was a missing column. Name the cause.
+    const detail = err?.code === 'ER_BAD_FIELD_ERROR'
+      ? ' The database is missing a column this build expects; run the pending migrations.'
+      : '';
+    return res.status(500).json({
+      error: `Failed to open activity sandbox.${detail}`,
+      code: err?.code || null,
+    });
   } finally {
     try {
       await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);

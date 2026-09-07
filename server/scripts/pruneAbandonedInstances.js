@@ -24,6 +24,7 @@
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const db = require('../db');
+const { ensureSandboxOwnerSchema } = require('../utils/sandboxOwnerSchema');
 const {
   findAbandonedInstances,
   deleteAbandonedInstances,
@@ -143,6 +144,10 @@ async function explain(scope) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const scope = { courseId: args.courseId, activityId: args.activityId };
+
+  // The sweep filters on sandbox_owner_id, so make sure it exists before a
+  // report claims a clean database when the query simply could not run.
+  await ensureSandboxOwnerSchema();
 
   if (args.explain) {
     await explain(scope);

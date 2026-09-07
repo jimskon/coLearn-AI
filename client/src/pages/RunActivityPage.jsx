@@ -1347,8 +1347,26 @@ export default function RunActivityPage({
     } = {}
   ) {
     // ✅ TEST MODE: no AI feedback at all
-    if (isTestMode) return { accepted: true, feedback: null };
-    if (!canRunAI) return { accepted: true, feedback: null };
+    if (isTestMode) {
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
+    }
+    if (!canRunAI) {
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
+    }
 
     const qid = `${questionBlock.groupId}${questionBlock.id}`;
     const qText = getQuestionText(questionBlock, qid);
@@ -1360,7 +1378,14 @@ export default function RunActivityPage({
       isNoAI(questionBlock?.feedback?.[0])
     ) {
       console.log('[EVAL SKIP] AI disabled for question', { qid });
-      return { accepted: true, feedback: null };
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
     }
 
     const codeContext = [

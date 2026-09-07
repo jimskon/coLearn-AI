@@ -281,6 +281,22 @@ test('lenient activity guidance produces the three-state, non-picky evaluation p
   assert.match(prompt.user, /retry policy/i);
 });
 
+test('permissive question feedback accepts an on-track core answer without optional elaboration', async () => {
+  const prompt = await buildStudentResponsePrompt({
+    questionText: 'What difference in object lifetime separates aggregation and composition?',
+    studentAnswer: 'In composition, parts normally die with the whole; aggregation parts can remain independently.',
+    feedbackPrompt: 'Be permissive. If the answer is mostly on track, give positive feedback, briefly explain anything missing or unclear, and move on.',
+    guidance: '',
+    instanceId: 0,
+    qid: '4a',
+    retriesRequired: 3,
+  });
+
+  assert.match(prompt.sys, /LENIENT ACCEPTANCE POLICY/i);
+  assert.match(prompt.sys, /set decision=accepted and let the group move on/i);
+  assert.match(prompt.user, /must be accepted now; do not spend retries on optional elaboration/i);
+});
+
 test('a close answer automatically advances after its retry allowance', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
   __testHooks.openai.chat.completions.create = async () => ({

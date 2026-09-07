@@ -844,13 +844,16 @@ async function buildStudentResponsePrompt({
 }) {
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
   const activityGuide = stripHtml(guidance || "");
+  const questionGuide = stripHtml(feedbackPrompt || "");
   // The normal route passes the parsed policy, but this helper is also used
   // directly by validation/tests. Keep the activity's plain-language policy
-  // effective in both paths.
+  // effective in both paths. Question guidance is allowed to make one prompt
+  // more permissive than the activity default.
   const effectiveLenientAcceptance =
-    lenientAcceptance || derivePolicyFromGuidance(activityGuide).lenientAcceptance;
+    lenientAcceptance ||
+    derivePolicyFromGuidance(activityGuide).lenientAcceptance ||
+    derivePolicyFromGuidance(questionGuide).lenientAcceptance;
   const classGuide = stripHtml(classGuidance || "") || DEFAULT_CLASS_GUIDANCE;
-  const questionGuide = stripHtml(feedbackPrompt || "");
   const historyContext = await buildAttemptHistoryContext({
     instanceId,
     qid: qid || "",
@@ -907,7 +910,7 @@ async function buildStudentResponsePrompt({
       : "",
     "DECISION CONSISTENCY RULE: Decide accepted/revise/blocked before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise or decision=blocked.",
     effectiveLenientAcceptance
-      ? "LENIENT ACCEPTANCE POLICY: The instructor explicitly does not want picky grading. Accept relevant answers that show basic conceptual understanding even when wording is informal, incomplete, imprecise, or missing a secondary detail. Prefer revise over blocked whenever the group is on track."
+      ? "LENIENT ACCEPTANCE POLICY: The instructor explicitly does not want picky grading. If the answer is relevant and demonstrates the core idea, set decision=accepted and let the group move on—even when wording is informal, incomplete, imprecise, or missing a secondary detail. Do not use revise merely to request an optional example, a fuller explanation, improved wording, or an elaboration the prompt did not require."
       : "",
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
@@ -916,7 +919,9 @@ async function buildStudentResponsePrompt({
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
     retryLimit != null
-      ? `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). On the final allowed attempt, use revise rather than blocked for any relevant answer that shows basic understanding.`
+      ? effectiveLenientAcceptance
+        ? `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). Under the instructor's lenient policy, accept any on-track answer with the core idea rather than spending a retry on optional elaboration.`
+        : `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). On the final allowed attempt, use revise rather than blocked for any relevant answer that shows basic understanding.`
       : "",
     "When rejecting, use warm, collaborative language. Prefer 'You're on the right track — what about...' or 'Good start. Can you add...' over phrasing like 'you need to' or 'this is missing'.",
     "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting and use feedback to affirm what they got right.",
@@ -970,10 +975,12 @@ async function buildStudentResponsePrompt({
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
     "Stuck-prevention rule: if this is a later attempt and the group is close, accept; if not close, tell them exactly what to add in language they can act on immediately.",
     effectiveLenientAcceptance
-      ? "Lenient acceptance rule: accept anything relevant that is not clearly wrong. Do not reject for spelling, capitalization, informal wording, or a missing secondary detail. A close answer should be accepted or, at most, marked revise — never blocked."
+      ? "Lenient acceptance rule: accept anything relevant that is not clearly wrong. Do not reject for spelling, capitalization, informal wording, or a missing secondary detail. A close answer that has the core idea must be accepted; do not keep the group for optional elaboration."
       : "",
     retryLimit != null
-      ? `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. When the group is on track, use revise for a minor omission rather than blocked; after the retry limit, revise answers will be allowed to move on automatically.`
+      ? effectiveLenientAcceptance
+        ? `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. Under the instructor's lenient policy, an on-track answer with the core idea must be accepted now; do not spend retries on optional elaboration.`
+        : `Retry rule: this is attempt ${priorAttempts + 1} against a ${retryLimit}-retry policy. When the group is on track, use revise for a minor omission rather than blocked; after the retry limit, revise answers will be allowed to move on automatically.`
       : "",
     "Rejection rule: name the exact missing or incorrect requirement from the instructor feedbackprompt. Do not use generic feedback such as saying the response should be more complete or well explained.",
     "Coaching tone rule: feedback should feel like a supportive challenge from a peer, not a checklist from an evaluator. The group should feel encouraged to refine, not pressured to satisfy the AI.",
@@ -1703,7 +1710,10 @@ function derivePolicyFromGuidance(guidanceText = "") {
   const noExtras = /do not require extra features|do not require extras/.test(g);
   const lenientAcceptance =
     /don'?t be picky|not\s+(?:completely|clearly)\s+wrong|accept\s+(?:anything|any(?:thing| answer)|equivalent wording|close enough)/.test(g) ||
-    /accept\s+(?:a|an)?\s*(?:somewhat|mostly|reasonably)\s+(?:on[- ]?track|correct|relevant)/.test(g);
+    /accept\s+(?:a|an)?\s*(?:somewhat|mostly|reasonably)\s+(?:on[- ]?track|correct|relevant)/.test(g) ||
+    /\bbe\s+permissive\b/.test(g) ||
+    /\b(?:answer|response|work)\s+is\s+(?:somewhat|mostly|reasonably)\s+on[- ]?track\b/.test(g) ||
+    /\bmostly\s+on[- ]?track\b[\s\S]{0,160}\bmove\s+on\b/.test(g);
 
   const followupGate = explicitFU
     ? explicitFU.toLowerCase()
@@ -1761,6 +1771,7 @@ function getEffectivePolicy(activityGuide, questionGuide) {
     lenientAcceptance: pick(
       "lenientAcceptance",
       "don'?t be picky|not\\s+(?:completely|clearly)\\s+wrong|accept\\s+(?:anything|any(?:thing| answer)|equivalent wording|close enough)|accept\\s+(?:a|an)?\\s*(?:somewhat|mostly|reasonably)\\s+(?:on[- ]?track|correct|relevant)"
+      + "|\\bbe\\s+permissive\\b|\\b(?:answer|response|work)\\s+is\\s+(?:somewhat|mostly|reasonably)\\s+on[- ]?track\\b|\\bmostly\\s+on[- ]?track\\b[\\s\\S]{0,160}\\bmove\\s+on\\b"
     ),
   };
 }

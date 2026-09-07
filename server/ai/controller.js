@@ -1938,7 +1938,14 @@ async function evaluateStudentResponse(req, res) {
 
   if (qid && instanceId && await hasAcceptedHistoryLock(instanceId, qid)) {
     accepted = true;
-    feedback = null;
+    feedback = isPositiveFeedbackEnabled(
+      guidance,
+      followupPrompt,
+      activityAiMode,
+      questionAiMode,
+    )
+      ? "Good work - your response addresses the question."
+      : null;
     return await applyGateAndSend();
   }
 

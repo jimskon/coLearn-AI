@@ -1037,3 +1037,47 @@ test('response evaluation short-circuits when the question is already accepted',
     global.fetch = originalFetch;
   }
 });
+
+test('accepted-history short-circuit honors activity-level positive feedback', async () => {
+  const originalQuery = db.query;
+  const originalFetch = global.fetch;
+
+  db.query = async () => [[
+    { question_id: '1aAF', response: 'resolved' },
+    { question_id: '1aFM', response: 'accepted' },
+    { question_id: '1aS', response: 'complete' },
+  ]];
+
+  global.fetch = async (input, init) => {
+    const url = typeof input === 'string' ? input : input?.url || '';
+    if (url.includes('api.openai.com')) {
+      throw new Error('OpenAI should not be called for an accepted question');
+    }
+    return originalFetch(input, init);
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      qid: '1a',
+      questionText: 'What does the loop do?',
+      studentAnswer: 'I changed my answer, but this question was already accepted.',
+      sampleResponse: 'It repeats until the condition changes.',
+      feedbackPrompt: 'Focus on the repetition.',
+      guidance: 'Follow-ups: default',
+      activityAiMode: 'positive',
+      instanceId: 123,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 0,
+      submissionString: 'I changed my answer, but this question was already accepted.',
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, true);
+    assert.equal(response.body.decision, 'accepted');
+    assert.equal(response.body.feedback, 'Good work - your response addresses the question.');
+  } finally {
+    db.query = originalQuery;
+    global.fetch = originalFetch;
+  }
+});

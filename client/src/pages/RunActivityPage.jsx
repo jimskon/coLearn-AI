@@ -2854,6 +2854,21 @@ export default function RunActivityPage({
         Number.isFinite(resultCompletedGroups) &&
         resultCompletedGroups > priorCompletedGroups;
 
+      console.log('[GROUP SUBMIT PROGRESS]', {
+        instanceId,
+        submitGroupIndex,
+        groupNum,
+        parsedGroups: Array.isArray(groups) ? groups.length : null,
+        priorCompletedGroups,
+        resultCompletedGroups,
+        advancedByServer,
+        progressStatus: result?.progress_status || null,
+        activeStudentId: result?.activeStudentId ?? null,
+        canAdvance,
+        blocked,
+        unanswered: attempt.unanswered,
+      });
+
        setActivity((prev) => (
         prev
           ? {

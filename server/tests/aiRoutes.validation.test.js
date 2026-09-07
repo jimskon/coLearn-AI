@@ -263,6 +263,45 @@ test('dry-run response evaluation skips persistent retry bookkeeping', async () 
   assert.equal(typeof response.body.feedback, 'string');
 });
 
+test('a revise decision retains feedback when the author uses feedbackprompt none', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  __testHooks.openai.chat.completions.create = async () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          decision: 'revise',
+          feedback: 'The bottom compartment should list operations or methods.',
+          revision_requirement: 'Identify the bottom UML compartment as operations or methods.',
+          revision_severity: 'normal',
+        }),
+      },
+    }],
+  });
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: 'What is recorded in the top, middle, and bottom compartments of a UML class box?',
+      studentAnswer: 'top: class name; middle: attributes; bottom: love',
+      sampleResponse: 'Top: class name. Middle: attributes. Bottom: operations.',
+      feedbackPrompt: 'none',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 15,
+      retriesRequired: 1,
+      submissionString: 'uml-box-wrong-bottom',
+      dryRun: true,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.accepted, false);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.canContinue, false);
+    assert.match(response.body.feedback, /bottom compartment/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('lenient activity guidance produces the two-state, non-picky evaluation policy', async () => {
   const prompt = await buildStudentResponsePrompt({
     questionText: 'Which class is the superclass, and which classes are specialized?',

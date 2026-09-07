@@ -1481,7 +1481,11 @@ export default function RunActivityPage({
 
       return {
         accepted,
-        feedback: timerExpired ? null : feedback,
+        // A timer expiring must not hide revision guidance.  It only means the
+        // student may explicitly continue despite a revise decision.  Hiding
+        // the message here created the confusing "blocked with no feedback"
+        // state for an incorrect answer.
+        feedback,
         canContinue: timerExpired ? true : canContinue,
         retryCount,
         retriesRequired: retriesRequiredOut,

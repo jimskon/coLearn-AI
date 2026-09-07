@@ -2140,7 +2140,11 @@ async function evaluateStudentResponse(req, res) {
     // `feedback`, so a well-formed follow-up still reaches the group. If the
     // model produced nothing at all, `feedback` simply stays empty and no
     // guidance box is rendered.
-    if (isNone(feedbackPrompt) && !policy.requirementsOnly) {
+    // `none` means there is no author-supplied follow-up prompt. It must not
+    // erase feedback for a revise decision: a student who is blocked needs to
+    // know the concrete reason. Accepted feedback is already suppressed above
+    // unless the author explicitly opted into `positive`.
+    if (accepted && isNone(feedbackPrompt) && !policy.requirementsOnly) {
       feedback = null;
     }
 

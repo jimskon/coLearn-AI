@@ -2077,7 +2077,15 @@ async function evaluateStudentResponse(req, res) {
     // emits `blocked` without one of the four required serious reasons.
     // This is structured-contract validation, not keyword matching against
     // the model's prose feedback.
-    if (decision === 'blocked' && !obviouslyBad && !norm.blockedReason) {
+    // Requirements-only questions deliberately retain their strict local
+    // guard: an old-style rejection there must not be downgraded to `revise`,
+    // because a zero-retry question auto-advances revise responses.
+    if (
+      decision === 'blocked'
+      && !policy.requirementsOnly
+      && !obviouslyBad
+      && !norm.blockedReason
+    ) {
       decision = 'revise';
       accepted = false;
     }

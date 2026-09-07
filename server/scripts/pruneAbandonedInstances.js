@@ -27,19 +27,22 @@ const db = require('../db');
 const {
   findAbandonedInstances,
   deleteAbandonedInstances,
+  explainInstances,
+  identifyScopeNumber,
 } = require('../utils/emptyInstances');
 
 function parseArgs(argv) {
-  const args = { apply: false, courseId: null, activityId: null, verbose: false };
+  const args = { apply: false, courseId: null, activityId: null, verbose: false, explain: false };
   for (const raw of argv) {
     const arg = String(raw);
     if (arg === '--apply') args.apply = true;
     else if (arg === '--verbose') args.verbose = true;
+    else if (arg === '--explain') args.explain = true;
     else if (arg.startsWith('--course=')) args.courseId = Number(arg.slice('--course='.length));
     else if (arg.startsWith('--activity=')) args.activityId = Number(arg.slice('--activity='.length));
     else {
       console.error(`Unknown argument: ${arg}`);
-      console.error('Usage: pruneAbandonedInstances.js [--course=ID] [--activity=ID] [--verbose] [--apply]');
+      console.error('Usage: pruneAbandonedInstances.js [--course=ID] [--activity=ID] [--verbose] [--explain] [--apply]');
       process.exit(2);
     }
   }
@@ -70,14 +73,88 @@ function printTable(rows, columns) {
   }
 }
 
+/**
+ * Why nothing matched.
+ *
+ * Two very different situations produce the same empty result -- a predicate
+ * that is too strict, and a scope that matched no rows at all -- so say which.
+ */
+async function explain(scope) {
+  const rows = await explainInstances(db, scope);
+
+  if (!rows.length) {
+    console.log('No activity instances exist for that scope at all.\n');
+
+    for (const [label, value] of [['--course', scope.courseId], ['--activity', scope.activityId]]) {
+      if (value == null) continue;
+      const matches = await identifyScopeNumber(db, value);
+      if (!matches.length) {
+        console.log(`${label}=${value} does not match any course, class or activity id.`);
+        continue;
+      }
+      console.log(`${label}=${value} looks like:`);
+      for (const match of matches) {
+        if (match.kind === 'courses-of-class') {
+          console.log('  a class id. Instances belong to its courses, so use one of:');
+          for (const course of match.courses) {
+            console.log(`    --course=${course.id}   ${course.name}`);
+          }
+        } else {
+          console.log(`  ${match.kind} ${match.id}: ${match.name}`);
+        }
+      }
+    }
+    return;
+  }
+
+  const kept = rows.filter((row) => row.keptBecause.length);
+  console.log(`${rows.length} instance(s) in scope; ${rows.length - kept.length} match the abandoned rule.\n`);
+
+  printTable(
+    rows.map((row) => ({
+      id: row.id,
+      activity: row.activity_id,
+      group: row.group_number,
+      mode: row.active_rotation_mode,
+      progress: row.progress_status,
+      members: row.members,
+      responses: row.responses,
+      drafts: row.drafts,
+      kept_because: row.keptBecause.join('; ') || '(abandoned)',
+    })),
+    ['id', 'activity', 'group', 'mode', 'progress', 'members', 'responses', 'drafts', 'kept_because'],
+  );
+
+  // The reason that appears most is the clause worth arguing about.
+  const reasons = new Map();
+  for (const row of kept) {
+    for (const reason of row.keptBecause) {
+      reasons.set(reason, (reasons.get(reason) || 0) + 1);
+    }
+  }
+  if (reasons.size) {
+    console.log('\nKept by:');
+    for (const [reason, count] of [...reasons].sort((a, b) => b[1] - a[1])) {
+      console.log(`  ${String(count).padStart(4)}  ${reason}`);
+    }
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const scope = { courseId: args.courseId, activityId: args.activityId };
 
+  if (args.explain) {
+    await explain(scope);
+    return;
+  }
+
   const rows = await findAbandonedInstances(db, scope);
 
   if (!rows.length) {
-    console.log('No abandoned instances found. Nothing to do.');
+    console.log('No abandoned instances found.');
+    console.log('If a roster still shows empty groups, run again with --explain');
+    console.log('to see every instance in scope and why each one was kept.');
     return;
   }
 

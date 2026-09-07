@@ -140,8 +140,106 @@ async function deleteAbandonedInstances(conn, { courseId = null, activityId = nu
   return Number(result?.affectedRows || 0);
 }
 
+/**
+ * Every instance in scope, with a verdict on each clause of the predicate.
+ *
+ * Exists because "No abandoned instances found" is an unhelpful answer when a
+ * roster is visibly full of empty cards: it can mean the rule is wrong, or that
+ * the scope matched nothing at all, and those need different fixes. This
+ * reports the raw signals so a person can see which clause is doing it.
+ */
+async function explainInstances(conn, { courseId = null, activityId = null } = {}) {
+  const where = ['1 = 1'];
+  const params = [];
+
+  if (courseId != null) {
+    where.push('ai.course_id = ?');
+    params.push(Number(courseId));
+  }
+  if (activityId != null) {
+    where.push('ai.activity_id = ?');
+    params.push(Number(activityId));
+  }
+
+  const [rows] = await conn.query(
+    `SELECT ai.id,
+            ai.course_id,
+            ai.activity_id,
+            ai.group_number,
+            ai.active_rotation_mode,
+            ai.progress_status,
+            ai.status,
+            ai.submitted_at,
+            ai.graded_at,
+            COALESCE(ai.completed_groups, 0) AS completed_groups,
+            COALESCE(ai.points_earned, 0)    AS points_earned,
+            (SELECT COUNT(*) FROM group_members   gm WHERE gm.activity_instance_id = ai.id) AS members,
+            (SELECT COUNT(*) FROM responses       r  WHERE r.activity_instance_id  = ai.id) AS responses,
+            (SELECT COUNT(*) FROM response_drafts rd WHERE rd.activity_instance_id = ai.id) AS drafts
+       FROM activity_instances ai
+      WHERE ${where.join('\n        AND ')}
+      ORDER BY ai.activity_id, ai.group_number, ai.id`,
+    params,
+  );
+
+  return rows.map((row) => ({
+    ...row,
+    keptBecause: [
+      row.members > 0 && 'has members',
+      row.responses > 0 && 'has responses',
+      row.drafts > 0 && 'has drafts',
+      row.submitted_at && 'submitted',
+      row.graded_at && 'graded',
+      Number(row.completed_groups) > 0 && 'completed_groups > 0',
+      Number(row.points_earned) > 0 && 'points_earned > 0',
+      row.progress_status && row.progress_status !== 'not_started'
+        && `progress_status = ${row.progress_status}`,
+    ].filter(Boolean),
+  }));
+}
+
+/**
+ * When a scope matches no instances at all, the number given was probably an id
+ * for something else. coLearn has a class and a course, and a roster URL shows
+ * one while activity_instances records the other.
+ */
+async function identifyScopeNumber(conn, value) {
+  const id = Number(value);
+  const found = [];
+
+  const probes = [
+    ['course', 'SELECT id, name FROM courses WHERE id = ?'],
+    ['class', 'SELECT id, name FROM pogil_classes WHERE id = ?'],
+    ['activity', 'SELECT id, title AS name FROM pogil_activities WHERE id = ?'],
+  ];
+
+  for (const [kind, sql] of probes) {
+    try {
+      const [[row]] = await conn.query(sql, [id]);
+      if (row) found.push({ kind, id: row.id, name: row.name });
+    } catch {
+      // A table that does not exist in this deployment simply is not a match.
+    }
+  }
+
+  // A class does not own instances directly; its courses do.
+  try {
+    const [courses] = await conn.query(
+      'SELECT id, name FROM courses WHERE class_id = ?',
+      [id],
+    );
+    if (courses.length) found.push({ kind: 'courses-of-class', courses });
+  } catch {
+    // ignore
+  }
+
+  return found;
+}
+
 module.exports = {
   ABANDONED_INSTANCE_SQL,
   findAbandonedInstances,
   deleteAbandonedInstances,
+  explainInstances,
+  identifyScopeNumber,
 };

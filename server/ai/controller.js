@@ -981,8 +981,19 @@ async function buildStudentResponsePrompt({
         ? `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). Under the instructor's lenient policy, accept any on-track answer with the core idea rather than spending a retry on optional elaboration.`
         : `Retry context: the group has ${priorAttempts} prior changed attempt(s) and the activity allows ${retryLimit} retry/revision attempt(s). On the final allowed attempt, use revise for any relevant answer that shows basic understanding.`
       : "",
-    "When rejecting, use warm, collaborative language. Prefer 'You're on the right track — what about...' or 'Good start. Can you add...' over phrasing like 'you need to' or 'this is missing'.",
-    "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting and use feedback to affirm what they got right.",
+    // Praise on a revise message is still praise. \aimode{positive} is the
+    // switch for it, and it used to gate only the accepted case -- so an
+    // instructor who had turned positive feedback off still got "Good start.
+    // Can you add..." on a wrong answer, which is the one place it reads as
+    // hollow. Warmth is not the same as affirmation: without positive, the
+    // message stays courteous and non-blaming but does not tell a group its
+    // wrong answer was a good start.
+    positiveEnabled
+      ? "When rejecting, use warm, collaborative language. Prefer 'You're on the right track — what about...' or 'Good start. Can you add...' over phrasing like 'you need to' or 'this is missing'."
+      : "When rejecting, be courteous and matter-of-fact: name what to add or change and ask one question that moves them toward it. Do NOT open with praise or an assessment of how well they did — no 'Good start', 'Nice work', 'You're on the right track', or any equivalent. Do not blame either; describe the gap, not the group.",
+    positiveEnabled
+      ? "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting and use feedback to affirm what they got right."
+      : "If the answer shows the group understands the concept but expressed it vaguely, lean toward accepting. Accepted answers get feedback=null; do not use the feedback field to praise.",
     `Write every feedback message in ${feedbackLanguage}. Do not mix languages or mirror the student's answer language if it differs.`,
     "If prior group attempts are provided, use them to understand the group's learning thread, avoid repeating earlier feedback, and choose the right scaffolding level.",
     "Address the group naturally as 'you'; do not single out the active typer or mention which person typed.",
@@ -2526,7 +2537,11 @@ async function evaluateCode({
     "- Treat this as one collaborative group conversation; do not single out the active typer.",
     "feedbackprompt is meta guidance; do NOT quote it.",
     "Before suggesting to add a line, verify it is not already present (or equivalent) in the code.",
-    "- When rejecting code, use coaching language. Start with what the code does right, then name one specific thing to fix. Prefer 'Almost — try...' over 'Your code is missing...'",
+    // Same rule for code as for text: "Start with what the code does right" is
+    // praise, and \aimode{positive} governs whether the group gets any.
+    positiveEnabled
+      ? "- When rejecting code, use coaching language. Start with what the code does right, then name one specific thing to fix. Prefer 'Almost — try...' over 'Your code is missing...'"
+      : "- When rejecting code, name one specific thing to fix and keep the tone neutral and practical. Do NOT open with praise or say what the code does right — no 'Almost', 'Nice', 'Good start', or any equivalent. Describe the problem, not the group.",
     codeTimerPressure === 'expired'
       ? "- TIMER EXPIRED: Section time is up. If the code is on-task and makes a reasonable attempt, set accepted=true."
       : codeTimerPressure === 'critical'

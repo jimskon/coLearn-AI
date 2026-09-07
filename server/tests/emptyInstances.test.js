@@ -7,6 +7,7 @@ const {
   ABANDONED_INSTANCE_SQL,
   findAbandonedInstances,
   deleteAbandonedInstances,
+  deleteAbandonedSandboxes,
 } = require('../utils/emptyInstances');
 
 // ---------------------------------------------------------------------------
@@ -130,4 +131,34 @@ test('every activity_instances column the module names exists in the schema', ()
 
   const missing = [...referenced].filter((column) => !declared.has(column));
   assert.deepEqual(missing, [], `not columns of activity_instances: ${missing.join(', ')}`);
+});
+
+// ---------------------------------------------------------------------------
+// The sandbox sweep must stay in its lane
+// ---------------------------------------------------------------------------
+
+test('the sweep is scoped to one owner and keeps the sandbox being handed back', async () => {
+  const calls = [];
+  await deleteAbandonedSandboxes(fakeConn(calls), {
+    courseId: 4170, activityId: 4738, ownerId: 9, exceptId: 555,
+  });
+  const [{ sql, params }] = calls;
+  assert.match(sql, /sandbox_owner_id = \?/, 'must be limited to one owner');
+  assert.match(sql, /active_rotation_mode = 'sandbox'/, 'must only ever touch sandboxes');
+  assert.match(sql, /ai\.id <> \?/, 'the reused sandbox must survive');
+  assert.match(sql, /NOT EXISTS/, 'the abandoned predicate still applies');
+  assert.deepEqual(params, [4170, 4738, 9, 555]);
+});
+
+test('the sweep does nothing without a complete scope', async () => {
+  for (const scope of [
+    { courseId: null, activityId: 1, ownerId: 1 },
+    { courseId: 1, activityId: null, ownerId: 1 },
+    { courseId: 1, activityId: 1, ownerId: null },
+  ]) {
+    const calls = [];
+    const removed = await deleteAbandonedSandboxes(fakeConn(calls), scope);
+    assert.equal(removed, 0);
+    assert.deepEqual(calls, [], 'a missing scope must not become an unbounded delete');
+  }
 });

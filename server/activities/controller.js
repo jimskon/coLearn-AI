@@ -1,5 +1,6 @@
 // server/activities/controller.js
 const db = require('../db');
+const { deleteAbandonedSandboxes } = require('../utils/emptyInstances');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 const {
   loadActivitySourceById,
@@ -592,17 +593,38 @@ exports.ensureSandboxInstance = async (req, res) => {
 
     const courseId = Number(course.id);
 
+    // Find this author's sandbox by sandbox_owner_id, not active_student_id.
+    //
+    // active_student_id is a rotation slot, not an identity: it is cleared to
+    // NULL when the author leaves the sandbox, and on group submit. Matching on
+    // it meant the reuse lookup missed every time after the first visit, so a
+    // single activity collected one abandoned sandbox instance per Test Run --
+    // dozens of them, each taking a group number and appearing on the roster as
+    // a group whose student is unknown.
     const [[existing]] = await conn.query(
       `SELECT id AS instance_id
          FROM activity_instances
         WHERE activity_id = ?
           AND course_id = ?
-          AND active_student_id = ?
+          AND sandbox_owner_id = ?
           AND active_rotation_mode = 'sandbox'
         ORDER BY id ASC
         LIMIT 1`,
       [activityId, courseId, userId]
     );
+
+    // Opening a Test Run is also when the previous ones get tidied. Bounded to
+    // this author's own abandoned sandboxes for this activity, so a colleague
+    // with a sandbox open right now is untouched.
+    const sweptExisting = await deleteAbandonedSandboxes(conn, {
+      courseId,
+      activityId,
+      ownerId: userId,
+      exceptId: existing?.instance_id || null,
+    });
+    if (sweptExisting) {
+      console.log('[SANDBOX] swept abandoned sandboxes', { activityId, courseId, userId, sweptExisting });
+    }
 
     if (existing?.instance_id) {
       return res.json({ instanceId: Number(existing.instance_id), created: false });
@@ -618,9 +640,9 @@ exports.ensureSandboxInstance = async (req, res) => {
     const [result] = await conn.query(
       `INSERT INTO activity_instances
          (activity_id, course_id, status, group_number, total_groups, completed_groups,
-          progress_status, active_student_id, active_rotation_mode)
-       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, 'sandbox')`,
-      [activityId, courseId, Number(nextRow?.next_group_number) || 1, userId]
+          progress_status, active_student_id, sandbox_owner_id, active_rotation_mode)
+       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, ?, 'sandbox')`,
+      [activityId, courseId, Number(nextRow?.next_group_number) || 1, userId, userId]
     );
 
     return res.status(201).json({ instanceId: Number(result.insertId), created: true });

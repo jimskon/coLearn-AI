@@ -236,10 +236,54 @@ async function identifyScopeNumber(conn, value) {
   return found;
 }
 
+/**
+ * Clear an author's leftover sandbox instances for one activity.
+ *
+ * Reuse keeps a single Test Run sandbox per author, but that only stops new
+ * ones appearing -- it does not tidy what an earlier build left behind, and a
+ * sandbox nobody reopens would otherwise sit on the roster forever. Opening a
+ * Test Run is the natural moment to sweep: the author is already here, already
+ * holds the lock, and the sweep is bounded to rows they own.
+ *
+ * Deliberately scoped to `ownerId`. Another instructor may have their own
+ * sandbox open on this activity right now, and while an open sandbox is
+ * "abandoned" by this module's definition -- nothing has been saved in it --
+ * deleting it out from under a live page is a different kind of wrong.
+ *
+ * `exceptId` is the sandbox being handed back, which must survive.
+ */
+async function deleteAbandonedSandboxes(conn, { courseId, activityId, ownerId, exceptId = null }) {
+  if (!courseId || !activityId || !ownerId) return 0;
+
+  const params = [Number(courseId), Number(activityId), Number(ownerId)];
+  const keepClause = exceptId ? 'AND ai.id <> ?' : '';
+  if (exceptId) params.push(Number(exceptId));
+
+  const [result] = await conn.query(
+    `DELETE FROM activity_instances
+      WHERE id IN (
+        SELECT id FROM (
+          SELECT ai.id
+            FROM activity_instances ai
+           WHERE ai.course_id = ?
+             AND ai.activity_id = ?
+             AND ai.sandbox_owner_id = ?
+             AND ai.active_rotation_mode = 'sandbox'
+             ${keepClause}
+             AND ${ABANDONED_INSTANCE_SQL}
+        ) AS doomed
+      )`,
+    params,
+  );
+
+  return Number(result?.affectedRows || 0);
+}
+
 module.exports = {
   ABANDONED_INSTANCE_SQL,
   findAbandonedInstances,
   deleteAbandonedInstances,
+  deleteAbandonedSandboxes,
   explainInstances,
   identifyScopeNumber,
 };

@@ -105,8 +105,16 @@ export default function RunActivityWorkspace({
   // duration, so the panel does not appear and vanish as the student advances.
   // An activity with no \ai block keeps the single-column layout unchanged.
   const aiEntries = useMemo(() => collectAiEntries(groups), [groups]);
-  const useSplitLayout = aiEntries.length > 0;
+  // Assignments render AI inline beside each question; the split panel is for group activities.
+  const useSplitLayout = aiEntries.length > 0 && !isAssignmentMode;
   const split = useSplitPane(useSplitLayout);
+
+  // For inline AI in assignment mode: lock reason shown when the student cannot ask.
+  const assignmentAiLockReason = isSubmitted
+    ? 'This assignment has been submitted. The transcript is read only.'
+    : (isInstructor || isObserver)
+    ? 'Only the student can use the AI assistant.'
+    : '';
 
   const completedGroupCount = Number(activity?.completed_groups ?? 0);
   const previousCompletedGroupCountRef = useRef(completedGroupCount);
@@ -183,6 +191,9 @@ export default function RunActivityWorkspace({
           suppressStudentTestFeedbackUi,
           hideStudentTestSections,
           suppressAiBlocks: useSplitLayout,
+          onAiTurnSaved,
+          isSubmitted,
+          aiLockReason: assignmentAiLockReason,
         })}
 
         {groups.map((group, index) => {
@@ -241,6 +252,9 @@ export default function RunActivityWorkspace({
                   suppressStudentTestFeedbackUi,
                   hideStudentTestSections,
                   suppressAiBlocks: useSplitLayout,
+                  onAiTurnSaved,
+                  isSubmitted,
+                  aiLockReason: assignmentAiLockReason,
                 })}
 
               <p ref={questionGroupAnchorRef}>
@@ -298,6 +312,9 @@ export default function RunActivityWorkspace({
                   suppressStudentTestFeedbackUi,
                   hideStudentTestSections,
                   suppressAiBlocks: useSplitLayout,
+                  onAiTurnSaved,
+                  isSubmitted,
+                  aiLockReason: assignmentAiLockReason,
                 });
 
                 if (block.type !== 'question' || !isAssessmentMode) {

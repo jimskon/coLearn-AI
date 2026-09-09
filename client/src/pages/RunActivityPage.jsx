@@ -3242,9 +3242,26 @@ export default function RunActivityPage({
         return next;
       });
 
-      // Optionally you could recompute overall totals or reload activity,
-      // but typically this is enough:
-      // await loadActivity();   // <- if you want to be extra sure
+      // Recompute overall score on the server so ViewTestsPage and the
+      // score banner on this page both reflect the manual override.
+      try {
+        const recomputeRes = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/recompute-test-totals`,
+          { method: 'POST', credentials: 'include' }
+        );
+        if (recomputeRes.ok) {
+          const totals = await recomputeRes.json();
+          if (totals?.ok) {
+            setActivity((prev) =>
+              prev
+                ? { ...prev, points_earned: totals.earned, points_possible: totals.possible }
+                : prev
+            );
+          }
+        }
+      } catch (recomputeErr) {
+        console.warn('Score recompute failed (non-fatal):', recomputeErr);
+      }
 
       alert(`Saved updated scores/feedback for ${qid}.`);
     } catch (err) {

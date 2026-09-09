@@ -2420,7 +2420,7 @@ export function renderBlocks(blocks, options = {}) {
           instanceId={options.instanceId}
           userId={options.answeredBy}
           transcript={readAiTranscript(options.prefill, aiQid)}
-          canAsk={options.mode === 'run' ? !!isActive && !options.isObserver : true}
+          canAsk={options.mode === 'run' ? !!isActive && !options.isObserver && !options.isSubmitted : true}
           lockReason={options.aiLockReason}
           onTurnSaved={options.onAiTurnSaved}
         />
@@ -3432,7 +3432,7 @@ export function renderBlocks(blocks, options = {}) {
                 instanceId={options.instanceId}
                 userId={options.answeredBy}
                 transcript={readAiTranscript(options.prefill, aiQid)}
-                canAsk={options.mode === 'run' ? !!isActive && !options.isObserver : true}
+                canAsk={options.mode === 'run' ? !!isActive && !options.isObserver && !options.isSubmitted : true}
                 lockReason={options.aiLockReason}
                 onTurnSaved={options.onAiTurnSaved}
               />

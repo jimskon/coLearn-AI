@@ -2288,7 +2288,7 @@ async function getInstancesForActivityInCourse(req, res) {
       });
     }
 
-    res.json({ courseName, activityTitle, groups });
+    res.json({ courseName, activityTitle, activityType: rosterActivityType, groups });
   } catch (err) {
     console.error("❌ getInstancesForActivityInCourse:", err);
     res.status(500).json({ error: 'Failed to fetch instances' });

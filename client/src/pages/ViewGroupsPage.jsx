@@ -192,6 +192,7 @@ export default function ViewGroupsPage() {
   const { user } = useUser();
 
   const [activityTitle, setActivityTitle] = useState('');
+  const [activityType, setActivityType] = useState('activity'); // 'test' | 'assignment' | 'activity'
   const [courseName, setCourseName] = useState(incomingCourseName || '');
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -213,6 +214,8 @@ export default function ViewGroupsPage() {
   const [isDemoClass, setIsDemoClass] = useState(false);
   const [clearingDemoRoster, setClearingDemoRoster] = useState(false);
   const isDemoInstructor = user?.demo_mode === 'instructor';
+  // Tests and assignments give each student a private instance — 'add to group' = 'enroll student'
+  const isSoloMode = activityType === 'test' || activityType === 'assignment';
 
   const fetchGroups = async ({ quiet = false } = {}) => {
     if (!quiet) {
@@ -235,6 +238,7 @@ export default function ViewGroupsPage() {
 
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
+      if (data.activityType) setActivityType(data.activityType);
       setGroups(data.groups);
       if (Array.isArray(data.groups) && data.groups.length > 0) {
         setRotationMode(String(data.groups[0].active_rotation_mode || 'submit'));
@@ -801,15 +805,17 @@ export default function ViewGroupsPage() {
                 onClick={handleAddToGroup}
                 disabled={!selectedAdd || timerPaused || isDemoInstructor}
               >
-                Add to group
+                {isSoloMode ? 'Add student' : 'Add to group'}
               </Button>
-              <Button
-                variant="outline-secondary"
-                onClick={handleAddAsSoloGroup}
-                disabled={!selectedAdd || timerPaused || isDemoInstructor}
-              >
-                Group of one
-              </Button>
+              {!isSoloMode && (
+                <Button
+                  variant="outline-secondary"
+                  onClick={handleAddAsSoloGroup}
+                  disabled={!selectedAdd || timerPaused || isDemoInstructor}
+                >
+                  Group of one
+                </Button>
+              )}
             </div>
 
             <Form.Select

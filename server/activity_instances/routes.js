@@ -18,6 +18,7 @@ router.post('/by-activity/:activityId/sandbox-instance', controller.ensureActivi
 
 // ✅ Reopen a timed test window for this instance
 router.post('/:instanceId/reopen', controller.reopenInstance);
+router.patch('/:instanceId/assignment-due-at', controller.updateAssignmentDueAt);
 
 // ✅ Regrade this test instance using stored answers
 //router.post('/:instanceId/regrade', controller.regradeTestInstance);

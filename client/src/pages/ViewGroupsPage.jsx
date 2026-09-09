@@ -211,11 +211,76 @@ export default function ViewGroupsPage() {
   const [rotatingGroups, setRotatingGroups] = useState(new Set());
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  // Due date editing state (assignment mode)
+  const [dueEdit, setDueEdit] = useState(null); // { instanceId, dueAt, reopen, isSubmitted }
+  const [savingDue, setSavingDue] = useState(false);
+  const [bulkDue, setBulkDue] = useState({ dueAt: '', reopen: false, saving: false });
   const [isDemoClass, setIsDemoClass] = useState(false);
   const [clearingDemoRoster, setClearingDemoRoster] = useState(false);
   const isDemoInstructor = user?.demo_mode === 'instructor';
   // Tests and assignments give each student a private instance — 'add to group' = 'enroll student'
   const isSoloMode = activityType === 'test' || activityType === 'assignment';
+
+  // Convert UTC db string to datetime-local input value
+  const toLocalInput = (utcStr) => {
+    if (!utcStr) return '';
+    const d = new Date(utcStr);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  };
+
+  const saveDueDate = async () => {
+    if (!dueEdit || !dueEdit.dueAt) return;
+    setSavingDue(true);
+    try {
+      const dueUtc = new Date(dueEdit.dueAt).toISOString();
+      const res = await fetch(
+        API_BASE_URL + '/api/activity-instances/' + dueEdit.instanceId + '/assignment-due-at',
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ assignmentDueAt: dueUtc, reopen: dueEdit.reopen }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to update due date');
+      setDueEdit(null);
+      await fetchGroups({ quiet: true });
+    } catch (err) {
+      alert(err.message || 'Failed to update due date.');
+    } finally {
+      setSavingDue(false);
+    }
+  };
+
+  const saveBulkDueDate = async () => {
+    if (!bulkDue.dueAt) return;
+    setBulkDue(function(p) { return Object.assign({}, p, { saving: true }); });
+    try {
+      const dueUtc = new Date(bulkDue.dueAt).toISOString();
+      // Update all assignment instances for this activity
+      const promises = groups.map(function(g) {
+        return fetch(
+          API_BASE_URL + '/api/activity-instances/' + g.instance_id + '/assignment-due-at',
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ assignmentDueAt: dueUtc, reopen: bulkDue.reopen }),
+          }
+        );
+      });
+      await Promise.all(promises);
+      setBulkDue({ dueAt: '', reopen: false, saving: false });
+      await fetchGroups({ quiet: true });
+    } catch (err) {
+      alert(err.message || 'Failed to update due dates.');
+      setBulkDue(function(p) { return Object.assign({}, p, { saving: false }); });
+    }
+  };
 
   const fetchGroups = async ({ quiet = false } = {}) => {
     if (!quiet) {
@@ -734,16 +799,68 @@ export default function ViewGroupsPage() {
                         </li>
                       ))}
                     </ul>
-                    {group.assignment_due_at ? (
+                    {activityType === 'assignment' && (
                       <div className="small mb-2">
-                        <strong>Due:</strong> {formatUtcToLocal(group.assignment_due_at)}
-                        {group.submitted_at ? (
-                          <span className={group.submitted_late ? 'text-warning-emphasis' : 'text-success'}>
-                            {group.submitted_late ? ' · Submitted late' : ' · Submitted on time'}
-                          </span>
-                        ) : null}
+                        {dueEdit && dueEdit.instanceId === group.instance_id ? (
+                          <div>
+                            <Form.Control
+                              type="datetime-local"
+                              size="sm"
+                              className="mb-1"
+                              value={dueEdit.dueAt}
+                              onChange={function(e) { setDueEdit(function(p) { return Object.assign({}, p, { dueAt: e.target.value }); }); }}
+                            />
+                            {dueEdit.isSubmitted && (
+                              <Form.Check
+                                type="checkbox"
+                                label="Reopen for resubmission"
+                                checked={dueEdit.reopen}
+                                onChange={function(e) { setDueEdit(function(p) { return Object.assign({}, p, { reopen: e.target.checked }); }); }}
+                                className="mb-1"
+                              />
+                            )}
+                            <div className="d-flex gap-1">
+                              <Button size="sm" variant="primary" onClick={saveDueDate} disabled={savingDue}>
+                                {savingDue ? 'Saving…' : 'Save'}
+                              </Button>
+                              <Button size="sm" variant="secondary" onClick={function() { setDueEdit(null); }} disabled={savingDue}>
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="d-flex align-items-center gap-2">
+                            <span>
+                              <strong>Due:</strong>{' '}
+                              {group.assignment_due_at ? formatUtcToLocal(group.assignment_due_at) : 'No due date'}
+                            </span>
+                            {!isDemoInstructor && (
+                              <Button
+                                size="sm"
+                                variant="outline-secondary"
+                                className="py-0 px-1"
+                                title="Edit due date"
+                                onClick={function() {
+                                  setDueEdit({
+                                    instanceId: group.instance_id,
+                                    dueAt: toLocalInput(group.assignment_due_at),
+                                    reopen: false,
+                                    isSubmitted: !!group.submitted_at,
+                                  });
+                                }}
+                              >
+                                ✏️
+                              </Button>
+                            )}
+                            {group.submitted_at ? (
+                              <span className={group.submitted_late ? 'text-warning-emphasis' : 'text-success'}>
+                                {group.submitted_late ? '· Submitted late' : '· Submitted on time'}
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
                       </div>
-                    ) : null}
+                    )}
                     <GroupProgressBars group={group} />
                   </Card.Body>
                 </Card>
@@ -846,6 +963,40 @@ export default function ViewGroupsPage() {
           </div>
         </Card.Body>
       </Card>
+      {activityType === 'assignment' && !isDemoInstructor && (
+        <Card className="my-4">
+          <Card.Body>
+            <div className="fw-semibold mb-2">Change Due Date for All Students</div>
+            <div className="small text-muted mb-3">
+              Sets the same due date on every student instance, overriding any individual dates.
+            </div>
+            <Form.Group className="mb-2">
+              <Form.Label className="small">New due date (your local time)</Form.Label>
+              <Form.Control
+                type="datetime-local"
+                value={bulkDue.dueAt}
+                onChange={function(e) { setBulkDue(function(p) { return Object.assign({}, p, { dueAt: e.target.value }); }); }}
+                disabled={bulkDue.saving}
+              />
+            </Form.Group>
+            <Form.Check
+              type="checkbox"
+              label="Reopen submitted students for resubmission (clears their submission & grading, keeps answers)"
+              checked={bulkDue.reopen}
+              onChange={function(e) { setBulkDue(function(p) { return Object.assign({}, p, { reopen: e.target.checked }); }); }}
+              className="mb-3 small"
+              disabled={bulkDue.saving}
+            />
+            <Button
+              variant="primary"
+              disabled={!bulkDue.dueAt || bulkDue.saving}
+              onClick={saveBulkDueDate}
+            >
+              {bulkDue.saving ? 'Updating…' : 'Update All'}
+            </Button>
+          </Card.Body>
+        </Card>
+      )}
     </Container>
   );
 }

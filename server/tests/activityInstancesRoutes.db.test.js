@@ -1459,7 +1459,7 @@ test('test-settings rejects invalid scheduling payloads without changing stored 
   assert.equal(String(instance.test_reopen_until).slice(0, 19), '2026-05-01 13:20:00');
 });
 
-test('reopen rejects already-submitted timed tests so instructors must clear answers first', async () => {
+test('reopen allows already-submitted timed tests and clears submission + grading', async () => {
   const instructor = await createUser('instructor');
   const classId = await createClassRecord();
   const courseId = await createCourse({ instructorId: instructor.id, classId });
@@ -1471,6 +1471,9 @@ test('reopen rejects already-submitted timed tests so instructors must clear ans
         SET test_start_at = '2026-05-01 13:00:00',
             test_duration_minutes = 30,
             submitted_at = '2026-05-01 13:25:00',
+            graded_at = '2026-05-01 14:00:00',
+            points_earned = 8,
+            points_possible = 10,
             test_reopen_until = NULL
       WHERE id = ?`,
     [instanceId]
@@ -1481,16 +1484,23 @@ test('reopen rejects already-submitted timed tests so instructors must clear ans
     body: { minutes: 15 },
   });
 
-  assert.equal(response.status, 400);
-  assert.equal(response.body.error, 'Test already submitted; clear answers to reopen.');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.wasSubmitted, true);
 
   const [[instance]] = await db.query(
-    `SELECT test_reopen_until
+    `SELECT test_reopen_until, submitted_at, graded_at, points_earned, points_possible
        FROM activity_instances
       WHERE id = ?`,
     [instanceId]
   );
-  assert.equal(instance.test_reopen_until, null);
+  // Reopen window should be set
+  assert.notEqual(instance.test_reopen_until, null);
+  // Submission + grading should be cleared so student can resubmit
+  assert.equal(instance.submitted_at, null);
+  assert.equal(instance.graded_at, null);
+  assert.equal(instance.points_earned, null);
+  assert.equal(instance.points_possible, null);
 });
 
 test('preview-doc redacts multiple-choice answers for students in tests', async () => {

@@ -752,6 +752,14 @@ export default function ViewGroupsPage() {
                           )}
                         </Button>
                       ) : null}
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => navigate(`/run/${group.instance_id}`, { state: { courseName } })}
+                      >
+                        {isComplete ? 'Review Activity' : 'View Activity'}
+                      </Button>
+
                       {!isDemoInstructor ? (
                         <Button
                           variant="outline-danger"
@@ -767,14 +775,6 @@ export default function ViewGroupsPage() {
                           ⚠️
                         </Button>
                       ) : null}
-
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={() => navigate(`/run/${group.instance_id}`, { state: { courseName } })}
-                      >
-                        {isComplete ? 'Review Activity' : 'View Activity'}
-                      </Button>
                     </div>
                   </Card.Header>
 

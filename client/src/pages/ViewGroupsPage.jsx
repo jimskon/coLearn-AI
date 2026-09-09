@@ -9,6 +9,7 @@ import {
   Button,
   ButtonGroup,
   Badge,
+  Modal,
   Row,
   Col,
   Form,
@@ -199,6 +200,7 @@ export default function ViewGroupsPage() {
   const [error, setError] = useState('');
   const [clearing, setClearing] = useState(new Set());
   const [deleting, setDeleting] = useState(new Set());
+  const [dangerModal, setDangerModal] = useState(null); // { instanceId, label, action: null|'clear'|'delete' }
 
   // Live-edit state
   const [available, setAvailable] = useState([]);
@@ -754,21 +756,17 @@ export default function ViewGroupsPage() {
                         <Button
                           variant="outline-danger"
                           size="sm"
-                          disabled={clearing.has(group.instance_id) || timerPaused}
-                          onClick={() => clearGroupAnswers(group.instance_id)}
+                          title="Danger zone: clear answers or delete instance"
+                          onClick={() => {
+                            const label = isSoloMode
+                              ? ((group.members || [])[0]?.name || 'Student')
+                              : 'Group ' + group.group_number;
+                            setDangerModal({ instanceId: group.instance_id, label, action: null });
+                          }}
                         >
-                          {clearing.has(group.instance_id) ? 'Clearing…' : 'Clear Answers'}
+                          ⚠️
                         </Button>
                       ) : null}
-
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        disabled={deleting.has(instanceId)}
-                        onClick={() => deleteInstance(instanceId)}
-                      >
-                        {deleting.has(instanceId) ? 'Deleting…' : 'Delete Instance'}
-                      </Button>
 
                       <Button
                         variant="primary"
@@ -997,6 +995,79 @@ export default function ViewGroupsPage() {
           </Card.Body>
         </Card>
       )}
+      {/* Danger zone modal */}
+      <Modal show={!!dangerModal} onHide={() => setDangerModal(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Danger zone</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="mb-3">
+            <strong>{dangerModal && dangerModal.label}</strong>
+          </p>
+          {dangerModal && dangerModal.action === 'clear' ? (
+            <div className="alert alert-danger">
+              <strong>Are you sure?</strong> This will permanently delete all answers for{' '}
+              <strong>{dangerModal.label}</strong>. This cannot be undone.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="danger"
+                  disabled={clearing.has(dangerModal.instanceId)}
+                  onClick={() => {
+                    clearGroupAnswers(dangerModal.instanceId);
+                    setDangerModal(null);
+                  }}
+                >
+                  {clearing.has(dangerModal && dangerModal.instanceId) ? 'Clearing…' : 'Yes, clear all answers'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: null }); })}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : dangerModal && dangerModal.action === 'delete' ? (
+            <div className="alert alert-danger">
+              <strong>Are you sure?</strong> This will permanently delete the instance and all data for{' '}
+              <strong>{dangerModal.label}</strong>. This cannot be undone.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="danger"
+                  disabled={deleting.has(dangerModal.instanceId)}
+                  onClick={() => {
+                    deleteInstance(Number(dangerModal.instanceId));
+                    setDangerModal(null);
+                  }}
+                >
+                  {deleting.has(dangerModal && dangerModal.instanceId) ? 'Deleting…' : 'Yes, delete instance'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: null }); })}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="d-flex flex-column gap-2">
+              <Button
+                variant="outline-danger"
+                onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: 'clear' }); })}
+              >
+                Clear Answers
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: 'delete' }); })}
+              >
+                Delete Instance
+              </Button>
+            </div>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setDangerModal(null)}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
     </Container>
   );
 }

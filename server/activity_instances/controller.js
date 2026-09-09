@@ -3356,8 +3356,23 @@ async function recomputeTestTotals(req, res) {
       [instanceId, instanceId]
     );
 
+    // Also load response_drafts — instructor score overrides land here via bulk-save.
+    // Drafts take precedence over the responses table (same merge logic as getInstanceResponses).
+    const [draftRows] = await conn.query(
+      `SELECT question_id, response
+       FROM response_drafts
+       WHERE activity_instance_id = ?`,
+      [instanceId]
+    );
+
     const map = Object.create(null);
     for (const r of rows) map[r.question_id] = r.response;
+    // Overlay drafts (instructor overrides win)
+    for (const d of draftRows) {
+      if (d.response !== null && d.response !== undefined) {
+        map[d.question_id] = d.response;
+      }
+    }
 
     // 3) Sum scores
     const baseQids = new Set();

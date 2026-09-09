@@ -2288,7 +2288,7 @@ async function getInstancesForActivityInCourse(req, res) {
       });
     }
 
-    res.json({ courseName, activityTitle, groups });
+    res.json({ courseName, activityTitle, activityType: rosterActivityType, groups });
   } catch (err) {
     console.error("❌ getInstancesForActivityInCourse:", err);
     res.status(500).json({ error: 'Failed to fetch instances' });
@@ -2590,8 +2590,9 @@ async function updateTestSettings(req, res) {
 
 // NEW: Reopen a timed test for an instance
 async function reopenInstance(req, res) {
-  const { instanceId } = req.params;   // ✅ correct param
-  const { minutes } = req.body || {};  // optional override
+  const { instanceId } = req.params;
+  // Accept either minutes (relative) or reopenUntil (absolute ISO datetime)
+  const { minutes, reopenUntil: reopenUntilIso } = req.body || {};
 
   if (!instanceId) {
     return res.status(400).json({ error: 'Missing instanceId' });
@@ -2599,7 +2600,8 @@ async function reopenInstance(req, res) {
 
   try {
     const [[instance]] = await db.query(
-      `SELECT test_start_at, test_duration_minutes, test_reopen_until, submitted_at
+      `SELECT test_start_at, test_duration_minutes, test_reopen_until, submitted_at,
+              graded_at, points_earned, points_possible
        FROM activity_instances
        WHERE id = ?`,
       [instanceId]
@@ -2613,28 +2615,104 @@ async function reopenInstance(req, res) {
       return res.status(400).json({ error: 'Not a timed test instance' });
     }
 
-    // If you want to block reopen when already submitted, enforce here
-    if (instance.submitted_at) {
-      return res.status(400).json({ error: 'Test already submitted; clear answers to reopen.' });
+    // Determine the new reopen-until value
+    let reopenUntil;
+    if (reopenUntilIso) {
+      reopenUntil = new Date(reopenUntilIso);
+      if (isNaN(reopenUntil.getTime())) {
+        return res.status(400).json({ error: 'Invalid reopenUntil datetime' });
+      }
+    } else {
+      const extendMinutes =
+        minutes && minutes > 0 ? minutes : instance.test_duration_minutes;
+      reopenUntil = new Date(Date.now() + extendMinutes * 60000);
     }
 
-    const extendMinutes =
-      minutes && minutes > 0 ? minutes : instance.test_duration_minutes;
+    const reopenUntilDb = reopenUntil.toISOString().slice(0, 19).replace('T', ' ');
 
-    const now = new Date();
-    const reopenUntil = new Date(now.getTime() + extendMinutes * 60000);
+    // If submitted: clear submission + grading so student can resubmit.
+    // Answers in `responses` table are intentionally kept.
+    const wasSubmitted = !!instance.submitted_at;
+    if (wasSubmitted) {
+      await db.query(
+        `UPDATE activity_instances
+         SET test_reopen_until = ?,
+             submitted_at      = NULL,
+             graded_at         = NULL,
+             points_earned     = NULL,
+             points_possible   = NULL
+         WHERE id = ?`,
+        [reopenUntilDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, {
+        test_reopen_until: reopenUntilDb,
+        submitted_at: null,
+        graded_at: null,
+        points_earned: null,
+        points_possible: null,
+      });
+    } else {
+      await db.query(
+        `UPDATE activity_instances
+         SET test_reopen_until = ?
+         WHERE id = ?`,
+        [reopenUntilDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, { test_reopen_until: reopenUntilDb });
+    }
 
-    await db.query(
-      `UPDATE activity_instances
-       SET test_reopen_until = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? MINUTE)
-       WHERE id = ?`,
-      [extendMinutes, instanceId]
-    );
-
-    return res.json({ ok: true, test_reopen_until: reopenUntil });
+    return res.json({ ok: true, test_reopen_until: reopenUntil, wasSubmitted });
   } catch (err) {
     console.error('❌ reopenInstance error:', err);
     return res.status(500).json({ error: 'Failed to reopen test.' });
+  }
+}
+
+// Update assignment due date for one instance; optionally reopen a submitted assignment.
+async function updateAssignmentDueAt(req, res) {
+  const { instanceId } = req.params;
+  const { assignmentDueAt, reopen } = req.body || {};
+
+  if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+  if (!assignmentDueAt) return res.status(400).json({ error: 'Missing assignmentDueAt' });
+
+  const due = new Date(assignmentDueAt);
+  if (isNaN(due.getTime())) return res.status(400).json({ error: 'Invalid assignmentDueAt' });
+
+  try {
+    await ensureAssignmentDueSchema();
+    const dueDb = due.toISOString().slice(0, 19).replace('T', ' ');
+
+    if (reopen) {
+      await db.query(
+        `UPDATE activity_instances
+         SET assignment_due_at = ?,
+             submitted_at      = NULL,
+             graded_at         = NULL,
+             points_earned     = NULL,
+             points_possible   = NULL
+         WHERE id = ?`,
+        [dueDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, {
+        assignment_due_at: dueDb,
+        submitted_at: null,
+        graded_at: null,
+        points_earned: null,
+        points_possible: null,
+      });
+    } else {
+      await db.query(
+        `UPDATE activity_instances SET assignment_due_at = ? WHERE id = ?`,
+        [dueDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, { assignment_due_at: dueDb });
+    }
+
+    return res.json({ ok: true, assignment_due_at: dueDb });
+  } catch (err) {
+    console.error('❌ updateAssignmentDueAt error:', err);
+    return res.status(500).json({ error: 'Failed to update due date.' });
   }
 }
 
@@ -3424,6 +3502,7 @@ module.exports = {
   getInstanceResponses,
   refreshTotalGroups,
   reopenInstance,
+  updateAssignmentDueAt,
   submitTest,
   updateTestSettings,
   recomputeTestTotals,

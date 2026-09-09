@@ -3245,12 +3245,15 @@ export default function RunActivityPage({
       // Recompute overall score on the server so ViewTestsPage and the
       // score banner on this page both reflect the manual override.
       try {
+        console.log('[ScoreSave] calling recompute-test-totals for instance', instanceId);
         const recomputeRes = await fetch(
           `${API_BASE_URL}/api/activity-instances/${instanceId}/recompute-test-totals`,
           { method: 'POST', credentials: 'include' }
         );
+        console.log('[ScoreSave] recompute status:', recomputeRes.status);
         if (recomputeRes.ok) {
           const totals = await recomputeRes.json();
+          console.log('[ScoreSave] recompute totals:', totals);
           if (totals?.ok) {
             setActivity((prev) =>
               prev
@@ -3260,7 +3263,7 @@ export default function RunActivityPage({
           }
         }
       } catch (recomputeErr) {
-        console.warn('Score recompute failed (non-fatal):', recomputeErr);
+        console.warn('[ScoreSave] Score recompute failed (non-fatal):', recomputeErr);
       }
 
       alert(`Saved updated scores/feedback for ${qid}.`);

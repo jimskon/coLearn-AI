@@ -25,6 +25,10 @@ export default function ViewTestsPage() {
   const [editing, setEditing] = useState(null); // { instanceId, startAtLocal, durationMinutes }
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Reopen modal state
+  const [reopenModal, setReopenModal] = useState(null); // { instanceId, isSubmitted, reopenUntil }
+  const [savingReopen, setSavingReopen] = useState(false);
+
 
 
   const toLocalInputValue = (utcString) => {
@@ -163,34 +167,50 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
     }
   };
 
-  const handleReopen = async (instanceId) => {
-    const minutesStr = window.prompt('Reopen test for how many minutes?', '30');
-    if (!minutesStr) return;
+  const openReopenModal = (t) => {
+    // Default reopen-until: 1 hour from now
+    const defaultUntil = new Date(Date.now() + 60 * 60000);
+    const pad = (n) => String(n).padStart(2, '0');
+    const yr = defaultUntil.getFullYear();
+    const mo = pad(defaultUntil.getMonth() + 1);
+    const dy = pad(defaultUntil.getDate());
+    const hr = pad(defaultUntil.getHours());
+    const mn = pad(defaultUntil.getMinutes());
+    const localDefault = yr + '-' + mo + '-' + dy + 'T' + hr + ':' + mn;
+    setReopenModal({
+      instanceId: t.instance_id,
+      isSubmitted: !!t.submitted_at,
+      reopenUntil: localDefault,
+    });
+  };
 
-    const minutes = Number(minutesStr);
-    if (!Number.isFinite(minutes) || minutes <= 0) {
-      alert('Please enter a positive number of minutes.');
-      return;
-    }
-
+  const saveReopen = async () => {
+    if (!reopenModal) return;
+    setSavingReopen(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/reopen`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ minutes }),
-      });
+      const reopenUntilUtc = new Date(reopenModal.reopenUntil).toISOString();
+      const res = await fetch(
+        API_BASE_URL + '/api/activity-instances/' + reopenModal.instanceId + '/reopen',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ reopenUntil: reopenUntilUtc }),
+        }
+      );
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to reopen test');
-
+      setReopenModal(null);
       await fetchTests();
     } catch (err) {
-      console.error('❌ Reopen failed:', err);
+      console.error('Reopen failed:', err);
       alert(err.message || 'Failed to reopen test.');
+    } finally {
+      setSavingReopen(false);
     }
   };
 
-  const handleMarkReviewed = async (instanceId) => {
+  const handleMarkReviewedviewed = async (instanceId) => {
     const next = new Set(reviewing);
     next.add(instanceId);
     setReviewing(next);
@@ -319,15 +339,14 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
                         View
                       </Button>
 
-                      {hasTiming && !isSubmitted && (
+                      {hasTiming && (
                         <Button
-                          variant="outline-secondary"
+                          variant={isSubmitted ? 'warning' : 'outline-secondary'}
                           size="sm"
-                          onClick={() => handleReopen(instanceId)}
+                          onClick={() => openReopenModal(t)}
                         >
-                          Reopen
+                          {isSubmitted ? 'Reopen (submitted)' : 'Reopen'}
                         </Button>
-
                       )}
                       <Button
                         variant="outline-primary"
@@ -361,6 +380,41 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
           </tbody>
         </Table>
       )}
+      {/* Reopen test modal */}
+      <Modal show={!!reopenModal} onHide={() => setReopenModal(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Reopen test</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {reopenModal && reopenModal.isSubmitted && (
+            <div className="alert alert-warning py-2 small mb-3">
+              This student already submitted. Reopening will clear their submission and grading
+              so they can resubmit. Their answers will be preserved.
+            </div>
+          )}
+          <Form.Group>
+            <Form.Label>Open until (your local time)</Form.Label>
+            <Form.Control
+              type="datetime-local"
+              value={reopenModal ? reopenModal.reopenUntil : ''}
+              onChange={(e) => setReopenModal(function(prev) { return Object.assign({}, prev, { reopenUntil: e.target.value }); })}
+            />
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setReopenModal(null)} disabled={savingReopen}>
+            Cancel
+          </Button>
+          <Button
+            variant={reopenModal && reopenModal.isSubmitted ? 'warning' : 'primary'}
+            onClick={saveReopen}
+            disabled={savingReopen}
+          >
+            {savingReopen ? 'Saving…' : (reopenModal && reopenModal.isSubmitted ? 'Reopen & clear submission' : 'Save')}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
       <Modal show={!!editing} onHide={() => setEditing(null)} centered>
         <Modal.Header closeButton>
           <Modal.Title>Edit test timing</Modal.Title>

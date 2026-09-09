@@ -1023,46 +1023,59 @@ export default function RunActivityPage({
   }, []);
 
 
+  // Keep a stable ref to the latest draft answers so the periodic save reads
+  // current values without resetting the timer on every keystroke.
+  const draftAnswersRef = useRef({ existingAnswers, followupAnswers });
+  useEffect(() => {
+    draftAnswersRef.current = { existingAnswers, followupAnswers };
+  }, [existingAnswers, followupAnswers]);
+
+  const flushDrafts = useCallback(() => {
+    if (!canPersistDrafts || !isActive || !user?.id || !instanceId) return;
+    const { existingAnswers: ea, followupAnswers: fa } = draftAnswersRef.current;
+    const textToSave = {};
+    for (const [key, val] of Object.entries(ea)) {
+      if (/^\d+[A-Za-z]+AI\d+$/i.test(key)) continue;
+      if (val?.type === 'text' && val.response?.trim()) {
+        textToSave[key] = val.response.trim();
+      }
+    }
+    for (const [key, val] of Object.entries(fa)) {
+      if (val?.trim()) {
+        textToSave[key] = val.trim();
+      }
+    }
+    if (Object.keys(textToSave).length === 0) return;
+    fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ instanceId, userId: user.id, answers: textToSave }),
+    }).catch(() => {});
+  }, [canPersistDrafts, isActive, user?.id, instanceId]);
+
+  // Flush drafts whenever the student leaves or hides the tab.
+  useEffect(() => {
+    if (!canPersistDrafts || !isActive) return;
+    const handleLeave = () => flushDrafts();
+    document.addEventListener('visibilitychange', handleLeave);
+    window.addEventListener('beforeunload', handleLeave);
+    return () => {
+      document.removeEventListener('visibilitychange', handleLeave);
+      window.removeEventListener('beforeunload', handleLeave);
+    };
+  }, [canPersistDrafts, isActive, flushDrafts]);
+
   useEffect(() => {
     if (!canPersistDrafts) return;
     if (!isActive || !user?.id || !instanceId) return;
 
     const interval = setInterval(() => {
-      const textToSave = {};
-
-      for (const [key, val] of Object.entries(existingAnswers)) {
-        // AI turn rows (1aAI1, 1aAI2, ...) are written authoritatively by the
-        // AI endpoint at the moment the exchange happens. They ride along in
-        // the answers map so the transcript renders, but they must never be
-        // re-saved as drafts or we end up with a second, divergent copy.
-        if (/^\d+[A-Za-z]+AI\d+$/i.test(key)) continue;
-        if (val?.type === 'text' && val.response?.trim()) {
-          textToSave[key] = val.response.trim();
-        }
-      }
-
-      for (const [key, val] of Object.entries(followupAnswers)) {
-        if (val?.trim()) {
-          textToSave[key] = val.trim();
-        }
-      }
-
-      if (Object.keys(textToSave).length > 0) {
-        fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            instanceId,
-            userId: user.id,
-            answers: textToSave,
-          }),
-        }).catch(() => { });
-      }
+      flushDrafts();
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [canPersistDrafts, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
+  }, [canPersistDrafts, isActive, user?.id, instanceId, flushDrafts]);
 
   useEffect(() => {
     if (!activeStudentId) return;

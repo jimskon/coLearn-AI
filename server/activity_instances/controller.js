@@ -2187,6 +2187,29 @@ async function getInstancesForActivityInCourse(req, res) {
     );
 
 
+    // Batch-fetch which instances have *any* saved work (drafts OR submitted
+    // responses). Used to distinguish "not started" from "in progress" for
+    // assignment instances whose progress_status is never updated by the
+    // group-navigation flow.
+    const instanceIds = instances.map((i) => i.instance_id);
+    const hasResponsesSet = new Set();
+    if (instanceIds.length > 0) {
+      const [draftHits] = await db.query(
+        `SELECT DISTINCT activity_instance_id
+         FROM response_drafts
+         WHERE activity_instance_id IN (?)`,
+        [instanceIds]
+      );
+      const [respHits] = await db.query(
+        `SELECT DISTINCT activity_instance_id
+         FROM responses
+         WHERE activity_instance_id IN (?)`,
+        [instanceIds]
+      );
+      draftHits.forEach((r) => hasResponsesSet.add(Number(r.activity_instance_id)));
+      respHits.forEach((r) => hasResponsesSet.add(Number(r.activity_instance_id)));
+    }
+
     const groups = [];
     for (const inst of instances) {
       const [members] = await db.query(
@@ -2277,6 +2300,7 @@ async function getInstancesForActivityInCourse(req, res) {
         reviewed_at: inst.reviewed_at,
         points_earned: inst.points_earned,
         points_possible: inst.points_possible,
+        has_responses: hasResponsesSet.has(Number(inst.instance_id)),
         group_submit_counts: groupSubmitCounts,
         members: members.map(m => ({
           student_id: m.student_id,

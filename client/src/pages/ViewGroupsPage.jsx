@@ -20,6 +20,15 @@ import { FaUserCheck, FaLaptop, FaRandom } from 'react-icons/fa';
 import { formatUtcToLocal, parseUtcDbDatetime } from '../utils/time';
 
 function progressLabelFromInstanceRow(g) {
+  // For assignments, use submitted_at / has_responses rather than the
+  // progress_status field (which the group-navigation flow never updates for
+  // assignment instances — it stays 'not_started' forever).
+  if (g.is_assignment) {
+    if (g.submitted_at) return g.submitted_late ? 'Submitted late' : 'Submitted on time';
+    if (g.has_responses) return 'In progress';
+    return 'Not started';
+  }
+
   const tg = Number(g.total_groups || 0);
   const cg = Number(g.completed_groups || 0);
   const status = String(g.progress_status || '').toLowerCase();
@@ -32,6 +41,8 @@ function progressLabelFromInstanceRow(g) {
 }
 
 function isCompleteFromInstanceRow(g) {
+  if (g.is_assignment) return !!g.submitted_at;
+
   const tg = Number(g.total_groups ?? 0);
   const cg = Number(g.completed_groups ?? 0);
 
@@ -306,7 +317,13 @@ export default function ViewGroupsPage() {
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
       if (data.activityType) setActivityType(data.activityType);
-      setGroups(data.groups);
+      // Tag each row so helper functions can branch on assignment vs other modes
+      // without threading activityType as an argument everywhere.
+      const taggedGroups = (data.groups || []).map((g) => ({
+        ...g,
+        is_assignment: data.activityType === 'assignment',
+      }));
+      setGroups(taggedGroups);
       if (Array.isArray(data.groups) && data.groups.length > 0) {
         setRotationMode(String(data.groups[0].active_rotation_mode || 'submit'));
       }
@@ -710,6 +727,118 @@ export default function ViewGroupsPage() {
               Demo instructor mode: roster and rotation controls are visible but disabled. Use <strong>View Activity</strong> to open the group activity.
             </Alert>
           ) : null}
+          {/* ── Assignment mode: compact table ── */}
+          {activityType === 'assignment' && (
+            <div className="table-responsive mb-4">
+              <table className="table table-sm table-hover align-middle">
+                <thead className="table-light">
+                  <tr>
+                    <th>Student</th>
+                    <th>Status</th>
+                    <th>Due</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((group) => {
+                    const isComplete = isCompleteFromInstanceRow(group);
+                    const instanceId = Number(group.instance_id);
+                    const student = (group.members || [])[0];
+                    const label = progressLabelFromInstanceRow(group);
+                    const statusVariant =
+                      isComplete
+                        ? group.submitted_late ? 'text-warning-emphasis' : 'text-success'
+                        : group.has_responses ? 'text-primary' : 'text-muted';
+
+                    return (
+                      <tr key={group.instance_id}>
+                        <td>
+                          <div className="fw-semibold">{student?.name || '—'}</div>
+                          {!isDemoClass && student?.email && (
+                            <div className="small text-muted">{student.email}</div>
+                          )}
+                        </td>
+                        <td>
+                          <span className={statusVariant}>{label}</span>
+                        </td>
+                        <td>
+                          {dueEdit && dueEdit.instanceId === group.instance_id ? (
+                            <div style={{ minWidth: 220 }}>
+                              <Form.Control
+                                type="datetime-local"
+                                size="sm"
+                                className="mb-1"
+                                value={dueEdit.dueAt}
+                                onChange={(e) => setDueEdit((p) => ({ ...p, dueAt: e.target.value }))}
+                              />
+                              {dueEdit.isSubmitted && (
+                                <Form.Check
+                                  type="checkbox"
+                                  label="Reopen"
+                                  checked={dueEdit.reopen}
+                                  onChange={(e) => setDueEdit((p) => ({ ...p, reopen: e.target.checked }))}
+                                  className="mb-1 small"
+                                />
+                              )}
+                              <div className="d-flex gap-1">
+                                <Button size="sm" variant="primary" onClick={saveDueDate} disabled={savingDue}>
+                                  {savingDue ? 'Saving…' : 'Save'}
+                                </Button>
+                                <Button size="sm" variant="secondary" onClick={() => setDueEdit(null)} disabled={savingDue}>
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="d-flex align-items-center gap-1">
+                              <span className="small">
+                                {group.assignment_due_at ? formatUtcToLocal(group.assignment_due_at) : '—'}
+                              </span>
+                              {!isDemoInstructor && (
+                                <Button
+                                  size="sm" variant="outline-secondary" className="py-0 px-1"
+                                  title="Edit due date"
+                                  onClick={() => setDueEdit({
+                                    instanceId: group.instance_id,
+                                    dueAt: toLocalInput(group.assignment_due_at),
+                                    reopen: false,
+                                    isSubmitted: !!group.submitted_at,
+                                  })}
+                                >✏️</Button>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="text-end">
+                          <div className="d-flex gap-1 justify-content-end flex-wrap">
+                            <Button
+                              variant="primary" size="sm"
+                              onClick={() => navigate(`/run/${group.instance_id}`, { state: { courseName } })}
+                            >
+                              {isComplete ? 'Review' : 'View'}
+                            </Button>
+                            {!isDemoInstructor && (
+                              <Button
+                                variant="outline-danger" size="sm"
+                                title="Danger zone"
+                                onClick={() => {
+                                  const lbl = student?.name || 'Student';
+                                  setDangerModal({ instanceId: group.instance_id, label: lbl, action: null });
+                                }}
+                              >⚠️</Button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ── Activity / test mode: card grid ── */}
+          {activityType !== 'assignment' && (
           <Row>
           {groups.map((group) => {
             const isComplete = isCompleteFromInstanceRow(group);
@@ -859,13 +988,14 @@ export default function ViewGroupsPage() {
                         )}
                       </div>
                     )}
-                    <GroupProgressBars group={group} />
+                    {activityType !== 'assignment' && <GroupProgressBars group={group} />}
                   </Card.Body>
                 </Card>
               </Col>
             );
           })}
           </Row>
+          )}
         </>
       )}
 

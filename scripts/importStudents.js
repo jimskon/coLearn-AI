@@ -2,13 +2,13 @@
 // scripts/importStudents.js
 // Usage: node scripts/importStudents.js students.csv
 //
-// CSV format (header row required):
-//   name,email
-//   -- or --
-//   first_name,last_name,email
+// CSV format — NO header row, three columns:
+//   Name, email, password
+//   Abd Grece, greceabd06@gmail.com, KENYON
+// Each student's password comes from column 3.
 //
-// Prompts for a default password for new accounts and an optional
-// course join code to enroll everyone in an existing class instance.
+// Prompts for an optional course join code to enroll everyone in an
+// existing class instance.  Each student's password comes from the CSV.
 
 'use strict';
 
@@ -67,37 +67,35 @@ function ask(question, { hidden = false } = {}) {
 }
 
 function parseCsv(text) {
+  // Format: Name, email, institution  (no header row)
+  // Handles extra whitespace and trailing tab-separated columns.
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  if (lines.length < 2) throw new Error('CSV must have a header row and at least one data row.');
-
-  const headers = lines[0].split(',').map((h) => h.trim().toLowerCase().replace(/[^a-z_]/g, ''));
-
-  const nameIdx     = headers.indexOf('name');
-  const firstIdx    = headers.indexOf('first_name');
-  const lastIdx     = headers.indexOf('last_name');
-  const emailIdx    = headers.indexOf('email');
-
-  if (emailIdx === -1) throw new Error('CSV must have an "email" column.');
-  if (nameIdx === -1 && (firstIdx === -1 || lastIdx === -1)) {
-    throw new Error('CSV must have either a "name" column or both "first_name" and "last_name" columns.');
-  }
+  if (lines.length < 1) throw new Error('CSV is empty.');
 
   const students = [];
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = 0; i < lines.length; i++) {
+    // Split on commas; each field may have surrounding whitespace
     const cols = lines[i].split(',').map((c) => c.trim());
-    const email = cols[emailIdx] || '';
-    if (!email) continue;
-
-    let name;
-    if (nameIdx !== -1) {
-      name = cols[nameIdx] || '';
-    } else {
-      name = `${cols[firstIdx] || ''} ${cols[lastIdx] || ''}`.trim();
+    if (cols.length < 2) {
+      console.warn(`  Skipping row ${i + 1} (not enough columns): ${lines[i]}`);
+      continue;
     }
+    const name  = cols[0];
+    const email = cols[1].toLowerCase();
+    // cols[2] is the student's password (required)
 
-    if (!name) throw new Error(`Row ${i + 1}: could not determine student name.`);
-    students.push({ name, email: email.toLowerCase() });
+    if (!name || !email || !email.includes('@')) {
+      console.warn(`  Skipping row ${i + 1} (missing name or invalid email): ${lines[i]}`);
+      continue;
+    }
+    const password = cols[2] || '';
+    if (!password) {
+      console.warn(`  Skipping row ${i + 1} (missing password): ${lines[i]}`);
+      continue;
+    }
+    students.push({ name, email, password });
   }
+  if (students.length === 0) throw new Error('No valid rows found in CSV.');
   return students;
 }
 
@@ -127,17 +125,9 @@ async function main() {
   console.log(`\nImport Students into coLearn\n`);
   console.log(`Found ${students.length} student(s) in ${path.basename(resolvedPath)}\n`);
 
-  // Default password for new accounts
-  const password = await ask('Default password for new accounts: ', { hidden: true });
-  const confirm  = await ask('Confirm password: ',                  { hidden: true });
-  if (password !== confirm) { console.error('Passwords do not match.'); process.exit(1); }
-  if (password.length < 6)  { console.error('Password must be at least 6 characters.'); process.exit(1); }
-
   // Optional join code
   const joinCodeRaw = await ask('Course join code (press Enter to skip): ');
   const joinCode = joinCodeRaw || null;
-
-  const hash = await bcrypt.hash(password, 10);
 
   const conn = await mysql.createConnection({
     host:     process.env.DB_HOST,
@@ -165,7 +155,7 @@ async function main() {
 
   const results = { created: 0, existing: 0, enrolled: 0, alreadyEnrolled: 0, errors: [] };
 
-  for (const { name, email } of students) {
+  for (const { name, email, password } of students) {
     try {
       // Upsert user
       const [[existing]] = await conn.execute(
@@ -178,9 +168,10 @@ async function main() {
         results.existing++;
         process.stdout.write(`  ~ ${name} <${email}> — already exists\n`);
       } else {
+        const studentHash = await bcrypt.hash(password, 10);
         const [ins] = await conn.execute(
           `INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'student')`,
-          [name, email, hash]
+          [name, email, studentHash]
         );
         userId = ins.insertId;
         results.created++;

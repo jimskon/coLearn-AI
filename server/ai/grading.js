@@ -1,9 +1,6 @@
 // server/ai/grading.js
-const OpenAI = require("openai");
+const { chatCompletion } = require('./llm-provider');
 require("dotenv").config();
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
 function stripHtml(s = "") {
   return String(s)
@@ -146,18 +143,15 @@ async function gradeTestQuestion({
   const user = userLines.join("\n");
 
   try {
-    const chat = await openai.chat.completions.create({
-      model: MODEL,
+    const { text: raw } = await chatCompletion({
       messages: [
         { name: "grader", role: "system", content: sys },
         { role: "user", content: user },
       ],
       temperature: 0.1,
       max_tokens: 260,
-      response_format: { type: "json_object" },
+      jsonMode: true,
     });
-
-    const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
     const obj = JSON.parse(raw);
 
     let codeScore = Number(obj.codeScore ?? 0);

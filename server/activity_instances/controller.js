@@ -1850,8 +1850,21 @@ async function submitGroupResponses(req, res) {
       const currentBaseValue = String(group.baseValue ?? '');
       const previousBaseValue = String(latestByQid.get(baseQid) ?? '');
       if (currentBaseValue === previousBaseValue) {
-        payloadEntries.push(...finalFeedbackEntries);
-        continue;
+        // For code-only questions, group.baseValue is null because the base
+        // question key (e.g. '1a') is never set in answers — only '1acode1' is.
+        // In that case the '' === '' comparison always matches and code is never
+        // saved. Fall back to checking if any non-feedback entry actually changed.
+        if (group.baseValue != null) {
+          payloadEntries.push(...finalFeedbackEntries);
+          continue;
+        }
+        const anyDataChanged = group.entries
+          .filter(([qid]) => !isFinalAiFeedbackEntry(qid, baseQid))
+          .some(([qid, val]) => String(latestByQid.get(qid) ?? '') !== String(val ?? ''));
+        if (!anyDataChanged) {
+          payloadEntries.push(...finalFeedbackEntries);
+          continue;
+        }
       }
 
       payloadEntries.push(...group.entries);

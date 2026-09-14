@@ -19,10 +19,15 @@ export default function ViewTestsPage() {
   const [error, setError] = useState('');
 
   const [clearing, setClearing] = useState(new Set());
+  const [deleting, setDeleting] = useState(new Set());
   const [reviewing, setReviewing] = useState(new Set());
 
   const [editing, setEditing] = useState(null); // { instanceId, startAtLocal, durationMinutes }
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Reopen modal state
+  const [reopenModal, setReopenModal] = useState(null); // { instanceId, isSubmitted, reopenUntil }
+  const [savingReopen, setSavingReopen] = useState(false);
 
 
 
@@ -138,34 +143,74 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
     }
   };
 
-  const handleReopen = async (instanceId) => {
-    const minutesStr = window.prompt('Reopen test for how many minutes?', '30');
-    if (!minutesStr) return;
+  const deleteInstance = async (instanceId) => {
+    if (!window.confirm('Delete this test attempt permanently? This removes the student membership, saved work, submission, scores, and feedback. This cannot be undone.')) return;
 
-    const minutes = Number(minutesStr);
-    if (!Number.isFinite(minutes) || minutes <= 0) {
-      alert('Please enter a positive number of minutes.');
-      return;
-    }
-
+    setDeleting((previous) => new Set(previous).add(instanceId));
     try {
-      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/reopen`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
+        method: 'DELETE',
         credentials: 'include',
-        body: JSON.stringify({ minutes }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to reopen test');
-
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data?.error || 'Failed to delete the test attempt.');
       await fetchTests();
     } catch (err) {
-      console.error('❌ Reopen failed:', err);
-      alert(err.message || 'Failed to reopen test.');
+      console.error('Delete test instance failed:', err);
+      alert(err?.message || 'Failed to delete the test attempt.');
+    } finally {
+      setDeleting((previous) => {
+        const next = new Set(previous);
+        next.delete(instanceId);
+        return next;
+      });
     }
   };
 
-  const handleMarkReviewed = async (instanceId) => {
+  const openReopenModal = (t) => {
+    // Default reopen-until: 1 hour from now
+    const defaultUntil = new Date(Date.now() + 60 * 60000);
+    const pad = (n) => String(n).padStart(2, '0');
+    const yr = defaultUntil.getFullYear();
+    const mo = pad(defaultUntil.getMonth() + 1);
+    const dy = pad(defaultUntil.getDate());
+    const hr = pad(defaultUntil.getHours());
+    const mn = pad(defaultUntil.getMinutes());
+    const localDefault = yr + '-' + mo + '-' + dy + 'T' + hr + ':' + mn;
+    setReopenModal({
+      instanceId: t.instance_id,
+      isSubmitted: !!t.submitted_at,
+      reopenUntil: localDefault,
+    });
+  };
+
+  const saveReopen = async () => {
+    if (!reopenModal) return;
+    setSavingReopen(true);
+    try {
+      const reopenUntilUtc = new Date(reopenModal.reopenUntil).toISOString();
+      const res = await fetch(
+        API_BASE_URL + '/api/activity-instances/' + reopenModal.instanceId + '/reopen',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ reopenUntil: reopenUntilUtc }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to reopen test');
+      setReopenModal(null);
+      await fetchTests();
+    } catch (err) {
+      console.error('Reopen failed:', err);
+      alert(err.message || 'Failed to reopen test.');
+    } finally {
+      setSavingReopen(false);
+    }
+  };
+
+  const handleMarkReviewedviewed = async (instanceId) => {
     const next = new Set(reviewing);
     next.add(instanceId);
     setReviewing(next);
@@ -193,12 +238,16 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
   return (
     <Container className="mt-4">
       <h2>
-        {activityTitle ? `Tests: ${activityTitle}` : 'Tests'}
+        {activityTitle ? `Exam roster: ${activityTitle}` : 'Exam roster'}
         <Badge bg="warning" text="dark" className="ms-2">
-          Test
+          Professor-managed
         </Badge>
       </h2>
       {courseName && <h4 className="text-muted">{courseName}</h4>}
+      <Alert variant="info" className="mt-3">
+        This page shows the instructor-managed exam attempts. Students only see the exam workspace;
+        this roster is for scheduling, reopening, reviewing, and clearing submissions.
+      </Alert>
 
       {loading ? (
         <Spinner animation="border" />
@@ -212,8 +261,8 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
             <tr>
               <th>Student</th>
               <th>Status</th>
-              <th>Start</th>
-              <th>Duration</th>
+              <th>Release</th>
+              <th>Window</th>
               <th>Reopen until</th>
               <th>Submitted</th>
               <th>Score</th>
@@ -290,15 +339,14 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
                         View
                       </Button>
 
-                      {hasTiming && !isSubmitted && (
+                      {hasTiming && (
                         <Button
-                          variant="outline-secondary"
+                          variant={isSubmitted ? 'warning' : 'outline-secondary'}
                           size="sm"
-                          onClick={() => handleReopen(instanceId)}
+                          onClick={() => openReopenModal(t)}
                         >
-                          Reopen
+                          {isSubmitted ? 'Reopen (submitted)' : 'Reopen'}
                         </Button>
-
                       )}
                       <Button
                         variant="outline-primary"
@@ -316,6 +364,14 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
                       >
                         {clearing.has(instanceId) ? 'Clearing…' : 'Clear'}
                       </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        disabled={deleting.has(instanceId)}
+                        onClick={() => deleteInstance(instanceId)}
+                      >
+                        {deleting.has(instanceId) ? 'Deleting…' : 'Delete'}
+                      </Button>
                     </div>
                   </td>
                 </tr>
@@ -324,6 +380,41 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
           </tbody>
         </Table>
       )}
+      {/* Reopen test modal */}
+      <Modal show={!!reopenModal} onHide={() => setReopenModal(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Reopen test</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {reopenModal && reopenModal.isSubmitted && (
+            <div className="alert alert-warning py-2 small mb-3">
+              This student already submitted. Reopening will clear their submission and grading
+              so they can resubmit. Their answers will be preserved.
+            </div>
+          )}
+          <Form.Group>
+            <Form.Label>Open until (your local time)</Form.Label>
+            <Form.Control
+              type="datetime-local"
+              value={reopenModal ? reopenModal.reopenUntil : ''}
+              onChange={(e) => setReopenModal(function(prev) { return Object.assign({}, prev, { reopenUntil: e.target.value }); })}
+            />
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setReopenModal(null)} disabled={savingReopen}>
+            Cancel
+          </Button>
+          <Button
+            variant={reopenModal && reopenModal.isSubmitted ? 'warning' : 'primary'}
+            onClick={saveReopen}
+            disabled={savingReopen}
+          >
+            {savingReopen ? 'Saving…' : (reopenModal && reopenModal.isSubmitted ? 'Reopen & clear submission' : 'Save')}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
       <Modal show={!!editing} onHide={() => setEditing(null)} centered>
         <Modal.Header closeButton>
           <Modal.Title>Edit test timing</Modal.Title>

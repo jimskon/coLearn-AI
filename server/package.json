@@ -1,14 +1,14 @@
 {
   "name": "colearn-ai-server",
-  "version": "0.9.0",
+  "version": "1.1.0",
   "description": "Express API server for coLearn-AI",
   "main": "index.js",
   "scripts": {
     "lint:syntax": "node scripts/check-syntax.js",
-      "test:unit": "node --test tests",
-    "test:db": "node --test tests/*.db.test.js",
-    "test": "npm run lint:syntax && npm run test:unit",
-    "test:ci": "npm test && npm run test:db",
+    "test:unit": "node --test $(ls tests/*.test.js | grep -v '[.]db[.]test[.]js$')",
+    "test:db": "node --test --test-concurrency=1 tests/*.db.test.js",
+    "test": "npm run lint:syntax && npm run test:unit && npm run test:db",
+    "test:ci": "npm test",
     "start": "node index.js"
   },
   "keywords": [],

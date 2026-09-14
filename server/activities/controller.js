@@ -1,12 +1,111 @@
 // server/activities/controller.js
 const db = require('../db');
+const { deleteAbandonedSandboxes } = require('../utils/emptyInstances');
+const { ensureSandboxOwnerSchema } = require('../utils/sandboxOwnerSchema');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
-const { loadActivitySourceById } = require('../utils/activityContent');
+const {
+  loadActivitySourceById,
+  fetchGoogleDocLinesByUrl,
+  fetchGoogleDocMetadataByUrl,
+  sourceHash,
+  sourceSyncStatus,
+} = require('../utils/activityContent');
 const { recordAuditEvent } = require('../utils/auditLogger');
+const { ensureActivitySourceSchema } = require('../utils/activitySourceSchema');
+const { ensureActivityEditLockSchema } = require('../utils/activityEditLockSchema');
+const { validateActivityMarkup } = require('../../shared/activityMarkupValidation.cjs');
+const { randomUUID } = require('crypto');
+
+const EDIT_LEASE_SECONDS = 120;
+
+function editorFromRequest(req) {
+  const user = req.user;
+  const role = String(user?.role || '').toLowerCase();
+  if (!user?.id || !['root', 'creator', 'instructor'].includes(role)) return null;
+  return user;
+}
+
+async function getActivityEditLease(activityId) {
+  const [[lease]] = await db.query(
+    `SELECT l.activity_id, l.user_id, l.lease_token, l.expires_at,
+            u.name AS owner_name, u.email AS owner_email
+       FROM activity_edit_locks l
+       LEFT JOIN users u ON u.id = l.user_id
+      WHERE l.activity_id = ? AND l.expires_at > NOW(3)`,
+    [activityId],
+  );
+  return lease || null;
+}
+
+async function hasValidActivityEditLease(activityId, userId, token) {
+  if (!token) return false;
+  const [[lease]] = await db.query(
+    `SELECT 1 AS valid
+       FROM activity_edit_locks
+      WHERE activity_id = ? AND user_id = ? AND lease_token = ? AND expires_at > NOW(3)`,
+    [activityId, userId, token],
+  );
+  return Boolean(lease?.valid);
+}
 
 function extractTitleFromText(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
   return match ? match[1].trim() : null;
+}
+
+async function getRemoteActivityStatus(activity) {
+  if (!activity?.sheet_url) {
+    const error = new Error('This activity does not have a linked Google Doc.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const [remote, remoteLines] = await Promise.all([
+    fetchGoogleDocMetadataByUrl(activity.sheet_url),
+    fetchGoogleDocLinesByUrl(activity.sheet_url),
+  ]);
+  const remoteText = remoteLines.join('\n');
+  const comparison = sourceSyncStatus({
+    localText: activity.content_text,
+    localUpdatedAt: activity.source_updated_at,
+    remoteText,
+    remoteUpdatedAt: remote.updated_at,
+    lastSyncedHash: activity.last_synced_hash,
+  });
+
+  return { remote, remoteText, comparison };
+}
+
+function sqlDate(value) {
+  const date = value ? new Date(value) : null;
+  return date && Number.isFinite(date.getTime()) ? date : null;
+}
+
+// Reading Google is enough to record what we observed. If the hashes match,
+// this also establishes the shared base used for later conflict detection.
+async function recordRemoteObservation(activity, status) {
+  const hasLocalCopy = activity.content_text != null;
+  const nowInSync = hasLocalCopy && status.comparison.state === 'in_sync';
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET local_source_hash = CASE WHEN ? THEN ? ELSE local_source_hash END,
+            remote_source_hash = ?,
+            remote_updated_at = ?,
+            last_synced_hash = CASE WHEN ? THEN ? ELSE last_synced_hash END,
+            last_synced_at = CASE WHEN ? THEN NOW(3) ELSE last_synced_at END
+      WHERE id = ?`,
+    [
+      hasLocalCopy,
+      hasLocalCopy ? status.comparison.local_hash : null,
+      status.comparison.remote_hash,
+      sqlDate(status.remote.updated_at),
+      nowInSync,
+      nowInSync ? status.comparison.local_hash : null,
+      nowInSync,
+      activity.id,
+    ]
+  );
 }
 
 // Create a new activity
@@ -57,6 +156,7 @@ exports.createActivity = async (req, res) => {
 exports.getActivity = async (req, res) => {
   const { id } = req.params;
   try {
+    await ensureActivitySourceSchema();
     const [rows] = await db.query('SELECT * FROM pogil_activities WHERE id = ?', [id]);
     if (rows.length === 0) {
       return res.status(404).json({ error: 'Activity not found' });
@@ -73,10 +173,106 @@ exports.getActivity = async (req, res) => {
   }
 };
 
+exports.acquireActivityEditLease = async (req, res) => {
+  const activityId = Number(req.params.id);
+  const editor = editorFromRequest(req);
+  if (!activityId || !editor) {
+    return res.status(403).json({ error: 'Only signed-in instructors and creators can edit activities.' });
+  }
+
+  try {
+    await ensureActivityEditLockSchema();
+    const [[activity]] = await db.query('SELECT id FROM pogil_activities WHERE id = ?', [activityId]);
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    const leaseToken = randomUUID();
+    // This single statement safely replaces an expired lease, or refreshes a
+    // lease for the same person. A live lease belonging to somebody else is
+    // intentionally left untouched.
+    await db.query(
+      `INSERT INTO activity_edit_locks
+          (activity_id, user_id, lease_token, acquired_at, expires_at)
+       VALUES (?, ?, ?, NOW(3), DATE_ADD(NOW(3), INTERVAL ${EDIT_LEASE_SECONDS} SECOND))
+       ON DUPLICATE KEY UPDATE
+         user_id = IF(expires_at <= NOW(3) OR user_id = ?, VALUES(user_id), user_id),
+         lease_token = IF(expires_at <= NOW(3) OR user_id = ?, VALUES(lease_token), lease_token),
+         acquired_at = IF(expires_at <= NOW(3) OR user_id = ?, NOW(3), acquired_at),
+         expires_at = IF(expires_at <= NOW(3) OR user_id = ?,
+           DATE_ADD(NOW(3), INTERVAL ${EDIT_LEASE_SECONDS} SECOND), expires_at)`,
+      [activityId, editor.id, leaseToken, editor.id, editor.id, editor.id, editor.id],
+    );
+
+    const lease = await getActivityEditLease(activityId);
+    if (!lease || Number(lease.user_id) !== Number(editor.id) || lease.lease_token !== leaseToken) {
+      return res.status(423).json({
+        error: `${lease?.owner_name || lease?.owner_email || 'Another instructor'} is editing this activity.`,
+        owner_name: lease?.owner_name || lease?.owner_email || 'Another instructor',
+        expires_at: lease?.expires_at || null,
+      });
+    }
+
+    return res.json({
+      lease_token: leaseToken,
+      expires_at: lease.expires_at,
+      lease_seconds: EDIT_LEASE_SECONDS,
+    });
+  } catch (err) {
+    console.error('acquireActivityEditLease error:', err);
+    return res.status(500).json({ error: 'Could not start this editing session.' });
+  }
+};
+
+exports.heartbeatActivityEditLease = async (req, res) => {
+  const activityId = Number(req.params.id);
+  const editor = editorFromRequest(req);
+  const token = String(req.body?.lease_token || '');
+  if (!activityId || !editor || !token) {
+    return res.status(400).json({ error: 'An activity editing lease is required.' });
+  }
+
+  try {
+    await ensureActivityEditLockSchema();
+    const [result] = await db.query(
+      `UPDATE activity_edit_locks
+          SET expires_at = DATE_ADD(NOW(3), INTERVAL ${EDIT_LEASE_SECONDS} SECOND)
+        WHERE activity_id = ? AND user_id = ? AND lease_token = ? AND expires_at > NOW(3)`,
+      [activityId, editor.id, token],
+    );
+    if (!result.affectedRows) {
+      return res.status(409).json({ error: 'Your editing lease expired or was replaced. Reload before saving.' });
+    }
+    const lease = await getActivityEditLease(activityId);
+    return res.json({ expires_at: lease?.expires_at || null, lease_seconds: EDIT_LEASE_SECONDS });
+  } catch (err) {
+    console.error('heartbeatActivityEditLease error:', err);
+    return res.status(500).json({ error: 'Could not renew the editing session.' });
+  }
+};
+
+exports.releaseActivityEditLease = async (req, res) => {
+  const activityId = Number(req.params.id);
+  const editor = editorFromRequest(req);
+  const token = String(req.body?.lease_token || '');
+  if (!activityId || !editor || !token) return res.status(204).end();
+
+  try {
+    await ensureActivityEditLockSchema();
+    await db.query(
+      'DELETE FROM activity_edit_locks WHERE activity_id = ? AND user_id = ? AND lease_token = ?',
+      [activityId, editor.id, token],
+    );
+    return res.status(204).end();
+  } catch (err) {
+    console.error('releaseActivityEditLease error:', err);
+    return res.status(500).json({ error: 'Could not close the editing session.' });
+  }
+};
+
 exports.getActivitySource = async (req, res) => {
   const { id } = req.params;
 
   try {
+    await ensureActivitySourceSchema();
     const source = await loadActivitySourceById(db, id);
     if (!source) {
       return res.status(404).json({ error: 'Activity not found' });
@@ -85,6 +281,17 @@ exports.getActivitySource = async (req, res) => {
     return res.json({
       activity_id: Number(id),
       source_type: source.activity.source_type || 'remote',
+      source_updated_at: source.activity.source_updated_at || null,
+      metadata: {
+        source_updated_at: source.activity.source_updated_at || null,
+        source_revision: source.activity.source_revision || 0,
+        source_origin: source.activity.source_origin || null,
+        local_source_hash: source.activity.local_source_hash || null,
+        remote_source_hash: source.activity.remote_source_hash || null,
+        remote_updated_at: source.activity.remote_updated_at || null,
+        last_synced_hash: source.activity.last_synced_hash || null,
+        last_synced_at: source.activity.last_synced_at || null,
+      },
       lines: source.lines,
       text: source.text,
     });
@@ -96,39 +303,244 @@ exports.getActivitySource = async (req, res) => {
 
 exports.saveActivitySource = async (req, res) => {
   const { id } = req.params;
-  const { text } = req.body || {};
+  const { text, expected_revision: expectedRevisionRaw, edit_lease_token: editLeaseToken } = req.body || {};
 
   if (typeof text !== 'string') {
     return res.status(400).json({ error: 'text is required' });
   }
 
+  const markupValidation = validateActivityMarkup(text);
+  if (!markupValidation.valid) {
+    return res.status(400).json({
+      error: 'Activity markup is invalid. Fix the reported structural errors before saving.',
+      issues: markupValidation.issues,
+    });
+  }
+
   try {
-    const [rows] = await db.query('SELECT id, title FROM pogil_activities WHERE id = ?', [id]);
+    await ensureActivitySourceSchema();
+    await ensureActivityEditLockSchema();
+    const [rows] = await db.query('SELECT id, title, source_revision FROM pogil_activities WHERE id = ?', [id]);
     if (!rows.length) {
       return res.status(404).json({ error: 'Activity not found' });
+    }
+
+    const expectedRevision = Number(expectedRevisionRaw);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({ error: 'expected_revision is required to save safely.' });
+    }
+
+    const activeLease = await getActivityEditLease(id);
+    if (activeLease) {
+      const editor = editorFromRequest(req);
+      const ownsLease = editor
+        && Number(activeLease.user_id) === Number(editor.id)
+        && await hasValidActivityEditLease(id, editor.id, editLeaseToken);
+      if (!ownsLease) {
+        return res.status(423).json({
+          error: `${activeLease.owner_name || activeLease.owner_email || 'Another instructor'} is editing this activity.`,
+          owner_name: activeLease.owner_name || activeLease.owner_email || 'Another instructor',
+          expires_at: activeLease.expires_at,
+        });
+      }
     }
 
     const extractedTitle = extractTitleFromText(text);
     const nextTitle = extractedTitle || rows[0].title;
 
-    await db.query(
+    const localHash = sourceHash(text);
+    const [updateResult] = await db.query(
       `UPDATE pogil_activities
           SET content_text = ?,
               source_type = 'local',
-              title = ?
-        WHERE id = ?`,
-      [text, nextTitle, id]
+              title = ?,
+              source_updated_at = NOW(3),
+              source_revision = source_revision + 1,
+              source_origin = 'editor',
+              local_source_hash = ?
+        WHERE id = ? AND source_revision = ?`,
+      [text, nextTitle, localHash, id, expectedRevision]
+    );
+
+    if (!updateResult.affectedRows) {
+      const [[current]] = await db.query(
+        'SELECT source_revision, source_updated_at FROM pogil_activities WHERE id = ?',
+        [id],
+      );
+      return res.status(409).json({
+        error: 'This activity changed after you opened it. Reload before saving.',
+        current_revision: current?.source_revision ?? null,
+        current_updated_at: current?.source_updated_at ?? null,
+      });
+    }
+
+    const [[saved]] = await db.query(
+      `SELECT source_updated_at, source_revision, source_origin,
+              local_source_hash, remote_source_hash, remote_updated_at,
+              last_synced_hash, last_synced_at
+         FROM pogil_activities WHERE id = ?`,
+      [id]
     );
 
     return res.json({
       activity_id: Number(id),
       source_type: 'local',
       title: nextTitle,
+      source_updated_at: saved?.source_updated_at || null,
+      source_revision: saved?.source_revision || 0,
+      source_origin: saved?.source_origin || null,
+      metadata: {
+        source_updated_at: saved?.source_updated_at || null,
+        source_revision: saved?.source_revision || 0,
+        source_origin: saved?.source_origin || null,
+        local_source_hash: saved?.local_source_hash || null,
+        remote_source_hash: saved?.remote_source_hash || null,
+        remote_updated_at: saved?.remote_updated_at || null,
+        last_synced_hash: saved?.last_synced_hash || null,
+        last_synced_at: saved?.last_synced_at || null,
+      },
       text,
     });
   } catch (err) {
     console.error('saveActivitySource error:', err);
     return res.status(500).json({ error: 'Could not save activity source.' });
+  }
+};
+
+exports.getRemoteSourceStatus = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await ensureActivitySourceSchema();
+    const [[activity]] = await db.query(
+      `SELECT id, sheet_url, content_text, source_updated_at,
+              source_revision, source_origin, local_source_hash,
+              remote_source_hash, remote_updated_at, last_synced_hash, last_synced_at
+         FROM pogil_activities WHERE id = ?`,
+      [id]
+    );
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    const status = await getRemoteActivityStatus(activity);
+    await recordRemoteObservation(activity, status);
+    return res.json({
+      activity_id: Number(id),
+      local: {
+        updated_at: activity.source_updated_at || null,
+        revision: activity.source_revision || 0,
+        origin: activity.source_origin || null,
+        has_copy: activity.content_text != null,
+        last_synced_at: status.comparison.state === 'in_sync'
+          ? new Date().toISOString()
+          : activity.last_synced_at || null,
+      },
+      remote: status.remote,
+      comparison: status.comparison,
+    });
+  } catch (err) {
+    console.error('getRemoteSourceStatus error:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : 'Could not read the linked Google Doc.',
+    });
+  }
+};
+
+exports.importRemoteSource = async (req, res) => {
+  const { id } = req.params;
+  try {
+    await ensureActivitySourceSchema();
+    await ensureActivityEditLockSchema();
+    const [[activity]] = await db.query(
+      `SELECT id, title, sheet_url, content_text, source_updated_at,
+              source_revision, last_synced_hash
+         FROM pogil_activities WHERE id = ?`,
+      [id]
+    );
+    if (!activity) return res.status(404).json({ error: 'Activity not found' });
+
+    const expectedRevision = Number(req.body?.expected_revision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      return res.status(400).json({ error: 'expected_revision is required to import safely.' });
+    }
+
+    const activeLease = await getActivityEditLease(id);
+    if (activeLease) {
+      const editor = editorFromRequest(req);
+      const ownsLease = editor
+        && Number(activeLease.user_id) === Number(editor.id)
+        && await hasValidActivityEditLease(id, editor.id, req.body?.edit_lease_token);
+      if (!ownsLease) {
+        return res.status(423).json({
+          error: `${activeLease.owner_name || activeLease.owner_email || 'Another instructor'} is editing this activity.`,
+          owner_name: activeLease.owner_name || activeLease.owner_email || 'Another instructor',
+          expires_at: activeLease.expires_at,
+        });
+      }
+    }
+
+    const { remote, remoteText } = await getRemoteActivityStatus(activity);
+    const markupValidation = validateActivityMarkup(remoteText);
+    if (!markupValidation.valid) {
+      return res.status(400).json({
+        error: 'The linked Google Doc contains invalid activity markup. Fix its structural errors before importing it.',
+        issues: markupValidation.issues,
+      });
+    }
+    const nextTitle = extractTitleFromText(remoteText) || activity.title;
+    const syncedHash = sourceHash(remoteText);
+    const [updateResult] = await db.query(
+      `UPDATE pogil_activities
+          SET content_text = ?,
+              source_type = 'local',
+              title = ?,
+              source_updated_at = NOW(3),
+              source_revision = source_revision + 1,
+              source_origin = 'google_import',
+              local_source_hash = ?,
+              remote_source_hash = ?,
+              remote_updated_at = ?,
+              last_synced_hash = ?,
+              last_synced_at = NOW(3)
+        WHERE id = ? AND source_revision = ?`,
+      [remoteText, nextTitle, syncedHash, syncedHash, sqlDate(remote.updated_at), syncedHash, id, expectedRevision]
+    );
+    if (!updateResult.affectedRows) {
+      const [[current]] = await db.query(
+        'SELECT source_revision, source_updated_at FROM pogil_activities WHERE id = ?',
+        [id],
+      );
+      return res.status(409).json({
+        error: 'This activity changed after you opened it. Reload before importing Google changes.',
+        current_revision: current?.source_revision ?? null,
+        current_updated_at: current?.source_updated_at ?? null,
+      });
+    }
+    const [[saved]] = await db.query(
+      `SELECT source_updated_at, source_revision, source_origin, last_synced_at
+         FROM pogil_activities WHERE id = ?`, [id]
+    );
+
+    void recordAuditEvent('activity_remote_imported', {
+      req,
+      userId: req.user?.id || null,
+      activityId: Number(id),
+      details: { remote_updated_at: remote.updated_at, remote_url: remote.url },
+    });
+    return res.json({
+      activity_id: Number(id),
+      title: nextTitle,
+      source_type: 'local',
+      source_updated_at: saved?.source_updated_at || null,
+      source_revision: saved?.source_revision || 0,
+      source_origin: saved?.source_origin || null,
+      last_synced_at: saved?.last_synced_at || null,
+      text: remoteText,
+      remote,
+    });
+  } catch (err) {
+    console.error('importRemoteSource error:', err);
+    return res.status(err.statusCode || 500).json({
+      error: err.statusCode ? err.message : 'Could not import the linked Google Doc.',
+    });
   }
 };
 
@@ -143,6 +555,18 @@ exports.ensureSandboxInstance = async (req, res) => {
 
   if (!userId || !['instructor', 'creator', 'root'].includes(userRole)) {
     return res.status(403).json({ error: 'Only instructors and creators can open the sandbox.' });
+  }
+
+  // Before anything reads sandbox_owner_id. Migration 021 adds it too; doing it
+  // here as well means the code and the schema can deploy in either order.
+  try {
+    await ensureSandboxOwnerSchema();
+  } catch (err) {
+    console.error('ensureSandboxOwnerSchema failed:', err);
+    return res.status(500).json({
+      error: 'Could not prepare the sandbox. The activity_instances table is missing sandbox_owner_id '
+        + 'and it could not be added automatically -- run migrations/021.',
+    });
   }
 
   const conn = await db.getConnection();
@@ -182,41 +606,71 @@ exports.ensureSandboxInstance = async (req, res) => {
 
     const courseId = Number(course.id);
 
+    // Find this author's sandbox by sandbox_owner_id, not active_student_id.
+    //
+    // active_student_id is a rotation slot, not an identity: it is cleared to
+    // NULL when the author leaves the sandbox, and on group submit. Matching on
+    // it meant the reuse lookup missed every time after the first visit, so a
+    // single activity collected one abandoned sandbox instance per Test Run --
+    // dozens of them, each taking a group number and appearing on the roster as
+    // a group whose student is unknown.
     const [[existing]] = await conn.query(
       `SELECT id AS instance_id
          FROM activity_instances
         WHERE activity_id = ?
           AND course_id = ?
-          AND active_student_id = ?
+          AND sandbox_owner_id = ?
           AND active_rotation_mode = 'sandbox'
         ORDER BY id ASC
         LIMIT 1`,
       [activityId, courseId, userId]
     );
 
+    // Opening a Test Run is also when the previous ones get tidied. Bounded to
+    // this author's own abandoned sandboxes for this activity, so a colleague
+    // with a sandbox open right now is untouched.
+    const sweptExisting = await deleteAbandonedSandboxes(conn, {
+      courseId,
+      activityId,
+      ownerId: userId,
+      exceptId: existing?.instance_id || null,
+    });
+    if (sweptExisting) {
+      console.log('[SANDBOX] swept abandoned sandboxes', { activityId, courseId, userId, sweptExisting });
+    }
+
     if (existing?.instance_id) {
       return res.json({ instanceId: Number(existing.instance_id), created: false });
     }
 
-    const [[nextRow]] = await conn.query(
-      `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_group_number
-         FROM activity_instances
-        WHERE activity_id = ? AND course_id = ?`,
-      [activityId, courseId]
-    );
-
+    // group_number 0 means "not a group", which is the convention the other
+    // sandbox endpoint already uses and which every roster query already
+    // filters on. Taking MAX+1 instead made the sandbox a real group number,
+    // and three separate things count those: the setup gate refuses to create
+    // groups when number 1 exists, new groups are numbered after the highest,
+    // and smart-add looks for a group with space. So a hidden sandbox at
+    // number 1 silently blocked group setup for the whole activity, which is
+    // the leftover that outlived hiding it from the roster.
     const [result] = await conn.query(
       `INSERT INTO activity_instances
          (activity_id, course_id, status, group_number, total_groups, completed_groups,
-          progress_status, active_student_id, active_rotation_mode)
-       VALUES (?, ?, 'in_progress', ?, 0, 0, 'not_started', ?, 'sandbox')`,
-      [activityId, courseId, Number(nextRow?.next_group_number) || 1, userId]
+          progress_status, active_student_id, sandbox_owner_id, active_rotation_mode)
+       VALUES (?, ?, 'in_progress', 0, 0, 0, 'not_started', ?, ?, 'sandbox')`,
+      [activityId, courseId, userId, userId]
     );
 
     return res.status(201).json({ instanceId: Number(result.insertId), created: true });
   } catch (err) {
     console.error('ensureSandboxInstance error:', err);
-    return res.status(500).json({ error: 'Failed to open activity sandbox.' });
+    // "Failed to open activity sandbox." on its own sent us hunting through
+    // three sandbox endpoints for what was a missing column. Name the cause.
+    const detail = err?.code === 'ER_BAD_FIELD_ERROR'
+      ? ' The database is missing a column this build expects; run the pending migrations.'
+      : '';
+    return res.status(500).json({
+      error: `Failed to open activity sandbox.${detail}`,
+      code: err?.code || null,
+    });
   } finally {
     try {
       await conn.query('SELECT RELEASE_LOCK(?)', [lockName]);

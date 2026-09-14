@@ -39,6 +39,7 @@ CREATE TABLE `activity_instances` (
   `total_groups` int(11) DEFAULT NULL,
   `completed_groups` int(11) NOT NULL DEFAULT 0,
   `progress_status` enum('not_started','in_progress','completed') NOT NULL DEFAULT 'not_started',
+  `sandbox_owner_id` int(11) DEFAULT NULL,
   `section_timer_key` varchar(64) DEFAULT NULL,
   `section_timer_duration_minutes` int(11) DEFAULT NULL,
   `section_timer_started_at` datetime DEFAULT NULL,
@@ -50,6 +51,8 @@ CREATE TABLE `activity_instances` (
   `test_duration_minutes` int(10) unsigned NOT NULL DEFAULT 0 COMMENT 'Time limit in minutes for timed tests (0 = no limit)',
   `test_reopen_until` datetime DEFAULT NULL COMMENT 'Optional reopen-until time for this instance',
   `submitted_at` datetime DEFAULT NULL COMMENT 'When the instance was finally submitted',
+  `assignment_due_at` datetime DEFAULT NULL COMMENT 'Optional due date for lab assignments',
+  `submitted_late` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'Whether the first submission was after assignment_due_at',
   `graded_at` datetime DEFAULT NULL,
   `review_complete` tinyint(1) NOT NULL DEFAULT 0,
   `reviewed_at` datetime DEFAULT NULL,
@@ -255,12 +258,34 @@ CREATE TABLE `pogil_activities` (
   `is_test` tinyint(1) DEFAULT NULL,
   `source_type` varchar(16) NOT NULL DEFAULT 'remote',
   `content_text` longtext DEFAULT NULL,
+  `source_updated_at` datetime(3) DEFAULT NULL,
+  `source_revision` int unsigned NOT NULL DEFAULT 0,
+  `source_origin` varchar(32) DEFAULT NULL,
+  `local_source_hash` char(64) DEFAULT NULL,
+  `remote_source_hash` char(64) DEFAULT NULL,
+  `remote_updated_at` datetime(3) DEFAULT NULL,
+  `last_synced_hash` char(64) DEFAULT NULL,
+  `last_synced_at` datetime(3) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `class_id` (`class_id`),
   KEY `created_by` (`created_by`),
   CONSTRAINT `pogil_activities_ibfk_1` FOREIGN KEY (`class_id`) REFERENCES `pogil_classes` (`id`) ON DELETE CASCADE,
   CONSTRAINT `pogil_activities_ibfk_2` FOREIGN KEY (`created_by`) REFERENCES `users` (`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB AUTO_INCREMENT=555 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+/*!40101 SET character_set_client = @saved_cs_client */;
+DROP TABLE IF EXISTS `activity_edit_locks`;
+/*!40101 SET @saved_cs_client     = @@character_set_client */;
+/*!40101 SET character_set_client = utf8mb4 */;
+CREATE TABLE `activity_edit_locks` (
+  `activity_id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `lease_token` char(36) NOT NULL,
+  `acquired_at` datetime(3) NOT NULL,
+  `expires_at` datetime(3) NOT NULL,
+  PRIMARY KEY (`activity_id`),
+  KEY `activity_edit_locks_expires_at_idx` (`expires_at`),
+  CONSTRAINT `activity_edit_locks_activity_fk` FOREIGN KEY (`activity_id`) REFERENCES `pogil_activities` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 DROP TABLE IF EXISTS `pogil_classes`;
 /*!40101 SET @saved_cs_client     = @@character_set_client */;
@@ -273,6 +298,7 @@ CREATE TABLE `pogil_classes` (
   `level` varchar(255) DEFAULT NULL,
   `topic_domain` varchar(255) DEFAULT NULL,
   `demo_mode` tinyint(1) NOT NULL DEFAULT 0,
+  `ai_guidance` text DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `name` (`name`),
   KEY `created_by` (`created_by`),
@@ -348,4 +374,3 @@ CREATE TABLE `users` (
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
-

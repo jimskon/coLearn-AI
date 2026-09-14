@@ -8,13 +8,36 @@ import ActivityPythonBlock from '../components/activity/ActivityPythonBlock';
 import ActivityRemotePythonBlock from '../components/activity/ActivityRemotePythonBlock';
 import InfoBubble from '../components/activity/InfoBubble';
 import { normalizeInfoBubbleTarget } from './infoBubbleSession';
+import {
+  parseMultipleChoiceSelections,
+  serializeMultipleChoiceSelections,
+  validateMultipleChoice,
+} from './multipleChoice';
+import {
+  getMultipleChoiceTestModeIssueMessage,
+  getUnsupportedScoreTypeMessage,
+  parseScoreCommand,
+} from './scoreValidation';
 import { makeResponseAttrs } from './responseDom';
 import { API_BASE_URL } from '../config';
 
-import { Form, Button, Spinner } from 'react-bootstrap';
+import { Badge, Form, Button, Spinner } from 'react-bootstrap';
 
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
+import { createDisplayCodeBlock, parseDisplayCodeBlockCommand } from './displayCodeBlocks';
+import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
+import activityGrammar from '../../../shared/activityGrammar.cjs';
+
+const { closesBlock, familyOfCloser } = codeBlockFamilies;
+const AI_MODE_FLAGS = new Set(activityGrammar.COMMA_LIST_VALUES.aimode.values);
+
+function unsupportedAiModeFlags(value = '') {
+  return String(value || '')
+    .split(',')
+    .map((flag) => flag.trim().toLowerCase())
+    .filter((flag) => flag && !AI_MODE_FLAGS.has(flag));
+}
 
 
 
@@ -46,6 +69,42 @@ const SUPPORTED_INFO_TARGETS = new Set([
   'submitbutton',
   'aifeedback',
 ]);
+
+export const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
+export const INLINE_AI_MODEL_OPTIONS = [
+  { value: 'gpt-5-mini', label: 'GPT-5 mini — standard' },
+  { value: 'gpt-4o-mini', label: 'GPT-4o mini — fast and economical' },
+];
+
+export const INLINE_AI_MODE_GUIDE = [
+  {
+    value: 'explain',
+    label: 'Explain',
+    description: 'Guide the student with hints and clear reasoning.',
+  },
+  {
+    value: 'critique',
+    label: 'Critique',
+    description: 'Review student work and point out what to improve.',
+  },
+  {
+    value: 'testgen',
+    label: 'Testgen',
+    description: 'Suggest checks or test cases the student can run.',
+  },
+  {
+    value: 'generate',
+    label: 'Generate',
+    description: 'Create the requested deliverable directly.',
+  },
+];
+
+const normalizeInlineAiModel = (value) => {
+  const model = String(value || '').trim();
+  return INLINE_AI_MODEL_OPTIONS.some((option) => option.value === model)
+    ? model
+    : INLINE_AI_DEFAULT_MODEL;
+};
 
 const parseInfoSeconds = (value) => {
   const seconds = Number.parseInt(String(value || '').trim(), 10);
@@ -122,58 +181,220 @@ function ImgWithFallback({ src, alt, widthStyle, captionHtml }) {
   );
 }
 
-function InlineAiAssistBlock({
+// ---------------------------------------------------------------------------
+// Inline AI assistance
+//
+// An AI turn is one student prompt plus the AI's reply. Turns are persisted
+// server-side, append-only, as `responses` rows keyed <baseQid>AI<n>. This
+// component therefore keeps NO conversation state of its own when it is running
+// inside a live activity instance: it renders whatever the answers map says.
+//
+// That is deliberate, and it is what delivers three requirements at once:
+//   * observers (including instructors) see the transcript, because they read
+//     the same answers map the active student writes to;
+//   * a change of active student is a non-event, because the thread lives on
+//     the instance rather than in one student's browser;
+//   * the instructor history report gets the exchanges for free.
+//
+// In the activity editor's preview there is no instance to write to, so the
+// component falls back to local state and the stateless /api/ai/assist route.
+// ---------------------------------------------------------------------------
+
+// Pulls the persisted transcript for one question out of the answers map.
+// Turn rows are <baseQid>AI<n>; anything unparseable is skipped rather than
+// throwing, so one bad row cannot blank out a whole conversation.
+export function readAiTranscript(prefill, baseQid) {
+  if (!prefill || !baseQid) return [];
+
+  const pattern = new RegExp(`^${baseQid}AI(\\d+)$`, 'i');
+  const turns = [];
+
+  for (const [key, entry] of Object.entries(prefill)) {
+    const match = pattern.exec(key);
+    if (!match) continue;
+
+    const raw = entry && typeof entry === 'object' ? entry.response : entry;
+    let parsed;
+    try {
+      parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object') continue;
+    if (!parsed.prompt && !parsed.reply) continue;
+
+    turns.push({ ...parsed, index: Number(match[1]) });
+  }
+
+  turns.sort((a, b) => (a.index || 0) - (b.index || 0));
+  return turns;
+}
+
+// The response key an AI block's turns are stored under. AI blocks attached to
+// a question share that question's key, so several \ai blocks in one question
+// form a single thread and land under the right question in the history report.
+export function aiBaseQidFor(aiBlock, questionBlock) {
+  if (questionBlock?.groupId != null && questionBlock?.id) {
+    return `${questionBlock.groupId}${questionBlock.id}`;
+  }
+  // Standalone (group-level) AI panel: `2ai`, `2aib`, `2aic`, ... Always
+  // digits-then-letters so it satisfies the server's question_id validator.
+  const suffix = aiBlock?.previewKey?.match(/:(\d+)$/)?.[1];
+  const nth = Math.max(1, parseInt(suffix, 10) || 1);
+  return `${aiBlock?.groupId ?? 0}ai${nth > 1 ? String.fromCharCode(96 + nth) : ''}`;
+}
+
+export function InlineAiAssistBlock({
   aiBlock,
   questionBlock,
+  activityLanguage = '',
   runMode,
   selectedPreviewKey,
   onSelectBlock,
+  // Live-instance wiring. Absent in the editor preview.
+  baseQid = '',
+  instanceId = null,
+  userId = null,
+  transcript = null,
+  canAsk = true,
+  lockReason = '',
+  onTurnSaved,
 }) {
   const [inputValue, setInputValue] = useState('');
-  const [responseValue, setResponseValue] = useState('');
+  const [localTurns, setLocalTurns] = useState([]);
+  const [pendingPrompt, setPendingPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const historyScrollRef = useRef(null);
+  // Whether the reader is parked at the end of the transcript and wants to
+  // follow it, or has scrolled up and wants to stay where they are.
+  const followTailRef = useRef(true);
+
+  // Persisted mode needs both an instance to attribute the turn to and a key to
+  // file it under; without either we are in the editor preview.
+  const persisted = Number(instanceId) > 0 && !!baseQid;
+  const turns = persisted ? (transcript || []) : localTurns;
 
   const aiSelected = runMode === 'preview' && selectedPreviewKey === aiBlock.previewKey;
+  const modeMeta = INLINE_AI_MODE_GUIDE.find((entry) => entry.value === String(aiBlock.mode || '').toLowerCase())
+    || INLINE_AI_MODE_GUIDE[0];
+
+  /**
+   * Follow the transcript, but only for a reader who is already at the end of
+   * it.
+   *
+   * This used to scroll to the bottom whenever `turns` changed identity, and
+   * the live transcript arrives as a fresh array on every poll -- so a reader
+   * who scrolled up to copy a code block was yanked back to the end every few
+   * seconds, whether or not anything had actually been said. Scrolling up is
+   * the reader saying "hold still"; nothing arriving from the socket overrides
+   * that. Scrolling back down opts back in.
+   */
+  const TAIL_SLACK_PX = 48;
+
+  const handleHistoryScroll = () => {
+    const el = historyScrollRef.current;
+    if (!el) return;
+    followTailRef.current = (el.scrollHeight - el.scrollTop - el.clientHeight) <= TAIL_SLACK_PX;
+  };
+
+  // On arrival, start at the newest turn -- that is what the reader came for.
+  useEffect(() => {
+    const el = historyScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    followTailRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const el = historyScrollRef.current;
+    if (!el || !followTailRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [turns, pendingPrompt, busy]);
 
   const submitPrompt = async () => {
     const trimmed = inputValue.trim();
-    if (!trimmed) return;
+    if (!trimmed || busy || !canAsk) return;
+
+    // Replay the thread so the model keeps context across turns and across a
+    // change of active student.
+    const conversationHistory = turns.flatMap((turn) => ([
+      { role: 'user', content: String(turn.prompt || '') },
+      { role: 'assistant', content: String(turn.reply || '') },
+    ])).filter((entry) => entry.content);
+
+    // Asking is an explicit request to see the answer, so rejoin the tail even
+    // if this student had scrolled up to re-read something first.
+    followTailRef.current = true;
+    setPendingPrompt(trimmed);
+    setInputValue('');
     setBusy(true);
     setError('');
+
+    const payload = {
+      mode: aiBlock.mode,
+      model: aiBlock.model,
+      title: aiBlock.title || 'AI Assistant',
+      assistantPrompt: aiBlock.prompt || '',
+      guardrail: aiBlock.guardrail || '',
+      contextSources: aiBlock.contextSources || [],
+      questionText: questionBlock?.prompt || '',
+      sampleResponse: questionBlock?.samples?.[0] || '',
+      studentCode: Array.isArray(questionBlock?.pythonBlocks)
+        ? questionBlock.pythonBlocks.map((block) => block.content || '').join('\n\n').trim()
+        : '',
+      studentInput: trimmed,
+      conversationHistory,
+      activityLanguage,
+    };
+    if (persisted) {
+      payload.instanceId = instanceId;
+      payload.userId = userId;
+      payload.questionKey = baseQid;
+    }
+
     try {
-      const res = await fetch(`${API_BASE_URL}/api/ai/assist`, {
+      const res = await fetch(`${API_BASE_URL}/api/ai/${persisted ? 'activity-assist' : 'assist'}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          mode: aiBlock.mode,
-          title: aiBlock.title || 'AI Assistant',
-          assistantPrompt: aiBlock.prompt || '',
-          guardrail: aiBlock.guardrail || '',
-          contextSources: aiBlock.contextSources || [],
-          questionText: questionBlock?.prompt || '',
-          sampleResponse: questionBlock?.samples?.[0] || '',
-          studentCode: Array.isArray(questionBlock?.pythonBlocks)
-            ? questionBlock.pythonBlocks.map((block) => block.content || '').join('\n\n').trim()
-            : '',
-          studentInput: trimmed,
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'AI help failed.');
-      setResponseValue(String(data?.response || '').trim());
+
+      const replyText = String(data?.response || '').trim() || 'The AI did not return a response.';
+
+      if (persisted) {
+        // The row is already written; hand it up so the answers map reflects it
+        // immediately rather than waiting on the socket echo.
+        const savedTurn = data?.turn || { prompt: trimmed, reply: replyText };
+        onTurnSaved?.(data?.qid || `${baseQid}AI${turns.length + 1}`, savedTurn);
+      } else {
+        setLocalTurns((previous) => ([
+          ...previous,
+          { index: previous.length + 1, prompt: trimmed, reply: replyText },
+        ]));
+      }
     } catch (err) {
-      setError(err?.message || 'AI help failed.');
+      const message = err?.message || 'AI help failed.';
+      setError(message);
+      // Put the text back so a failed turn is not silently lost.
+      setInputValue((current) => current || trimmed);
     } finally {
+      setPendingPrompt('');
       setBusy(false);
     }
   };
+
+  const turnCount = turns.length + (pendingPrompt ? 1 : 0);
 
   return (
     <div
       className="border rounded p-3 my-3"
       data-preview-key={aiBlock.previewKey}
+      data-ai-base-qid={baseQid || undefined}
       onClick={(event) => {
         if (runMode !== 'preview' || typeof onSelectBlock !== 'function') return;
         if (event.target.closest('textarea, input, button, select, a')) return;
@@ -193,38 +414,149 @@ function InlineAiAssistBlock({
           }
       }
     >
-      <Form.Group>
-        <Form.Label className="small text-muted mb-1">Query</Form.Label>
-        <Form.Control
-          as="textarea"
-          rows={Math.max(aiBlock.inputRows || 4, 2)}
-          value={inputValue}
-          onChange={(event) => setInputValue(event.target.value)}
-          placeholder="Type your AI query here..."
-        />
-      </Form.Group>
+      <div className="d-flex align-items-center gap-2 mb-2">
+        {aiBlock.title ? (
+          <h5 className="mb-0" dangerouslySetInnerHTML={{ __html: aiBlock.title }} />
+        ) : (
+          <h5 className="mb-0">AI Coach</h5>
+        )}
+        <Badge bg="secondary" pill className="ms-1">{modeMeta.label}</Badge>
+        {persisted && !canAsk ? (
+          <Badge bg="light" text="dark" className="border">Read only</Badge>
+        ) : null}
+        <span className="ms-auto small text-muted">
+          {turnCount ? `${turnCount} exchange${turnCount === 1 ? '' : 's'}` : 'No questions yet'}
+        </span>
+      </div>
 
-      <div className="d-flex justify-content-end mt-2">
-        <Button size="sm" variant="primary" disabled={busy || !inputValue.trim()} onClick={submitPrompt}>
-          {busy ? <Spinner animation="border" size="sm" className="me-2" /> : null}
-          Ask AI
-        </Button>
+      {aiBlock.prompt ? (
+        <div className="mb-2" dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
+      ) : null}
+
+      {/* The full mode guide is an authoring aid; students only need the mode. */}
+      {runMode === 'preview' ? (
+        <div className="d-flex flex-wrap gap-2 mb-3">
+          {INLINE_AI_MODE_GUIDE.map((entry) => (
+            <Badge
+              key={entry.value}
+              bg={entry.value === modeMeta.value ? 'primary' : 'light'}
+              text={entry.value === modeMeta.value ? undefined : 'dark'}
+              className="border text-wrap"
+              style={{ whiteSpace: 'normal' }}
+            >
+              <span className="fw-semibold">{entry.label}</span>
+              <span className="ms-1">{entry.description}</span>
+            </Badge>
+          ))}
+        </div>
+      ) : (
+        <div className="small text-muted mb-3">{modeMeta.description}</div>
+      )}
+
+      <div
+        ref={historyScrollRef}
+        onScroll={handleHistoryScroll}
+        className="border rounded p-2 bg-body-tertiary"
+        style={{ maxHeight: '360px', minHeight: '120px', overflowY: 'auto' }}
+      >
+        {turns.length || pendingPrompt ? (
+          <>
+            {turns.map((turn) => (
+              <React.Fragment key={`turn-${turn.index}`}>
+                <div className="d-flex mb-2 justify-content-end">
+                  <div
+                    className="rounded-3 px-3 py-2 bg-primary text-white"
+                    style={{ maxWidth: '92%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  >
+                    <div className="small text-uppercase fw-semibold opacity-75 mb-1">Student</div>
+                    <div>{String(turn.prompt || '')}</div>
+                  </div>
+                </div>
+                <div className="d-flex mb-2 justify-content-start">
+                  <div
+                    className="rounded-3 px-3 py-2 bg-white border"
+                    style={{ maxWidth: '92%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  >
+                    <div className="small text-uppercase fw-semibold opacity-75 mb-1">AI</div>
+                    <div>{String(turn.reply || '')}</div>
+                  </div>
+                </div>
+              </React.Fragment>
+            ))}
+
+            {pendingPrompt ? (
+              <>
+                <div className="d-flex mb-2 justify-content-end">
+                  <div
+                    className="rounded-3 px-3 py-2 bg-primary text-white"
+                    style={{ maxWidth: '92%', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                  >
+                    <div className="small text-uppercase fw-semibold opacity-75 mb-1">Student</div>
+                    <div>{pendingPrompt}</div>
+                  </div>
+                </div>
+                <div className="d-flex mb-2 justify-content-start">
+                  <div className="rounded-3 px-3 py-2 bg-white border" style={{ maxWidth: '92%' }}>
+                    <div className="small text-uppercase fw-semibold opacity-75 mb-1">AI</div>
+                    <div className="d-flex align-items-center gap-2 small">
+                      <Spinner animation="border" size="sm" />
+                      Thinking...
+                    </div>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <div className="text-muted small">
+            {canAsk
+              ? 'Your conversation with the AI will stay here as you ask follow-up questions.'
+              : 'No questions have been asked yet.'}
+          </div>
+        )}
       </div>
 
       {error ? (
         <div className="alert alert-danger mt-2 mb-0 py-2 small">{error}</div>
       ) : null}
 
-      <Form.Group className="mt-2 mb-0">
-        <Form.Label className="small text-muted mb-1">Response</Form.Label>
-        <Form.Control
-          as="textarea"
-          rows={Math.max(Math.min((responseValue.split('\n').length || 1) + 1, 8), 3)}
-          readOnly
-          value={responseValue}
-          placeholder="The AI response will appear here."
-        />
-      </Form.Group>
+      {canAsk ? (
+        <>
+          <Form.Group className="mt-3">
+            <Form.Label className="small text-muted mb-1">Query</Form.Label>
+            <Form.Control
+              as="textarea"
+              rows={Math.max(aiBlock.inputRows || 4, 2)}
+              value={inputValue}
+              onChange={(event) => setInputValue(event.target.value)}
+              placeholder="Type your AI query here..."
+              disabled={busy}
+            />
+          </Form.Group>
+          <div className="d-flex align-items-center mt-2">
+            {persisted ? (
+              <span className="small text-muted">
+                Saved with your work and visible to your instructor.
+              </span>
+            ) : null}
+            <Button
+              size="sm"
+              variant="primary"
+              className="ms-auto"
+              disabled={busy || !inputValue.trim()}
+              onClick={submitPrompt}
+            >
+              {busy ? <Spinner animation="border" size="sm" className="me-2" /> : null}
+              Ask AI
+            </Button>
+          </div>
+        </>
+      ) : (
+        <div className="d-flex align-items-start gap-2 mt-3 small text-muted">
+          <span aria-hidden="true">🔒</span>
+          <span>{lockReason || 'Only the active student can ask the AI.'}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -233,7 +565,7 @@ function InlineAiAssistBlock({
 // Keeps everything else as-is. Works for any \SomeTag{ ... } (including section*, link, image, etc.)
 function collapseBracedCommands(rawLines) {
   const startsTag = (s) =>
-    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|mode|text|section\*?|questiongroup|question|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
+    /^\s*\\(?:title|name|activitycontext|studentlevel|aicodeguidance|aimode|mode|text|section\*?|questiongroup|question|responsemode|multiplechoice|choice|sampleresponses|feedbackprompt|followupprompt|info|table|image|link|file|pythonturtle|pythonremote|cpp|include)\{/.test(s);
   const out = [];
   let buf = null;
   let depth = 0;
@@ -305,6 +637,9 @@ export default function FileBlock({
     fileContents && Object.prototype.hasOwnProperty.call(fileContents, filename)
       ? fileContents[filename]
       : initialContent;
+  const lineCount = Math.max(1, String(effective || '').split('\n').length);
+  const visibleRows = Math.max(4, Math.min(lineCount, 30));
+  const shouldScroll = lineCount > 30;
 
   const [localValue, setLocalValue] = useState(effective);
 
@@ -443,9 +778,10 @@ export default function FileBlock({
         value={localValue}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
-        rows={Math.max(4, localValue.split('\n').length)}
+        rows={visibleRows}
         readOnly={!editable}
         className="font-monospace bg-light mt-1"
+        style={{ overflowY: shouldScroll ? 'auto' : 'hidden' }}
         ref={textareaRef}
       />
     </div>
@@ -471,7 +807,9 @@ export function parseSheetToBlocks(lines, options = {}) {
     const mode = String(rawMode || '').trim().toLowerCase();
 
     if (mode === 'test') return 'test';
-    if (mode === 'demo' || mode === 'playground') return 'demo';
+    if (mode === 'demo') return 'demo';
+    if (mode === 'playground') return 'playground';
+    if (mode === 'assignment') return 'assignment';
     if (mode === 'group' || mode === 'normal') return 'group';
 
     return 'group';
@@ -492,6 +830,11 @@ export function parseSheetToBlocks(lines, options = {}) {
     retriesDefault: 0,
     groupRetries: {},
     mode: 'group',
+    // Empty means the author did not say. Filling this in with 'English'
+    // would make an unset activity indistinguishable from one that chose
+    // English, and the deployment default could never apply.
+    language: '',
+    aiMode: 'no-positive',
   };
   let currentQuestion = null;
   let currentField = 'prompt';
@@ -508,6 +851,8 @@ export function parseSheetToBlocks(lines, options = {}) {
   let currentGroupIntro = null;
   let pendingIncludeFiles = null;
   let currentAiBlock = null;
+  let currentMultipleChoice = null;
+  let currentDisplayCodeBlock = null;
 
   // track some structural state to report missing closures
   let openGroupLine = null;
@@ -516,6 +861,65 @@ export function parseSheetToBlocks(lines, options = {}) {
   let openScoreLine = null;
   let openListLine = null;
   let openAiLine = null;
+  let openMultipleChoiceLine = null;
+  let openDisplayCodeLine = null;
+
+  const finalizeMultipleChoice = (closingLine) => {
+    if (!currentMultipleChoice || !currentQuestion) return;
+
+    const choices = currentMultipleChoice.choices;
+    const validation = validateMultipleChoice(currentMultipleChoice.correctAnswer, choices);
+    for (const message of validation.errors) {
+      pushIssue('error', currentMultipleChoice.sourceMeta.multipleChoiceLine, message, null);
+    }
+
+    currentMultipleChoice.sourceMeta.endMultipleChoiceLine = closingLine;
+    currentQuestion.multipleChoice = {
+      correctAnswer: validation.correctAnswer,
+      selectionMode: currentMultipleChoice.selectionMode,
+      choices,
+      hasChoiceScores: validation.hasChoiceScores,
+      maxChoicePoints: validation.maxChoicePoints,
+      sourceMeta: currentMultipleChoice.sourceMeta,
+    };
+    currentMultipleChoice = null;
+    openMultipleChoiceLine = null;
+  };
+
+  // AI panels may be attached to a question (legacy markup) or may stand on
+  // their own as a learning-tool block in a question group.
+  const finalizeAiBlock = (closingLine) => {
+    if (!currentAiBlock) return;
+
+    currentAiBlock.sourceMeta.endAiLine = closingLine;
+    if (currentAiBlock.parentQuestionId && currentQuestion) {
+      currentQuestion.aiBlocks.push(currentAiBlock);
+    } else {
+      blocks.push(currentAiBlock);
+    }
+    currentAiBlock = null;
+    openAiLine = null;
+  };
+
+  const finalizeDisplayCodeBlock = (closingLine) => {
+    if (!currentDisplayCodeBlock) return;
+
+    currentDisplayCodeBlock.sourceMeta.endDisplayLine = closingLine;
+    const finalized = {
+      ...currentDisplayCodeBlock,
+      content: currentDisplayCodeBlock.lines.join('\n'),
+    };
+
+    if (currentQuestion) {
+      if (!currentQuestion.displayCodeBlocks) currentQuestion.displayCodeBlocks = [];
+      currentQuestion.displayCodeBlocks.push(finalized);
+    } else {
+      blocks.push(finalized);
+    }
+
+    currentDisplayCodeBlock = null;
+    openDisplayCodeLine = null;
+  };
 
 
   const flushCurrentBlock = () => {
@@ -618,20 +1022,23 @@ export function parseSheetToBlocks(lines, options = {}) {
     // --- inside a \score ... \endscore block ---
     if (inScoreBlock && currentScore && currentQuestion) {
       if (trimmed === '\\endscore') {
-        // finalize this score block
-        const rawText = currentScore.lines.join('\n').trim();
-        const htmlText = format(rawText);
+        if (currentScore.supported) {
+          // finalize this score block
+          const rawText = currentScore.lines.join('\n').trim();
+          const htmlText = format(rawText);
 
-        if (!currentQuestion.scores) currentQuestion.scores = {};
-        // type is one of 'response', 'code', 'output'
-        currentQuestion.scores[currentScore.type] = {
-          points: currentScore.points,
-          instructionsHtml: htmlText,   // for display (instructor, preview)
-          instructionsRaw: rawText,     // for AI prompt building
-        };
+          if (!currentQuestion.scores) currentQuestion.scores = {};
+          // type is one of 'response', 'code', 'output'
+          currentQuestion.scores[currentScore.type] = {
+            points: currentScore.points,
+            instructionsHtml: htmlText,   // for display (instructor, preview)
+            instructionsRaw: rawText,     // for AI prompt building
+          };
+        }
 
         inScoreBlock = false;
         currentScore = null;
+        openScoreLine = null;
         continue;
       } else {
         currentScore.lines.push(line);
@@ -786,6 +1193,56 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
+    // --- display-only code blocks ---
+    const displayCommand = parseDisplayCodeBlockCommand(trimmed);
+
+    if (displayCommand?.kind === 'open') {
+      flushCurrentBlock();
+
+      if (currentDisplayCodeBlock) {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'New display-only code block started before the previous one was closed.', line);
+        finalizeDisplayCodeBlock(lineNo - 1);
+      }
+
+      currentField = displayCommand.type;
+      currentDisplayCodeBlock = createDisplayCodeBlock({
+        type: displayCommand.type,
+        language: displayCommand.language,
+        displayLine: lineNo,
+      });
+      openDisplayCodeLine = lineNo;
+      continue;
+    }
+
+    // A display block also closes on any closer from its own family, so
+    // \pythondisplay may end with \endpython. Guarded on a display block being
+    // open so a plain \endpython cannot be hijacked from a regular code block.
+    if (currentDisplayCodeBlock && closesBlock(trimmed, currentDisplayCodeBlock.type)) {
+      finalizeDisplayCodeBlock(lineNo);
+      currentField = 'prompt';
+      continue;
+    }
+
+    if (displayCommand?.kind === 'close') {
+      if (currentDisplayCodeBlock && currentDisplayCodeBlock.type === displayCommand.type) {
+        finalizeDisplayCodeBlock(lineNo);
+      } else {
+        pushIssue('error', lineNo, `${trimmed} without a matching \\pythondisplay or \\cppdisplay block.`, line);
+      }
+      currentField = 'prompt';
+      continue;
+    }
+
+    if (currentDisplayCodeBlock) {
+      if (trimmed === '\\endquestion' || trimmed === '\\endquestiongroup') {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'Unclosed display-only code block: missing matching end tag.', null);
+        finalizeDisplayCodeBlock(lineNo - 1);
+      } else {
+        currentDisplayCodeBlock.lines.push(line);
+        continue;
+      }
+    }
+
     // --- C++ blocks ---
     const cppMatch = trimmed.match(/^\\cpp(?:\{(\d+)\})?$/);
     if (cppMatch) {
@@ -820,8 +1277,8 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    if (trimmed === '\\endcpp') {
-      if (currentField === 'cpp') {
+    if (familyOfCloser(trimmed) === 'cpp') {
+      if (closesBlock(trimmed, currentField)) {
         const lastBlock = blocks.at(-1);
         if (lastBlock?.type === 'cpp' && lastBlock.lines) {
           lastBlock.content = lastBlock.lines.join('\n');
@@ -1023,8 +1480,10 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    if (trimmed === '\\endpython' || trimmed === '\\endpythonturtle' || trimmed === '\\endpythonremote') {
-      if (currentField === 'python' || currentField === 'pythonturtle' || currentField === 'pythonremote') {
+    // Any python-family closer ends any python-family block: \endpython is the
+    // canonical form, the longer historical spellings stay valid on read.
+    if (familyOfCloser(trimmed) === 'python') {
+      if (closesBlock(trimmed, currentField)) {
         const lastBlock = blocks.at(-1);
         if ((lastBlock?.type === 'python' || lastBlock?.type === 'pythonturtle' || lastBlock?.type === 'pythonremote') && lastBlock.lines) {
           lastBlock.content = lastBlock.lines.join('\n');
@@ -1075,8 +1534,8 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // Start of a header (now always single logical line thanks to collapseBracedCommands)
-    const headerStart = trimmed.match(/^\\(title|name|activitycontext|studentlevel|aicodeguidance|mode)\{([\s\S]*?)\}$/);
-    if (headerStart) {
+    const headerStart = trimmed.match(/^\\(title|name|activitycontext|studentlevel|aicodeguidance|aimode|mode|language)\{([\s\S]*?)\}$/);
+    if (headerStart && !currentQuestion) {
       flushCurrentBlock();
       const tag = headerStart[1];
       const content = headerStart[2];
@@ -1090,6 +1549,26 @@ export function parseSheetToBlocks(lines, options = {}) {
 
         blocks.push({ type: 'header', tag, content: format(meta.mode) });
         continue;
+      }
+
+      if (tag === 'language') {
+        meta.language = String(content || '').trim();
+      }
+
+      if (tag === 'aimode') {
+        // Keep the authored comma-separated flags intact. The evaluator
+        // resolves `positive` / `no-positive`; unknown future flags (such as
+        // `brief`) survive parsing rather than becoming visible worksheet text.
+        meta.aiMode = String(content || '').trim() || 'no-positive';
+        const invalidFlags = unsupportedAiModeFlags(meta.aiMode);
+        if (invalidFlags.length) {
+          pushIssue(
+            'error',
+            lineNo,
+            `Unsupported \\aimode value${invalidFlags.length === 1 ? '' : 's'}: ${invalidFlags.join(', ')}. Use: ${[...AI_MODE_FLAGS].join(', ')}.`,
+            line,
+          );
+        }
       }
 
       blocks.push({ type: 'header', tag, content: format(content) });
@@ -1197,15 +1676,20 @@ export function parseSheetToBlocks(lines, options = {}) {
       if (!inGroup) {
         pushIssue('error', lineNo, '\\endquestiongroup without a matching \\questiongroup', line);
       }
-      if (currentAiBlock && currentQuestion) {
+      if (currentAiBlock) {
         pushIssue('error', lineNo, 'Closing group while an \\ai block is still open. Missing \\endai before \\endquestiongroup.', line);
-        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
-        currentQuestion.aiBlocks.push(currentAiBlock);
-        currentAiBlock = null;
-        openAiLine = null;
+        finalizeAiBlock(lineNo - 1);
       }
       if (currentQuestion) {
         pushIssue('error', lineNo, 'Closing group while a \\question is still open. Missing \\endquestion before \\endquestiongroup.', line);
+      }
+      if (currentMultipleChoice) {
+        pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice before \\endquestiongroup.', null);
+        finalizeMultipleChoice(lineNo - 1);
+      }
+      if (currentDisplayCodeBlock) {
+        pushIssue('error', openDisplayCodeLine ?? lineNo, 'Unclosed display-only code block: missing matching end tag before \\endquestiongroup.', null);
+        finalizeDisplayCodeBlock(lineNo - 1);
       }
       if (currentGroupIntro?.sourceMeta) {
         currentGroupIntro.sourceMeta.endGroupLine = lineNo;
@@ -1287,22 +1771,106 @@ export function parseSheetToBlocks(lines, options = {}) {
         samples: [],
         feedback: [],
         followups: [],
+        aiMode: '',
+        responseMode: 'answer',
         aiBlocks: [],
         infos: [],
         codeBlocks: [],
+        displayCodeBlocks: [],
         scores: {},
         retriesRequired: currentGroupRetriesRequired,
         sourceMeta: {
           questionLine: lineNo,
+          responseModeLine: null,
+          responseMode: 'answer',
           textResponseLine: null,
           sampleLines: [],
           feedbackLines: [],
           followupLines: [],
+          aiModeLine: null,
           endQuestionLine: null,
         },
       };
 
       openQuestionLine = lineNo;
+      continue;
+    }
+
+    if (currentMultipleChoice) {
+      if (trimmed === '\\endmultiplechoice') {
+        finalizeMultipleChoice(lineNo);
+        continue;
+      }
+
+      // Accept a legacy/escaped point delimiter (\\{2}) as well as the documented {2}
+      // form, then store only the option text and numeric point value.
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}(?:\\?\{(\d+)\})?\s*$/);
+      if (choiceMatch) {
+        const value = String(choiceMatch[1] || '').trim();
+        if (!value) {
+          pushIssue('error', lineNo, '\\choice{value} requires a non-empty value.', line);
+        } else {
+          currentMultipleChoice.choices.push({
+            value,
+            content: format(value),
+            points: choiceMatch[2] === undefined ? null : Number.parseInt(choiceMatch[2], 10),
+            line: lineNo,
+          });
+          currentMultipleChoice.sourceMeta.choiceLines.push(lineNo);
+        }
+        continue;
+      }
+
+      if (trimmed === '\\endquestion' || trimmed === '\\endquestiongroup') {
+        pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice.', null);
+        finalizeMultipleChoice(lineNo - 1);
+      } else {
+          pushIssue('error', lineNo, 'Only \\choice{value} or \\choice{value}{points}, or \\endmultiplechoice is allowed inside a \\multiplechoice block.', line);
+        continue;
+      }
+    }
+
+    if (trimmed.startsWith('\\multiplechoice')) {
+      if (!currentQuestion) {
+        pushIssue('error', lineNo, '\\multiplechoice found outside of a \\question.', line);
+        continue;
+      }
+      if (currentMultipleChoice || currentQuestion.multipleChoice) {
+        pushIssue('error', lineNo, 'A question can contain only one \\multiplechoice block.', line);
+        continue;
+      }
+
+      const match = trimmed.match(/^\\multiplechoice\{([\s\S]*?)\}\s*$/);
+      if (!match) {
+        pushIssue('error', lineNo, 'Malformed \\multiplechoice. Use \\multiplechoice{correct answer}.', line);
+        continue;
+      }
+
+      currentMultipleChoice = {
+        correctAnswer: String(match[1] || '').trim().toLowerCase() === 'multiple'
+          ? ''
+          : String(match[1] || '').trim(),
+        selectionMode: String(match[1] || '').trim().toLowerCase() === 'multiple'
+          ? 'multiple'
+          : 'single',
+        choices: [],
+        sourceMeta: {
+          multipleChoiceLine: lineNo,
+          choiceLines: [],
+          endMultipleChoiceLine: null,
+        },
+      };
+      openMultipleChoiceLine = lineNo;
+      continue;
+    }
+
+    if (trimmed === '\\endmultiplechoice') {
+      pushIssue('error', lineNo, '\\endmultiplechoice without a matching \\multiplechoice{...}.', line);
+      continue;
+    }
+
+    if (trimmed.startsWith('\\choice')) {
+      pushIssue('error', lineNo, '\\choice{value} found outside of a \\multiplechoice block.', line);
       continue;
     }
 
@@ -1314,10 +1882,32 @@ export function parseSheetToBlocks(lines, options = {}) {
 
       if (currentAiBlock) {
         pushIssue('error', lineNo, 'Closing question while an \\ai block is still open. Missing \\endai before \\endquestion.', line);
-        currentAiBlock.sourceMeta.endAiLine = lineNo - 1;
-        currentQuestion.aiBlocks.push(currentAiBlock);
-        currentAiBlock = null;
-        openAiLine = null;
+        finalizeAiBlock(lineNo - 1);
+      }
+
+      if (currentMultipleChoice) {
+        pushIssue('error', openMultipleChoiceLine ?? lineNo, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice before \\endquestion.', null);
+        finalizeMultipleChoice(lineNo - 1);
+      }
+
+      const multipleChoiceScoreIssue = getMultipleChoiceTestModeIssueMessage({
+        isTest,
+        hasMultipleChoice: !!currentQuestion.multipleChoice,
+        correctAnswer: currentQuestion.multipleChoice?.correctAnswer,
+        hasResponseScore: !!currentQuestion.scores?.response,
+        hasChoiceScores: !!currentQuestion.multipleChoice?.hasChoiceScores,
+      });
+      if (multipleChoiceScoreIssue) {
+        pushIssue('error', openQuestionLine ?? lineNo, multipleChoiceScoreIssue, line);
+      }
+
+      if (currentQuestion.multipleChoice?.hasChoiceScores && !currentQuestion.scores?.response) {
+        currentQuestion.scores.response = {
+          points: currentQuestion.multipleChoice.maxChoicePoints,
+          instructionsHtml: '',
+          instructionsRaw: '',
+          derivedFromChoices: true,
+        };
       }
 
       // finalize as you already do
@@ -1344,27 +1934,82 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
-    if (trimmed.startsWith('\\ai{')) {
+    if (trimmed.startsWith('\\responsemode{')) {
       if (!currentQuestion) {
-        pushIssue('error', lineNo, '\\ai found outside of a \\question. AI blocks are currently only supported inside questions.', line);
+        pushIssue('error', lineNo, '\\responsemode found outside of a \\question.', line);
+        continue;
+      }
+
+      const match = trimmed.match(/^\\responsemode\{([\s\S]*?)\}\s*$/);
+      const responseMode = String(match?.[1] || '').trim().toLowerCase();
+      if (!responseMode) {
+        pushIssue('error', lineNo, '\\responsemode must be \\responsemode{answer} or \\responsemode{questions}.', line);
+        continue;
+      }
+
+      if (!['answer', 'questions'].includes(responseMode)) {
+        pushIssue('error', lineNo, `Unsupported \\responsemode{${responseMode}}. Use \\responsemode{answer} or \\responsemode{questions}.`, line);
+        continue;
+      }
+
+      currentQuestion.responseMode = responseMode;
+      currentQuestion.sourceMeta.responseMode = responseMode;
+      currentQuestion.sourceMeta.responseModeLine = lineNo;
+      continue;
+    }
+
+    if (trimmed.startsWith('\\aimode{')) {
+      if (!currentQuestion) {
+        pushIssue('error', lineNo, '\\aimode must be in the activity preamble or inside a \\question.', line);
+        continue;
+      }
+      const match = trimmed.match(/^\\aimode\{([\s\S]*?)\}\s*$/);
+      const value = String(match?.[1] || '').trim();
+      if (!value) {
+        pushIssue('error', lineNo, '\\aimode requires at least one comma-separated flag, such as \\aimode{positive}.', line);
+        continue;
+      }
+      const invalidFlags = unsupportedAiModeFlags(value);
+      if (invalidFlags.length) {
+        pushIssue(
+          'error',
+          lineNo,
+          `Unsupported \\aimode value${invalidFlags.length === 1 ? '' : 's'}: ${invalidFlags.join(', ')}. Use: ${[...AI_MODE_FLAGS].join(', ')}.`,
+          line,
+        );
+      }
+      currentQuestion.aiMode = value;
+      currentQuestion.sourceMeta.aiModeLine = lineNo;
+      continue;
+    }
+
+    if (trimmed.startsWith('\\ai{')) {
+      if (!inGroup) {
+        pushIssue('error', lineNo, '\\ai found outside of a \\questiongroup. Put AI blocks inside a question group.', line);
         continue;
       }
 
       if (currentAiBlock) {
         pushIssue('error', lineNo, 'New \\ai block started before the previous \\ai block was closed. Missing \\endai.', line);
-        currentQuestion.aiBlocks.push(currentAiBlock);
+        finalizeAiBlock(lineNo - 1);
       }
 
       const match = trimmed.match(/^\\ai\{([\s\S]*?)\}\s*$/);
       const mode = String(match?.[1] || 'explain').trim().toLowerCase() || 'explain';
-      const aiIndex = (currentQuestion.aiBlocks?.length || 0) + 1;
+      const isQuestionAttached = !!currentQuestion;
+      const aiIndex = isQuestionAttached
+        ? (currentQuestion.aiBlocks?.length || 0) + 1
+        : blocks.filter((block) => block?.type === 'ai' && block?.groupId === groupNumber).length + 1;
 
       currentAiBlock = {
         type: 'ai',
-        parentQuestionId: currentQuestion.id,
-        groupId: currentQuestion.groupId,
-        previewKey: `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`,
+        parentQuestionId: isQuestionAttached ? currentQuestion.id : null,
+        groupId: isQuestionAttached ? currentQuestion.groupId : groupNumber,
+        previewKey: isQuestionAttached
+          ? `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`
+          : `ai:${groupNumber}:standalone:${aiIndex}`,
         mode,
+        model: INLINE_AI_DEFAULT_MODEL,
         title: format('AI Coach'),
         prompt: '',
         guardrail: '',
@@ -1372,6 +2017,7 @@ export function parseSheetToBlocks(lines, options = {}) {
         inputRows: 4,
         sourceMeta: {
           aiLine: lineNo,
+          modelLine: null,
           titleLine: null,
           promptLine: null,
           guardrailLine: null,
@@ -1385,19 +2031,27 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     if (trimmed === '\\endai') {
-      if (!currentAiBlock || !currentQuestion) {
+      if (!currentAiBlock) {
         pushIssue('error', lineNo, '\\endai without a matching \\ai{...}', line);
         continue;
       }
 
-      currentAiBlock.sourceMeta.endAiLine = lineNo;
-      currentQuestion.aiBlocks.push(currentAiBlock);
-      currentAiBlock = null;
-      openAiLine = null;
+      finalizeAiBlock(lineNo);
       continue;
     }
 
     if (currentAiBlock) {
+      const modelMatch = trimmed.match(/^\\aimodel\{([\s\S]*?)\}\s*$/);
+      if (modelMatch) {
+        const requestedModel = String(modelMatch[1] || '').trim();
+        currentAiBlock.model = normalizeInlineAiModel(requestedModel);
+        currentAiBlock.sourceMeta.modelLine = lineNo;
+        if (requestedModel && requestedModel !== currentAiBlock.model) {
+          pushIssue('warn', lineNo, `Unsupported AI model "${requestedModel}"; using ${INLINE_AI_DEFAULT_MODEL}.`, line);
+        }
+        continue;
+      }
+
       const titleMatch = trimmed.match(/^\\aititle\{([\s\S]*?)\}\s*$/);
       if (titleMatch) {
         currentAiBlock.title = format(titleMatch[1] || '');
@@ -1443,29 +2097,17 @@ export function parseSheetToBlocks(lines, options = {}) {
     }
 
     // --- scoring blocks: \score{n,type} ... \endscore ---
-    // type is one of: response, code, output
-    const scoreMatch = trimmed.match(/^\\score\{(\d+)\s*,\s*(response|code|output)\}/i);
+    const scoreMatch = parseScoreCommand(trimmed);
     if (scoreMatch && currentQuestion) {
-      const points = parseInt(scoreMatch[1], 10);
-      const scoreType = scoreMatch[2].toLowerCase();
+      const { points, type: scoreType, supported } = scoreMatch;
+      if (!supported) {
+        pushIssue('error', lineNo, getUnsupportedScoreTypeMessage(scoreType), line);
+      }
 
       inScoreBlock = true;
       openScoreLine = lineNo;
-      currentScore = { type: scoreType, points, lines: [] };
+      currentScore = { type: scoreType, points, lines: [], supported };
       continue;
-    }
-
-    if (inScoreBlock && currentScore && currentQuestion) {
-      if (trimmed === '\\endscore') {
-        // existing finalize logic...
-        inScoreBlock = false;
-        currentScore = null;
-        openScoreLine = null;
-        continue;
-      } else {
-        currentScore.lines.push(line);
-        continue;
-      }
     }
 
     if (trimmed.startsWith('\\textresponse')) {
@@ -1618,6 +2260,14 @@ export function parseSheetToBlocks(lines, options = {}) {
   flushCurrentBlock();
 
   // ✅ report any unclosed structures
+  if (currentMultipleChoice) {
+    pushIssue('error', openMultipleChoiceLine ?? null, 'Unclosed \\multiplechoice block: missing \\endmultiplechoice at end of document.', null);
+    finalizeMultipleChoice(lines.length);
+  }
+  if (currentDisplayCodeBlock) {
+    pushIssue('error', openDisplayCodeLine ?? null, 'Unclosed display-only code block: missing matching end tag at end of document.', null);
+    finalizeDisplayCodeBlock(lines.length);
+  }
   if (currentQuestion) {
     pushIssue('error', openQuestionLine ?? null, 'Unclosed \\question: missing \\endquestion at end of document.', null);
   }
@@ -1672,6 +2322,8 @@ const HIDE_FROM_STUDENTS_HEADERS = new Set([
   'activitycontext',
   'studentlevel',
   'mode',
+  'language',
+  'aimode',
 ]);
 
 export function renderBlocks(blocks, options = {}) {
@@ -1680,6 +2332,7 @@ export function renderBlocks(blocks, options = {}) {
     isActive = false,
     isObserver = false,
     isInstructor = false,
+    isTestMode = false,
     allowLocalToggle = true,
     prefill = {},
     mode: runMode = 'preview',
@@ -1702,6 +2355,9 @@ export function renderBlocks(blocks, options = {}) {
     renderInsertAfterQuestion = null,
     renderInsertBeforeGroup = null,
     renderInsertAfterGroup = null,
+    suppressStudentTestFeedbackUi = false,
+    hideStudentTestSections = false,
+    activityLanguage = '',
   } = options;
 
   let standaloneCodeCounter = 1;
@@ -1713,6 +2369,7 @@ export function renderBlocks(blocks, options = {}) {
       : (editable && isActive);   // only active student edits in RUN
 
   const renderInfoBubbles = (block, target, keyPrefix, anchorRef, bubbleOptions = {}) => {
+    if (suppressStudentTestFeedbackUi && !isInstructor) return null;
     const bubbleSession = bubbleOptions.infoBubbleSession || infoBubbleSession;
     const bubbleKey = `${keyPrefix}-${target}`;
     const infos = getInfosForTarget(block, target);
@@ -1745,6 +2402,31 @@ export function renderBlocks(blocks, options = {}) {
         : renderInsertAfterGroup(block);
     }
 
+    // A standalone AI panel is a group-level learning tool, not a question and
+    // not a response. It therefore has no grading, retry, or response state.
+    if (block.type === 'ai') {
+      if (options.suppressAiBlocks) return null;
+      const aiQid = aiBaseQidFor(block, null);
+      return (
+        <InlineAiAssistBlock
+          key={`group-ai-${block.groupId}-${block.previewKey}`}
+          aiBlock={block}
+          questionBlock={null}
+          activityLanguage={activityLanguage}
+          runMode={runMode}
+          selectedPreviewKey={selectedPreviewKey}
+          onSelectBlock={onSelectBlock}
+          baseQid={aiQid}
+          instanceId={options.instanceId}
+          userId={options.answeredBy}
+          transcript={readAiTranscript(options.prefill, aiQid)}
+          canAsk={options.mode === 'run' ? !!isActive && !options.isObserver && !options.isSubmitted : true}
+          lockReason={options.aiLockReason}
+          onTurnSaved={options.onAiTurnSaved}
+        />
+      );
+    }
+
     // 🔹 Render headers (title/name/activitycontext/studentlevel) inline where they appear
     if (block.type === 'header') {
       // Hide metadata headers from students in RUN mode.
@@ -1763,6 +2445,8 @@ export function renderBlocks(blocks, options = {}) {
         name: 'Name',
         activitycontext: 'Context',
         studentlevel: 'Student level',
+        language: 'Language',
+        aimode: 'AI feedback mode',
         aicodeguidance: 'AI code guidance',
       };
       const label = labelMap[block.tag] || block.tag;
@@ -1790,12 +2474,15 @@ export function renderBlocks(blocks, options = {}) {
     }
 
     if (block.type === 'section') {
+      if (hideStudentTestSections && runMode !== 'preview' && !isInstructor) {
+        return null;
+      }
       return (
         <h2 key={`section-${index}`} className="my-3">
           {block.title}
           {block.minutes ? (
             <small className="text-muted ms-2 fw-normal">
-              ({block.minutes} minute{block.minutes === 1 ? '' : 's'})
+              (Section timer: {block.minutes} minute{block.minutes === 1 ? '' : 's'})
             </small>
           ) : null}
         </h2>
@@ -1863,6 +2550,9 @@ export function renderBlocks(blocks, options = {}) {
     if (block.type === 'groupIntro') {
       const groupIntroAnchorRef = React.createRef();
       const isSelectedPreviewGroup = runMode === 'preview' && selectedPreviewKey === block.previewKey;
+      const retriesRequired = Number.isFinite(Number(block.retriesRequired))
+        ? Math.max(0, Number(block.retriesRequired))
+        : null;
       return (
         <React.Fragment key={`groupIntro-${index}`}>
           {typeof renderInsertBeforeGroup === 'function' ? renderInsertBeforeGroup(block) : null}
@@ -1888,8 +2578,13 @@ export function renderBlocks(blocks, options = {}) {
             }
           >
             <strong>{block.groupId}. <span dangerouslySetInnerHTML={{ __html: block.content }} /></strong>
-            {renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
-            {runMode === 'preview' && renderInfoBubbles(
+            {retriesRequired != null ? (
+              <span className="ms-2 badge bg-light text-dark border">
+                Retries: {retriesRequired}
+              </span>
+            ) : null}
+            {!suppressStudentTestFeedbackUi && renderInfoBubbles(block, 'questiongroup', `groupIntro-${index}`, groupIntroAnchorRef)}
+            {runMode === 'preview' && !suppressStudentTestFeedbackUi && renderInfoBubbles(
               block,
               'submitbutton',
               `groupIntro-submit-${index}`,
@@ -1939,6 +2634,21 @@ export function renderBlocks(blocks, options = {}) {
 
 
 
+
+    if (block.type === 'pythondisplay' || block.type === 'cppdisplay') {
+      const DisplayComponent =
+        block.type === 'cppdisplay' ? ActivityCppBlock : ActivityPythonBlock;
+      return (
+        <div key={`${block.type}-${index}`} className="mb-3">
+          <DisplayComponent
+            code={block.content || ''}
+            blockIndex={`${block.type}-${index}`}
+            editable={false}
+            displayOnly={true}
+          />
+        </div>
+      );
+    }
 
     if (block.type === 'pythonturtle') {
       // Local-only top-level turtle: no DB keys, no prefill, always reflect sheet
@@ -2027,7 +2737,7 @@ export function renderBlocks(blocks, options = {}) {
                 onClick={() => options.onToggleViewMode?.(codeKey, viewMode === 'active' ? 'local' : 'active')}
                 title="Switch between following the active student and a private sandbox"
               >
-                {viewMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {viewMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2037,6 +2747,7 @@ export function renderBlocks(blocks, options = {}) {
             blockIndex={`pyt-${codeKey}-${index}`}
             editable={canEdit}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && viewMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             onCodeChange={(rk, code, extra) => {
 
               // observers in Local mode: keep it client-side only
@@ -2151,7 +2862,7 @@ export function renderBlocks(blocks, options = {}) {
                 onClick={() => options.onToggleViewMode?.(codeKey, codeMode === 'active' ? 'local' : 'active')}
                 title="Switch between following the active student and a private sandbox"
               >
-                {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2162,6 +2873,7 @@ export function renderBlocks(blocks, options = {}) {
             editable={canEdit}
             runnerEnabled={block.type === 'pythonremote' ? remotePythonEnabled : true}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             // 👇 forward meta so the server sees the actual task
             onCodeChange={(rk, code, extra) => {
               // local sandbox -> store locally, no network
@@ -2243,7 +2955,7 @@ export function renderBlocks(blocks, options = {}) {
                 className="btn btn-sm btn-outline-secondary"
                 onClick={() => options.onToggleViewMode?.(codeKey, codeMode === 'active' ? 'local' : 'active')}
               >
-                {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
               </button>
             </div>
           )}
@@ -2253,6 +2965,7 @@ export function renderBlocks(blocks, options = {}) {
             editable={canEdit}
             runnerEnabled={runtimeFeatures.remoteCpp ?? true}
             responseKey={codeKey}
+            onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(codeKey, 'local'); }}
             onCodeChange={(rk, code, extra) => {
               if (showToggle && codeMode === 'local' && !isActive) {
                 options.onLocalCodeChange?.(rk, code);
@@ -2344,12 +3057,19 @@ export function renderBlocks(blocks, options = {}) {
 
       const hasPython = (block.pythonBlocks?.length || 0) > 0;
       const hasCpp = (block.cppBlocks?.length || 0) > 0;
+      const hasMultipleChoice = (block.multipleChoice?.choices?.length || 0) > 0;
+      const allowsMultipleChoices = block.multipleChoice?.selectionMode === 'multiple';
+      const hasInlineAi = (block.aiBlocks?.length || 0) > 0;
       const isCodeOnly =
         (hasPython || hasCpp) && !block.hasTextResponse && !block.hasTableResponse;
 
-      // Show a free-text box only if explicitly requested OR (no code & no table)
+      // A multiple-choice response replaces the default free-text response. Authors can
+      // still add code, tables, or other response elements to the same question. An
+      // inline AI block is itself an interaction, so it does not receive the legacy
+      // default text area unless the author explicitly adds \textresponse.
       const showTextArea =
-        block.hasTextResponse || (!hasPython && !hasCpp && !block.hasTableResponse);
+        !hasMultipleChoice &&
+        (block.hasTextResponse || (!hasInlineAi && !hasPython && !hasCpp && !block.hasTableResponse));
 
       const lockMainResponse =
         runMode === 'preview'
@@ -2362,22 +3082,33 @@ export function renderBlocks(blocks, options = {}) {
       if (block.scores) {
         const scoreEntries = [
           ['response', 'Response'],
+          ['choice', 'Choice'],
           ['code', 'Code'],
           ['output', 'Output'],
         ];
         for (const [key, label] of scoreEntries) {
           const s = block.scores[key];
-          if (s && typeof s.points === 'number') {
+          if (s && Number.isFinite(Number(s.points))) {
+            const points = Number(s.points);
             scoreBadges.push(
               <span
                 key={`score-${responseKey}-${key}`}
                 className="badge bg-light text-muted border ms-2"
               >
-                {s.points} pt{s.points !== 1 ? 's' : ''} {label}
+                {points} pt{points !== 1 ? 's' : ''} {label}
               </span>
             );
           }
         }
+      } else if (runMode === 'preview' && isInstructor) {
+        scoreBadges.push(
+          <span
+            key={`score-${responseKey}-missing`}
+            className="badge bg-warning text-dark border ms-2"
+          >
+            No rubric yet
+          </span>
+        );
       }
 
       const isSelectedPreviewBlock = runMode === 'preview' && selectedPreviewKey === block.previewKey;
@@ -2438,6 +3169,21 @@ export function renderBlocks(blocks, options = {}) {
             questionAnchorRef
           )}
 
+          {block.displayCodeBlocks?.map((displayBlock, displayIndex) => {
+            const DisplayComponent =
+              displayBlock.type === 'cppdisplay' ? ActivityCppBlock : ActivityPythonBlock;
+            return (
+              <div key={`q-${block.groupId}-${block.id}-display-${displayIndex}`} className="mb-3">
+                <DisplayComponent
+                  code={displayBlock.content || ''}
+                  blockIndex={`q-${block.groupId}-${block.id}-display-${displayIndex}`}
+                  editable={false}
+                  displayOnly={true}
+                />
+              </div>
+            );
+          })}
+
           {block.pythonBlocks?.map((py, i) => {
             const codeAnchorRef = React.createRef();
             const PythonBlockComponent =
@@ -2475,7 +3221,7 @@ export function renderBlocks(blocks, options = {}) {
 
             return (
               <div key={`q-${block.groupId}-${block.id}-py-${i}`} ref={codeAnchorRef}>
-                {renderInfoBubbles(
+                {!suppressStudentTestFeedbackUi && renderInfoBubbles(
                   block,
                   'coderesponse',
                   `question-${block.groupId}-${block.id}-py-${i}`,
@@ -2498,7 +3244,7 @@ export function renderBlocks(blocks, options = {}) {
                       className="btn btn-sm btn-outline-secondary"
                       onClick={() => options.onToggleViewMode?.(responseKey, codeMode === 'active' ? 'local' : 'active')}
                     >
-                      {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                      {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
                     </button>
                   </div>
                 )}
@@ -2510,6 +3256,7 @@ export function renderBlocks(blocks, options = {}) {
                   runnerEnabled={py.type === 'pythonremote' ? remotePythonEnabled : true}
                   localOnly={runMode === 'preview'}
                   responseKey={responseKey}
+                  onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(responseKey, 'local'); }}
                   onCodeChange={(rk, code, extra) => {
                     if (showToggle && codeMode === 'local' && !isActive) {
                       options.onLocalCodeChange?.(rk, code);
@@ -2557,7 +3304,7 @@ export function renderBlocks(blocks, options = {}) {
 
             return (
               <div key={`q-${block.groupId}-${block.id}-cpp-${i}`} ref={codeAnchorRef}>
-                {renderInfoBubbles(
+                {!suppressStudentTestFeedbackUi && renderInfoBubbles(
                   block,
                   'coderesponse',
                   `question-${block.groupId}-${block.id}-cpp-${i}`,
@@ -2583,7 +3330,7 @@ export function renderBlocks(blocks, options = {}) {
                         )
                       }
                     >
-                      {codeMode === 'active' ? 'Follow Active' : 'Local Sandbox'}
+                      {codeMode === 'active' ? 'Following Active' : 'Local Sandbox'}
                     </button>
                   </div>
                 )}
@@ -2619,6 +3366,7 @@ export function renderBlocks(blocks, options = {}) {
                   feedback={codeFeedbackShown?.[responseKey] || null}
                   fileContents={fileContents}
                   setFileContents={setFileContents}
+                  onEditStart={() => { if (!isActive && codeMode === 'active') options.onToggleViewMode?.(responseKey, 'local'); }}
                 />
               </div>
             );
@@ -2666,18 +3414,83 @@ export function renderBlocks(blocks, options = {}) {
             </div>
           ))}
 
-          {block.aiBlocks?.map((aiBlock, i) => {
+          {(options.suppressAiBlocks ? [] : (block.aiBlocks || [])).map((aiBlock, i) => {
+            // All \ai blocks on a question share the question's response key, so
+            // they read and write one thread and group under that question in
+            // the instructor history report.
+            const aiQid = aiBaseQidFor(aiBlock, block);
             return (
               <InlineAiAssistBlock
                 key={`q-ai-${block.groupId}-${block.id}-${i}`}
                 aiBlock={aiBlock}
                 questionBlock={block}
+                activityLanguage={activityLanguage}
                 runMode={runMode}
                 selectedPreviewKey={selectedPreviewKey}
                 onSelectBlock={onSelectBlock}
+                baseQid={aiQid}
+                instanceId={options.instanceId}
+                userId={options.answeredBy}
+                transcript={readAiTranscript(options.prefill, aiQid)}
+                canAsk={options.mode === 'run' ? !!isActive && !options.isObserver && !options.isSubmitted : true}
+                lockReason={options.aiLockReason}
+                onTurnSaved={options.onAiTurnSaved}
               />
             );
           })}
+
+          {hasMultipleChoice ? (
+            <fieldset className="mt-3" aria-label={allowsMultipleChoices ? 'Select all that apply' : 'Choose one answer'}>
+              <legend className="fs-6 mb-2">{allowsMultipleChoices ? 'Select all that apply' : 'Choose one answer'}</legend>
+              {block.multipleChoice.choices.map((choice, choiceIndex) => {
+                const choiceId = `multiple-choice-${responseKey}-${choiceIndex}`;
+                const isMultilineCodeChoice = /\\\\|\n/.test(String(choice.value || ''));
+                const choiceLabel = isMultilineCodeChoice ? (
+                  <code style={{ display: 'block', whiteSpace: 'pre-wrap', lineHeight: 1.45 }}>
+                    {String(choice.value || '').replace(/\\\\/g, '\n')}
+                  </code>
+                ) : (
+                  <span dangerouslySetInnerHTML={{ __html: choice.content || choice.value }} />
+                );
+                const selectedChoices = allowsMultipleChoices
+                  ? parseMultipleChoiceSelections(prefill?.[responseKey]?.response)
+                  : [];
+                const isSelected = allowsMultipleChoices
+                  ? selectedChoices.includes(choice.value)
+                  : (prefill?.[responseKey]?.response || '') === choice.value;
+                return (
+                  <Form.Check
+                    key={choiceId}
+                    id={choiceId}
+                    type={allowsMultipleChoices ? 'checkbox' : 'radio'}
+                    name={`multiple-choice-${responseKey}`}
+                    value={choice.value}
+                    checked={isSelected}
+                    disabled={!editable || lockMainResponse}
+                    className="mb-2"
+                    label={choiceLabel}
+                    onChange={(event) => {
+                      const nextValue = allowsMultipleChoices
+                        ? serializeMultipleChoiceSelections(
+                          event.target.checked
+                            ? [...selectedChoices, choice.value]
+                            : selectedChoices.filter((value) => value !== choice.value)
+                        )
+                        : choice.value;
+                      options.onTextChange?.(responseKey, nextValue, {
+                        questionText: stripHtml(block.prompt || ''),
+                        sampleResponse: stripHtml(block.samples?.[0] || ''),
+                        feedbackPrompt: stripHtml(block.feedback?.[0] || ''),
+                        hasMultipleChoice: true,
+                        allowsMultipleChoices,
+                        retriesRequired: block.retriesRequired ?? 0,
+                      });
+                    }}
+                  />
+                );
+              })}
+            </fieldset>
+          ) : null}
 
           {showTextArea ? (
             (() => {
@@ -2727,6 +3540,7 @@ export function renderBlocks(blocks, options = {}) {
 
 
           {(() => {
+            if (suppressStudentTestFeedbackUi && !isInstructor) return null;
             const aiFeedbackVisible =
               Boolean(textFeedbackShown?.[responseKey]) ||
               (runMode === 'preview' &&
@@ -2747,16 +3561,21 @@ export function renderBlocks(blocks, options = {}) {
                   </>
                 )}
 
-                {textFeedbackShown?.[responseKey] && (
-                  <Alert
-                    variant="warning"
-                    className="mt-2"
-                    style={{ whiteSpace: 'pre-wrap' }}
-                  >
-                    <strong>AI Guidance</strong>
-                    <div>{textFeedbackShown[responseKey]}</div>
-                  </Alert>
-                )}
+                {textFeedbackShown?.[responseKey] && (() => {
+                  const fb = textFeedbackShown[responseKey];
+                  const fbText = typeof fb === 'object' ? fb.text : fb;
+                  const fbVariant = (typeof fb === 'object' && fb.positive) ? 'success' : 'warning';
+                  return (
+                    <Alert
+                      variant={fbVariant}
+                      className="mt-2"
+                      style={{ whiteSpace: 'pre-wrap' }}
+                    >
+                      <strong>AI Guidance</strong>
+                      <div>{fbText}</div>
+                    </Alert>
+                  );
+                })()}
 
                 {renderInfoBubbles(
                   block,
@@ -2769,7 +3588,7 @@ export function renderBlocks(blocks, options = {}) {
             );
           })()}
 
-          {unansweredMessage && (
+          {unansweredMessage && !suppressStudentTestFeedbackUi && (
             <Alert
               variant="warning"
               className="mt-2 border border-warning"
@@ -2780,7 +3599,7 @@ export function renderBlocks(blocks, options = {}) {
             </Alert>
           )}
 
-          {runMode === 'preview' &&
+          {runMode === 'preview' && !suppressStudentTestFeedbackUi &&
             renderInfoBubbles(
               block,
               'submitbutton',
@@ -2792,7 +3611,7 @@ export function renderBlocks(blocks, options = {}) {
 
 
           {/* Follow-up UI */}
-          {followupsShown?.[responseKey] && (
+          {followupsShown?.[responseKey] && !suppressStudentTestFeedbackUi && (
             !showTextArea && hasPython ? (
               <div className="mt-3 alert alert-warning py-2">
                 <strong>Follow-up:</strong> {followupsShown[responseKey]}

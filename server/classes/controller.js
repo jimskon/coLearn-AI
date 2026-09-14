@@ -1,9 +1,11 @@
 const db = require('../db');
 const { toPlain } = require('../utils/dbHelpers');
 const { extractGoogleFileId } = require('../utils/googleIds');
-const { fetchGoogleDocLinesByUrl } = require('../utils/activityContent');
+const { fetchGoogleDocLinesByUrl, sourceHash } = require('../utils/activityContent');
 const activityCreator = require('../utils/activityCreator');
+const { inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
+const { ensureActivitySourceSchema } = require('../utils/activitySourceSchema');
 const { recordAuditEvent } = require('../utils/auditLogger');
 
 const CREATOR_MODEL_OPTIONS = new Set([
@@ -100,13 +102,14 @@ exports.createClass = async (req, res) => {
     level = null,
     topic_domain = null,
     demo_mode = false,
+    ai_guidance = null,
     createdBy,
   } = req.body;
   try {
     await ensureDemoModeSchema();
     const [result] = await db.query(
-      'INSERT INTO pogil_classes (name, description, level, topic_domain, demo_mode, created_by) VALUES (?, ?, ?, ?, ?, ?)',
-      [name, description, level, topic_domain, demo_mode ? 1 : 0, createdBy]
+      'INSERT INTO pogil_classes (name, description, level, topic_domain, demo_mode, ai_guidance, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [name, description, level, topic_domain, demo_mode ? 1 : 0, ai_guidance, createdBy]
     );
     res.status(201).json({
       id: Number(result.insertId),
@@ -115,6 +118,7 @@ exports.createClass = async (req, res) => {
       level,
       topic_domain,
       demo_mode: Boolean(demo_mode),
+      ai_guidance,
       created_by: createdBy,
     });
     void recordAuditEvent('class_created', {
@@ -130,14 +134,29 @@ exports.createClass = async (req, res) => {
 };
 
 exports.updateClass = async (req, res) => {
-  const { name, description, level = null, topic_domain = null, demo_mode = false } = req.body;
+  const {
+    name,
+    description,
+    level = null,
+    topic_domain = null,
+    demo_mode = false,
+    ai_guidance = null,
+  } = req.body;
   try {
     await ensureDemoModeSchema();
     await db.query(
-      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ?, demo_mode = ? WHERE id = ?',
-      [name, description, level, topic_domain, demo_mode ? 1 : 0, req.params.id]
+      'UPDATE pogil_classes SET name = ?, description = ?, level = ?, topic_domain = ?, demo_mode = ?, ai_guidance = ? WHERE id = ?',
+      [name, description, level, topic_domain, demo_mode ? 1 : 0, ai_guidance, req.params.id]
     );
-    res.json({ id: req.params.id, name, description, level, topic_domain, demo_mode: Boolean(demo_mode) });
+    res.json({
+      id: req.params.id,
+      name,
+      description,
+      level,
+      topic_domain,
+      demo_mode: Boolean(demo_mode),
+      ai_guidance,
+    });
   } catch (err) {
     console.error("Error updating class:", err);
     res.status(500).json({ error: 'Failed to update class' });
@@ -161,7 +180,14 @@ exports.getActivitiesByClass = async (req, res) => {
       'SELECT * FROM pogil_activities WHERE class_id = ? ORDER BY order_index',
       [id]
     );
-    res.json(rows.map(r => ({ ...r })));
+    const enriched = await Promise.all(rows.map(async (row) => {
+      const mode = await inferAuthoredModeFromActivity(row);
+      return {
+        ...row,
+        mode,
+      };
+    }));
+    res.json(enriched.map(r => ({ ...r })));
   } catch (err) {
     console.error('Error fetching class activities:', err);
     res.status(500).json({ error: 'Failed to retrieve activities for class.' });
@@ -195,25 +221,32 @@ exports.createActivityForClass = async (req, res) => {
     return res.status(400).json({ error: 'Remote activities require a Google Sheet or Doc URL.' });
   }
 
-  if (normalizedSourceType === 'local' && (content_text == null || String(content_text) === '')) {
+  if (normalizedSourceType === 'local' && content_text == null) {
     return res.status(400).json({ error: 'Local activities require content_text.' });
   }
 
   try {
+    await ensureActivitySourceSchema();
     const [result] = await db.query(
       `INSERT INTO pogil_activities
-         (name, title, sheet_url, source_type, content_text, order_index, class_id, created_by)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (name, title, sheet_url, source_type, content_text, source_updated_at, order_index, class_id, created_by)
+       VALUES (?, ?, ?, ?, ?, CASE WHEN ? = 'local' THEN NOW(3) ELSE NULL END, ?, ?, ?)`,
       [
         name,
         title,
         normalizedSourceType === 'remote' ? sheet_url : null,
         normalizedSourceType,
         normalizedSourceType === 'local' ? content_text : null,
+        normalizedSourceType,
         order_index,
         classId,
         createdBy,
       ]
+    );
+
+    const [[created]] = await db.query(
+      'SELECT source_updated_at FROM pogil_activities WHERE id = ?',
+      [result.insertId]
     );
 
     res.status(201).json({
@@ -223,6 +256,7 @@ exports.createActivityForClass = async (req, res) => {
       sheet_url: normalizedSourceType === 'remote' ? sheet_url : null,
       source_type: normalizedSourceType,
       content_text: normalizedSourceType === 'local' ? content_text : null,
+      source_updated_at: created?.source_updated_at || null,
       order_index,
       class_id: Number(classId),
       created_by: createdBy
@@ -250,15 +284,273 @@ exports.updateActivityForClass = async (req, res) => {
   const { title, sheet_url, order_index } = req.body;
 
   try {
+    await ensureActivitySourceSchema();
+    const [[existing]] = await db.query(
+      `SELECT id, sheet_url
+         FROM pogil_activities
+        WHERE name = ? AND class_id = ?`,
+      [activityName, classId]
+    );
+    if (!existing) {
+      return res.status(404).json({ error: 'Activity not found.' });
+    }
+
+    const previousUrl = String(existing.sheet_url || '').trim();
+    const nextUrl = String(sheet_url || '').trim();
+    const linkedDocumentChanged = previousUrl !== nextUrl;
+
     await db.query(
-      'UPDATE pogil_activities SET title = ?, sheet_url = ?, order_index = ? WHERE name = ? AND class_id = ?',
-      [title, sheet_url, order_index, activityName, classId]
+      `UPDATE pogil_activities
+          SET title = ?,
+              sheet_url = ?,
+              order_index = ?,
+              remote_source_hash = CASE WHEN ? THEN NULL ELSE remote_source_hash END,
+              remote_updated_at = CASE WHEN ? THEN NULL ELSE remote_updated_at END,
+              last_synced_hash = CASE WHEN ? THEN NULL ELSE last_synced_hash END,
+              last_synced_at = CASE WHEN ? THEN NULL ELSE last_synced_at END
+        WHERE id = ?`,
+      [
+        title,
+        nextUrl || null,
+        order_index,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        linkedDocumentChanged,
+        existing.id,
+      ]
     );
 
-    res.json({ name: activityName, title, sheet_url, order_index, class_id: classId });
+    res.json({
+      name: activityName,
+      title,
+      sheet_url: nextUrl || null,
+      order_index,
+      class_id: classId,
+      remote_link_changed: linkedDocumentChanged,
+    });
   } catch (err) {
     console.error('Error updating activity:', err);
     res.status(500).json({ error: 'Failed to update activity.' });
+  }
+};
+
+async function countActivityResponses(activityId) {
+  const [[row]] = await db.query(
+    `SELECT COUNT(*) AS cnt
+       FROM responses r
+       JOIN activity_instances ai ON ai.id = r.activity_instance_id
+      WHERE ai.activity_id = ?`,
+    [activityId]
+  );
+  return Number(row?.cnt || 0);
+}
+
+// Replace the content of existing activities from a downloaded JSON bundle
+// (see handleDownloadSelected / handleUpload in ManageActivitiesPage.jsx).
+// Items are matched by id within this class. Any activity that already has
+// student responses is reported back as "blocked" instead of being changed,
+// unless its id is included in force_ids.
+exports.replaceActivitiesBundle = async (req, res) => {
+  const classId = Number(req.params.id);
+  const actorRole = String(req.user?.role || '').toLowerCase();
+  const items = Array.isArray(req.body?.activities) ? req.body.activities : [];
+  const forceIds = new Set(
+    (Array.isArray(req.body?.force_ids) ? req.body.force_ids : []).map((id) => Number(id))
+  );
+
+  if (!classId) return res.status(400).json({ error: 'Invalid class id.' });
+  if (!['root', 'creator', 'instructor'].includes(actorRole)) {
+    return res.status(403).json({ error: 'Only instructors, creators, or root can replace activities.' });
+  }
+  if (!items.length) {
+    return res.status(400).json({ error: 'No activities were provided to replace.' });
+  }
+
+  const replaced = [];
+  const blocked = [];
+  const skipped = [];
+
+  try {
+    await ensureActivitySourceSchema();
+
+    for (const item of items) {
+      const activityId = Number(item?.id);
+      if (!activityId) {
+        skipped.push({ id: null, name: item?.name || null, reason: 'Missing activity id.' });
+        continue;
+      }
+
+      const [[existing]] = await db.query(
+        `SELECT id, name, title FROM pogil_activities WHERE id = ? AND class_id = ?`,
+        [activityId, classId]
+      );
+      if (!existing) {
+        skipped.push({ id: activityId, name: item?.name || null, reason: 'Activity not found in this class.' });
+        continue;
+      }
+
+      const responseCount = await countActivityResponses(activityId);
+      if (responseCount > 0 && !forceIds.has(activityId)) {
+        blocked.push({
+          id: activityId,
+          name: existing.name,
+          title: existing.title,
+          response_count: responseCount,
+        });
+        continue;
+      }
+
+      const title = String(item?.title || existing.title || '').trim() || existing.title;
+      const contentText = String(item?.content_text ?? item?.text ?? '');
+      const sourceType = String(item?.source_type || 'local').toLowerCase() === 'remote' ? 'remote' : 'local';
+      const sheetUrl = sourceType === 'remote' ? (item?.sheet_url || null) : null;
+      const orderIndex = Number.isFinite(Number(item?.order_index)) ? Number(item.order_index) : null;
+      const localHash = sourceType === 'local' ? sourceHash(contentText) : null;
+
+      await db.query(
+        `UPDATE pogil_activities
+            SET title = ?,
+                content_text = ?,
+                source_type = ?,
+                sheet_url = ?,
+                order_index = COALESCE(?, order_index),
+                source_updated_at = NOW(3),
+                source_revision = source_revision + 1,
+                source_origin = 'bundle_replace',
+                local_source_hash = ?,
+                remote_source_hash = CASE WHEN ? = 'remote' THEN remote_source_hash ELSE NULL END
+          WHERE id = ?`,
+        [title, contentText, sourceType, sheetUrl, orderIndex, localHash, sourceType, activityId]
+      );
+
+      replaced.push({ id: activityId, name: existing.name, title, response_count: responseCount });
+    }
+
+    void recordAuditEvent('activities_bundle_replaced', {
+      req,
+      userId: req.user?.id || null,
+      classId,
+      details: {
+        replaced_count: replaced.length,
+        blocked_count: blocked.length,
+        skipped_count: skipped.length,
+      },
+    });
+
+    return res.json({ replaced, blocked, skipped });
+  } catch (err) {
+    console.error('Error replacing activities bundle:', err);
+    return res.status(500).json({ error: 'Failed to replace activities.' });
+  }
+};
+
+// Attach the Google Docs created by the instructor-owned Apps Script to the
+// existing local activities. coLearn never writes to Google: it only receives
+// the mapping file produced by that script.
+exports.importGoogleExportMapping = async (req, res) => {
+  const classId = Number(req.params.id);
+  const actorRole = String(req.user?.role || '').toLowerCase();
+  const mappingClassId = Number(req.body?.class_id);
+  const mappings = Array.isArray(req.body?.activities) ? req.body.activities : [];
+
+  if (!classId) return res.status(400).json({ error: 'Invalid class id.' });
+  if (mappingClassId && mappingClassId !== classId) {
+    return res.status(400).json({ error: 'This Google export mapping belongs to a different class.' });
+  }
+  if (!['root', 'creator', 'instructor'].includes(actorRole)) {
+    return res.status(403).json({ error: 'Only instructors, creators, or root can attach Google Docs.' });
+  }
+  if (!mappings.length) {
+    return res.status(400).json({ error: 'The mapping file does not contain any activities.' });
+  }
+
+  const seenIds = new Set();
+  const requestedIds = [];
+  for (const mapping of mappings) {
+    const activityId = Number(mapping?.activity_id ?? mapping?.id);
+    if (!activityId || seenIds.has(activityId)) {
+      return res.status(400).json({ error: 'Each mapping must contain one unique activity_id.' });
+    }
+    seenIds.add(activityId);
+    requestedIds.push(activityId);
+  }
+
+  try {
+    await ensureActivitySourceSchema();
+    const [activities] = await db.query(
+      `SELECT id, name, title, content_text
+         FROM pogil_activities
+        WHERE class_id = ? AND id IN (?)`,
+      [classId, requestedIds]
+    );
+    const activityById = new Map(activities.map((activity) => [Number(activity.id), activity]));
+    const attached = [];
+    const skipped = [];
+    const conn = await db.getConnection();
+
+    try {
+      await conn.beginTransaction();
+      for (const mapping of mappings) {
+        const activityId = Number(mapping?.activity_id ?? mapping?.id);
+        const activity = activityById.get(activityId);
+        const googleDocUrl = String(mapping?.google_doc_url ?? mapping?.sheet_url ?? '').trim();
+
+        if (!activity) {
+          skipped.push({ activity_id: activityId, reason: 'Activity is not part of this class.' });
+          continue;
+        }
+        if (!activity.content_text) {
+          skipped.push({ activity_id: activityId, name: activity.name, reason: 'Activity has no saved local markup.' });
+          continue;
+        }
+        if (!extractGoogleFileId(googleDocUrl)) {
+          skipped.push({ activity_id: activityId, name: activity.name, reason: 'Mapping does not contain a valid Google Doc URL.' });
+          continue;
+        }
+
+        const currentHash = sourceHash(activity.content_text);
+        const exportedHash = String(mapping?.content_hash || '').trim().toLowerCase();
+        if (exportedHash && exportedHash !== currentHash) {
+          skipped.push({
+            activity_id: activityId,
+            name: activity.name,
+            reason: 'Local markup changed after this export. Download a fresh bundle before attaching this Doc.',
+          });
+          continue;
+        }
+
+        await conn.query(
+          `UPDATE pogil_activities
+              SET sheet_url = ?,
+                  local_source_hash = ?,
+                  remote_source_hash = NULL,
+                  remote_updated_at = NULL,
+                  last_synced_hash = NULL,
+                  last_synced_at = NULL
+            WHERE id = ?`,
+          [googleDocUrl, currentHash, activityId]
+        );
+        attached.push({ activity_id: activityId, name: activity.name, title: activity.title, google_doc_url: googleDocUrl });
+      }
+      await conn.commit();
+    } catch (err) {
+      await conn.rollback();
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    void recordAuditEvent('activity_google_export_mapping_imported', {
+      req,
+      userId: req.user?.id || null,
+      classId,
+      details: { attached_count: attached.length, skipped_count: skipped.length },
+    });
+    return res.json({ attached, skipped });
+  } catch (err) {
+    console.error('Failed to attach Google export mapping:', err);
+    return res.status(500).json({ error: 'Could not attach the Google export mapping.' });
   }
 };
 
@@ -450,6 +742,7 @@ exports.createCreatorDraft = async (req, res) => {
     use_timed_sections = false,
     timed_sections = [],
     retries_required = 3,
+    language = 'English',
     createdBy,
   } = req.body || {};
 
@@ -458,11 +751,18 @@ exports.createCreatorDraft = async (req, res) => {
   const durationMinutes = Number(duration_minutes);
   const normalizedMode = String(mode || 'group').trim().toLowerCase();
   const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
-  const normalizedMajorSections = Array.isArray(major_sections)
-    ? CREATOR_MAJOR_SECTION_OPTIONS.filter((sectionName) => major_sections.includes(sectionName))
-    : [];
-  const normalizedUseTimedSections = use_timed_sections === true;
+  const normalizedSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const normalizedMajorSections = normalizedSectionlessMode
+    ? []
+    : Array.isArray(major_sections)
+      ? CREATOR_MAJOR_SECTION_OPTIONS.filter((sectionName) => major_sections.includes(sectionName))
+      : [];
+  const normalizedUseTimedSections = normalizedSectionlessMode ? false : use_timed_sections === true;
   const normalizedRetriesRequired = Math.max(0, Math.round(Number(retries_required) || 0));
+  const normalizedLanguage = String(language || 'English')
+    .replace(/[{}\r\n]+/g, ' ')
+    .trim()
+    .slice(0, 80) || 'English';
   const normalizedTimedSections = normalizedUseTimedSections
     ? normalizedMajorSections.map((sectionName) => {
         const match = Array.isArray(timed_sections)
@@ -481,15 +781,15 @@ exports.createCreatorDraft = async (req, res) => {
     });
   }
 
-  if (!['group', 'demo', 'test'].includes(normalizedMode)) {
-    return res.status(400).json({ error: 'mode must be group, demo, or test.' });
+  if (!['group', 'playground', 'demo', 'test', 'assignment'].includes(normalizedMode)) {
+    return res.status(400).json({ error: 'mode must be group, playground, demo, assignment, or test.' });
   }
 
   if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
     return res.status(400).json({ error: 'selected_model is not supported.' });
   }
 
-  if (!normalizedMajorSections.length) {
+  if (!normalizedSectionlessMode && !normalizedMajorSections.length) {
     return res.status(400).json({ error: 'major_sections must include at least one supported section.' });
   }
 
@@ -506,7 +806,7 @@ exports.createCreatorDraft = async (req, res) => {
 
   try {
     const [classes] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      'SELECT id, name, description, level, topic_domain, ai_guidance FROM pogil_classes WHERE id = ?',
       [classId]
     );
 
@@ -525,12 +825,23 @@ exports.createCreatorDraft = async (req, res) => {
       majorSections: normalizedMajorSections,
       timedSections: normalizedTimedSections,
       retriesRequired: normalizedRetriesRequired,
+      language: normalizedLanguage,
       classLevel: classRow.level,
       classTopicDomain: classRow.topic_domain,
       classDescription: classRow.description,
       activityDescription: normalizedDescription,
     });
-    const contentText = generation.text;
+    const generatedText = String(generation.text || '');
+    const languageLine = `\\language{${normalizedLanguage}}`;
+    const contentLines = generatedText.split('\n');
+    const existingLanguageIndex = contentLines.findIndex((line) => /^\\language\{[\s\S]*\}\s*$/.test(line.trim()));
+    if (existingLanguageIndex >= 0) {
+      contentLines[existingLanguageIndex] = languageLine;
+    } else {
+      const modeIndex = contentLines.findIndex((line) => /^\\mode\{[\s\S]*\}\s*$/.test(line.trim()));
+      contentLines.splice(modeIndex >= 0 ? modeIndex + 1 : 0, 0, languageLine);
+    }
+    const contentText = contentLines.join('\n');
 
     const [result] = await db.query(
       `INSERT INTO pogil_activities
@@ -563,6 +874,7 @@ exports.createCreatorDraft = async (req, res) => {
       use_timed_sections: normalizedUseTimedSections,
       timed_sections: normalizedTimedSections,
       retries_required: normalizedRetriesRequired,
+      language: normalizedLanguage,
       generation_status: generation.generation_status,
       generation_error: generation.generation_error,
       generation_debug_preview: generation.raw_model_output
@@ -572,84 +884,6 @@ exports.createCreatorDraft = async (req, res) => {
   } catch (err) {
     console.error('Error creating creator draft:', err);
     return res.status(500).json({ error: 'Failed to create draft activity.' });
-  }
-};
-
-exports.reviseCreatorDraft = async (req, res) => {
-  const classId = Number(req.params.id);
-  const activityId = Number(req.params.activityId);
-  const {
-    request,
-    doc_text,
-    selected_model = 'gpt-5-mini',
-    parse_issues = [],
-  } = req.body || {};
-
-  const revisionRequest = String(request || '').trim();
-  const currentText = String(doc_text || '').trim();
-  const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
-
-  if (!classId || !activityId) {
-    return res.status(400).json({ error: 'Valid class and activity ids are required.' });
-  }
-
-  if (!revisionRequest || !currentText) {
-    return res.status(400).json({ error: 'request and doc_text are required.' });
-  }
-
-  if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
-    return res.status(400).json({ error: 'selected_model is not supported.' });
-  }
-
-  try {
-    const [[classRow]] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
-      [classId]
-    );
-
-    if (!classRow) {
-      return res.status(404).json({ error: 'Class not found' });
-    }
-
-    const [[activity]] = await db.query(
-      `SELECT id, title, class_id, source_type
-         FROM pogil_activities
-        WHERE id = ? AND class_id = ?
-        LIMIT 1`,
-      [activityId, classId]
-    );
-
-    if (!activity) {
-      return res.status(404).json({ error: 'Draft activity not found for this class.' });
-    }
-
-    const revision = await activityCreator.reviseActivityDraft({
-      currentText,
-      revisionRequest,
-      selectedModel: normalizedSelectedModel,
-      title: activity.title,
-      classLevel: classRow.level,
-      classTopicDomain: classRow.topic_domain,
-      classDescription: classRow.description,
-      parseIssues: Array.isArray(parse_issues) ? parse_issues : [],
-    });
-
-    return res.json({
-      activity_id: activityId,
-      class_id: classId,
-      proposedDocText: revision.proposedDocText,
-      proposed_doc_text: revision.proposedDocText,
-      summary: revision.summary || [],
-      warnings: revision.warnings || [],
-      generation_status: revision.generation_status,
-      generation_error: revision.generation_error,
-      generation_debug_preview: revision.raw_model_output
-        ? String(revision.raw_model_output).slice(0, 500)
-        : null,
-    });
-  } catch (err) {
-    console.error('Error revising creator draft:', err);
-    return res.status(500).json({ error: 'Failed to revise draft activity.' });
   }
 };
 
@@ -678,7 +912,7 @@ exports.reviseCreatorQuestion = async (req, res) => {
 
   try {
     const [[classRow]] = await db.query(
-      'SELECT id, name, description, level, topic_domain FROM pogil_classes WHERE id = ?',
+      'SELECT id, name, description, level, topic_domain, ai_guidance FROM pogil_classes WHERE id = ?',
       [classId]
     );
     if (!classRow) return res.status(404).json({ error: 'Class not found' });

@@ -5,6 +5,8 @@ const controller = require('./controller');
 
 // Clear ALL answers for a group (activity instance)
 router.delete('/:instanceId/responses', controller.clearResponsesForInstance);
+// Permanently remove an instance and its members, drafts, responses, and feedback.
+router.delete('/:instanceId', controller.deleteActivityInstance);
 
 // ✅ Create a new activity instance
 router.post('/', controller.createActivityInstance);
@@ -16,6 +18,7 @@ router.post('/by-activity/:activityId/sandbox-instance', controller.ensureActivi
 
 // ✅ Reopen a timed test window for this instance
 router.post('/:instanceId/reopen', controller.reopenInstance);
+router.patch('/:instanceId/assignment-due-at', controller.updateAssignmentDueAt);
 
 // ✅ Regrade this test instance using stored answers
 //router.post('/:instanceId/regrade', controller.regradeTestInstance);
@@ -24,6 +27,11 @@ router.post('/:instanceId/test-settings', controller.updateTestSettings);
 
 // ✅ Submit a test for this instance
 router.post('/:instanceId/submit-test', controller.submitTest);   
+// First focus loss warns; a second loss instructs the browser to submit.
+router.post('/:instanceId/focus-loss', controller.recordTestFocusLoss);
+// Assignment labs use the same scoring pipeline, but keep a distinct public
+// endpoint so callers do not need to represent a lab as a test.
+router.post('/:instanceId/submit-assignment', controller.submitTest);
 
 // ✅ Get activity instance details
 router.get('/:id', controller.getActivityInstanceById);
@@ -69,6 +77,7 @@ router.post('/by-activity/:courseId/:activityId/active-rotation-mode', controlle
 router.get('/:instanceId/refresh-groups', controller.refreshTotalGroups);
 
 router.post('/:instanceId/recompute-test-totals', controller.recomputeTestTotals);
+router.post('/:instanceId/mark-reviewed', controller.markTestReviewed);
 
 
 

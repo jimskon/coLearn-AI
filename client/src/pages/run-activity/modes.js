@@ -3,6 +3,7 @@ export const RUN_ACTIVITY_MODES = Object.freeze({
   INSTRUCTOR_VIEW: 'instructor_view',
   ACTIVITY_PREVIEW: 'activity_preview',
   CREATOR_SANDBOX: 'creator_sandbox',
+  CREATOR_TEST_RUN: 'creator_test',
 
   // Legacy aliases accepted by existing URLs/tests.
   STUDENT: 'student',
@@ -23,6 +24,10 @@ export function normalizeRunActivityMode(mode, { user } = {}) {
 
   if (value === RUN_ACTIVITY_MODES.SANDBOX || value === RUN_ACTIVITY_MODES.CREATOR_SANDBOX) {
     return RUN_ACTIVITY_MODES.CREATOR_SANDBOX;
+  }
+
+  if (value === RUN_ACTIVITY_MODES.CREATOR_TEST_RUN) {
+    return RUN_ACTIVITY_MODES.CREATOR_TEST_RUN;
   }
 
   if (value === 'preview' || value === RUN_ACTIVITY_MODES.ACTIVITY_PREVIEW) {

@@ -1,3 +1,5 @@
+const { configuredDefaultLanguage, FALLBACK_LANGUAGE } = require('../../shared/activityLanguage.cjs');
+
 const DEFAULT_RUNTIME_FEATURES = Object.freeze({
   remoteCpp: false,
   remotePython: false,
@@ -35,15 +37,29 @@ function getRuntimeFeatures(env = process.env) {
   return features;
 }
 
+/**
+ * Deployment-wide defaults the client needs before it has parsed an activity.
+ *
+ * Separate from `features` because these are values, not switches: a feature
+ * is on or off, a default is what to use when an activity did not say.
+ */
+function getRuntimeDefaults(env = process.env) {
+  return {
+    language: configuredDefaultLanguage(env) || FALLBACK_LANGUAGE,
+  };
+}
+
 function getRuntimeFeatureConfig(env = process.env) {
   return {
     features: getRuntimeFeatures(env),
+    defaults: getRuntimeDefaults(env),
   };
 }
 
 module.exports = {
   DEFAULT_RUNTIME_FEATURES,
   getRuntimeFeatures,
+  getRuntimeDefaults,
   getRuntimeFeatureConfig,
   parseBoolean,
 };

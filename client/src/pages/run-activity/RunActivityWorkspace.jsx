@@ -1,9 +1,11 @@
-import React from 'react';
-import { Alert, Button, Spinner } from 'react-bootstrap';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { Alert, Badge, Button, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
 import { collectInfosForTarget } from '../../utils/parseSheet';
 import useRuntimeFeatures from '../../hooks/useRuntimeFeatures';
+import { shouldShowQuestionGradePreview } from './gradeQuestionPreviewUi';
+import { ActivityAiPanel, SplitDivider, collectAiEntries, useSplitPane } from './ActivityAiPanel';
 
 function renderInfoStack(infos, keyPrefix, anchorRef, options = {}) {
   if (!infos?.length) return null;
@@ -45,6 +47,8 @@ export default function RunActivityWorkspace({
   groups,
   activity,
   isTestMode,
+  isAssignmentMode,
+  isCreatorTestRun,
   isStudent,
   isSubmitted,
   timeExpired,
@@ -56,12 +60,17 @@ export default function RunActivityWorkspace({
   baseQidFromResponseKey,
   isObserver,
   isSandbox,
+  isCreatorSandbox,
   allowFreeNavigation,
   canEditAnswers,
   canSubmitGroup,
   canSubmitTest,
+  canSubmitAssignment,
   canRegradeTests,
   canSaveInstructorScores,
+  canGradeQuestionPreview,
+  canGradeAllQuestions,
+  gradingAllQuestions,
   codeViewMode,
   localCode,
   handleTextChange,
@@ -74,44 +83,95 @@ export default function RunActivityWorkspace({
   isPlaygroundMode,
   canBypassGroups,
   handleRegradeTest,
+  handleMarkTestReviewed,
   overallTestTotals,
+  questionGradePreviews,
+  gradingQuestionQid,
+  handleGradeSingleQuestion,
+  handleGradeAllQuestions,
+  clearQuestionGradePreview,
   infoBubbleSession,
+  suppressStudentTestFeedbackUi = false,
+  hideStudentTestSections = false,
+  onAiTurnSaved,
+  activeStudentName = '',
 }) {
   const { features: runtimeFeatures } = useRuntimeFeatures();
+  const isTestRunner = isStudent || isCreatorTestRun;
+  const isAssessmentMode = isTestMode || isAssignmentMode;
   let globalQuestionCounter = 0;
 
-  return (
-    <div style={{ position: 'relative' }}>
-      {activityPaused && (
-        <div
-          className="d-flex align-items-center justify-content-center"
-          style={{
-            position: 'absolute',
-            inset: 0,
-            zIndex: 20,
-            background: 'rgba(255,255,255,0.45)',
-            backdropFilter: 'grayscale(0.15)',
-          }}
-        >
-          <div className="px-3 py-2 rounded border bg-light text-muted fw-semibold shadow-sm">
-            Paused
-          </div>
-        </div>
-      )}
+  // An activity that uses AI anywhere is laid out as a split pane for its whole
+  // duration, so the panel does not appear and vanish as the student advances.
+  // An activity with no \ai block keeps the single-column layout unchanged.
+  const aiEntries = useMemo(() => collectAiEntries(groups), [groups]);
+  // Assignments render AI inline beside each question; the split panel is for group activities.
+  const useSplitLayout = aiEntries.length > 0 && !isAssignmentMode;
+  const split = useSplitPane(useSplitLayout);
+
+  // For inline AI in assignment mode: lock reason shown when the student cannot ask.
+  const assignmentAiLockReason = isSubmitted
+    ? 'This assignment has been submitted. The transcript is read only.'
+    : (isInstructor || isObserver)
+    ? 'Only the student can use the AI assistant.'
+    : '';
+
+  const completedGroupCount = Number(activity?.completed_groups ?? 0);
+  const previousCompletedGroupCountRef = useRef(completedGroupCount);
+
+  useEffect(() => {
+    const previous = previousCompletedGroupCountRef.current;
+    previousCompletedGroupCountRef.current = completedGroupCount;
+
+    if (completedGroupCount <= previous) return;
+    if (isSandbox || isAssessmentMode) return;
+
+    window.setTimeout(() => {
+      document
+        .querySelector('[data-active-group="true"]')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  }, [completedGroupCount, isSandbox, isAssessmentMode]);
+  // Instructors see every group, so "current" for them is the student's
+  // position, not their own scroll.
+  const isGroupRevealed = useCallback(
+    (groupIndex) => (
+      isSandbox || isAssessmentMode || isInstructor || groupIndex <= completedGroupCount
+    ),
+    [isSandbox, isAssessmentMode, isInstructor, completedGroupCount]
+  );
+
+  const workspaceBody = (
       <div
         aria-disabled={activityPaused ? 'true' : undefined}
         style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
       >
         {isSandbox && (
           <Alert variant="secondary" className="mb-3">
-            Sandbox mode is using the shared activity workspace with local edits only.
+            {isCreatorSandbox ? 'Creator sandbox' : 'Sandbox'} mode is using the shared activity workspace with local edits only. Creator tools can grade one question at a time or run the whole set of questions.
           </Alert>
+        )}
+
+        {isSandbox && isAssessmentMode && canGradeAllQuestions && (
+          <div className="d-flex flex-wrap gap-2 align-items-center mb-3">
+            <Button
+              size="sm"
+              variant="outline-primary"
+              onClick={handleGradeAllQuestions}
+              disabled={gradingAllQuestions || !!gradingQuestionQid}
+            >
+              {gradingAllQuestions ? <Spinner animation="border" size="sm" className="me-1" /> : null}
+              {gradingAllQuestions ? 'Grading All Questions…' : 'Grade All Questions'}
+            </Button>
+            <span className="text-muted small">Use the per-question button to preview just one item.</span>
+          </div>
         )}
 
         {renderBlocks(preamble, {
           editable: false,
           isActive: false,
           mode: 'run',
+          isTestMode,
           codeFeedbackShown,
           unansweredShown,
           isInstructor,
@@ -127,6 +187,13 @@ export default function RunActivityWorkspace({
           onFileChange: handleFileChange,
           infoBubbleSession,
           runtimeFeatures,
+          activityLanguage: activity?.language || activity?.meta?.language || '',
+          suppressStudentTestFeedbackUi,
+          hideStudentTestSections,
+          suppressAiBlocks: useSplitLayout,
+          onAiTurnSaved,
+          isSubmitted,
+          aiLockReason: assignmentAiLockReason,
         })}
 
         {groups.map((group, index) => {
@@ -138,15 +205,15 @@ export default function RunActivityWorkspace({
 
           const testEditable =
             canEditAnswers &&
-            isTestMode &&
-            isStudent &&
+            isAssessmentMode &&
+            isTestRunner &&
             !isSubmitted &&
             !timeExpired &&
             !testLockState.lockedBefore;
 
           const editable = isSandbox
             ? canEditAnswers
-            : isTestMode
+            : isAssessmentMode
             ? testEditable
             : (canEditAnswers && isActive && isCurrent && !isComplete);
 
@@ -154,7 +221,7 @@ export default function RunActivityWorkspace({
             isSandbox
               ? true
               : (
-            isTestMode
+            isAssessmentMode
               ? true
               : (isInstructor || isComplete || isCurrent)
               );
@@ -165,6 +232,7 @@ export default function RunActivityWorkspace({
             <div
               key={`group-${index}`}
               className="mb-4"
+              data-active-group={isCurrent ? 'true' : undefined}
               data-current-group={editable ? 'true' : undefined}
               data-sandbox-group={isSandbox ? String(index) : undefined}
             >
@@ -173,16 +241,29 @@ export default function RunActivityWorkspace({
                   editable: false,
                   isActive: false,
                   mode: 'run',
+                  isTestMode,
                   prefill: existingAnswers,
                   currentGroupIndex: index,
                   codeFeedbackShown,
                   unansweredShown,
                   infoBubbleSession,
                   runtimeFeatures,
+                  activityLanguage: activity?.language || activity?.meta?.language || '',
+                  suppressStudentTestFeedbackUi,
+                  hideStudentTestSections,
+                  suppressAiBlocks: useSplitLayout,
+                  onAiTurnSaved,
+                  isSubmitted,
+                  aiLockReason: assignmentAiLockReason,
                 })}
 
               <p ref={questionGroupAnchorRef}>
                 <strong>{index + 1}.</strong> {group.intro.content}
+                {Number.isFinite(Number(group?.intro?.retriesRequired)) ? (
+                  <Badge bg="light" text="dark" className="border ms-2 align-middle">
+                    Retries: {Math.max(0, Number(group.intro.retriesRequired))}
+                  </Badge>
+                ) : null}
               </p>
               {renderInfoStack(
                 collectGroupInfos(group, 'questiongroup'),
@@ -227,9 +308,16 @@ export default function RunActivityWorkspace({
                     }),
                   infoBubbleSession,
                   runtimeFeatures,
+                  isTestMode,
+                  suppressStudentTestFeedbackUi,
+                  hideStudentTestSections,
+                  suppressAiBlocks: useSplitLayout,
+                  onAiTurnSaved,
+                  isSubmitted,
+                  aiLockReason: assignmentAiLockReason,
                 });
 
-                if (!isTestMode || block.type !== 'question') {
+                if (block.type !== 'question' || !isAssessmentMode) {
                   return (
                     <div key={`group-${index}-block-${bIndex}`}>
                       {renderedBlock}
@@ -243,17 +331,97 @@ export default function RunActivityWorkspace({
 
                 const allowEdit =
                   canSaveInstructorScores &&
-                  isTestMode &&
+                  isAssessmentMode &&
                   isInstructor &&
                   isSubmitted;
                 const showScorePanel =
-                  isTestMode &&
-                  (isInstructor || isSubmitted);
+                  isAssessmentMode &&
+                  isSubmitted &&
+                  (isInstructor || isStudent);
+                const canGradeQuestionPreviewForBlock = shouldShowQuestionGradePreview({
+                  blockType: block.type,
+                  canGradeQuestionPreview,
+                  isTestMode: isAssessmentMode,
+                });
+                const questionGradePreview = questionGradePreviews?.[qid];
+                const isGradingThisQuestion = gradingQuestionQid === qid;
                 const displayNumber = nonLegacyForUI ? qid : globalQuestionCounter;
 
                 return (
                   <div key={`group-${index}-block-${bIndex}`} className="mb-2">
                     {renderedBlock}
+
+                    {canGradeQuestionPreviewForBlock && (
+                      <div className="mt-2 d-flex flex-wrap gap-2 align-items-center">
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          onClick={() => handleGradeSingleQuestion(qid)}
+                          disabled={isGradingThisQuestion}
+                        >
+                          {isGradingThisQuestion ? 'Grading…' : questionGradePreview ? 'Re-grade Question' : 'Grade This Question'}
+                        </Button>
+                        {questionGradePreview && (
+                          <Button
+                            size="sm"
+                            variant="outline-secondary"
+                            onClick={() => clearQuestionGradePreview(qid)}
+                            disabled={isGradingThisQuestion}
+                          >
+                            Clear Preview
+                          </Button>
+                        )}
+                      </div>
+                    )}
+
+                    {questionGradePreview?.status === 'ready' && canGradeQuestionPreviewForBlock && (
+                      <Alert variant="info" className="mt-2 mb-0">
+                        <div className="fw-semibold mb-1">
+                          Question preview grade: {questionGradePreview.earnedTotal}/{questionGradePreview.maxTotal}
+                        </div>
+                        <div className="small text-muted mb-2">
+                          Preview only — this does not save anything to the test attempt.
+                        </div>
+                        {questionGradePreview.rubricSource === 'inferred' ? (
+                          <div className="small text-info mb-2">
+                            No explicit score bands were found for this question, so the sandbox used a small inferred preview rubric to show a real grading result.
+                          </div>
+                        ) : null}
+                        <div className="mb-1">
+                          {questionGradePreview.maxResp > 0 && (
+                            <div>
+                              <strong>Written:</strong> {questionGradePreview.responseScore}/{questionGradePreview.maxResp}
+                              {questionGradePreview.responseFeedback ? (
+                                <div className="small mt-1">{questionGradePreview.responseFeedback}</div>
+                              ) : null}
+                            </div>
+                          )}
+                          {questionGradePreview.maxRun > 0 && (
+                            <div className="mt-1">
+                              <strong>Run/output:</strong> {questionGradePreview.runScore}/{questionGradePreview.maxRun}
+                              {questionGradePreview.runFeedback ? (
+                                <div className="small mt-1">{questionGradePreview.runFeedback}</div>
+                              ) : null}
+                            </div>
+                          )}
+                          {questionGradePreview.maxCode > 0 && (
+                            <div className="mt-1">
+                              <strong>Code:</strong> {questionGradePreview.codeScore}/{questionGradePreview.maxCode}
+                              {questionGradePreview.codeFeedback ? (
+                                <div className="small mt-1">{questionGradePreview.codeFeedback}</div>
+                              ) : null}
+                            </div>
+                          )}
+                        </div>
+                      </Alert>
+                    )}
+
+                    {questionGradePreview?.status === 'error' && canGradeQuestionPreviewForBlock && (
+                      <Alert variant="warning" className="mt-2 mb-0">
+                        <strong>Could not grade this question preview.</strong>{' '}
+                        {questionGradePreview.error || 'Please try again.'}
+                      </Alert>
+                    )}
 
                     {showScorePanel && (
                       <QuestionScorePanel
@@ -299,7 +467,7 @@ export default function RunActivityWorkspace({
                 );
               })()}
 
-              {editable && canSubmitGroup && !isTestMode && !isSandbox && (
+              {editable && canSubmitGroup && !isAssessmentMode && !isSandbox && (
                 <div className="mt-2">
                   <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
                     {isSubmitting ? (
@@ -330,7 +498,7 @@ export default function RunActivityWorkspace({
           );
         })}
 
-        {canSubmitTest && isTestMode && isStudent && !isSandbox && timeExpired && !isSubmitted && (
+        {canSubmitTest && isTestMode && !isSandbox && isTestRunner && timeExpired && !isSubmitted && (
           <Alert variant="warning" className="mt-3">
             <div className="d-flex justify-content-between align-items-center">
               <div>
@@ -343,7 +511,7 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {canSubmitTest && isTestMode && isStudent && !isSandbox && !timeExpired && !isSubmitted && (
+        {canSubmitTest && isTestMode && !isSandbox && isTestRunner && !timeExpired && !isSubmitted && (
           <div className="mt-3">
             <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
               {isSubmitting ? (
@@ -358,15 +526,33 @@ export default function RunActivityWorkspace({
           </div>
         )}
 
-        {canRegradeTests && isTestMode && isInstructor && !isSandbox && isSubmitted && (
+        {canSubmitAssignment && isAssignmentMode && !isSandbox && isStudent && !isSubmitted && (
+          <div className="mt-3">
+            <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
+              {isSubmitting ? <><Spinner animation="border" size="sm" className="me-2" />Submitting…</> : 'Submit Lab'}
+            </Button>
+            <span className="text-muted small ms-2">This records your final draft for preliminary grading and instructor review.</span>
+          </div>
+        )}
+
+        {canRegradeTests && isAssessmentMode && isInstructor && !isSandbox && isSubmitted && (
           <div className="mt-3 d-flex gap-2">
             <Button
               variant="warning"
               onClick={() => handleRegradeTest()}
               disabled={isSubmitting}
             >
-              {isSubmitting ? 'Regrading…' : 'Regrade Test'}
+              {isSubmitting ? 'Regrading…' : isAssignmentMode ? 'Regrade Lab' : 'Regrade Test'}
             </Button>
+            {!Number(activity?.review_complete) && (
+              <Button
+                variant="success"
+                onClick={handleMarkTestReviewed}
+                disabled={isSubmitting}
+              >
+                Mark Reviewed
+              </Button>
+            )}
           </div>
         )}
 
@@ -376,9 +562,11 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {isTestMode && !isSandbox && overallTestTotals.max > 0 && (isInstructor || isSubmitted) && (
+        {isAssessmentMode && !isSandbox && overallTestTotals.max > 0 && isInstructor && (
           <Alert variant="info" className="mt-3">
-            Overall test score:{' '}
+            <strong>{Number(activity?.review_complete) ? 'Reviewed by instructor' : 'Preliminary score — pending instructor review'}</strong>
+            <br />
+            Overall {isAssignmentMode ? 'lab' : 'test'} score:{' '}
             <strong>
               {overallTestTotals.earned}/{overallTestTotals.max}
             </strong>{' '}
@@ -390,6 +578,82 @@ export default function RunActivityWorkspace({
             %)
           </Alert>
         )}
+      </div>
+  );
+
+  const pausedOverlay = activityPaused ? (
+    <div
+      className="d-flex align-items-center justify-content-center"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 20,
+        background: 'rgba(255,255,255,0.45)',
+        backdropFilter: 'grayscale(0.15)',
+      }}
+    >
+      <div className="px-3 py-2 rounded border bg-light text-muted fw-semibold shadow-sm">
+        Paused
+      </div>
+    </div>
+  ) : null;
+
+  if (!useSplitLayout) {
+    return (
+      <div style={{ position: 'relative' }}>
+        {pausedOverlay}
+        {workspaceBody}
+      </div>
+    );
+  }
+
+  // Split layout. The activity column scrolls with the page as it always has;
+  // the divider and the AI panel are sticky so the transcript stays in view
+  // while the student works down the activity.
+  const stickyStyle = {
+    position: 'sticky',
+    top: 80,
+    height: 'calc(100vh - 100px)',
+    alignSelf: 'flex-start',
+  };
+
+  return (
+    <div style={{ position: 'relative' }}>
+      {pausedOverlay}
+      <div ref={split.containerRef} className="d-flex align-items-start">
+        <div style={{ flex: `0 0 ${split.pct}%`, minWidth: 0, paddingRight: 12 }}>
+          {workspaceBody}
+        </div>
+
+        <div style={stickyStyle} className="d-flex">
+          <SplitDivider
+            pct={split.pct}
+            dragging={split.dragging}
+            onStart={() => split.setDragging(true)}
+            onKeyDown={split.handleKeyDown}
+          />
+        </div>
+
+        <div
+          className="border rounded bg-white ms-2"
+          style={{ ...stickyStyle, flex: '1 1 auto', minWidth: 0, overflow: 'hidden' }}
+        >
+          <ActivityAiPanel
+            entries={aiEntries}
+            currentGroupIndex={completedGroupCount}
+            isRevealed={isGroupRevealed}
+            isActive={isActive}
+            isObserver={isObserver}
+            isInstructor={isInstructor}
+            isSubmitted={isSubmitted}
+            activityLanguage={activity?.language || activity?.meta?.language || ''}
+            instanceId={instanceId}
+            userId={user?.id}
+            existingAnswers={existingAnswers}
+            onAiTurnSaved={onAiTurnSaved}
+            activeStudentName={activeStudentName}
+          />
+        </div>
       </div>
     </div>
   );

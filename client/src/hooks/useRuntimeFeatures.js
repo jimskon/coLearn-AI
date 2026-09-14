@@ -6,8 +6,15 @@ const DEFAULT_RUNTIME_FEATURES = Object.freeze({
   remotePython: true,
 });
 
+// Used only until /api/runtime/config answers, and if it never does. The
+// server is the authority on the deployment default.
+const DEFAULT_RUNTIME_DEFAULTS = Object.freeze({
+  language: 'English',
+});
+
 export default function useRuntimeFeatures() {
   const [features, setFeatures] = useState(DEFAULT_RUNTIME_FEATURES);
+  const [defaults, setDefaults] = useState(DEFAULT_RUNTIME_DEFAULTS);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -29,6 +36,10 @@ export default function useRuntimeFeatures() {
             ...DEFAULT_RUNTIME_FEATURES,
             ...(body?.features || {}),
           });
+          setDefaults({
+            ...DEFAULT_RUNTIME_DEFAULTS,
+            ...(body?.defaults || {}),
+          });
         }
       } catch (err) {
         console.warn('[runtime-features] Falling back to defaults', err);
@@ -44,5 +55,5 @@ export default function useRuntimeFeatures() {
     };
   }, []);
 
-  return { features, loaded };
+  return { features, defaults, loaded };
 }

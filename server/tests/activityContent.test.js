@@ -98,3 +98,59 @@ test('loadActivitySourceLines falls back to remote doc when local content is emp
     restore();
   }
 });
+
+test('sourceSyncStatus prefers matching markup over timestamps and otherwise identifies the newer copy', () => {
+  const { activityContent, restore } = loadActivityContent();
+
+  try {
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'same\nmarkup',
+      remoteText: 'same\nmarkup',
+      localUpdatedAt: '2026-08-07T12:00:00.000Z',
+      remoteUpdatedAt: '2026-08-07T13:00:00.000Z',
+    }).state, 'in_sync');
+
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'local copy',
+      remoteText: 'remote copy',
+      localUpdatedAt: '2026-08-07T14:00:00.000Z',
+      remoteUpdatedAt: '2026-08-07T13:00:00.000Z',
+    }).state, 'local_newer');
+
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'local copy',
+      remoteText: 'remote copy',
+      localUpdatedAt: '2026-08-07T12:00:00.000Z',
+      remoteUpdatedAt: '2026-08-07T13:00:00.000Z',
+    }).state, 'remote_newer');
+  } finally {
+    restore();
+  }
+});
+
+test('sourceSyncStatus detects when local and Google changed after their last shared version', () => {
+  const { activityContent, restore } = loadActivityContent();
+
+  try {
+    const baseHash = activityContent.sourceHash('shared base');
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'local edit',
+      remoteText: 'shared base',
+      lastSyncedHash: baseHash,
+    }).state, 'local_newer');
+
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'shared base',
+      remoteText: 'Google edit',
+      lastSyncedHash: baseHash,
+    }).state, 'remote_newer');
+
+    assert.equal(activityContent.sourceSyncStatus({
+      localText: 'local edit',
+      remoteText: 'Google edit',
+      lastSyncedHash: baseHash,
+    }).state, 'conflict');
+  } finally {
+    restore();
+  }
+});

@@ -1,4 +1,17 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
+
+// A burst of this many loads inside the window is treated as a loop, not as
+// legitimate activity. One submit or one becomes-active transition is a single
+// load, so real usage stays far below this.
+// A real instance row always carries its own id. An error body ({error: ...})
+// and a null parse do not, which is what makes this a reliable discriminator.
+function isLoadedInstance(data) {
+  return !!data && typeof data === 'object' && !Array.isArray(data) && data.id != null;
+}
+
+const RELOAD_BURST_LIMIT = 6;
+const RELOAD_BURST_WINDOW_MS = 4000;
+const RELOAD_BURST_COOLDOWN_MS = 5000;
 
 import { API_BASE_URL } from '../../config';
 import { parseSheetToBlocks } from '../../utils/parseSheet';
@@ -28,21 +41,97 @@ export default function useRunActivityData({
   loadingRef,
   stripHtml,
   isNoAI,
+  isTestMode = false,
 }) {
+  const loadActivityCallsRef = useRef([]);
+  const loadActivityStormRef = useRef(false);
+
   return useCallback(async function loadActivity() {
     if (loadingRef.current) {
       return;
     }
 
+    // Runaway-reload circuit breaker.
+    //
+    // loadActivity fetches /active-student and calls setActiveStudentId, and
+    // that endpoint is not a pure read -- it reassigns the active student and
+    // writes to the DB. Setting activeStudentId can flip isActive, and the
+    // isActive effect in RunActivityPage calls loadActivity again, so there is
+    // a real feedback edge here. When it engages, the page reloads in a tight
+    // loop: every pass re-parses the sheet and rewrites activity/groups, which
+    // makes the floating section timer flicker on and off at the top of the
+    // screen and hammers the server.
+    //
+    // Normal use never reloads this often -- a submit or a becomes-active
+    // transition is one load. So treat a burst as a bug: refuse it, and log the
+    // stack once so the offending caller is identifiable in the wild rather
+    // than only under a debugger.
+    const nowMs = Date.now();
+    const recent = (loadActivityCallsRef.current = loadActivityCallsRef.current
+      .filter((t) => nowMs - t < RELOAD_BURST_WINDOW_MS));
+
+    if (recent.length >= RELOAD_BURST_LIMIT) {
+      if (!loadActivityStormRef.current) {
+        loadActivityStormRef.current = true;
+        console.error(
+          `[RUN] Runaway loadActivity: ${recent.length} reloads in ` +
+          `${RELOAD_BURST_WINDOW_MS}ms. Suppressing further reloads for ` +
+          `${RELOAD_BURST_COOLDOWN_MS}ms. Caller stack follows.`
+        );
+        console.trace('[RUN] loadActivity caller');
+      }
+      if (nowMs - recent[recent.length - 1] < RELOAD_BURST_COOLDOWN_MS) {
+        return;
+      }
+      loadActivityCallsRef.current = [];
+      loadActivityStormRef.current = false;
+    }
+
+    loadActivityCallsRef.current.push(nowMs);
     loadingRef.current = true;
 
     try {
       const instanceRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
         credentials: 'include',
       });
-      const instanceData = await instanceRes.json();
+      const instanceData = await instanceRes.json().catch(() => null);
 
-      setActivity(instanceData);
+      // Never publish a failed read into `activity`.
+      //
+      // A non-ok response still parses as JSON -- typically {error: "..."} --
+      // and writing that object into activity silently strips every real field.
+      // The visible symptom is chrome derived from those fields blinking out
+      // and back: the submitted/score banner disappears for one render, as does
+      // the section timer, because submitted_at and section_timer_* are simply
+      // absent from the error payload. Keeping the previous good activity is
+      // always better than replacing it with an error body.
+      if (!instanceRes.ok || !isLoadedInstance(instanceData)) {
+        console.warn('[RUN] Ignoring bad activity-instance response; keeping previous state.', {
+          status: instanceRes.status,
+          body: instanceData,
+        });
+        return;
+      }
+
+      // MERGE, never replace.
+      //
+      // instanceData is the activity_instances row. It carries no `meta`,
+      // because mode/context/level are parsed out of the sheet further down and
+      // folded in by the setActivity near the end of this function.
+      //
+      // Replacing wholesale therefore publishes a activity that momentarily
+      // claims meta is absent, and activityMode falls back to 'group'. For an
+      // assignment that is not cosmetic: isAssignmentMode gates the
+      // submitted/score banner (so it blinks out), and it is a term of isActive
+      // (so isActive drops to false and then back to true when meta lands).
+      // The isActive effect in RunActivityPage reloads on that false -> true
+      // edge, which starts the next load, which repeats the whole dance -- an
+      // endless reload loop that only appears on assignments, since a group
+      // activity derives isActive from activeStudentId instead.
+      //
+      // Merging keeps the parsed fields from the previous load in place, so the
+      // edge happens once on genuine first load and never again.
+      setActivity((prev) => ({ ...prev, ...instanceData }));
 
       let effective = instanceData;
 
@@ -54,10 +143,13 @@ export default function useRunActivityData({
         const updatedRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
           credentials: 'include',
         });
-        const updatedData = await updatedRes.json();
+        const updatedData = await updatedRes.json().catch(() => null);
 
-        setActivity(updatedData);
-        effective = updatedData;
+        if (updatedRes.ok && isLoadedInstance(updatedData)) {
+          // Same reasoning as above: this is a row refresh, not a whole activity.
+          setActivity((prev) => ({ ...prev, ...updatedData }));
+          effective = updatedData;
+        }
       }
 
       const activeRes = await fetch(
@@ -116,45 +208,66 @@ export default function useRunActivityData({
           return next;
         });
 
-        setCodeFeedbackShown((prev) => {
-          const merged = { ...prev };
+        if (!isTestMode) {
+          setCodeFeedbackShown((prev) => {
+            const merged = { ...prev };
+            for (const [key, entry] of Object.entries(answersData)) {
+              if (
+                entry &&
+                Object.prototype.hasOwnProperty.call(entry, 'python_feedback')
+              ) {
+                merged[key] = entry.python_feedback;
+              }
+            }
+            return merged;
+          });
+
+          const restoredTextFeedback = {};
+
+          for (const [key, entry] of Object.entries(answersData || {})) {
+            if (!key.endsWith('F1')) continue;
+            const qid = key.slice(0, -2);
+
+            if (dirtyTextQidsRef.current.has(qid)) continue;
+
+            const text = (entry?.response || '').trim();
+            if (!text) continue;
+
+            // Restore the accepted/needs-revision colour along with the text.
+            //
+            // The UI reads this as {text, positive} and treats a bare string as
+            // not-positive, so storing just the text made every restored answer
+            // render yellow ("needs revision") after a reload -- including ones
+            // the AI had accepted. <qid>FM records which it was, and is already
+            // in this same payload.
+            const marker = (answersData?.[`${qid}FM`]?.response || '')
+              .trim()
+              .toLowerCase();
+
+            restoredTextFeedback[qid] = {
+              text,
+              positive: marker === 'accepted',
+            };
+          }
+
+          setTextFeedbackShown((prev) => ({ ...prev, ...restoredTextFeedback }));
+
+          const restoredFollowups = {};
           for (const [key, entry] of Object.entries(answersData)) {
-            if (
-              entry &&
-              Object.prototype.hasOwnProperty.call(entry, 'python_feedback')
-            ) {
-              merged[key] = entry.python_feedback;
+            if (!key.endsWith('FA1')) continue;
+            const text = (entry?.response || '').trim();
+            if (text) {
+              restoredFollowups[key] = text;
             }
           }
-          return merged;
-        });
-
-        const restoredTextFeedback = {};
-
-        for (const [key, entry] of Object.entries(answersData || {})) {
-          if (!key.endsWith('F1')) continue;
-          const qid = key.slice(0, -2);
-
-          if (dirtyTextQidsRef.current.has(qid)) continue;
-
-          const text = (entry?.response || '').trim();
-          if (!text) continue;
-
-          restoredTextFeedback[qid] = text;
-        }
-
-        setTextFeedbackShown((prev) => ({ ...prev, ...restoredTextFeedback }));
-
-        const restoredFollowups = {};
-        for (const [key, entry] of Object.entries(answersData)) {
-          if (!key.endsWith('FA1')) continue;
-          const text = (entry?.response || '').trim();
-          if (text) {
-            restoredFollowups[key] = text;
+          if (Object.keys(restoredFollowups).length > 0) {
+            setFollowupAnswers((prev) => ({ ...prev, ...restoredFollowups }));
           }
-        }
-        if (Object.keys(restoredFollowups).length > 0) {
-          setFollowupAnswers((prev) => ({ ...prev, ...restoredFollowups }));
+        } else {
+          setCodeFeedbackShown({});
+          setTextFeedbackShown({});
+          setFollowupAnswers({});
+          setFollowupsShown({});
         }
       } else {
         setExistingAnswers({});
@@ -208,10 +321,16 @@ export default function useRunActivityData({
         const aiCodeGuideBlock = blocks.find(
           (b) => b.type === 'header' && b.tag === 'aicodeguidance'
         );
+        const languageBlock = blocks.find(
+          (b) => b.type === 'header' && b.tag === 'language'
+        );
 
         const activitycontext = stripHtml(activityContextBlock?.content || '');
         const studentlevel = stripHtml(studentLevelBlock?.content || '');
         const aicodeguidance = stripHtml(aiCodeGuideBlock?.content || '');
+        // Left empty when the activity names no language, so the server can
+        // apply DEFAULT_ACTIVITY_LANGUAGE. Defaulting here would hide the gap.
+        const language = stripHtml(languageBlock?.content || meta.language || '');
 
         setActivity((prev) => ({
           ...prev,
@@ -219,6 +338,7 @@ export default function useRunActivityData({
           activitycontext,
           studentlevel,
           aicodeguidance,
+          language,
           meta,
         }));
 

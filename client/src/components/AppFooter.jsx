@@ -1,6 +1,11 @@
 import React from 'react';
 import { Container } from 'react-bootstrap';
-import { APP_COPYRIGHT, APP_VERSION } from '../version';
+import {
+  APP_BUILD_TIME_UTC,
+  APP_COPYRIGHT,
+  APP_GIT_COMMIT_SHA,
+  APP_VERSION,
+} from '../version';
 
 export default function AppFooter() {
   return (
@@ -14,7 +19,7 @@ export default function AppFooter() {
     >
       <Container className="d-flex flex-column flex-md-row justify-content-between align-items-center gap-2">
         <small>{APP_COPYRIGHT}</small>
-        <small>Version {APP_VERSION}</small>
+        <small>Version {APP_VERSION} · built {APP_BUILD_TIME_UTC} · {APP_GIT_COMMIT_SHA}</small>
       </Container>
     </footer>
   );

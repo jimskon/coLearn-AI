@@ -1,4 +1,4 @@
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import { useUser } from '../context/UserContext';
 import { Form, Button, Container, Row, Col, Card, Alert } from 'react-bootstrap';
@@ -8,6 +8,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const { setUser } = useUser();
   const navigate = useNavigate();
+  const location = useLocation();
   const [error, setError] = useState('');
 
   const handleSubmit = async (e) => {
@@ -17,6 +18,7 @@ export default function LoginPage() {
       const res = await fetch(`${import.meta.env.VITE_API_BASE_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: 'include',
         body: JSON.stringify({ email, password })
       });
       const data = await res.json();
@@ -25,7 +27,11 @@ export default function LoginPage() {
         const loggedInUser = { name: data.name, role: data.role, id: data.id };
         localStorage.setItem("user", JSON.stringify(loggedInUser)); // ✅ store persistently
         setUser(loggedInUser); // update context
-        navigate("/dashboard");
+        const requestedDestination = new URLSearchParams(location.search).get('next') || '';
+        const safeDestination = requestedDestination.startsWith('/') && !requestedDestination.startsWith('//')
+          ? requestedDestination
+          : '/dashboard';
+        navigate(safeDestination, { replace: true });
       } else {
         setError(data.error || "Login failed.");
       }

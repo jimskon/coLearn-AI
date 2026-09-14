@@ -4,6 +4,11 @@ import { useNavigate } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { Table, Button, Form, Container, Modal } from 'react-bootstrap';
+// One copy of the policy text, shared with the server, so the dialog cannot
+// advertise a default the server has stopped applying.
+import defaultClassGuidance from '../../../shared/defaultClassGuidance.cjs';
+
+const { DEFAULT_CLASS_GUIDANCE } = defaultClassGuidance;
 
 export default function ManageClassesPage() {
   const { user } = useUser();
@@ -16,6 +21,7 @@ export default function ManageClassesPage() {
     level: '',
     topic_domain: '',
     description: '',
+    ai_guidance: '',
     demo_mode: false,
   };
   const [classForm, setClassForm] = useState(emptyForm);
@@ -38,13 +44,33 @@ export default function ManageClassesPage() {
     setShowClassModal(true);
   };
 
+  // Every field is forced to a string before it reaches the form.
+  //
+  // `|| ''` only guards null and undefined -- it passes anything else straight
+  // through, and the dialog then calls .trim() on ai_guidance. A value that is
+  // not a string (a Buffer serialised as {type:'Buffer',data:[...]} when the
+  // column is BLOB rather than TEXT, for instance) has no .trim, the render
+  // throws, and React unmounts the subtree. The dialog simply never appears,
+  // with nothing on screen to say why. Create Class was unaffected because it
+  // starts from '' and never reaches that call.
+  const asText = (value) => {
+    if (value == null) return '';
+    if (typeof value === 'string') return value;
+    // A Buffer that has been through JSON, which is how a BLOB column arrives.
+    if (Array.isArray(value?.data)) {
+      try { return new TextDecoder().decode(new Uint8Array(value.data)); } catch { return ''; }
+    }
+    return String(value);
+  };
+
   const openEditModal = (classRow) => {
     setClassForm({
       id: classRow.id,
-      name: classRow.name || '',
-      level: classRow.level || '',
-      topic_domain: classRow.topic_domain || '',
-      description: classRow.description || '',
+      name: asText(classRow.name),
+      level: asText(classRow.level),
+      topic_domain: asText(classRow.topic_domain),
+      description: asText(classRow.description),
+      ai_guidance: asText(classRow.ai_guidance),
       demo_mode: Boolean(classRow.demo_mode),
     });
     setModalError('');
@@ -78,6 +104,7 @@ export default function ManageClassesPage() {
       level: classForm.level.trim() || null,
       topic_domain: classForm.topic_domain.trim() || null,
       description: classForm.description.trim() || null,
+      ai_guidance: classForm.ai_guidance.trim() || null,
       demo_mode: Boolean(classForm.demo_mode),
     };
 
@@ -163,7 +190,22 @@ export default function ManageClassesPage() {
           <Modal.Title>{classForm.id ? 'Update Class' : 'Create Class'}</Modal.Title>
         </Modal.Header>
         <Form onSubmit={handleSaveClass}>
-          <Modal.Body>
+          {/*
+            The body scrolls itself rather than via Modal's `scrollable` prop.
+            This dialog outgrew the window when it gained the Class AI Guidance
+            textarea, its two links and a help paragraph -- everything below
+            Description was clipped with no scrollbar, so the field read as
+            having been removed.
+
+            `scrollable` is the obvious fix and it is wrong here: it puts
+            overflow:hidden on .modal-content and expects .modal-body to be a
+            flex child of it, but this dialog has a <form> in between. The form
+            does not flex, the body collapses to nothing, and the whole dialog
+            renders as an empty sliver -- which looks exactly like the modal
+            failing to open. Constraining the body directly does not care what
+            wraps it.
+          */}
+          <Modal.Body style={{ maxHeight: '70vh', overflowY: 'auto' }}>
             <Form.Group className="mb-3" controlId="className">
               <Form.Label>Class Name</Form.Label>
               <Form.Control
@@ -205,6 +247,45 @@ export default function ManageClassesPage() {
                 onChange={handleModalFieldChange}
                 placeholder="Describe the class"
               />
+            </Form.Group>
+            <Form.Group className="mt-3" controlId="classAiGuidance">
+              <Form.Label>Class AI Guidance</Form.Label>
+              <Form.Control
+                as="textarea"
+                rows={4}
+                name="ai_guidance"
+                value={classForm.ai_guidance}
+                onChange={handleModalFieldChange}
+                placeholder={DEFAULT_CLASS_GUIDANCE}
+              />
+              <div className="d-flex align-items-center gap-2 mt-1">
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="p-0"
+                  onClick={() =>
+                    setClassForm((prev) => ({ ...prev, ai_guidance: DEFAULT_CLASS_GUIDANCE }))
+                  }
+                  disabled={String(classForm.ai_guidance || '').trim().length > 0}
+                >
+                  Copy the default in to edit it
+                </Button>
+                {String(classForm.ai_guidance || '').trim().length > 0 ? (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="p-0 text-muted"
+                    onClick={() => setClassForm((prev) => ({ ...prev, ai_guidance: '' }))}
+                  >
+                    Clear (use system default)
+                  </Button>
+                ) : null}
+              </div>
+              <Form.Text className="text-muted">
+                Sets the default AI feedback policy for all activities in this class. The grey text is
+                the system default, which applies while this box is empty — copy it in if you want to
+                edit it. Individual activities can refine this in their \aicodeguidance field.
+              </Form.Text>
             </Form.Group>
             <Form.Group className="mt-3" controlId="classDemoMode">
               <Form.Check

@@ -5,10 +5,14 @@ const { authorize } = require('../utils/googleAuth');
 const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
 const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
+const { deleteAbandonedInstances } = require('../utils/emptyInstances');
+const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { enqueueSuggestionForStatusChange } = require('../progress_monitor/service');
+const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
+const { ensureAssignmentDueSchema } = require('../utils/assignmentDueSchema');
 
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -31,12 +35,33 @@ function normalizeSectionTimerPayload(raw = {}) {
   };
 }
 
+// The mysql driver may hand back a Date or a string depending on config; the
+// client's parseUtcDbDatetime understands the "YYYY-MM-DD HH:MM:SS" UTC form,
+// so normalise to that before sending timer anchors over the wire.
+function normalizeDbDatetime(value) {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime())
+      ? null
+      : value.toISOString().slice(0, 19).replace('T', ' ');
+  }
+  return String(value);
+}
+
 function toDbNowString(date = new Date()) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
 function normalizeActiveRotationMode(raw) {
   return String(raw || '').trim().toLowerCase() === 'group' ? 'group' : 'submit';
+}
+
+function normalizeScoreBands(scores = {}) {
+  return {
+    code: scores.code || null,
+    output: scores.output || null,
+    response: scores.response || null,
+  };
 }
 
 const PRESENCE_WINDOW_SEC = 120;
@@ -60,6 +85,21 @@ async function resumeExistingMembership(conn, activityInstanceId, studentId) {
   );
 }
 
+async function tableHasColumn(conn, tableName, columnName) {
+  const [rows] = await conn.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+      LIMIT 1`,
+    [tableName, columnName],
+  );
+  return rows.length > 0;
+}
+
+async function deleteInstanceRowsIfPresent(conn, tableName, columnName, instanceId) {
+  if (!(await tableHasColumn(conn, tableName, columnName))) return;
+  await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} = ?`, [instanceId]);
+}
+
 function countQuestionGroups(lines = []) {
   const count = (Array.isArray(lines) ? lines : [])
     .filter((line) => String(line || '').trimStart().startsWith('\\questiongroup'))
@@ -67,11 +107,217 @@ function countQuestionGroups(lines = []) {
   return count > 0 ? count : 1;
 }
 
+function parseTestQuestionsFromLines(lines) {
+  const questions = [];
+  let currentQuestion = null;
+  let currentMultipleChoice = null;
+
+  const finishMultipleChoice = () => {
+    if (!currentQuestion || !currentMultipleChoice) return;
+    const selectionMode = currentMultipleChoice.selectionMode === 'multiple' ? 'multiple' : 'single';
+    const correctAnswer = selectionMode === 'multiple'
+      ? ''
+      : String(currentMultipleChoice.correctAnswer || '').trim();
+    const choices = Array.isArray(currentMultipleChoice.choices)
+      ? currentMultipleChoice.choices
+          .map((choice) => ({
+            value: String(choice?.value ?? '').trim(),
+            content: String(choice?.content ?? '').trim(),
+            points: Number.isInteger(choice?.points) ? choice.points : null,
+          }))
+          .filter((choice) => !!choice.value)
+      : [];
+
+    const hasChoiceScores = choices.some((choice) => choice.points !== null);
+    currentQuestion.multipleChoice = {
+      correctAnswer,
+      selectionMode,
+      choices,
+      hasChoiceScores,
+      maxChoicePoints: hasChoiceScores
+        ? Math.max(0, ...choices.map((choice) => Number(choice.points) || 0))
+        : 0,
+    };
+    currentMultipleChoice = null;
+  };
+
+  const finishQuestion = () => {
+    if (!currentQuestion) return;
+    if (currentMultipleChoice) finishMultipleChoice();
+    currentQuestion.questionText = String(currentQuestion.questionText || '').trim();
+    if (currentQuestion.multipleChoice?.hasChoiceScores && !currentQuestion.scores?.response) {
+      currentQuestion.scores.response = {
+        points: currentQuestion.multipleChoice.maxChoicePoints,
+      };
+    }
+    questions.push(currentQuestion);
+    currentQuestion = null;
+  };
+
+  for (const rawLine of Array.isArray(lines) ? lines : []) {
+    const raw = String(rawLine ?? '');
+    const trimmed = raw.trim();
+
+    if (!trimmed) {
+      if (currentQuestion && !currentMultipleChoice) {
+        currentQuestion.questionText = currentQuestion.questionText
+          ? `${currentQuestion.questionText}\n`
+          : '';
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith('\\question{')) {
+      finishQuestion();
+      const match = trimmed.match(/^\\question\{([\s\S]*?)\}\s*$/);
+      currentQuestion = {
+        questionText: String(match?.[1] || '').trim(),
+        scores: {},
+        multipleChoice: null,
+        sampleResponses: [],
+      };
+      continue;
+    }
+
+    if (!currentQuestion) {
+      continue;
+    }
+
+    if (currentMultipleChoice) {
+      if (trimmed === '\\endmultiplechoice') {
+        finishMultipleChoice();
+        continue;
+      }
+
+      const choiceMatch = trimmed.match(/^\\choice\{([\s\S]*?)\}(?:\\?\{(\d+)\})?\s*$/);
+      if (choiceMatch) {
+        currentMultipleChoice.choices.push({
+          value: String(choiceMatch[1] || '').trim(),
+          content: String(choiceMatch[1] || '').trim(),
+          points: choiceMatch[2] === undefined ? null : Number.parseInt(choiceMatch[2], 10),
+        });
+      }
+      continue;
+    }
+
+    if (trimmed.startsWith('\\multiplechoice')) {
+      const match = trimmed.match(/^\\multiplechoice\{([\s\S]*?)\}\s*$/);
+      const value = String(match?.[1] || '').trim();
+      currentMultipleChoice = {
+        correctAnswer: value.toLowerCase() === 'multiple' ? '' : value,
+        selectionMode: value.toLowerCase() === 'multiple' ? 'multiple' : 'single',
+        choices: [],
+      };
+      continue;
+    }
+
+    const scoreMatch = trimmed.match(/^\\score\{([^}]*)\}/i);
+    if (scoreMatch) {
+      currentQuestion.scores = parseScoreSpec(scoreMatch[1]);
+      continue;
+    }
+
+    const sampleMatch = trimmed.match(/^\\sampleresponses\{([\s\S]*?)\}\s*$/i);
+    if (sampleMatch) {
+      currentQuestion.sampleResponses.push(String(sampleMatch[1] || '').trim());
+      continue;
+    }
+
+    if (trimmed === '\\endquestion') {
+      finishQuestion();
+      continue;
+    }
+
+    if (trimmed.startsWith('\\questiongroup{') || trimmed.startsWith('\\endquestiongroup')) {
+      continue;
+    }
+
+    if (!trimmed.startsWith('\\end')) {
+      currentQuestion.questionText = currentQuestion.questionText
+        ? `${currentQuestion.questionText} ${trimmed}`
+        : trimmed;
+    }
+  }
+
+  finishQuestion();
+  return questions;
+}
+
+function appendReferenceAnswer(feedback, label, answer) {
+  const reference = String(answer || '').trim();
+  if (!reference) return String(feedback || '').trim();
+
+  const prefix = String(label || 'Reference answer').trim();
+  const addition = `${prefix}: ${reference}`;
+  const existing = String(feedback || '').trim();
+  if (!existing) return addition;
+  if (existing.includes(addition)) return existing;
+  return `${existing}\n\n${addition}`;
+}
+
+function getTestReferenceAnswer(sourceQuestion = {}, maxResponsePoints = 0) {
+  const multipleChoice = sourceQuestion?.multipleChoice;
+  if (multipleChoice?.selectionMode !== 'multiple') {
+    if (multipleChoice?.hasChoiceScores) {
+      const fullCreditChoices = (multipleChoice.choices || [])
+        .filter((choice) => Number(choice?.points) === Number(maxResponsePoints))
+        .map((choice) => String(choice.value || '').trim())
+        .filter(Boolean);
+      if (fullCreditChoices.length) {
+        return { label: 'Full-credit answer', answer: fullCreditChoices.join(' or ') };
+      }
+    }
+
+    const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+    if (correctAnswer) return { label: 'Correct answer', answer: correctAnswer };
+  }
+
+  const sample = String(sourceQuestion?.sampleResponses?.[0] || '').trim();
+  return sample ? { label: 'Reference answer', answer: sample } : null;
+}
+
+function redactMultipleChoiceAnswers(lines) {
+  return (Array.isArray(lines) ? lines : []).map((line) => {
+    const raw = String(line ?? '');
+    if (!raw.trim().startsWith('\\multiplechoice{')) return raw;
+    return raw.replace(/^(\s*\\multiplechoice\{)[\s\S]*?(\}\s*)$/, '$1$2');
+  });
+}
+
 async function syncTotalGroupsFromSource(conn, instanceId, activitySource, fallbackTotalGroups) {
   const storedTotalGroups = Number(fallbackTotalGroups) || 0;
 
   try {
     const lines = await loadActivitySourceLines(activitySource || {});
+
+    // countQuestionGroups() reports 1 when it finds no \questiongroup lines at
+    // all. That is a guess, not a measurement, and it is indistinguishable from
+    // a real single-group activity -- so guard on the raw count instead.
+    //
+    // Finding zero groups does not mean the activity has one group; it means we
+    // failed to read the source. loadActivitySourceLines returns [] when the
+    // instance has no sheet_url, and a Google Doc that 403s or redirects comes
+    // back as an error page with no \questiongroup lines rather than throwing.
+    // Writing total_groups = 1 on the strength of that silently freezes every
+    // student past group 1: submit-group rescans only i = 1..total_groups, so
+    // the group they just completed is never counted, completed_groups never
+    // increases, and the client sees no advance. Both Submit and Continue then
+    // appear to do nothing and the student stays on the same question.
+    //
+    // Keep whatever we already knew instead of overwriting it with a guess.
+    const rawGroupCount = (Array.isArray(lines) ? lines : [])
+      .filter((line) => String(line || '').trimStart().startsWith('\\questiongroup'))
+      .length;
+
+    if (rawGroupCount === 0) {
+      console.warn('⚠️ Refusing to rewrite total_groups: no \\questiongroup lines found in activity source.', {
+        instanceId,
+        storedTotalGroups,
+        lineCount: Array.isArray(lines) ? lines.length : 0,
+      });
+      return storedTotalGroups > 0 ? storedTotalGroups : 1;
+    }
+
     const canonicalTotalGroups = countQuestionGroups(lines);
 
     if (instanceId && canonicalTotalGroups !== storedTotalGroups) {
@@ -187,9 +433,8 @@ function getHistoryBaseQid(qidRaw) {
   if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return null;
   if (/^test(?:Total|Max|Summary)Score$/i.test(qid)) return null;
 
-  if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
-
   const suffixPatterns = [
+    /^(?<base>\d+[A-Za-z]+)AI\d+$/i,
     /^(?<base>\d+[A-Za-z]+)F\d+$/i,
     /^(?<base>\d+[A-Za-z]+)FA\d+$/i,
     /^(?<base>\d+[A-Za-z]+)FM$/i,
@@ -214,6 +459,8 @@ function getHistoryBaseQid(qidRaw) {
     if (match?.groups?.base) return match.groups.base;
   }
 
+  if (/^\d+[A-Za-z]+$/i.test(qid)) return qid;
+
   return null;
 }
 
@@ -225,6 +472,16 @@ function isAcceptedQuestionState(latestByQid, baseQid) {
   if (codeAccepted === 'true') return true;
 
   return false;
+}
+
+function isFinalAiFeedbackEntry(qidRaw, baseQid) {
+  const qid = String(qidRaw || '').trim();
+  if (!qid || !baseQid) return false;
+
+  return new RegExp(
+    `^${baseQid}(?:F\\d+|FA\\d+|FM|AF|S|CodeFeedback|RunFeedback|ResponseFeedback)$`,
+    'i'
+  ).test(qid);
 }
 
 // ========== DOC PARSING ==========
@@ -335,6 +592,8 @@ async function clearResponsesForInstance(req, res) {
   if (!instanceId) return res.status(400).json({ error: 'Bad instance id' });
 
   try {
+    await ensureTestFocusSchema();
+    await ensureAssignmentDueSchema();
     const [del] = await db.query(
       `DELETE FROM responses WHERE activity_instance_id = ?`,
       [instanceId]
@@ -356,6 +615,7 @@ async function clearResponsesForInstance(req, res) {
 	       section_timer_paused = 0,
 	       section_timer_paused_at = NULL,
 	       test_reopen_until = NULL,
+	       test_focus_loss_count = 0,
 	       completed_groups  = 0
 	   WHERE id = ?`,
       [instanceId]
@@ -385,12 +645,178 @@ async function clearResponsesForInstance(req, res) {
   }
 }
 
+// Record a student leaving the visible test page. The first loss is a warning;
+// the second instructs the browser to submit. The server owns the count so a
+// refresh cannot reset the rule.
+async function recordTestFocusLoss(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  const userId = Number(req.user?.id);
+
+  if (!instanceId) {
+    return res.status(400).json({ error: 'A test instance is required.' });
+  }
+  if (!userId) {
+    return res.status(401).json({ error: 'Authentication is required.' });
+  }
+  if (req.user.role !== 'student') {
+    return res.status(403).json({ error: 'Only students can record test focus events.' });
+  }
+
+  try {
+    await ensureTestFocusSchema();
+    const conn = await db.getConnection();
+    let focusLossCount;
+    let context;
+    try {
+      await conn.beginTransaction();
+      const [[instance]] = await conn.query(
+        `SELECT ai.id, ai.activity_id, ai.course_id, ai.submitted_at,
+                ai.test_focus_enforcement, a.is_test
+           FROM activity_instances ai
+           JOIN pogil_activities a ON a.id = ai.activity_id
+           JOIN group_members gm ON gm.activity_instance_id = ai.id
+          WHERE ai.id = ? AND gm.student_id = ?
+          FOR UPDATE`,
+        [instanceId, userId],
+      );
+
+      if (!instance) {
+        await conn.rollback();
+        return res.status(404).json({ error: 'Test attempt not found for this student.' });
+      }
+      // Accept if the instance has focus enforcement enabled OR the activity DB flag is set.
+      // Activities that declare \mode{test} in content may have is_test=0 in the DB.
+      const isTestInstance =
+        Number(instance.is_test) === 1 || Number(instance.test_focus_enforcement) === 1;
+      if (!isTestInstance) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Focus events apply only to tests.' });
+      }
+      if (Number(instance.test_focus_enforcement) !== 1) {
+        await conn.rollback();
+        return res.json({ ok: true, action: 'ignore', focusLossCount: 0 });
+      }
+      if (instance.submitted_at) {
+        await conn.rollback();
+        return res.status(409).json({ error: 'This test has already been submitted.' });
+      }
+
+      await conn.query(
+        `UPDATE activity_instances
+            SET test_focus_loss_count = test_focus_loss_count + 1
+          WHERE id = ?`,
+        [instanceId],
+      );
+      const [[updated]] = await conn.query(
+        'SELECT test_focus_loss_count FROM activity_instances WHERE id = ?',
+        [instanceId],
+      );
+      focusLossCount = Number(updated?.test_focus_loss_count || 0);
+      context = instance;
+      await conn.commit();
+    } catch (err) {
+      try { await conn.rollback(); } catch { /* no-op */ }
+      throw err;
+    } finally {
+      conn.release();
+    }
+
+    void recordAuditEvent('test_focus_lost', {
+      req,
+      userId,
+      courseId: context.course_id,
+      activityId: context.activity_id,
+      activityInstanceId: instanceId,
+      details: {
+        focus_loss_count: focusLossCount,
+        action: focusLossCount >= 2 ? 'submit' : 'warn',
+      },
+    });
+
+    return res.json({
+      ok: true,
+      focusLossCount,
+      action: focusLossCount >= 2 ? 'submit' : 'warn',
+    });
+  } catch (err) {
+    console.error('recordTestFocusLoss failed:', err);
+    return res.status(500).json({ error: 'Could not record the test focus event.' });
+  }
+}
+
+// Permanently remove one activity instance and all of its dependent work.
+// This intentionally supports deleting submitted attempts so an instructor can
+// correct a roster/setup mistake without manually clearing several tables first.
+async function deleteActivityInstance(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  if (!instanceId) return res.status(400).json({ error: 'Bad instance id' });
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+    const [[instance]] = await conn.query(
+      'SELECT id, activity_id, course_id FROM activity_instances WHERE id = ? FOR UPDATE',
+      [instanceId],
+    );
+    if (!instance) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Activity instance not found' });
+    }
+
+    const responseIds = (await conn.query(
+      'SELECT id FROM responses WHERE activity_instance_id = ?',
+      [instanceId],
+    ))[0].map((row) => Number(row.id)).filter(Number.isFinite);
+
+    // Some installations have additional audit/feedback tables while others do
+    // not. Delete from every known dependent table when present.
+    for (const [tableName, columnName] of [
+      ['activity_heartbeats', 'activity_instance_id'],
+      ['audit_log', 'activity_instance_id'],
+      ['event_log', 'activity_instance_id'],
+      ['response_drafts', 'activity_instance_id'],
+      ['followups', 'activity_instance_id'],
+      ['feedback', 'activity_instance_id'],
+    ]) {
+      await deleteInstanceRowsIfPresent(conn, tableName, columnName, instanceId);
+    }
+
+    if (responseIds.length) {
+      for (const [tableName, columnName] of [
+        ['followups', 'response_id'],
+        ['feedback', 'response_id'],
+      ]) {
+        if (await tableHasColumn(conn, tableName, columnName)) {
+          await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} IN (?)`, [responseIds]);
+        }
+      }
+    }
+
+    await conn.query('DELETE FROM responses WHERE activity_instance_id = ?', [instanceId]);
+    await conn.query('DELETE FROM group_members WHERE activity_instance_id = ?', [instanceId]);
+    await conn.query('DELETE FROM activity_instances WHERE id = ?', [instanceId]);
+    await conn.commit();
+
+    global.emitInstanceState?.(instanceId, { deleted: true });
+    return res.json({ ok: true, deletedInstanceId: instanceId });
+  } catch (err) {
+    try { await conn.rollback(); } catch { /* no-op */ }
+    console.error('deleteActivityInstance failed:', err);
+    const detail = err?.code
+      ? `${err.code}: ${err.message}`
+      : (err?.message || 'Unknown database error');
+    return res.status(500).json({ error: `Could not delete activity instance (${detail})` });
+  } finally {
+    conn.release();
+  }
+}
+
 
 async function getParsedActivityDoc(req, res) {
   const { instanceId } = req.params;
   try {
     const [rows] = await db.query(`
-      SELECT a.id, a.sheet_url, a.source_type, a.content_text
+      SELECT a.id, a.sheet_url, a.source_type, a.content_text, a.is_test
       FROM activity_instances ai
       JOIN pogil_activities a ON ai.activity_id = a.id
       WHERE ai.id = ?
@@ -400,7 +826,14 @@ async function getParsedActivityDoc(req, res) {
       return res.status(404).json({ error: 'Activity source not found' });
     }
 
-    const lines = await loadActivitySourceLines(rows[0]);
+    const activity = rows[0];
+    let lines = await loadActivitySourceLines(activity);
+    const elevatedRole = ['creator', 'instructor', 'root'].includes(
+      String(req.user?.role || '').toLowerCase()
+    );
+    if (Number(activity?.is_test) === 1 && !elevatedRole) {
+      lines = redactMultipleChoiceAnswers(lines);
+    }
 
     res.json({ lines });
   } catch (err) {
@@ -462,8 +895,8 @@ async function ensureDemoInstance(req, res) {
     }
 
     const activityType = await inferActivityTypeFromActivity(activityRow);
-    if (activityType !== 'demo') {
-      return res.status(400).json({ error: 'This activity is not a demo.' });
+    if (activityType !== 'demo' && activityType !== 'playground') {
+      return res.status(400).json({ error: 'This activity is not a demo or playground.' });
     }
 
     if (userRole === 'student') {
@@ -659,6 +1092,8 @@ async function getActivityInstanceById(req, res) {
   const { id } = req.params;
 
   try {
+    await ensureTestFocusSchema();
+    await ensureAssignmentDueSchema();
     const [[instance]] = await db.query(
       `SELECT
          ai.id,
@@ -678,7 +1113,15 @@ async function getActivityInstanceById(req, res) {
          ai.test_start_at,
          ai.test_duration_minutes,
          ai.test_reopen_until,
+         ai.test_focus_enforcement,
          ai.submitted_at,
+         ai.assignment_due_at,
+         ai.submitted_late,
+         ai.graded_at,
+         ai.review_complete,
+         ai.reviewed_at,
+         ai.points_earned,
+         ai.points_possible,
          ai.hidden,
          a.title       AS title,
          a.name        AS activity_name,
@@ -816,11 +1259,37 @@ async function recordHeartbeat(req, res) {
       };
     }
 
+    // The authoritative timer state as it stands after this heartbeat.
+    //
+    // timerPatch is only populated when the timer CHANGED, and it is announced
+    // once over the socket. A client whose socket was not in the room at that
+    // instant -- still connecting, reconnected after a drop, resumed from sleep
+    // -- would otherwise never learn the timer exists, because every later
+    // heartbeat is a no-op that emits nothing. Returning the full state on
+    // every heartbeat turns it into a reconciliation loop, so a client that
+    // missed the broadcast self-heals on its next beat instead of needing a
+    // page reload.
+    const sectionTimer = timerPatch
+      ? {
+        section_timer_key: timerPatch.section_timer_key,
+        section_timer_duration_minutes: timerPatch.section_timer_duration_minutes,
+        section_timer_started_at: timerPatch.section_timer_started_at,
+        section_timer_paused: currentPaused ? 1 : 0,
+        section_timer_paused_at: normalizeDbDatetime(inst.section_timer_paused_at),
+      }
+      : {
+        section_timer_key: currentKey,
+        section_timer_duration_minutes: currentDuration,
+        section_timer_started_at: normalizeDbDatetime(currentStartedAt),
+        section_timer_paused: currentPaused ? 1 : 0,
+        section_timer_paused_at: normalizeDbDatetime(inst.section_timer_paused_at),
+      };
+
     if (userRow.role !== 'student') {
       if (timerPatch) {
         global.emitInstanceState?.(Number(instanceId), timerPatch);
       }
-      return res.json({ success: true, becameActive: false, ...(timerPatch || {}) });
+      return res.json({ success: true, becameActive: false, sectionTimer, ...(timerPatch || {}) });
     }
 
     const [[isMember]] = await db.query(
@@ -832,7 +1301,7 @@ async function recordHeartbeat(req, res) {
       if (timerPatch) {
         global.emitInstanceState?.(Number(instanceId), timerPatch);
       }
-      return res.json({ success: true, becameActive: false, ...(timerPatch || {}) });
+      return res.json({ success: true, becameActive: false, sectionTimer, ...(timerPatch || {}) });
     }
 
     await db.query(
@@ -866,6 +1335,7 @@ async function recordHeartbeat(req, res) {
       global.emitInstanceState?.(Number(instanceId), completedPatch);
       return res.json({
         success: true,
+        sectionTimer,
         becameActive: false,
         activeStudentId: null,
         ...(timerPatch || {}),
@@ -906,6 +1376,7 @@ async function recordHeartbeat(req, res) {
         });
         return res.json({
           success: true,
+          sectionTimer,
           becameActive: true,
           activeStudentId: newActiveId,
           ...(timerPatch || {}),
@@ -919,6 +1390,7 @@ async function recordHeartbeat(req, res) {
 
     return res.json({
       success: true,
+      sectionTimer,
       becameActive: false,
       activeStudentId: inst.active_student_id,
       ...(timerPatch || {}),
@@ -1034,7 +1506,7 @@ async function rotateActiveStudent(req, res) {
 
 // Body:
 // Non-test: { activityId, courseId, groups: [ { members: [ { student_id, role } ] } ] }
-// Test:     { activityId, courseId, selectedStudentIds: [id...], testStartAt, testDurationMinutes, lockedBeforeStart, lockedAfterEnd }
+// Test:     { activityId, courseId, selectedStudentIds: [id...], testStartAt, testDurationMinutes, lockedBeforeStart, lockedAfterEnd, focusEnforcement }
 async function setupMultipleGroupInstances(req, res) {
   const {
     activityId,
@@ -1045,12 +1517,16 @@ async function setupMultipleGroupInstances(req, res) {
     testDurationMinutes,
     lockedBeforeStart,
     lockedAfterEnd,
+    focusEnforcement,
+    assignmentDueAt,
   } = req.body;
 
   if (!activityId || !courseId) {
-    return res.status(400).json({ error: 'ZZZ_NEW_GUARD activityId and courseId are required' });
+    return res.status(400).json({ error: 'activityId and courseId are required.' });
   }
 
+  await ensureTestFocusSchema();
+  await ensureAssignmentDueSchema();
   const lockName = `setupGroups:${courseId}:${activityId}`;
   const conn = await db.getConnection();
 
@@ -1063,21 +1539,6 @@ async function setupMultipleGroupInstances(req, res) {
 
     await conn.beginTransaction();
 
-    // ✅ GUARD: if group 1 exists, do NOT create a second set
-    // Put this BEFORE any deletes/inserts.
-    const [[g1]] = await conn.query(
-      `SELECT id
-       FROM activity_instances
-       WHERE course_id = ? AND activity_id = ? AND group_number = 1
-       LIMIT 1`,
-      [courseId, activityId]
-    );
-
-    if (g1) {
-      await conn.rollback();
-      return res.status(409).json({ error: 'Groups already exist for this activity.' });
-    }
-
     // Look up DB truth
     const [[activityRow]] = await conn.query(
       `SELECT is_test, sheet_url, source_type, content_text FROM pogil_activities WHERE id = ?`,
@@ -1087,8 +1548,33 @@ async function setupMultipleGroupInstances(req, res) {
     // Decide test vs non-test
     const activityType = await inferActivityTypeFromActivity(activityRow || {});
     const dbIsTest = activityType === 'test';
+    const isAssignment = activityType === 'assignment';
     const hasTiming = !!testStartAt && Number(testDurationMinutes) > 0;
     const isTest = dbIsTest || hasTiming;
+
+    // A sandbox or abandoned preview may leave an unconfigured placeholder
+    // row behind. It is not a student test attempt and must not block setup.
+    const existingAttemptCondition = isTest
+      ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
+      : '';
+    // Excluding sandboxes explicitly as well as by group_number. A sandbox from
+    // an older build still holds a real number, and one sitting on number 1
+    // makes this refuse to create groups at all -- "Groups already exist for
+    // this activity" for an activity with no groups.
+    const [[existingAttempt]] = await conn.query(
+      `SELECT id
+         FROM activity_instances
+        WHERE course_id = ? AND activity_id = ? AND group_number = 1
+          AND COALESCE(active_rotation_mode, '') <> 'sandbox'
+          ${existingAttemptCondition}
+        LIMIT 1`,
+      [courseId, activityId],
+    );
+
+    if (existingAttempt) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Groups already exist for this activity.' });
+    }
 
     // For NON-tests, we require groups[]
     if (!isTest) {
@@ -1120,6 +1606,16 @@ async function setupMultipleGroupInstances(req, res) {
       }
     }
 
+    let assignmentDueForDb = null;
+    if (isAssignment && assignmentDueAt) {
+      const due = new Date(assignmentDueAt);
+      if (Number.isNaN(due.getTime())) {
+        await conn.rollback();
+        return res.status(400).json({ error: 'Invalid assignmentDueAt' });
+      }
+      assignmentDueForDb = due.toISOString().slice(0, 19).replace('T', ' ');
+    }
+
     // ✅ Compute total_groups from doc (used by BOTH tests and non-tests)
     let computedTotalGroups = 1;
     try {
@@ -1130,28 +1626,33 @@ async function setupMultipleGroupInstances(req, res) {
       computedTotalGroups = 1;
     }
 
-    // 🔥 IMPORTANT: you said you want to back out if group 1 exists.
-    // That means you should NOT be deleting old instances anymore.
-    // You can either delete this whole block, or keep it as dead code.
-    // I'd remove it to avoid accidental overwrites.
-
-    // Remove existing instances + members for this course+activity
-    // const [oldInstances] = await conn.query(
-    //   `SELECT id FROM activity_instances WHERE course_id = ? AND activity_id = ?`,
-    //   [courseId, activityId]
-    // );
-    // const instanceIds = oldInstances.map(r => r.id);
-    // if (instanceIds.length > 0) {
-    //   await conn.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
-    //   await conn.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
-    // }
+    // Clear the previous run's leftovers before numbering this one.
+    //
+    // Groups are numbered 1..N from scratch on every setup, so a class set up
+    // once for 24 test-takers and again as 6 groups of 5 keeps 18 rows nobody
+    // will ever open. They have no members, so they render on the roster as
+    // groups whose students are unknown -- the empty cards an instructor then
+    // has to delete by hand, one button at a time.
+    //
+    // The delete that used to live here removed every instance for the course
+    // and activity, student work included, which is why it was commented out
+    // rather than fixed. This one removes only instances that satisfy the
+    // shared abandoned test -- no members, no responses, no drafts, never
+    // submitted, never graded, no progress -- so it cannot reach anything a
+    // student touched. The predicate is re-checked inside the DELETE, so a
+    // group joined mid-setup survives.
+    const prunedAbandoned = await deleteAbandonedInstances(conn, { courseId, activityId });
+    if (prunedAbandoned) {
+      console.log('[SETUP] pruned abandoned instances', { courseId, activityId, prunedAbandoned });
+    }
 
     async function insertInstance({ group_number }) {
       const [instanceResult] = await conn.query(
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
-            test_start_at, test_duration_minutes, locked_before_start, locked_after_end, active_rotation_mode)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, 'submit')`,
+            test_start_at, test_duration_minutes, locked_before_start, locked_after_end, assignment_due_at,
+            test_focus_enforcement, active_rotation_mode)
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, ?, 'submit')`,
         [
           courseId,
           activityId,
@@ -1161,6 +1662,8 @@ async function setupMultipleGroupInstances(req, res) {
           isTest ? effectiveDuration : 0,
           isTest ? (lockedBeforeStart ? 1 : 0) : 0,
           isTest ? (lockedAfterEnd ? 1 : 0) : 0,
+          isAssignment ? assignmentDueForDb : null,
+          isTest && focusEnforcement ? 1 : 0,
         ]
       );
       return instanceResult.insertId;
@@ -1218,6 +1721,8 @@ async function setupMultipleGroupInstances(req, res) {
       activityId: Number(activityId),
       details: {
         is_test: isTest,
+        assignment_due_at: isAssignment ? assignmentDueForDb : null,
+        test_focus_enforcement: isTest && !!focusEnforcement,
         total_groups: computedTotalGroups,
         instance_count: isTest ? selectedStudentIds.length : groups.length,
       },
@@ -1250,7 +1755,12 @@ async function submitGroupResponses(req, res) {
   const instanceId = Number(req.params.instanceId);
   const studentId = Number(req.body?.studentId);
   const groupNum = Number(req.body?.groupNum);
-  const retriesRequired = Number(req.body?.retriesRequired || 1);
+  // An explicit zero is valid: it records AI feedback without making the
+  // group wait for a retry. Only use one when the client omitted the setting.
+  const requestedRetries = Number(req.body?.retriesRequired);
+  const retriesRequired = Number.isFinite(requestedRetries)
+    ? Math.max(0, requestedRetries)
+    : 1;
   const forceOverride = !!req.body?.forceOverride;
 
   const attempt = req.body?.attempt || {};
@@ -1303,7 +1813,13 @@ async function submitGroupResponses(req, res) {
 
     const submittedStatusEntries = Object.entries(answers).filter(([qidRaw]) => {
       const qid = String(qidRaw || '').trim();
-      return new RegExp(`^${groupNum}[A-Za-z][A-Za-z0-9_]*S$`).test(qid);
+      // Status rows are question-level completion markers such as 2aS or 12bS.
+      // Do not require the numeric prefix to match the current group number here:
+      // older/imported activities and visual-editor rewrites can legitimately
+      // submit question ids whose prefix reflects the parsed question group, while
+      // groupNum is the current navigation position. Requiring both to match made
+      // accepted AI feedback save correctly but still leave the group blocked.
+      return /^\d+[A-Za-z][A-Za-z0-9_]*S$/.test(qid);
     });
 
     const payloadEntries = [];
@@ -1344,14 +1860,33 @@ async function submitGroupResponses(req, res) {
     }
 
     for (const [baseQid, group] of groupEntriesByBase.entries()) {
+      const finalFeedbackEntries = group.entries.filter(([qid]) =>
+        isFinalAiFeedbackEntry(qid, baseQid)
+      );
+
       if (isAcceptedQuestionState(latestByQid, baseQid)) {
+        payloadEntries.push(...finalFeedbackEntries);
         continue;
       }
 
       const currentBaseValue = String(group.baseValue ?? '');
       const previousBaseValue = String(latestByQid.get(baseQid) ?? '');
       if (currentBaseValue === previousBaseValue) {
-        continue;
+        // For code-only questions, group.baseValue is null because the base
+        // question key (e.g. '1a') is never set in answers — only '1acode1' is.
+        // In that case the '' === '' comparison always matches and code is never
+        // saved. Fall back to checking if any non-feedback entry actually changed.
+        if (group.baseValue != null) {
+          payloadEntries.push(...finalFeedbackEntries);
+          continue;
+        }
+        const anyDataChanged = group.entries
+          .filter(([qid]) => !isFinalAiFeedbackEntry(qid, baseQid))
+          .some(([qid, val]) => String(latestByQid.get(qid) ?? '') !== String(val ?? ''));
+        if (!anyDataChanged) {
+          payloadEntries.push(...finalFeedbackEntries);
+          continue;
+        }
       }
 
       payloadEntries.push(...group.entries);
@@ -1405,6 +1940,9 @@ async function submitGroupResponses(req, res) {
       }
     );
 
+    // forceOverride comes only from the explicit Continue button. The client
+    // exposes that button once the configured retry allowance is exhausted;
+    // therefore \retries{0} permits it on the first rejected submission.
     const shouldAdvance =
       !!forceOverride ||
       (
@@ -1426,9 +1964,10 @@ async function submitGroupResponses(req, res) {
       }
     );
 
-    // ---- 4) Recompute cached progress from i=1..total_groups using istate ----
+    // ---- 4) Recompute cached progress from DB state ----
     const [[meta]] = await conn.query(
-      `SELECT ai.total_groups, ai.active_rotation_mode, a.sheet_url, a.source_type, a.content_text
+      `SELECT ai.total_groups, ai.completed_groups, ai.active_rotation_mode,
+              a.sheet_url, a.source_type, a.content_text
        FROM activity_instances ai
        JOIN pogil_activities a ON a.id = ai.activity_id
        WHERE ai.id = ?`,
@@ -1439,7 +1978,8 @@ async function submitGroupResponses(req, res) {
       : 0;
     const activeRotationMode = normalizeActiveRotationMode(meta?.active_rotation_mode);
 
-    let completedGroups = 0;
+    const storedCompletedGroups = Math.max(0, Number(meta?.completed_groups ?? 0) || 0);
+    let completedGroupsFromStates = 0;
     if (totalGroups > 0) {
       const [stateRows] = await conn.query(
         `SELECT r.question_id, r.response
@@ -1461,10 +2001,22 @@ async function submitGroupResponses(req, res) {
       );
 
       for (let i = 1; i <= totalGroups; i++) {
-        if (stateMap.get(`${i}state`) === 'complete') completedGroups++;
+        if (stateMap.get(`${i}state`) === 'complete') completedGroupsFromStates++;
         else break; // sequential contract
       }
     }
+
+    // activity_instances.completed_groups is the navigation source of truth.
+    // The response-history state rows are useful for reconstructing progress,
+    // but older live instances may be missing earlier Nstate rows. If this
+    // submit was accepted, advance the DB source of truth at least through the
+    // submitted group instead of letting an incomplete historical state chain
+    // keep the group stuck forever.
+    const acceptedCompletedGroups = shouldAdvance ? groupNum : 0;
+    const completedGroups = Math.min(
+      totalGroups > 0 ? totalGroups : Number.MAX_SAFE_INTEGER,
+      Math.max(storedCompletedGroups, completedGroupsFromStates, acceptedCompletedGroups)
+    );
 
     const progressStatus =
       totalGroups > 0 && completedGroups >= totalGroups ? 'completed' : 'in_progress';
@@ -1545,7 +2097,9 @@ async function submitGroupResponses(req, res) {
     });
 
     return res.json({
-      success: true, completed_groups: completedGroups, progress_status: progressStatus,
+      success: true,
+      completed_groups: completedGroups,
+      progress_status: progressStatus,
       ...(emitPatch && Object.prototype.hasOwnProperty.call(emitPatch, 'activeStudentId')
         ? { activeStudentId: emitPatch.activeStudentId }
         : {}),
@@ -1598,11 +2152,40 @@ async function getInstanceGroups(req, res) {
 async function getInstancesForActivityInCourse(req, res) {
   const { courseId, activityId } = req.params;
   try {
+    await ensureTestFocusSchema();
+    await ensureAssignmentDueSchema();
     const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
-    const [[activity]] = await db.query(`SELECT title FROM pogil_activities WHERE id = ?`, [activityId]);
+    const [[activity]] = await db.query(
+      `SELECT title, is_test, sheet_url, source_type, content_text
+         FROM pogil_activities WHERE id = ?`,
+      [activityId],
+    );
 
     const courseName = course?.name || 'Unknown Course';
     const activityTitle = activity?.title || '';
+
+    // A test roster must not list instances that were never scheduled.
+    //
+    // setupMultipleGroupInstances already treats an unscheduled row as an
+    // abandoned sandbox/preview placeholder rather than a student attempt --
+    // that is exactly why it refuses to let one block setup. The roster has to
+    // agree, otherwise the placeholder is listed beside the real group. It has
+    // no group_members, so it renders as a group whose student is unknown.
+    //
+    // Uses the same derivation as setup (inferActivityTypeFromActivity over the
+    // same columns, which this query already selected but never consulted), so
+    // the two cannot disagree about what counts as a test.
+    const rosterActivityType = await inferActivityTypeFromActivity(activity || {});
+    const unscheduledPlaceholderFilter =
+      rosterActivityType === 'test'
+        ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
+        : '';
+
+    // A Test Run opens a private sandbox instance for its author and takes the
+    // next free group number to do it. That is not a group, and listing it
+    // beside the real ones is how an author's own preview ends up looking like
+    // a student's abandoned attempt.
+    const sandboxFilter = "AND COALESCE(active_rotation_mode, '') <> 'sandbox'";
 
     const [instances] = await db.query(
 	      `SELECT id AS instance_id,
@@ -1620,7 +2203,10 @@ async function getInstancesForActivityInCourse(req, res) {
 	              test_start_at,
               test_duration_minutes,
               test_reopen_until,
+              test_focus_enforcement,
               submitted_at,
+              assignment_due_at,
+              submitted_late,
               graded_at,
               review_complete,
               reviewed_at,
@@ -1629,10 +2215,35 @@ async function getInstancesForActivityInCourse(req, res) {
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
+         ${sandboxFilter}
+         ${unscheduledPlaceholderFilter}
        ORDER BY group_number`,
       [courseId, activityId]
     );
 
+
+    // Batch-fetch which instances have *any* saved work (drafts OR submitted
+    // responses). Used to distinguish "not started" from "in progress" for
+    // assignment instances whose progress_status is never updated by the
+    // group-navigation flow.
+    const instanceIds = instances.map((i) => i.instance_id);
+    const hasResponsesSet = new Set();
+    if (instanceIds.length > 0) {
+      const [draftHits] = await db.query(
+        `SELECT DISTINCT activity_instance_id
+         FROM response_drafts
+         WHERE activity_instance_id IN (?)`,
+        [instanceIds]
+      );
+      const [respHits] = await db.query(
+        `SELECT DISTINCT activity_instance_id
+         FROM responses
+         WHERE activity_instance_id IN (?)`,
+        [instanceIds]
+      );
+      draftHits.forEach((r) => hasResponsesSet.add(Number(r.activity_instance_id)));
+      respHits.forEach((r) => hasResponsesSet.add(Number(r.activity_instance_id)));
+    }
 
     const groups = [];
     for (const inst of instances) {
@@ -1715,12 +2326,16 @@ async function getInstancesForActivityInCourse(req, res) {
         test_start_at: inst.test_start_at,
         test_duration_minutes: inst.test_duration_minutes,
         test_reopen_until: inst.test_reopen_until,
+        test_focus_enforcement: Number(inst.test_focus_enforcement) === 1,
         submitted_at: inst.submitted_at,
+        assignment_due_at: inst.assignment_due_at,
+        submitted_late: Number(inst.submitted_late) === 1,
         graded_at: inst.graded_at,
         review_complete: inst.review_complete,
         reviewed_at: inst.reviewed_at,
         points_earned: inst.points_earned,
         points_possible: inst.points_possible,
+        has_responses: hasResponsesSet.has(Number(inst.instance_id)),
         group_submit_counts: groupSubmitCounts,
         members: members.map(m => ({
           student_id: m.student_id,
@@ -1732,7 +2347,7 @@ async function getInstancesForActivityInCourse(req, res) {
       });
     }
 
-    res.json({ courseName, activityTitle, groups });
+    res.json({ courseName, activityTitle, activityType: rosterActivityType, groups });
   } catch (err) {
     console.error("❌ getInstancesForActivityInCourse:", err);
     res.status(500).json({ error: 'Failed to fetch instances' });
@@ -2034,8 +2649,9 @@ async function updateTestSettings(req, res) {
 
 // NEW: Reopen a timed test for an instance
 async function reopenInstance(req, res) {
-  const { instanceId } = req.params;   // ✅ correct param
-  const { minutes } = req.body || {};  // optional override
+  const { instanceId } = req.params;
+  // Accept either minutes (relative) or reopenUntil (absolute ISO datetime)
+  const { minutes, reopenUntil: reopenUntilIso } = req.body || {};
 
   if (!instanceId) {
     return res.status(400).json({ error: 'Missing instanceId' });
@@ -2043,7 +2659,8 @@ async function reopenInstance(req, res) {
 
   try {
     const [[instance]] = await db.query(
-      `SELECT test_start_at, test_duration_minutes, test_reopen_until, submitted_at
+      `SELECT test_start_at, test_duration_minutes, test_reopen_until, submitted_at,
+              graded_at, points_earned, points_possible
        FROM activity_instances
        WHERE id = ?`,
       [instanceId]
@@ -2057,69 +2674,105 @@ async function reopenInstance(req, res) {
       return res.status(400).json({ error: 'Not a timed test instance' });
     }
 
-    // If you want to block reopen when already submitted, enforce here
-    if (instance.submitted_at) {
-      return res.status(400).json({ error: 'Test already submitted; clear answers to reopen.' });
+    // Determine the new reopen-until value
+    let reopenUntil;
+    if (reopenUntilIso) {
+      reopenUntil = new Date(reopenUntilIso);
+      if (isNaN(reopenUntil.getTime())) {
+        return res.status(400).json({ error: 'Invalid reopenUntil datetime' });
+      }
+    } else {
+      const extendMinutes =
+        minutes && minutes > 0 ? minutes : instance.test_duration_minutes;
+      reopenUntil = new Date(Date.now() + extendMinutes * 60000);
     }
 
-    const extendMinutes =
-      minutes && minutes > 0 ? minutes : instance.test_duration_minutes;
+    const reopenUntilDb = reopenUntil.toISOString().slice(0, 19).replace('T', ' ');
 
-    const now = new Date();
-    const reopenUntil = new Date(now.getTime() + extendMinutes * 60000);
+    // If submitted: clear submission + grading so student can resubmit.
+    // Answers in `responses` table are intentionally kept.
+    const wasSubmitted = !!instance.submitted_at;
+    if (wasSubmitted) {
+      await db.query(
+        `UPDATE activity_instances
+         SET test_reopen_until = ?,
+             submitted_at      = NULL,
+             graded_at         = NULL,
+             points_earned     = NULL,
+             points_possible   = NULL
+         WHERE id = ?`,
+        [reopenUntilDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, {
+        test_reopen_until: reopenUntilDb,
+        submitted_at: null,
+        graded_at: null,
+        points_earned: null,
+        points_possible: null,
+      });
+    } else {
+      await db.query(
+        `UPDATE activity_instances
+         SET test_reopen_until = ?
+         WHERE id = ?`,
+        [reopenUntilDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, { test_reopen_until: reopenUntilDb });
+    }
 
-    await db.query(
-      `UPDATE activity_instances
-       SET test_reopen_until = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? MINUTE)
-       WHERE id = ?`,
-      [extendMinutes, instanceId]
-    );
-
-    return res.json({ ok: true, test_reopen_until: reopenUntil });
+    return res.json({ ok: true, test_reopen_until: reopenUntil, wasSubmitted });
   } catch (err) {
     console.error('❌ reopenInstance error:', err);
     return res.status(500).json({ error: 'Failed to reopen test.' });
   }
 }
 
-// Helper: parse score specs from either style:
-//   \score{10,code} or \score{6,response}
-//   \score{code=4,output=2,response=4}
-function parseScoreSpec(specRaw) {
-  const spec = String(specRaw || '').trim();
-  const out = {};
+// Update assignment due date for one instance; optionally reopen a submitted assignment.
+async function updateAssignmentDueAt(req, res) {
+  const { instanceId } = req.params;
+  const { assignmentDueAt, reopen } = req.body || {};
 
-  // style A: "code=4,output=2,response=4"
-  if (spec.includes('=')) {
-    for (const part of spec.split(/[;,]/)) {
-      const [kRaw, vRaw] = part.split('=');
-      if (!kRaw || !vRaw) continue;
-      const k = kRaw.trim().toLowerCase();
-      const v = Number(String(vRaw).trim());
-      if (!Number.isFinite(v)) continue;
+  if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+  if (!assignmentDueAt) return res.status(400).json({ error: 'Missing assignmentDueAt' });
 
-      if (k === 'code' || k === 'codes') out.code = v;
-      else if (k === 'output' || k === 'run') out.output = v;
-      else if (k === 'response') out.response = v;
+  const due = new Date(assignmentDueAt);
+  if (isNaN(due.getTime())) return res.status(400).json({ error: 'Invalid assignmentDueAt' });
+
+  try {
+    await ensureAssignmentDueSchema();
+    const dueDb = due.toISOString().slice(0, 19).replace('T', ' ');
+
+    if (reopen) {
+      await db.query(
+        `UPDATE activity_instances
+         SET assignment_due_at = ?,
+             submitted_at      = NULL,
+             graded_at         = NULL,
+             points_earned     = NULL,
+             points_possible   = NULL
+         WHERE id = ?`,
+        [dueDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, {
+        assignment_due_at: dueDb,
+        submitted_at: null,
+        graded_at: null,
+        points_earned: null,
+        points_possible: null,
+      });
+    } else {
+      await db.query(
+        `UPDATE activity_instances SET assignment_due_at = ? WHERE id = ?`,
+        [dueDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, { assignment_due_at: dueDb });
     }
-    return out;
+
+    return res.json({ ok: true, assignment_due_at: dueDb });
+  } catch (err) {
+    console.error('❌ updateAssignmentDueAt error:', err);
+    return res.status(500).json({ error: 'Failed to update due date.' });
   }
-
-  // style B: "10,code" (or "6,response")
-  // allow whitespace: "10, code"
-  const parts = spec.split(',').map(s => s.trim()).filter(Boolean);
-  if (parts.length >= 2) {
-    const pts = Number(parts[0]);
-    const bucket = parts[1].toLowerCase();
-
-    if (Number.isFinite(pts)) {
-      if (bucket === 'code') out.code = pts;
-      else if (bucket === 'output' || bucket === 'run') out.output = pts;
-      else if (bucket === 'response') out.response = pts;
-    }
-  }
-
-  return out;
 }
 
 // Helper: flatten Google doc into trimmed lines (same as you already do)
@@ -2259,6 +2912,7 @@ async function submitTest(req, res) {
   }
 
   const lockName = `submitTest:${instanceId}`;
+  await ensureAssignmentDueSchema();
   const conn = await db.getConnection();
 
   try {
@@ -2291,12 +2945,22 @@ async function submitTest(req, res) {
       }
     }
 
+    const [[sourceRow]] = await conn.query(
+      `SELECT a.sheet_url, a.source_type, a.content_text, a.is_test
+         FROM activity_instances ai
+         JOIN pogil_activities a ON ai.activity_id = a.id
+        WHERE ai.id = ?`,
+      [instanceId]
+    );
+    const sourceLines = sourceRow ? await loadActivitySourceLines(sourceRow) : [];
+    const parsedQuestions = parseTestQuestionsFromLines(sourceLines);
+
     let totalEarnedPoints = 0;
     let totalMaxPoints = 0;
     const questionResults = [];
 
     // -------- grade each question --------
-    for (const q of questions) {
+    for (const [index, q] of questions.entries()) {
       // Your client sends {qid, questionText, ...}
       const baseId = q.qid || q.id;
       if (!baseId) {
@@ -2305,7 +2969,11 @@ async function submitTest(req, res) {
       }
 
       const text = q.questionText || q.text || '';
-      const scores = q.scores || {};
+      const scores = normalizeScoreBands(q.scores || {});
+      const sourceQuestion = parsedQuestions[index] || {};
+      const multipleChoice = sourceQuestion.multipleChoice || null;
+      const isMultipleChoice = Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
+      const isMultipleSelect = multipleChoice?.selectionMode === 'multiple';
 
       const bucketPoints = (bucket) => {
         if (!bucket) return 0;
@@ -2384,32 +3052,104 @@ async function submitTest(req, res) {
         maxRespPts,
       });
 
-      // Skip grading if no points
-      if (maxCodePts <= 0 && maxRunPts <= 0 && maxRespPts <= 0) {
-        console.log('[SUBMIT_TEST] skip grading (no points configured)', baseId);
-        continue;
+      const selectedChoice = String(answers[baseId] || '').trim();
+
+      let codeScore = 0;
+      let codeFeedback = '';
+      let runScore = 0;
+      let runFeedback = '';
+      let responseScore = 0;
+      let responseFeedback = '';
+
+      const shouldUseAiGrader =
+        maxCodePts > 0 ||
+        maxRunPts > 0 ||
+        (!isMultipleChoice && maxRespPts > 0);
+
+      if (shouldUseAiGrader) {
+        const gradingScores = isMultipleChoice
+          ? {
+              ...scores,
+              response: {
+                ...(scores.response || {}),
+                points: 0,
+              },
+            }
+          : scores;
+
+        const graded = await gradeTestQuestion({
+          questionText: text,
+          scores: gradingScores,
+          responseText: written,
+          codeCells,
+          outputText,
+          rubric: gradingScores,
+        });
+
+        codeScore = graded.codeScore || 0;
+        codeFeedback = graded.codeFeedback || '';
+        runScore = graded.runScore || 0;
+        runFeedback = graded.runFeedback || '';
+        responseScore = graded.responseScore || 0;
+        responseFeedback = graded.responseFeedback || '';
       }
 
-      // Grade
-      const {
-        codeScore,
-        codeFeedback,
-        runScore,
-        runFeedback,
-        responseScore,
-        responseFeedback,
-      } = await gradeTestQuestion({
-        questionText: text,
-        scores,
-        responseText: written,
-        codeCells,
-        outputText,
-        rubric: scores,
-      });
+      if (isMultipleChoice && !isMultipleSelect) {
+        if (maxRespPts > 0) {
+          if (multipleChoice?.hasChoiceScores) {
+            const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
+            responseScore = Number(selected?.points || 0);
+            responseFeedback = selected
+              ? `Selected answer earned ${responseScore}/${maxRespPts} points.`
+              : 'No answer was selected.';
+          } else {
+            const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+            if (!correctAnswer) {
+              responseScore = 0;
+              responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
+            } else {
+              const isCorrect = selectedChoice === correctAnswer;
+              responseScore = isCorrect ? maxRespPts : 0;
+              responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+            }
+          }
+        } else {
+          responseScore = 0;
+          responseFeedback = '';
+        }
+      }
 
       const earned =
         (codeScore || 0) + (runScore || 0) + (responseScore || 0);
       const maxPts = maxCodePts + maxRunPts + maxRespPts;
+
+      // After a test is submitted, incorrect or partially-correct work should
+      // teach from the result. Use the activity's own answer key or sample;
+      // do not ask the grader to invent a "correct" solution.
+      if (maxPts > 0 && earned < maxPts) {
+        const reference = getTestReferenceAnswer(sourceQuestion, maxRespPts);
+        if (reference) {
+          if (maxRespPts > 0) {
+            responseFeedback = appendReferenceAnswer(
+              responseFeedback,
+              reference.label,
+              reference.answer,
+            );
+          } else if (maxCodePts > 0) {
+            codeFeedback = appendReferenceAnswer(
+              codeFeedback,
+              reference.label,
+              reference.answer,
+            );
+          } else if (maxRunPts > 0) {
+            runFeedback = appendReferenceAnswer(
+              runFeedback,
+              reference.label,
+              reference.answer,
+            );
+          }
+        }
+      }
 
       totalEarnedPoints += earned;
       totalMaxPoints += maxPts;
@@ -2547,6 +3287,10 @@ async function submitTest(req, res) {
           points_possible  = ?,
           progress_status  = 'completed',
           submitted_at     = COALESCE(submitted_at, UTC_TIMESTAMP()),
+          submitted_late   = CASE
+                               WHEN assignment_due_at IS NOT NULL AND UTC_TIMESTAMP() > assignment_due_at THEN 1
+                               ELSE 0
+                             END,
           graded_at        = UTC_TIMESTAMP(),
           submitted_by_user_id = COALESCE(submitted_by_user_id, ?)
         WHERE id = ?
@@ -2671,8 +3415,23 @@ async function recomputeTestTotals(req, res) {
       [instanceId, instanceId]
     );
 
+    // Also load response_drafts — instructor score overrides land here via bulk-save.
+    // Drafts take precedence over the responses table (same merge logic as getInstanceResponses).
+    const [draftRows] = await conn.query(
+      `SELECT question_id, response
+       FROM response_drafts
+       WHERE activity_instance_id = ?`,
+      [instanceId]
+    );
+
     const map = Object.create(null);
     for (const r of rows) map[r.question_id] = r.response;
+    // Overlay drafts (instructor overrides win)
+    for (const d of draftRows) {
+      if (d.response !== null && d.response !== undefined) {
+        map[d.question_id] = d.response;
+      }
+    }
 
     // 3) Sum scores
     const baseQids = new Set();
@@ -2729,6 +3488,40 @@ async function recomputeTestTotals(req, res) {
   } finally {
     try { await conn.query(`SELECT RELEASE_LOCK(?)`, [lockName]); } catch { }
     conn.release();
+  }
+}
+
+async function markTestReviewed(req, res) {
+  const { instanceId } = req.params;
+  const role = req.user?.role;
+  if (role !== 'instructor' && role !== 'root' && role !== 'creator') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  try {
+    const [[instance]] = await db.query(
+      `SELECT submitted_at FROM activity_instances WHERE id = ?`,
+      [instanceId],
+    );
+    if (!instance) return res.status(404).json({ error: 'Activity instance not found' });
+    if (!instance.submitted_at) return res.status(400).json({ error: 'A test must be submitted before it can be reviewed.' });
+
+    await db.query(
+      `UPDATE activity_instances
+       SET review_complete = 1,
+           reviewed_at = UTC_TIMESTAMP()
+       WHERE id = ?`,
+      [instanceId],
+    );
+
+    global.emitInstanceState?.(Number(instanceId), {
+      review_complete: 1,
+      reviewed_at: toDbNowString(),
+    });
+    return res.json({ ok: true, review_complete: 1 });
+  } catch (err) {
+    console.error('markTestReviewed failed:', err);
+    return res.status(500).json({ error: 'Could not mark this test as reviewed.' });
   }
 }
 
@@ -2946,6 +3739,8 @@ async function recordProgressStatusChange(req, res) {
 // Export it as part of the module
 module.exports = {
   clearResponsesForInstance,
+  recordTestFocusLoss,
+  deleteActivityInstance,
   getParsedActivityDoc,
   createActivityInstance,
   ensureDemoInstance,
@@ -2967,8 +3762,11 @@ module.exports = {
   getInstanceResponses,
   refreshTotalGroups,
   reopenInstance,
+  updateAssignmentDueAt,
   submitTest,
   updateTestSettings,
   recomputeTestTotals,
+  markTestReviewed,
   getInstanceResponseHistory,
+  parseScoreSpec,
 };

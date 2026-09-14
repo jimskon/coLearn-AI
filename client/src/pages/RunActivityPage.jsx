@@ -1,16 +1,21 @@
 // client/src/pages/RunActivityPage.jsx
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { useParams, useLocation } from 'react-router-dom';
-import { Container, Alert, Button, ButtonGroup, Spinner } from 'react-bootstrap';
+import { Container, Alert, Button, ButtonGroup, Spinner, Modal } from 'react-bootstrap';
 import Prism from 'prismjs';
 import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-python';
 
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
+import { isSurveyMultipleChoice } from '../utils/multipleChoice';
 import { renderBlocks } from '../utils/parseSheet';
 import { parseUtcDbDatetime } from '../utils/time';
 import { normalizeRunActivityMode } from './run-activity/modes';
+import {
+  shouldHideStudentTestSections,
+  shouldSuppressStudentTestFeedbackUi,
+} from './run-activity/testModeUi';
 import useRunModePolicy from './run-activity/useRunModePolicy';
 import useRunActivityData from './run-activity/useRunActivityData';
 import useRunActivitySync from './run-activity/useRunActivitySync';
@@ -336,6 +341,10 @@ export default function RunActivityPage({
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
+  const isAssignmentMode = activityMode === 'assignment';
+  const [gradingQuestionQid, setGradingQuestionQid] = useState(null);
+  const [gradingAllQuestions, setGradingAllQuestions] = useState(false);
+  const [questionGradePreviews, setQuestionGradePreviews] = useState({});
 
   const [groups, setGroups] = useState([]);
   const [activeStudentName, setActiveStudentName] = useState('');
@@ -373,6 +382,10 @@ export default function RunActivityPage({
   const [timeExpired, setTimeExpired] = useState(false);
   // ✅ add this (prevents repeat auto-submit calls)
   const [autoSubmitted, setAutoSubmitted] = useState(false);
+  const [focusWarning, setFocusWarning] = useState(null);
+  const [showFocusModal, setShowFocusModal] = useState(false);
+  const focusLossRequestRef = useRef(false);
+  const focusAutoSubmitRef = useRef(false);
   const [sectionTimerNowMs, setSectionTimerNowMs] = useState(() => Date.now());
 
 
@@ -381,6 +394,15 @@ export default function RunActivityPage({
   const isLockedFU = (qid) => qidsNoFURef.current?.has(qid);
 
   const currentTimedSection = useMemo(() => {
+    const isTestStyleActivity =
+      activityMode === 'test' ||
+      Number(activity?.is_test) === 1 ||
+      (
+        activity?.test_start_at &&
+        Number(activity?.test_duration_minutes) > 0
+      );
+
+    if (isTestStyleActivity) return null;
     if (!Array.isArray(groups) || currentGroupIndex >= groups.length) return null;
 
     const group = groups[currentGroupIndex];
@@ -391,7 +413,7 @@ export default function RunActivityPage({
       key: section.key,
       minutes: Number(section.minutes),
     };
-  }, [groups, currentGroupIndex]);
+  }, [activity?.is_test, activity?.test_duration_minutes, activity?.test_start_at, activityMode, groups, currentGroupIndex]);
 
   const sectionTimer = useMemo(() => {
     const startedAt = activity?.section_timer_started_at
@@ -494,6 +516,7 @@ export default function RunActivityPage({
 
 
   const isTestMode = useMemo(() => {
+    if (requestedMode === 'creator_test') return true;
     if (activityMode === 'test') return true;
 
     // Primary: any instance with a time window is a test
@@ -518,7 +541,7 @@ export default function RunActivityPage({
           Object.keys(b.scores).length > 0
       )
     );
-  }, [activityMode, activity, groups]);
+  }, [requestedMode, activityMode, activity, groups]);
   // ✅ Non-legacy test if its test_start_at is on/after 2026-01-01 UTC
   const isNonLegacyTest = useMemo(() => {
     if (!isTestMode) return false;
@@ -550,6 +573,8 @@ export default function RunActivityPage({
   const runMode = normalizeRunActivityMode(requestedMode, { user });
   const {
     isSandbox,
+    isCreatorSandbox,
+    isCreatorTestRun,
     isInstructor,
     isStudent,
     isActive,
@@ -562,12 +587,15 @@ export default function RunActivityPage({
     canEditAnswers,
     canSubmitGroup,
     canSubmitTest,
+    canSubmitAssignment,
     canRunAI,
     canPersistDrafts,
     canPersistSubmissions,
     canPersistAIResults,
     canRegradeTests,
     canSaveInstructorScores,
+    canGradeQuestionPreview,
+    canGradeAllQuestions,
     canRefreshInstanceMetadata,
     loadPersistedResponses,
   } = useRunModePolicy({
@@ -577,6 +605,7 @@ export default function RunActivityPage({
     activity,
     isPlaygroundMode,
     isTestMode,
+    isAssignmentMode,
   });
 
   const {
@@ -610,6 +639,7 @@ export default function RunActivityPage({
     handleFileChange,
     handleTextChange,
     handleCodeChange,
+    clearLocalSandbox,
   } = useRunActivityResponses({
     instanceId,
     user,
@@ -618,6 +648,19 @@ export default function RunActivityPage({
     persistResponses: canPersistDrafts,
     emitLiveUpdates: canUseLiveSync,
   });
+
+  // When this student becomes the active student, discard local sandbox edits
+  // and reload from the DB so they see the last-saved version, not stale local state.
+  const prevIsActiveRef = useRef(false);
+  useEffect(() => {
+    const justBecameActive = !prevIsActiveRef.current && isActive;
+    prevIsActiveRef.current = isActive;
+    if (!justBecameActive) return;
+    clearLocalSandbox();
+    loadActivityRef.current();
+  // Deliberately keyed on isActive alone: this fires on the false -> true edge.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isActive]);
 
   useEffect(() => {
     if (!allowFreeNavigation) return;
@@ -651,6 +694,7 @@ export default function RunActivityPage({
     loadingRef,
     stripHtml,
     isNoAI,
+    isTestMode,
   });
 
   useEffect(() => {
@@ -758,8 +802,19 @@ export default function RunActivityPage({
 
   // ✅ NEW: overall totals useMemo
   const overallTestTotals = useMemo(() => {
-    if (!isTestMode || !groups || groups.length === 0) {
+    if ((!isTestMode && !isAssignmentMode) || !groups || groups.length === 0) {
       return { earned: 0, max: 0 };
+    }
+
+    const storedEarned = Number(activity?.points_earned);
+    const storedMax = Number(activity?.points_possible);
+    if (
+      !!activity?.submitted_at &&
+      Number.isFinite(storedEarned) &&
+      Number.isFinite(storedMax) &&
+      storedMax > 0
+    ) {
+      return { earned: storedEarned, max: storedMax };
     }
 
     let earned = 0;
@@ -776,7 +831,7 @@ export default function RunActivityPage({
       }
     }
     return { earned, max };
-  }, [isTestMode, groups, existingAnswers]);
+  }, [isTestMode, isAssignmentMode, groups, existingAnswers, activity?.submitted_at, activity?.points_earned, activity?.points_possible]);
 
   useEffect(() => {
     if (!DEBUG_FILES) return;
@@ -811,11 +866,28 @@ export default function RunActivityPage({
     loadSkulpt();
   }, []);
 
+  // Keep a live handle to loadActivity WITHOUT making it an effect dependency.
+  //
+  // loadActivity is a useCallback over ~20 dependencies. Listing it below meant
+  // the initial-load effect re-ran whenever any one of them changed identity --
+  // and loadActivity itself calls setActivity, setGroups, setActiveStudentId and
+  // more, so a single load could invalidate its own effect and immediately load
+  // again. The console stack for the runaway showed exactly that shape:
+  // mount -> effect -> loadActivity -> await -> setState -> commit -> effect ->
+  // loadActivity, repeating until the circuit breaker tripped.
+  //
+  // The intent here is "load once for this user and instance", which is what
+  // the primitive dependency list below now expresses literally.
+  const loadActivityRef = useRef(loadActivity);
+  useEffect(() => {
+    loadActivityRef.current = loadActivity;
+  });
+
   useEffect(() => {
     if (user?.id) {
-      loadActivity();
+      loadActivityRef.current();
     }
-  }, [user?.id, instanceId, loadActivity]);
+  }, [user?.id, instanceId]);
 
 
   useEffect(() => {
@@ -832,6 +904,89 @@ export default function RunActivityPage({
       }
     }
     return null;
+  }
+
+  function buildPreviewRubric(block, payload) {
+    const hasExplicitRubric = block?.scores && Object.keys(block.scores).length > 0;
+    if (hasExplicitRubric) {
+      return { scores: block.scores, inferred: false };
+    }
+
+    const scores = {};
+    const addBand = (key, points, instructionsRaw) => {
+      scores[key] = {
+        points,
+        instructionsRaw,
+        instructionsHtml: instructionsRaw,
+      };
+    };
+
+    const responseText = String(payload?.responseText || '').trim();
+    const outputText = String(payload?.outputText || '').trim();
+    const hasCode = Array.isArray(payload?.codeCells) && payload.codeCells.length > 0;
+    const hasWrittenResponse = !!block?.hasTextResponse || responseText.length > 0 || !!block?.multipleChoice;
+
+    if (hasCode) {
+      addBand('code', 1, 'Judge whether the submitted code solves the task correctly. Give brief, concrete feedback about what works and what still needs attention.');
+    }
+    if (hasCode || outputText) {
+      addBand('output', 1, 'Judge whether the program output or test behavior matches the requested task. Give brief, concrete feedback about any mismatch or success.');
+    }
+    if (hasWrittenResponse) {
+      addBand('response', 1, 'Judge whether the written response answers the question directly and clearly. Give brief, concrete feedback about the quality of the explanation.');
+    }
+
+    if (!Object.keys(scores).length) {
+      addBand('response', 1, 'Judge whether the student response addresses the question. Give brief, concrete feedback.');
+    }
+
+    return { scores, inferred: true };
+  }
+
+  async function fetchQuestionGradePreview(block) {
+    const qid = `${block.groupId}${block.id}`;
+    const payloadContainer = document;
+    const { questions } = buildTestSubmissionPayload([block], payloadContainer, existingAnswers);
+    const payload = questions?.[0];
+    if (!payload) return null;
+
+    const rubric = buildPreviewRubric(block, payload);
+
+    const res = await fetch(`${API_BASE_URL}/api/ai/grade-test-question`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        questionText: payload.questionText,
+        scores: rubric.scores || payload.scores || block.scores || {},
+        responseText: payload.responseText || '',
+        codeCells: payload.codeCells || [],
+        outputText: payload.outputText || '',
+        rubric: rubric.scores || payload.scores || block.scores || {},
+      }),
+    });
+
+    const raw = await res.text();
+    if (!res.ok) {
+      throw new Error(raw || `Question grading failed (${res.status})`);
+    }
+
+    let parsed;
+    try {
+      parsed = raw ? JSON.parse(raw) : {};
+    } catch (err) {
+      throw new Error('Question grading returned invalid JSON.');
+    }
+
+    return {
+      ...normalizeQuestionGradeResult({
+        block,
+        payload,
+        result: parsed,
+        scores: rubric.scores,
+      }),
+      rubricSource: rubric.inferred ? 'inferred' : 'explicit',
+    };
   }
 
   const socket = useRunActivitySync({
@@ -853,44 +1008,76 @@ export default function RunActivityPage({
     setCodeFeedbackShown,
     setFollowupsShown,
     findQuestionBlockByQid,
+    dirtyKeysRef,
   });
 
+  // An AI turn the active student just completed. The row is already persisted
+  // server-side and broadcast over the socket; applying it locally as well means
+  // the asker sees their own exchange immediately instead of waiting on the
+  // round trip, and re-applying the socket echo is a no-op because turns are
+  // keyed by qid.
+  const handleAiTurnSaved = useCallback((qid, turn) => {
+    if (!qid || !turn) return;
+    setExistingAnswers((prev) => ({
+      ...prev,
+      [qid]: { response: JSON.stringify(turn), type: 'text' },
+    }));
+  }, []);
+
+
+  // Keep a stable ref to the latest draft answers so the periodic save reads
+  // current values without resetting the timer on every keystroke.
+  const draftAnswersRef = useRef({ existingAnswers, followupAnswers });
+  useEffect(() => {
+    draftAnswersRef.current = { existingAnswers, followupAnswers };
+  }, [existingAnswers, followupAnswers]);
+
+  const flushDrafts = useCallback(() => {
+    if (!canPersistDrafts || !isActive || !user?.id || !instanceId) return;
+    const { existingAnswers: ea, followupAnswers: fa } = draftAnswersRef.current;
+    const textToSave = {};
+    for (const [key, val] of Object.entries(ea)) {
+      if (/^\d+[A-Za-z]+AI\d+$/i.test(key)) continue;
+      if (val?.type === 'text' && val.response?.trim()) {
+        textToSave[key] = val.response.trim();
+      }
+    }
+    for (const [key, val] of Object.entries(fa)) {
+      if (val?.trim()) {
+        textToSave[key] = val.trim();
+      }
+    }
+    if (Object.keys(textToSave).length === 0) return;
+    fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ instanceId, userId: user.id, answers: textToSave }),
+    }).catch(() => {});
+  }, [canPersistDrafts, isActive, user?.id, instanceId]);
+
+  // Flush drafts whenever the student leaves or hides the tab.
+  useEffect(() => {
+    if (!canPersistDrafts || !isActive) return;
+    const handleLeave = () => flushDrafts();
+    document.addEventListener('visibilitychange', handleLeave);
+    window.addEventListener('beforeunload', handleLeave);
+    return () => {
+      document.removeEventListener('visibilitychange', handleLeave);
+      window.removeEventListener('beforeunload', handleLeave);
+    };
+  }, [canPersistDrafts, isActive, flushDrafts]);
 
   useEffect(() => {
     if (!canPersistDrafts) return;
     if (!isActive || !user?.id || !instanceId) return;
 
     const interval = setInterval(() => {
-      const textToSave = {};
-
-      for (const [key, val] of Object.entries(existingAnswers)) {
-        if (val?.type === 'text' && val.response?.trim()) {
-          textToSave[key] = val.response.trim();
-        }
-      }
-
-      for (const [key, val] of Object.entries(followupAnswers)) {
-        if (val?.trim()) {
-          textToSave[key] = val.trim();
-        }
-      }
-
-      if (Object.keys(textToSave).length > 0) {
-        fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            instanceId,
-            userId: user.id,
-            answers: textToSave,
-          }),
-        }).catch(() => { });
-      }
+      flushDrafts();
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [canPersistDrafts, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
+  }, [canPersistDrafts, isActive, user?.id, instanceId, flushDrafts]);
 
   useEffect(() => {
     if (!activeStudentId) return;
@@ -1014,6 +1201,74 @@ export default function RunActivityPage({
     instanceId,
   ]);
 
+  // A web page cannot prevent a tab/app switch, but it can reliably detect
+  // that the page became hidden. The server persists the count so refreshing
+  // the page cannot reset the first-warning/second-submit policy.
+  useEffect(() => {
+    const canMonitor =
+      isTestMode &&
+      isStudent &&
+      Number(activity?.test_focus_enforcement) === 1 &&
+      !!instanceId &&
+      !activity?.submitted_at &&
+      !testLockState.lockedBefore;
+
+    if (!canMonitor) return undefined;
+
+    const recordFocusLoss = async (event) => {
+      // visibilitychange fires twice (hidden + visible); only act when hiding
+      if (event?.type === 'visibilitychange' && !document.hidden) return;
+      if (focusLossRequestRef.current || focusAutoSubmitRef.current) return;
+
+      focusLossRequestRef.current = true;
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/focus-loss`,
+          {
+            method: 'POST',
+            credentials: 'include',
+            keepalive: true,
+          },
+        );
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result.ok) {
+          console.warn('Could not record test focus loss:', result?.error || response.status);
+          return;
+        }
+
+        if (result.action === 'submit') {
+          focusAutoSubmitRef.current = true;
+          setFocusWarning('Your test is being submitted because you left the exam window a second time.');
+          await handleSubmit(false);
+          return;
+        }
+
+        // First violation — show blocking modal
+        setShowFocusModal(true);
+      } catch (err) {
+        console.warn('Could not record test focus loss:', err);
+      } finally {
+        focusLossRequestRef.current = false;
+      }
+    };
+
+    document.addEventListener('visibilitychange', recordFocusLoss);
+    window.addEventListener('blur', recordFocusLoss);
+    return () => {
+      document.removeEventListener('visibilitychange', recordFocusLoss);
+      window.removeEventListener('blur', recordFocusLoss);
+    };
+    // handleSubmit is a function declaration below, as in the timed-submit effect above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    isTestMode,
+    isStudent,
+    instanceId,
+    activity?.submitted_at,
+    activity?.test_focus_enforcement,
+    testLockState.lockedBefore,
+  ]);
+
 
   async function saveResponse(instanceId, key, value) {
     if (!canPersistDrafts) return;
@@ -1107,8 +1362,26 @@ export default function RunActivityPage({
     } = {}
   ) {
     // ✅ TEST MODE: no AI feedback at all
-    if (isTestMode) return { accepted: true, feedback: null };
-    if (!canRunAI) return { accepted: true, feedback: null };
+    if (isTestMode) {
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
+    }
+    if (!canRunAI) {
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
+    }
 
     const qid = `${questionBlock.groupId}${questionBlock.id}`;
     const qText = getQuestionText(questionBlock, qid);
@@ -1120,7 +1393,14 @@ export default function RunActivityPage({
       isNoAI(questionBlock?.feedback?.[0])
     ) {
       console.log('[EVAL SKIP] AI disabled for question', { qid });
-      return { accepted: true, feedback: null };
+      return {
+        accepted: true,
+        feedback: null,
+        canContinue: true,
+        retryCount: null,
+        retriesRequired: null,
+        decision: 'accepted',
+      };
     }
 
     const codeContext = [
@@ -1138,6 +1418,7 @@ export default function RunActivityPage({
     const body = {
       qid,
       questionText: qText,
+      responseMode: questionBlock.responseMode || 'answer',
       studentAnswer,
       sampleResponse: questionBlock.samples?.[0] || '',
       feedbackPrompt: questionBlock.feedback?.[0] || '',
@@ -1148,15 +1429,31 @@ export default function RunActivityPage({
         studentLevel: activity?.studentlevel || 'intro',
       },
       guidance: activity?.aicodeguidance || '',
+      activityAiMode: activity?.meta?.aiMode || 'no-positive',
+      questionAiMode: questionBlock?.aiMode || '',
+      hasTableResponse: questionBlock?.hasTableResponse === true,
+      activityLanguage: activity?.language || activity?.meta?.language || '',
       codeContext,
 
       // ✅ retry gate inputs
       instanceId: instanceIdNum,
       groupNum: Number(groupNum),
       answeredByUserId: Number(answeredByUserId ?? user?.id),
-      retriesRequired: Number(retriesRequired) || 1,
+      // Zero is a meaningful policy: show any AI guidance, but never block
+      // progression for a retry. Do not collapse it to the default of one.
+      retriesRequired: Number.isFinite(Number(retriesRequired))
+        ? Math.max(0, Number(retriesRequired))
+        : 1,
       submissionString: String(submissionString || ""),
       dryRun: !canPersistAIResults,
+
+      // Timer pressure: let AI ease up when time is running low
+      timerRemainingMs:
+        sectionTimer?.visible && !sectionTimer?.paused
+          ? Math.max(0, sectionTimer.remainingMs ?? 0)
+          : null,
+      timerDurationMs:
+        sectionTimer?.visible ? (sectionTimer.durationMs ?? null) : null,
     };
 
     try {
@@ -1198,7 +1495,9 @@ export default function RunActivityPage({
         throw e;
       }
 
-      const accepted = data?.accepted !== false;
+      // Fail closed: only an explicit server acceptance completes a question.
+      // A malformed response must not become a silent pass.
+      const accepted = data?.accepted === true;
 
       const feedback =
         typeof data?.feedback === 'string' && data.feedback.trim()
@@ -1214,13 +1513,25 @@ export default function RunActivityPage({
       const retriesRequiredOut = Number.isFinite(Number(data?.retriesRequired))
         ? Number(data.retriesRequired)
         : null;
+      const decision = ['accepted', 'revise'].includes(data?.decision)
+        ? data.decision
+        : (accepted ? 'accepted' : 'revise');
+
+      // If the section timer has expired, never deadlock the group — let them move on
+      const timerExpired =
+        sectionTimer?.visible && (sectionTimer.remainingMs ?? Infinity) <= 0;
 
       return {
         accepted,
+        // A timer expiring must not hide revision guidance.  It only means the
+        // student may explicitly continue despite a revise decision.  Hiding
+        // the message here created the confusing "blocked with no feedback"
+        // state for an incorrect answer.
         feedback,
-        canContinue,
+        canContinue: timerExpired ? true : canContinue,
         retryCount,
         retriesRequired: retriesRequiredOut,
+        decision,
       };
 
       // ✅ IMPORTANT: this function MUST NOT write to `answers` here.
@@ -1239,12 +1550,15 @@ export default function RunActivityPage({
         msg: err?.message,
       });
 
-      // Policy: don't deadlock on AI failure
+      // Do not silently pass work when evaluation is unavailable. Preserve the
+      // normal revise state and let the existing explicit Continue workflow
+      // handle a temporary outage.
       return {
-        accepted: true,
-        feedback: '(AI unavailable; continuing)',
-        canContinue: false,
-        done: true,
+        accepted: false,
+        decision: 'revise',
+        feedback: 'AI feedback is temporarily unavailable. Please try again or continue when that option is available.',
+        canContinue: true,
+        done: false,
         retryCount: null,
         retriesRequired: null,
         skipped: false,
@@ -1366,7 +1680,7 @@ export default function RunActivityPage({
     return generic || detectLanguageFromCode(studentCode) || 'python';
   }
 
-  function buildTestSubmissionPayload(blocks, container) {
+  function buildTestSubmissionPayload(blocks, container, existingAnswers) {
     const answers = {};
     const questions = [];
 
@@ -1378,8 +1692,15 @@ export default function RunActivityPage({
 
       // 1) Base written/text response (if any)
       const textEl = container.querySelector(`textarea[data-response-key="${qid}"]`);
+      const checkedChoice = container.querySelector(
+        `input[name="multiple-choice-${qid}"]:checked`
+      );
 
-      const baseAnswer = textEl?.value?.trim() || '';
+      const baseAnswer =
+        textEl?.value?.trim() ||
+        checkedChoice?.value?.trim() ||
+        existingAnswers?.[qid]?.response?.trim?.() ||
+        '';
 
       // 2) Table inputs (if any)
       let tableHasInput = false;
@@ -1481,6 +1802,94 @@ export default function RunActivityPage({
     }
 
     return { answers, questions };
+  }
+
+  function bucketPoints(bucket) {
+    if (bucket == null) return 0;
+    if (typeof bucket === 'number') return bucket;
+    if (typeof bucket === 'object' && typeof bucket.points === 'number') return bucket.points;
+    return 0;
+  }
+
+  function normalizeScoreBands(scores = {}) {
+    return {
+      response: scores.response || null,
+      code: scores.code || null,
+      output: scores.output || null,
+    };
+  }
+
+  function normalizeQuestionGradeResult({ block, payload, result, scores: previewScores = null }) {
+    const scores = normalizeScoreBands(previewScores || block?.scores || {});
+    const maxCodePts = bucketPoints(scores.code);
+    const maxRunPts = bucketPoints(scores.output);
+    const maxRespPts = bucketPoints(scores.response);
+
+    const multipleChoice = block?.multipleChoice || null;
+    const isMultipleChoice =
+      Array.isArray(multipleChoice?.choices) && multipleChoice.choices.length >= 2;
+    const hasChoiceScores =
+      !!multipleChoice?.hasChoiceScores ||
+      multipleChoice?.choices?.some((choice) => Number.isInteger(choice?.points));
+
+    const responseText = String(payload?.responseText || '').trim();
+    const selectedChoice = responseText;
+
+    let codeScore = Number(result?.codeScore ?? 0);
+    let runScore = Number(result?.runScore ?? 0);
+    let responseScore = Number(result?.responseScore ?? 0);
+    let codeFeedback = String(result?.codeFeedback ?? '').trim();
+    let runFeedback = String(result?.runFeedback ?? '').trim();
+    let responseFeedback = String(result?.responseFeedback ?? '').trim();
+
+    if (isMultipleChoice && maxRespPts > 0) {
+      if (hasChoiceScores) {
+        const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
+        responseScore = Number(selected?.points || 0);
+        responseFeedback = selected
+          ? `Selected answer earned ${responseScore}/${maxRespPts} points.`
+          : 'No answer was selected.';
+      } else {
+        const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
+        if (!correctAnswer) {
+          responseScore = 0;
+          responseFeedback = 'This multiple-choice question is missing a correct answer, so it cannot be graded as a test item.';
+        } else {
+          const isCorrect = selectedChoice === correctAnswer;
+          responseScore = isCorrect ? maxRespPts : 0;
+          responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+        }
+      }
+    }
+
+    codeScore = Math.max(0, Math.min(maxCodePts, Number.isFinite(codeScore) ? codeScore : 0));
+    runScore = Math.max(0, Math.min(maxRunPts, Number.isFinite(runScore) ? runScore : 0));
+    responseScore = Math.max(
+      0,
+      Math.min(maxRespPts, Number.isFinite(responseScore) ? responseScore : 0)
+    );
+
+    const earnedTotal = codeScore + runScore + responseScore;
+    const maxTotal = maxCodePts + maxRunPts + maxRespPts;
+
+    return {
+      status: 'ready',
+      qid: payload?.qid || null,
+      questionText: payload?.questionText || '',
+      selectedChoice,
+      codeScore,
+      runScore,
+      responseScore,
+      codeFeedback,
+      runFeedback,
+      responseFeedback,
+      maxCode: maxCodePts,
+      maxRun: maxRunPts,
+      maxResp: maxRespPts,
+      earnedTotal,
+      maxTotal,
+      gradedAt: new Date().toISOString(),
+    };
   }
 
 
@@ -1586,7 +1995,7 @@ export default function RunActivityPage({
     let groupSubmissionString = null;
     let container = null;
     let blocks = null;
-    const useTestSubmissionFlow = isTestMode && canSubmitTest;
+    const useTestSubmissionFlow = (isTestMode && canSubmitTest) || (isAssignmentMode && canSubmitAssignment);
     function clearCodeFeedbackForQid(qid, codeCells) {
       setCodeFeedbackShown((prev) => {
         const next = { ...prev };
@@ -1654,8 +2063,12 @@ export default function RunActivityPage({
       const completedCount = Number(activity?.completed_groups ?? 0);
       groupNum = isSandbox ? submitGroupIndex + 1 : completedCount + 1; // ✅ 1-based, ALWAYS
 
-      retriesRequired =
-        Number(currentGroup?.intro?.retriesRequired ?? 1) || 1;
+      // Preserve an explicit \retries{0}. It means feedback may be shown,
+      // but a rejected answer can continue immediately.
+      const configuredRetries = Number(currentGroup?.intro?.retriesRequired);
+      retriesRequired = Number.isFinite(configuredRetries)
+        ? Math.max(0, configuredRetries)
+        : 1;
 
       blocks = [currentGroup.intro, ...currentGroup.content];
 
@@ -1685,15 +2098,17 @@ export default function RunActivityPage({
       try {
         const { answers, questions } = buildTestSubmissionPayload(
           blocks,
-          container
+          container,
+          existingAnswers
         );
         console.log('[TEST SUBMIT payload]', {
           answersCount: Object.keys(answers).length,
           questionsCount: questions.length,
         });
 
+        const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';
         const res = await fetch(
-          `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1709,7 +2124,7 @@ export default function RunActivityPage({
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           alert(
-            `Test submission failed: ${err.error || 'Unknown error submitting test.'
+          `${isAssignmentMode ? 'Lab' : 'Test'} submission failed: ${err.error || 'Unknown error submitting this activity.'
             }`
           );
           setIsSubmitting(false);
@@ -1719,10 +2134,10 @@ export default function RunActivityPage({
         // console.log('[RUNDBG] after submit, about to reload', { loading: loadingRef.current, t: Date.now() });
         await loadActivity();
         //console.log('[RUNDBG] after submit, reload done');
-        alert('Test submitted. Your answers have been recorded.');
+        alert(`${isAssignmentMode ? 'Lab' : 'Test'} submitted. Your answers have been recorded.`);
       } catch (err) {
-        console.error('❌ Test submission failed:', err);
-        alert('An error occurred submitting the test.');
+        console.error('❌ Assessment submission failed:', err);
+        alert(`An error occurred submitting the ${isAssignmentMode ? 'lab' : 'test'}.`);
       } finally {
         setIsSubmitting(false);
       }
@@ -1925,6 +2340,16 @@ export default function RunActivityPage({
           continue;
         }
 
+        if (isTestMode) {
+          answers[`${qid}CodeFeedback`] = '';
+          answers[`${qid}CodeAccepted`] = 'true';
+          answers[`${qid}CodeCanContinue`] = 'false';
+          answers[`${qid}CodeRetryCount`] = '';
+          answers[`${qid}CodeRetriesRequired`] = '';
+          answers[`${qid}CodeSubmissionString`] = groupSubmissionString;
+          continue;
+        }
+
         // ✅ collect observed output for this question
         const outputEls = container.querySelectorAll(
           `[data-output-key^="${qid}output"]`
@@ -1959,12 +2384,23 @@ export default function RunActivityPage({
 
             // activity-level policy
             guidance: activity?.aicodeguidance || '',
+            activityAiMode: activity?.meta?.aiMode || 'no-positive',
+            questionAiMode: block?.aiMode || '',
+            activityLanguage: activity?.language || activity?.meta?.language || '',
             instanceId: Number(instanceId),
             groupNum,
             answeredByUserId: Number(user?.id),
             retriesRequired,
             submissionString: groupSubmissionString,
             dryRun: !canPersistAIResults,
+
+            // Timer pressure: let AI ease up when time is running low
+            timerRemainingMs:
+              sectionTimer?.visible && !sectionTimer?.paused
+                ? Math.max(0, sectionTimer.remainingMs ?? 0)
+                : null,
+            timerDurationMs:
+              sectionTimer?.visible ? (sectionTimer.durationMs ?? null) : null,
 
             // ✅ new
             outputText,
@@ -2025,7 +2461,10 @@ export default function RunActivityPage({
               };
             }
 
-            if (data?.canContinue === true) {
+            // A rejected answer can offer the explicit Continue button once
+            // its retry allowance is exhausted. \retries{0} is exhausted on
+            // the first rejected submission, so the button appears at once.
+            if (data?.accepted === false && data?.canContinue === true) {
               setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
             }
           } finally {
@@ -2081,7 +2520,8 @@ export default function RunActivityPage({
               });
             }
           }
-          // ✅ compute !accepted even if server returns only accepted/comment
+          // AI acceptance is the progression gate. A zero-retry policy means
+          // no bypass is available, not that rejected work is auto-accepted.
           if (!accepted) {
             answers[`${qid}S`] = 'inprogress';
             pendingRevision.push(`${qid} (needs revision)`);
@@ -2148,8 +2588,8 @@ export default function RunActivityPage({
       const el = container.querySelector(`textarea[data-response-key="${qid}"]`);
 
       const baseAnswer =
-        String(existingAnswers?.[qid]?.response ?? '').trim() ||
-        String(container.querySelector(`[data-response-key="${qid}"]`)?.value ?? '').trim();
+        String(container.querySelector(`[data-response-key="${qid}"]`)?.value ?? '').trim() ||
+        String(existingAnswers?.[qid]?.response ?? '').trim();
 
 
       // ---- Gather table inputs & save them ----
@@ -2222,9 +2662,6 @@ export default function RunActivityPage({
         existingAnswers
       );
 
-      const prevAF = lowerResp(existingAnswers, `${qid}AF`); // "active" or "resolved"
-      const prevFM = lowerResp(existingAnswers, `${qid}FM`); // "accepted" or "needsrevision"
-
       // ✅ Clear old AI comment ONLY on submit (before re-evaluating)
       setTextFeedbackShown((prev) => {
         const next = { ...prev };
@@ -2238,6 +2675,19 @@ export default function RunActivityPage({
 
       // Only clear the visible feedback box before re-eval
       emitTextAIState(socket, qid, { f1: '' });
+      if (isSurveyMultipleChoice(block)) {
+        // A blank \multiplechoice{} is a survey: store the selected value and
+        // mark it complete without asking the AI to judge or coach the student.
+        answers[`${qid}S`] = 'complete';
+        answers[`${qid}AF`] = 'resolved';
+        answers[`${qid}FM`] = 'accepted';
+        emitTextAIState(socket, qid, {
+          af: answers[`${qid}AF`],
+          f1: '',
+          fm: answers[`${qid}FM`],
+        });
+        continue;
+      }
       if (!looksCodeOnlyNow && !isTestMode) {
         const dbgInput = String(aiInput ?? '').trim();
         /*console.log('[EVALDBG]', {
@@ -2256,7 +2706,10 @@ export default function RunActivityPage({
           answeredByUserId: user.id,
         });
 
-        const progressAllowed = (ai.accepted === true);
+        // Acceptance and retry permission are deliberately separate.  A
+        // `revise` result remains yellow and incomplete; `canContinue` only
+        // enables the explicit Continue button after the retry allowance.
+        const progressAllowed = ai.decision === 'accepted';
 
         answers[`${qid}S`] = progressAllowed ? 'complete' : 'inprogress';
 
@@ -2264,8 +2717,9 @@ export default function RunActivityPage({
           pendingRevision.push(`${qid} (AI)`);
         }
 
-        // If backend says retries threshold reached for this group, enable bypass button
-        if (ai?.canContinue === true) {
+        // A rejected answer can offer the explicit Continue button once its
+        // retry allowance is exhausted. \retries{0} means that is immediate.
+        if (ai?.accepted === false && ai?.canContinue === true) {
           setCanBypassGroups((prev) => ({ ...prev, [submitGroupIndex]: true }));
         }
         /*console.log('[RETRY GATE]', {
@@ -2275,20 +2729,25 @@ export default function RunActivityPage({
           progressAllowed,
         });*/
 
-        // ✅ Default accept unless AI explicitly rejects
-        accepted = ai.accepted !== false;
+        // The decision is the sole source of truth for both progression and
+        // feedback colour.  `canContinue` is not acceptance; it only unlocks
+        // the explicit bypass button for a revise result.
+        accepted = progressAllowed;
+        const feedbackAccepted = progressAllowed;
         feedback = typeof ai.feedback === 'string' ? ai.feedback : '';
 
-        const newHasFeedback = typeof feedback === 'string' && feedback.trim().length > 0;
-        const becomingAccepted = (prevAF === 'active') && accepted;
-
-        answers[`${qid}AF`] = accepted ? 'resolved' : 'active';
-        answers[`${qid}FM`] = accepted ? 'accepted' : 'needsRevision';
+        answers[`${qid}AF`] = feedbackAccepted ? 'resolved' : 'active';
+        answers[`${qid}FM`] = feedbackAccepted ? 'accepted' : 'needsRevision';
 
         if (feedback && feedback.trim()) {
           const f = feedback.trim();
           answers[`${qid}F1`] = f;
-          setTextFeedbackShown((prev) => ({ ...prev, [qid]: f }));
+          // Store with a 'positive' flag so the UI colours positive feedback green
+          // and negative feedback yellow.
+          setTextFeedbackShown((prev) => ({
+            ...prev,
+            [qid]: { text: f, positive: feedbackAccepted },
+          }));
         } else {
           answers[`${qid}F1`] = '';
           setTextFeedbackShown((prev) => {
@@ -2435,6 +2894,21 @@ export default function RunActivityPage({
         Number.isFinite(resultCompletedGroups) &&
         resultCompletedGroups > priorCompletedGroups;
 
+      console.log('[GROUP SUBMIT PROGRESS]', {
+        instanceId,
+        submitGroupIndex,
+        groupNum,
+        parsedGroups: Array.isArray(groups) ? groups.length : null,
+        priorCompletedGroups,
+        resultCompletedGroups,
+        advancedByServer,
+        progressStatus: result?.progress_status || null,
+        activeStudentId: result?.activeStudentId ?? null,
+        canAdvance,
+        blocked,
+        unanswered: attempt.unanswered,
+      });
+
        setActivity((prev) => (
         prev
           ? {
@@ -2481,18 +2955,6 @@ export default function RunActivityPage({
         return next;
       });
 
-      if (!isTestMode && forceOverride) {
-        const qBlocksForGroup = blocks.filter((b) => b.type === 'question');
-        setTextFeedbackShown((prev) => {
-          const next = { ...prev };
-          qBlocksForGroup.forEach((b) => {
-            const qid = `${b.groupId}${b.id}`;
-            delete next[qid];
-          });
-          return next;
-        });
-      }
-
       if (submitGroupIndex + 1 === groups.length) {
         await fetch(`${API_BASE_URL}/api/responses/mark-complete`, {
           method: 'POST',
@@ -2533,7 +2995,10 @@ export default function RunActivityPage({
     setIsSubmitting(true);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    // A full-test regrade can include several AI-scored code/written responses.
+    // Keep the request alive long enough for the server to process the whole attempt.
+    const regradeTimeoutMs = 180000;
+    const timeoutId = setTimeout(() => controller.abort(), regradeTimeoutMs);
 
     try {
       const studentId = activity?.submitted_by_user_id || null;
@@ -2573,15 +3038,16 @@ export default function RunActivityPage({
         questions.push({ qid, questionText, scores: block.scores || {}, responseText, codeCells, outputText });
       }
 
+      const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';
       console.log('[REGRD] about to POST', {
-        url: `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+        url: `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
         studentId,
         answersCount: Object.keys(answers).length,
         questionsCount: questions.length,
       });
 
       const res = await fetch(
-        `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-test`,
+        `${API_BASE_URL}/api/activity-instances/${instanceId}/${submissionEndpoint}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2613,12 +3079,119 @@ export default function RunActivityPage({
       alert('Regrade complete.');
     } catch (e) {
       console.error('[REGRD] error', e);
-      alert(e?.name === 'AbortError' ? 'Regrade timed out (20s).' : 'Regrade failed.');
+      alert(e?.name === 'AbortError' ? 'Regrade timed out after 3 minutes. Please try again or check the server log.' : 'Regrade failed.');
     } finally {
       clearTimeout(timeoutId);
       setIsSubmitting(false);
       console.log('[REGRD] done');
     }
+  }
+
+  async function handleMarkTestReviewed() {
+    if (!canSaveInstructorScores || !instanceId) return;
+    setIsSubmitting(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/mark-reviewed`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.error || 'Unable to mark the test as reviewed.');
+      }
+      await loadActivity();
+    } catch (err) {
+      console.error('Failed to mark test reviewed:', err);
+      alert(err.message || 'Unable to mark the test as reviewed.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleGradeSingleQuestion(qid) {
+    if (gradingQuestionQid || gradingAllQuestions) return;
+    if (!isTestMode && !isAssignmentMode) return;
+
+    const block = findQuestionBlockByQid(qid);
+    if (!block) return;
+
+    setGradingQuestionQid(qid);
+
+    try {
+      const preview = await fetchQuestionGradePreview(block);
+      if (!preview) return;
+
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        [qid]: preview,
+      }));
+    } catch (err) {
+      console.error('Single-question grading failed:', err);
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        [qid]: {
+          status: 'error',
+          qid,
+          questionText: getQuestionText(block, qid),
+          error: err?.message || 'Question grading failed.',
+          gradedAt: new Date().toISOString(),
+        },
+      }));
+    } finally {
+      setGradingQuestionQid(null);
+    }
+  }
+
+  async function handleGradeAllQuestions() {
+    if (gradingQuestionQid || gradingAllQuestions) return;
+    if (!isTestMode && !isAssignmentMode) return;
+
+    const blocksToGrade = groups.flatMap((group) => [group.intro, ...(group.content || [])])
+      .filter((block) => block?.type === 'question');
+    if (!blocksToGrade.length) return;
+
+    setGradingAllQuestions(true);
+    try {
+      const nextPreviews = {};
+      for (const block of blocksToGrade) {
+        const qid = `${block.groupId}${block.id}`;
+        try {
+          const preview = await fetchQuestionGradePreview(block);
+          if (preview) {
+            nextPreviews[qid] = preview;
+          }
+        } catch (err) {
+          console.error('Question grading failed:', err);
+          nextPreviews[qid] = {
+            status: 'error',
+            qid,
+            questionText: getQuestionText(block, qid),
+            error: err?.message || 'Question grading failed.',
+            gradedAt: new Date().toISOString(),
+          };
+        }
+      }
+
+      setQuestionGradePreviews((prev) => ({
+        ...prev,
+        ...nextPreviews,
+      }));
+    } finally {
+      setGradingAllQuestions(false);
+    }
+  }
+
+  function clearQuestionGradePreview(qid) {
+    setQuestionGradePreviews((prev) => {
+      const next = { ...prev };
+      delete next[qid];
+      return next;
+    });
+  }
+
+  function clearQuestionGradePreviewForResponseKey(responseKey) {
+    const qid = baseQidFromResponseKey(responseKey);
+    if (qid) clearQuestionGradePreview(qid);
   }
   // Instructor override: save edited per-question scores & feedback
   async function handleSaveQuestionScores(qid, local) {
@@ -2671,9 +3244,29 @@ export default function RunActivityPage({
         return next;
       });
 
-      // Optionally you could recompute overall totals or reload activity,
-      // but typically this is enough:
-      // await loadActivity();   // <- if you want to be extra sure
+      // Recompute overall score on the server so ViewTestsPage and the
+      // score banner on this page both reflect the manual override.
+      try {
+        console.log('[ScoreSave] calling recompute-test-totals for instance', instanceId);
+        const recomputeRes = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/recompute-test-totals`,
+          { method: 'POST', credentials: 'include' }
+        );
+        console.log('[ScoreSave] recompute status:', recomputeRes.status);
+        if (recomputeRes.ok) {
+          const totals = await recomputeRes.json();
+          console.log('[ScoreSave] recompute totals:', totals);
+          if (totals?.ok) {
+            setActivity((prev) =>
+              prev
+                ? { ...prev, points_earned: totals.earned, points_possible: totals.possible }
+                : prev
+            );
+          }
+        }
+      } catch (recomputeErr) {
+        console.warn('[ScoreSave] Score recompute failed (non-fatal):', recomputeErr);
+      }
 
       alert(`Saved updated scores/feedback for ${qid}.`);
     } catch (err) {
@@ -2782,10 +3375,15 @@ export default function RunActivityPage({
 
         <RunActivityTestStatusBanner
           isTestMode={isTestMode}
+          isAssignmentMode={isAssignmentMode}
           testWindow={testWindow}
           testLockState={testLockState}
           isStudent={isStudent}
           submittedAt={activity?.submitted_at}
+          assignmentDueAt={activity?.assignment_due_at}
+          submittedLate={Number(activity?.submitted_late) === 1 || activity?.submitted_late === true}
+          reviewComplete={Number(activity?.review_complete) === 1}
+          score={overallTestTotals}
           formatRemainingSeconds={formatRemainingSeconds}
         />
 
@@ -2820,6 +3418,35 @@ export default function RunActivityPage({
             {submitAlert}
           </Alert>
         )}
+        {/* First focus-loss: blocking modal the student must acknowledge */}
+        <Modal show={showFocusModal} backdrop="static" keyboard={false} centered>
+          <Modal.Header>
+            <Modal.Title>⚠️ Exam Warning</Modal.Title>
+          </Modal.Header>
+          <Modal.Body>
+            <p>
+              <strong>You left the exam window.</strong> This has been recorded by your instructor.
+            </p>
+            <p>
+              If you leave the exam window again, your test will be <strong>automatically submitted</strong>.
+            </p>
+          </Modal.Body>
+          <Modal.Footer>
+            <Button variant="warning" onClick={() => setShowFocusModal(false)}>
+              I Understand — Return to Exam
+            </Button>
+          </Modal.Footer>
+        </Modal>
+
+        {/* Second focus-loss: auto-submit banner */}
+        {focusWarning && (
+          <Alert
+            variant="danger"
+            className="mt-3"
+          >
+            {focusWarning}
+          </Alert>
+        )}
         {effectiveViewMode === 'history' ? (
           <RunActivityHistoryView
             historyRows={historyRows}
@@ -2831,6 +3458,8 @@ export default function RunActivityPage({
           />
         ) : (
           <RunActivityWorkspace
+            onAiTurnSaved={handleAiTurnSaved}
+            activeStudentName={activeStudentName}
             activityPaused={activityPaused}
             renderBlocks={renderBlocks}
             preamble={preamble}
@@ -2847,6 +3476,7 @@ export default function RunActivityPage({
             groups={groups}
             activity={activity}
             isTestMode={isTestMode}
+            isAssignmentMode={isAssignmentMode}
             isStudent={isStudent}
             isSubmitted={isSubmitted}
             timeExpired={timeExpired}
@@ -2854,21 +3484,26 @@ export default function RunActivityPage({
             socket={socket}
             instanceId={instanceId}
             user={user}
-            handleCodeChange={handleCodeChange}
             baseQidFromResponseKey={baseQidFromResponseKey}
             isObserver={isObserver}
             isSandbox={isSandbox}
+            isCreatorTestRun={isCreatorTestRun}
             allowFreeNavigation={allowFreeNavigation}
             canEditAnswers={canEditAnswers}
             canSubmitGroup={canSubmitGroup}
             canSubmitTest={canSubmitTest}
+            canSubmitAssignment={canSubmitAssignment}
             canRegradeTests={canRegradeTests}
             canSaveInstructorScores={canSaveInstructorScores}
+            canGradeQuestionPreview={canGradeQuestionPreview}
+            canGradeAllQuestions={canGradeAllQuestions}
+            gradingAllQuestions={gradingAllQuestions}
+            isCreatorSandbox={isCreatorSandbox}
+            handleGradeAllQuestions={handleGradeAllQuestions}
             sandboxGroupIndex={sandboxGroupIndex}
             setSandboxGroupIndex={setSandboxGroupIndex}
             codeViewMode={codeViewMode}
             localCode={localCode}
-            handleTextChange={handleTextChange}
             textFeedbackShown={textFeedbackShown}
             nonLegacyForUI={nonLegacyForUI}
             getQuestionScores={getQuestionScores}
@@ -2878,8 +3513,33 @@ export default function RunActivityPage({
             isPlaygroundMode={isPlaygroundMode}
             canBypassGroups={canBypassGroups}
             handleRegradeTest={handleRegradeTest}
+            handleMarkTestReviewed={handleMarkTestReviewed}
+            handleTextChange={(responseKey, value, extra) => {
+              clearQuestionGradePreviewForResponseKey(responseKey);
+              return handleTextChange(responseKey, value, extra);
+            }}
+            handleCodeChange={(responseKey, code, extra) => {
+              clearQuestionGradePreviewForResponseKey(responseKey);
+              return handleCodeChange(responseKey, code, extra);
+            }}
             overallTestTotals={overallTestTotals}
+            questionGradePreviews={questionGradePreviews}
+            gradingQuestionQid={gradingQuestionQid}
+            handleGradeSingleQuestion={handleGradeSingleQuestion}
+            clearQuestionGradePreview={clearQuestionGradePreview}
             infoBubbleSession={infoBubbleSessionRef.current}
+            suppressStudentTestFeedbackUi={shouldSuppressStudentTestFeedbackUi({
+              isTestMode,
+              isStudent,
+              isCreatorTestRun,
+              runMode,
+            })}
+            hideStudentTestSections={shouldHideStudentTestSections({
+              isTestMode,
+              isStudent,
+              isCreatorTestRun,
+              runMode,
+            })}
           />
         )}
       </Container>

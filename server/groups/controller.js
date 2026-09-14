@@ -9,15 +9,20 @@ const ROLES = ['facilitator', 'analyst', 'qc', 'spokesperson'];
  * Helpers
  */
 
-async function isTestActivity(conn, activityId) {
+// Returns the activity type string: 'test', 'assignment', 'activity', etc.
+async function getActivityType(conn, activityId) {
   const [[row]] = await conn.query(
     `SELECT COALESCE(is_test, 0) AS is_test, sheet_url, source_type, content_text
        FROM pogil_activities
       WHERE id = ?`,
     [activityId]
   );
-  const activityType = await inferActivityTypeFromActivity(row || {});
-  return activityType === 'test';
+  return inferActivityTypeFromActivity(row || {});
+}
+
+// Convenience wrappers kept for backward compatibility with any future callers.
+async function isTestActivity(conn, activityId) {
+  return (await getActivityType(conn, activityId)) === 'test';
 }
 
 // Create a new instance for a test (group of 1, no roles)
@@ -25,17 +30,23 @@ async function isTestActivity(conn, activityId) {
 async function createNewTestInstance(conn, activityId, courseId) {
   // next group_number
   const [[{ next_num }]] = await conn.query(
+    // Sandboxes are not groups. Counting them made the first real group come
+    // out numbered 13 on an activity whose author had previewed it a dozen
+    // times.
     `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_num
        FROM activity_instances
-      WHERE activity_id = ? AND course_id = ?`,
+      WHERE activity_id = ? AND course_id = ?
+        AND COALESCE(active_rotation_mode, '') <> 'sandbox'
+        AND COALESCE(group_number, 1) <> 0`,
     [activityId, courseId]
   );
 
   // copy timing defaults from any existing instance
   const [[tmpl]] = await conn.query(
-    `SELECT test_start_at, test_duration_minutes, lock_before_start, lock_after_end
+    `SELECT test_start_at, test_duration_minutes, locked_before_start, locked_after_end, total_groups
        FROM activity_instances
       WHERE activity_id = ? AND course_id = ?
+        AND COALESCE(active_rotation_mode, '') <> 'sandbox'
       ORDER BY id ASC
       LIMIT 1`,
     [activityId, courseId]
@@ -43,17 +54,57 @@ async function createNewTestInstance(conn, activityId, courseId) {
 
   const [ins] = await conn.query(
     `INSERT INTO activity_instances
-       (activity_id, course_id, status, group_number,
-        test_start_at, test_duration_minutes, lock_before_start, lock_after_end)
-     VALUES (?, ?, 'in_progress', ?, ?, ?, ?, ?)`,
+       (activity_id, course_id, status, group_number, total_groups,
+        test_start_at, test_duration_minutes, locked_before_start, locked_after_end)
+     VALUES (?, ?, 'in_progress', ?, ?, ?, ?, ?, ?)`,
     [
       activityId,
       courseId,
       next_num,
+      tmpl?.total_groups ?? 1,
       tmpl?.test_start_at ?? null,
       tmpl?.test_duration_minutes ?? 0,
-      tmpl?.lock_before_start ?? 0,
-      tmpl?.lock_after_end ?? 0,
+      tmpl?.locked_before_start ?? 0,
+      tmpl?.locked_after_end ?? 0,
+    ]
+  );
+
+  return { id: ins.insertId, groupNumber: next_num };
+}
+
+// Create a new instance for an assignment (group of 1, copies due date from existing instances).
+async function createNewAssignmentInstance(conn, activityId, courseId) {
+  // next group_number (excluding sandboxes)
+  const [[{ next_num }]] = await conn.query(
+    `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_num
+       FROM activity_instances
+      WHERE activity_id = ? AND course_id = ?
+        AND COALESCE(active_rotation_mode, '') <> 'sandbox'
+        AND COALESCE(group_number, 1) <> 0`,
+    [activityId, courseId]
+  );
+
+  // copy assignment settings from existing instances
+  const [[tmpl]] = await conn.query(
+    `SELECT assignment_due_at, total_groups
+       FROM activity_instances
+      WHERE activity_id = ? AND course_id = ?
+        AND COALESCE(active_rotation_mode, '') <> 'sandbox'
+      ORDER BY id ASC
+      LIMIT 1`,
+    [activityId, courseId]
+  );
+
+  const [ins] = await conn.query(
+    `INSERT INTO activity_instances
+       (activity_id, course_id, status, group_number, total_groups, assignment_due_at)
+     VALUES (?, ?, 'in_progress', ?, ?, ?)`,
+    [
+      activityId,
+      courseId,
+      next_num,
+      tmpl?.total_groups ?? 1,
+      tmpl?.assignment_due_at ?? null,
     ]
   );
 
@@ -117,6 +168,10 @@ async function pickGroupWithSpace(conn, activityId, courseId, maxSize = 4) {
       FROM activity_instances ai
       LEFT JOIN group_members gm ON gm.activity_instance_id = ai.id
      WHERE ai.activity_id = ? AND ai.course_id = ? AND ai.status = 'in_progress'
+       -- An author's sandbox looks like an empty group with room to spare, so
+       -- without this a real student could be added straight into it.
+       AND COALESCE(ai.active_rotation_mode, '') <> 'sandbox'
+       AND COALESCE(ai.group_number, 1) <> 0
      GROUP BY ai.id
      ORDER BY size ASC, ai.group_number ASC
     `,
@@ -131,9 +186,14 @@ async function pickGroupWithSpace(conn, activityId, courseId, maxSize = 4) {
 
 async function createNewGroup(conn, activityId, courseId) {
   const [[{ next_num }]] = await conn.query(
+    // Sandboxes are not groups. Counting them made the first real group come
+    // out numbered 13 on an activity whose author had previewed it a dozen
+    // times.
     `SELECT COALESCE(MAX(group_number), 0) + 1 AS next_num
        FROM activity_instances
-      WHERE activity_id = ? AND course_id = ?`,
+      WHERE activity_id = ? AND course_id = ?
+        AND COALESCE(active_rotation_mode, '') <> 'sandbox'
+        AND COALESCE(group_number, 1) <> 0`,
     [activityId, courseId]
   );
 
@@ -304,16 +364,21 @@ async function smartAddStudent(req, res) {
       return res.status(409).json({ error: 'Student already in a group for this activity' });
     }
 
-    const testMode = await isTestActivity(conn, activityId);
-    const demoCourse = !testMode && await isDemoCourse(conn, courseId);
+    const activityType = await getActivityType(conn, activityId);
+    const testMode = activityType === 'test';
+    const assignmentMode = activityType === 'assignment';
+    const demoCourse = !testMode && !assignmentMode && await isDemoCourse(conn, courseId);
 
     let group;
     let role = null;
     let cleanRole = null;
 
     if (testMode) {
-      // TEST: always create a brand-new instance (group of 1)
+      // Tests always receive a private instance with no role.
       group = await createNewTestInstance(conn, activityId, courseId);
+    } else if (assignmentMode) {
+      // Assignments also receive a private instance with no role.
+      group = await createNewAssignmentInstance(conn, activityId, courseId);
     } else {
       if (demoCourse) {
         await pruneInactiveDemoMembers(conn, activityId, courseId);
@@ -428,11 +493,15 @@ async function addSoloStudent(req, res) {
       return res.status(409).json({ error: 'Student already in a group for this activity' });
     }
 
-    const testMode = await isTestActivity(conn, activityId);
+    const activityType = await getActivityType(conn, activityId);
+    const testMode = activityType === 'test';
+    const assignmentMode = activityType === 'assignment';
 
     // Always create a brand-new instance for solo
     const group = testMode
       ? await createNewTestInstance(conn, activityId, courseId)
+      : assignmentMode
+      ? await createNewAssignmentInstance(conn, activityId, courseId)
       : await createNewGroup(conn, activityId, courseId);
 
     // Add member (no role)

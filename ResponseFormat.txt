@@ -1,0 +1,270 @@
+/*
+QUESTION ID CONTRACT FOR responses.question_id
+
+This system uses a structured naming scheme for question-related response rows.
+The goal is to make every stored row self-describing, append-only, and easy to
+reconstruct into the current and historical state of a student's work.
+
+----------------------------------------------------------------------------
+1. ROOT QUESTION IDs
+----------------------------------------------------------------------------
+
+A root question ID identifies the main answer for a question.
+
+Examples:
+  1a
+  2b
+  12c
+  27aa
+
+Form:
+  <groupNumber><questionLetterSeq>
+
+Where:
+  - <groupNumber> is one or more digits: 1, 2, 12, 27, ...
+  - <questionLetterSeq> is one or more lowercase letters: a, b, z, aa, ab, ...
+
+Examples:
+  1a    = first question in group 1
+  2c    = third question in group 2
+  12aa  = question aa in group 12
+
+These root IDs represent the student's main answer to that question.
+
+----------------------------------------------------------------------------
+2. DERIVED IDs
+----------------------------------------------------------------------------
+
+Derived IDs attach additional artifacts or metadata to a root question.
+
+Every derived ID belongs to exactly one root question.
+
+Examples:
+  2aS
+  2aF1
+  2aFA1
+  2cCODE1
+
+----------------------------------------------------------------------------
+3. SUPPORTED SUFFIX TYPES
+----------------------------------------------------------------------------
+
+A. State row
+   Form:
+     <root>S
+
+   Example:
+     2aS
+
+   Meaning:
+     Stores the current workflow state for the root question, such as:
+       inprogress
+       complete
+       bypassed
+       etc.
+
+   Notes:
+     - This is NOT the main answer.
+     - This row tracks status only.
+
+B. Follow-up prompt row
+   Form:
+     <root>F<n>
+
+   Examples:
+     2aF1
+     2aF2
+
+   Meaning:
+     Stores AI/system-generated follow-up prompt number n for the root question.
+
+   Notes:
+     - n starts at 1 and increases by 1 for additional follow-ups.
+     - The prompt itself is stored in response.
+
+C. Follow-up answer row
+   Form:
+     <root>FA<n>
+
+   Examples:
+     2aFA1
+     2aFA2
+
+   Meaning:
+     Stores the student's answer to follow-up prompt number n for the root question.
+
+   Notes:
+     - FA<n> corresponds to F<n>.
+     - Example:
+         2aF1  = first follow-up prompt
+         2aFA1 = student's answer to that first follow-up prompt
+
+D. Code artifact row
+   Form:
+     <root>CODE<n>
+
+   Examples:
+     2cCODE1
+     2cCODE2
+
+   Meaning:
+     Stores editable code artifact number n associated with the root question.
+
+   Notes:
+     - Use when a question contains one or more code blocks whose contents must be saved.
+     - n starts at 1 and increases by 1 for additional code blocks in the same root question.
+
+----------------------------------------------------------------------------
+4. OPTIONAL FUTURE SUFFIX TYPES
+----------------------------------------------------------------------------
+
+Do not introduce new suffix families casually.
+
+If new derived row types are added later, they must:
+  1. be documented here,
+  2. be parsed by the shared parser,
+  3. be covered by tests,
+  4. use an unambiguous suffix form.
+
+For example, if code output is ever persisted separately, define it formally first
+rather than inventing ad hoc keys.
+
+----------------------------------------------------------------------------
+5. FORMAL GRAMMAR
+----------------------------------------------------------------------------
+
+Let:
+
+  ROOT := <digits><letters>
+
+Examples of valid ROOT values:
+  1a
+  2b
+  10z
+  14aa
+
+Then valid question_id values are:
+
+  ROOT
+  ROOT + "S"
+  ROOT + "F" + <positiveInteger>
+  ROOT + "FA" + <positiveInteger>
+  ROOT + "CODE" + <positiveInteger>
+
+Examples of valid full IDs:
+  1a
+  1aS
+  1aF1
+  1aFA1
+  1aCODE1
+  12ab
+  12abS
+  12abF2
+  12abFA2
+  12abCODE3
+
+----------------------------------------------------------------------------
+6. VALIDATION RULES
+----------------------------------------------------------------------------
+
+A question_id is valid only if all of the following hold:
+
+  - it begins with a valid ROOT
+  - suffix, if present, is one of:
+      S
+      F<n>
+      FA<n>
+      CODE<n>
+  - n must be a positive integer (1, 2, 3, ...)
+  - letters in ROOT must be lowercase
+  - no underscores, hyphens, or mixed separators are allowed
+  - no zero-based indices:
+      invalid: 2aF0
+      invalid: 2aFA0
+      invalid: 2aCODE0
+
+Examples of INVALID values:
+  2
+  a2
+  2A
+  2a_state
+  2a-F1
+  2aFA
+  2aF0
+  2aCODE0
+  2aCode1
+  2aOUTPUT1   // invalid unless explicitly added to this contract
+
+----------------------------------------------------------------------------
+7. SEMANTIC OWNERSHIP
+----------------------------------------------------------------------------
+
+Every derived ID belongs to a single root question.
+
+Examples:
+  rootOf(2aS)      = 2a
+  rootOf(2aF1)     = 2a
+  rootOf(2aFA1)    = 2a
+  rootOf(2cCODE1)  = 2c
+
+This matters because reconstruction should group all related rows under the root question.
+
+----------------------------------------------------------------------------
+8. CURRENT-VS-HISTORY RULE
+----------------------------------------------------------------------------
+
+This table is append-only.
+
+That means:
+  - a new row never overwrites an old row
+  - "current value" for an exact question_id is the row with the largest id
+  - history is the full ordered sequence of rows for that exact question_id
+
+Examples:
+  - current main answer for 2a      = latest row where question_id = "2a"
+  - current state for 2a            = latest row where question_id = "2aS"
+  - current follow-up answer #1     = latest row where question_id = "2aFA1"
+  - current code artifact #1 for 2c = latest row where question_id = "2cCODE1"
+
+Do NOT determine current state by overwriting rows in place.
+
+----------------------------------------------------------------------------
+9. RECONSTRUCTION RULE
+----------------------------------------------------------------------------
+
+To reconstruct one root question, first identify the root, then collect all rows
+whose question_id is either:
+  - exactly the root, or
+  - one of its valid derived forms
+
+For root = 2a, related IDs may include:
+  2a
+  2aS
+  2aF1
+  2aFA1
+  2aF2
+  2aFA2
+  2aCODE1
+
+The UI/backend may then assemble:
+  - latest main answer
+  - latest state
+  - ordered follow-up prompt/answer pairs
+  - ordered code artifacts
+
+----------------------------------------------------------------------------
+10. IMPLEMENTATION REQUIREMENT
+----------------------------------------------------------------------------
+
+All code that interprets question_id values should use one shared parser/helper.
+
+Do NOT scatter ad hoc regexes across routes and controllers.
+
+The shared helper should answer:
+  - is this valid?
+  - what is the root question?
+  - what kind of row is this? (main/state/followup_prompt/followup_answer/code)
+  - what ordinal is it, if any?
+
+This contract is the single source of truth for question_id structure.
+*/

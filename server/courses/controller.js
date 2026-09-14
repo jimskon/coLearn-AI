@@ -1,7 +1,22 @@
 // /courses/controller.js
 const db = require("../db");
-const { inferActivityTypeFromActivity } = require('../utils/activityType');
+const { inferActivityTypeFromActivity, inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
+
+async function tableHasColumn(conn, tableName, columnName) {
+  const [rows] = await conn.query(
+    `SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?
+      LIMIT 1`,
+    [tableName, columnName],
+  );
+  return rows.length > 0;
+}
+
+async function deleteRowsIfPresent(conn, tableName, columnName, value) {
+  if (!(await tableHasColumn(conn, tableName, columnName))) return;
+  await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} = ?`, [value]);
+}
 
 // GET all courses
 async function getAllCourses(req, res) {
@@ -120,14 +135,17 @@ async function deleteCourse(req, res) {
   const user = req.user;
   const courseId = req.params.id;
 
+  const conn = await db.getConnection();
   try {
+    await conn.beginTransaction();
     // Step 1: Get the course's instructor ID
-    const [result] = await db.query(
+    const [result] = await conn.query(
       "SELECT instructor_id FROM courses WHERE id = ?",
       [courseId]
     );
 
     if (result.length === 0) {
+      await conn.rollback();
       return res.status(404).json({ error: "Instance not found" });
     }
 
@@ -138,17 +156,64 @@ async function deleteCourse(req, res) {
     const isAdmin = user.role === "root" || user.role === "creator";
 
     if (!isOwner && !isAdmin) {
+      await conn.rollback();
       return res
         .status(403)
         .json({ error: "Unauthorized to delete this instance" });
     }
 
-    // Step 3: Proceed to delete
-    await db.query("DELETE FROM courses WHERE id = ?", [courseId]);
+    // Step 3: Delete activity instances before their parent course.  Courses
+    // can contain submitted test/lab attempts, so remove their dependent rows
+    // in a safe order instead of relying on every deployment having cascades.
+    const [instanceRows] = await conn.query(
+      'SELECT id FROM activity_instances WHERE course_id = ? FOR UPDATE',
+      [courseId],
+    );
+    const instanceIds = instanceRows.map((row) => Number(row.id)).filter(Number.isFinite);
+
+    if (instanceIds.length) {
+      const responseIds = (await conn.query(
+        'SELECT id FROM responses WHERE activity_instance_id IN (?)',
+        [instanceIds],
+      ))[0].map((row) => Number(row.id)).filter(Number.isFinite);
+
+      for (const [tableName, columnName] of [
+        ['activity_heartbeats', 'activity_instance_id'],
+        ['event_log', 'activity_instance_id'],
+        ['response_drafts', 'activity_instance_id'],
+        ['followups', 'activity_instance_id'],
+        ['feedback', 'activity_instance_id'],
+        ['audit_log', 'activity_instance_id'],
+      ]) {
+        if (await tableHasColumn(conn, tableName, columnName)) {
+          await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} IN (?)`, [instanceIds]);
+        }
+      }
+
+      if (responseIds.length) {
+        for (const [tableName, columnName] of [['followups', 'response_id'], ['feedback', 'response_id']]) {
+          if (await tableHasColumn(conn, tableName, columnName)) {
+            await conn.query(`DELETE FROM ${tableName} WHERE ${columnName} IN (?)`, [responseIds]);
+          }
+        }
+      }
+
+      await conn.query('DELETE FROM responses WHERE activity_instance_id IN (?)', [instanceIds]);
+      await conn.query('DELETE FROM group_members WHERE activity_instance_id IN (?)', [instanceIds]);
+      await conn.query('DELETE FROM activity_instances WHERE id IN (?)', [instanceIds]);
+    }
+
+    await deleteRowsIfPresent(conn, 'audit_log', 'course_id', courseId);
+    await conn.query('DELETE FROM course_enrollments WHERE course_id = ?', [courseId]);
+    await conn.query("DELETE FROM courses WHERE id = ?", [courseId]);
+    await conn.commit();
     res.json({ success: true });
   } catch (err) {
+    try { await conn.rollback(); } catch { /* no-op */ }
     console.error("Error deleting course:", err);
     res.status(500).json({ error: "Delete failed" });
+  } finally {
+    conn.release();
   }
 }
 
@@ -284,6 +349,7 @@ async function getCourseActivities(req, res) {
 
     const activities = await Promise.all(rows.map(async (row) => {
       const activityType = await inferActivityTypeFromActivity(row);
+      const authoredMode = await inferAuthoredModeFromActivity(row);
       const isTest = activityType === 'test';
       const is_test = row.is_test; // 1 / 0 / null
       const status = (row.progress_status || '').toLowerCase();
@@ -309,6 +375,7 @@ async function getCourseActivities(req, res) {
 
         is_test,
         activity_type: activityType,
+        authored_mode: authoredMode,
         isTest,
         isTestKnown: true,
 
@@ -329,8 +396,12 @@ async function getCourseActivities(req, res) {
     const visibleActivities = role === 'student'
       ? activities.filter(
           (activity) =>
-            !activity.hidden &&
-            (activity.activity_type === 'demo' || activity.has_groups || activity.class_demo_mode)
+        !activity.hidden &&
+        (activity.activity_type === 'demo'
+          || activity.activity_type === 'playground'
+          || activity.activity_type === 'assignment'
+          || activity.has_groups
+          || activity.class_demo_mode)
         )
       : activities;
 
@@ -338,6 +409,79 @@ async function getCourseActivities(req, res) {
   } catch (err) {
     console.error("❌ Error fetching activities for course:", err);
     res.status(500).json({ error: "Failed to fetch activities" });
+  }
+}
+
+// Resolve a stable course/activity URL without trusting an instance ID from
+// WordPress, Moodle, or the browser. The membership row is the authorization
+// boundary: a student can only be sent to an instance that includes them.
+async function resolveStudentActivityLaunch(req, res) {
+  const courseId = Number(req.params.courseId);
+  const activityId = Number(req.params.activityId);
+  const user = req.user;
+
+  if (!courseId || !activityId) {
+    return res.status(400).json({ error: 'A course and activity are required.' });
+  }
+  if (!user?.id) {
+    return res.status(401).json({ error: 'Please sign in to open this activity.' });
+  }
+
+  try {
+    const [[courseActivity]] = await db.query(
+      `SELECT a.id, a.title
+         FROM courses c
+         JOIN pogil_activities a ON a.class_id = c.class_id
+        WHERE c.id = ? AND a.id = ?`,
+      [courseId, activityId],
+    );
+    if (!courseActivity) {
+      return res.status(404).json({ error: 'This activity is not available in this course.' });
+    }
+
+    if (user.role !== 'student') {
+      return res.json({
+        destination: `/courses/${courseId}/activities`,
+        activity_title: courseActivity.title,
+        message: 'Instructors manage this activity from the course activity list.',
+      });
+    }
+
+    const [[enrollment]] = await db.query(
+      'SELECT 1 AS enrolled FROM course_enrollments WHERE course_id = ? AND student_id = ?',
+      [courseId, user.id],
+    );
+    if (!enrollment) {
+      return res.status(403).json({ error: 'You are not enrolled in the course for this activity.' });
+    }
+
+    const [[instance]] = await db.query(
+      `SELECT ai.id AS instance_id
+         FROM activity_instances ai
+         JOIN group_members gm ON gm.activity_instance_id = ai.id
+        WHERE ai.course_id = ?
+          AND ai.activity_id = ?
+          AND gm.student_id = ?
+          AND COALESCE(ai.group_number, 1) <> 0
+          AND COALESCE(ai.hidden, 0) = 0
+        ORDER BY ai.id DESC
+        LIMIT 1`,
+      [courseId, activityId, user.id],
+    );
+    if (!instance?.instance_id) {
+      return res.status(409).json({
+        error: 'This activity is not ready for you yet. Your instructor may still need to activate it or assign you to a group.',
+      });
+    }
+
+    return res.json({
+      destination: `/run/${Number(instance.instance_id)}`,
+      instance_id: Number(instance.instance_id),
+      activity_title: courseActivity.title,
+    });
+  } catch (err) {
+    console.error('resolveStudentActivityLaunch error:', err);
+    return res.status(500).json({ error: 'Could not open this activity.' });
   }
 }
 
@@ -926,6 +1070,7 @@ module.exports = {
   createCourse,
   deleteCourse,
   getCourseActivities,
+  resolveStudentActivityLaunch,
   getUserEnrollments,
   enrollByCode,
   getCourseEnrollments,

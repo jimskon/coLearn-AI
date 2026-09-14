@@ -83,6 +83,7 @@ async function ensureSchema() {
       sheet_url TEXT DEFAULT NULL,
       source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
       content_text LONGTEXT DEFAULT NULL,
+      source_updated_at DATETIME(3) DEFAULT NULL,
       class_id INT NOT NULL,
       order_index INT NOT NULL DEFAULT 0,
       created_by INT DEFAULT NULL,
@@ -94,7 +95,8 @@ async function ensureSchema() {
   await db.query(`
     ALTER TABLE pogil_activities
       ADD COLUMN IF NOT EXISTS source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
-      ADD COLUMN IF NOT EXISTS content_text LONGTEXT DEFAULT NULL
+      ADD COLUMN IF NOT EXISTS content_text LONGTEXT DEFAULT NULL,
+      ADD COLUMN IF NOT EXISTS source_updated_at DATETIME(3) DEFAULT NULL
   `);
 
   await db.query(`
@@ -240,13 +242,13 @@ test.after(async () => {
   await db.end();
 });
 
-test('activity storage columns default existing-style inserts to remote with no local content', async () => {
+test('activity storage columns default existing-style inserts to remote with no local content or source version', async () => {
   const creator = await createUser('creator');
   const classId = await createClassRecord();
   const activity = await insertActivity({ classId, createdBy: creator.id });
 
   const [[row]] = await db.query(
-    `SELECT source_type, content_text
+    `SELECT source_type, content_text, source_updated_at
        FROM pogil_activities
       WHERE id = ?`,
     [activity.id]
@@ -254,6 +256,7 @@ test('activity storage columns default existing-style inserts to remote with no 
 
   assert.equal(row.source_type, 'remote');
   assert.equal(row.content_text, null);
+  assert.equal(row.source_updated_at, null);
 });
 
 test('getActivitySource returns stored local content without reading Google Docs', async () => {
@@ -281,6 +284,8 @@ test('getActivitySource returns stored local content without reading Google Docs
   assert.equal(response.status, 200);
   assert.equal(response.body.activity_id, activity.id);
   assert.equal(response.body.source_type, 'local');
+  assert.equal(response.body.source_updated_at, null);
+  assert.equal(response.body.metadata.source_updated_at, null);
   assert.deepEqual(response.body.lines, contentText.split('\n'));
   assert.equal(response.body.text, contentText);
 });
@@ -299,11 +304,13 @@ test('saveActivitySource converts a remote activity into a local one and stores 
     '',
     '\\questiongroup{One}',
     '\\question{Saved locally?}',
+    '\\endquestion',
+    '\\endquestiongroup',
   ].join('\n');
 
   const response = await requestJson(creator, `/api/activities/${activity.id}/source`, {
     method: 'PUT',
-    body: { text: contentText },
+    body: { text: contentText, expected_revision: 0 },
   });
 
   assert.equal(response.status, 200);
@@ -311,9 +318,11 @@ test('saveActivitySource converts a remote activity into a local one and stores 
   assert.equal(response.body.source_type, 'local');
   assert.equal(response.body.title, 'Saved Local Title');
   assert.equal(response.body.text, contentText);
+  assert.ok(response.body.source_updated_at);
+  assert.equal(response.body.metadata.source_updated_at, response.body.source_updated_at);
 
   const [[row]] = await db.query(
-    `SELECT source_type, content_text, title, sheet_url
+    `SELECT source_type, content_text, title, sheet_url, source_updated_at
        FROM pogil_activities
       WHERE id = ?`,
     [activity.id]
@@ -323,6 +332,7 @@ test('saveActivitySource converts a remote activity into a local one and stores 
   assert.equal(row.content_text, contentText);
   assert.equal(row.title, 'Saved Local Title');
   assert.equal(row.sheet_url, activity.sheet_url);
+  assert.ok(row.source_updated_at);
 });
 
 test('saveActivitySource updates stored text for an already-local activity', async () => {
@@ -330,7 +340,7 @@ test('saveActivitySource updates stored text for an already-local activity', asy
   const classId = await createClassRecord();
   const activity = await insertActivity({ classId, createdBy: creator.id });
   const firstText = '\\title{First}\\mode{group}';
-  const secondText = '\\title{Second}\\mode{group}\n\\questiongroup{One}';
+  const secondText = '\\title{Second}\\mode{group}\n\\questiongroup{One}\n\\endquestiongroup';
 
   await db.query(
     `UPDATE pogil_activities
@@ -342,7 +352,7 @@ test('saveActivitySource updates stored text for an already-local activity', asy
 
   const response = await requestJson(creator, `/api/activities/${activity.id}/source`, {
     method: 'PUT',
-    body: { text: secondText },
+    body: { text: secondText, expected_revision: 0 },
   });
 
   assert.equal(response.status, 200);
@@ -375,10 +385,70 @@ test('saveActivitySource rejects missing text and 404s for missing activity', as
 
   const missing = await requestJson(creator, '/api/activities/999999/source', {
     method: 'PUT',
-    body: { text: '\\title{Missing}' },
+    body: { text: '\\title{Missing}', expected_revision: 0 },
   });
   assert.equal(missing.status, 404);
   assert.deepEqual(missing.body, { error: 'Activity not found' });
+});
+
+test('activity edit leases block another editor, expire safely, and protect saves', async () => {
+  const firstEditor = await createUser('creator', 'First Editor');
+  const secondEditor = await createUser('instructor', 'Second Editor');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: firstEditor.id });
+  const validMarkup = '\\title{Locked}\n\\mode{group}\n\\questiongroup{One}\n\\endquestiongroup';
+
+  const acquired = await requestJson(firstEditor, `/api/activities/${activity.id}/edit-lease`, {
+    method: 'PUT',
+    body: {},
+  });
+  assert.equal(acquired.status, 200);
+  assert.match(acquired.body.lease_token, /^[0-9a-f-]{36}$/i);
+
+  const blocked = await requestJson(secondEditor, `/api/activities/${activity.id}/edit-lease`, {
+    method: 'PUT',
+    body: {},
+  });
+  assert.equal(blocked.status, 423);
+  assert.equal(blocked.body.owner_name, 'First Editor');
+
+  const deniedSave = await requestJson(secondEditor, `/api/activities/${activity.id}/source`, {
+    method: 'PUT',
+    body: { text: validMarkup, expected_revision: 0 },
+  });
+  assert.equal(deniedSave.status, 423);
+
+  const heartbeat = await requestJson(firstEditor, `/api/activities/${activity.id}/edit-lease/heartbeat`, {
+    method: 'POST',
+    body: { lease_token: acquired.body.lease_token },
+  });
+  assert.equal(heartbeat.status, 200);
+
+  const released = await requestJson(firstEditor, `/api/activities/${activity.id}/edit-lease`, {
+    method: 'DELETE',
+    body: { lease_token: acquired.body.lease_token },
+  });
+  assert.equal(released.status, 204);
+
+  const acquiredBySecondEditor = await requestJson(secondEditor, `/api/activities/${activity.id}/edit-lease`, {
+    method: 'PUT',
+    body: {},
+  });
+  assert.equal(acquiredBySecondEditor.status, 200);
+  assert.notEqual(acquiredBySecondEditor.body.lease_token, acquired.body.lease_token);
+});
+
+test('remote source status explains when an activity has no linked Google Doc', async () => {
+  const creator = await createUser('creator');
+  const classId = await createClassRecord();
+  const activity = await insertActivity({ classId, createdBy: creator.id, sheetUrl: null });
+
+  const response = await requestJson(creator, `/api/activities/${activity.id}/remote-status`);
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(response.body, {
+    error: 'This activity does not have a linked Google Doc.',
+  });
 });
 test('createActivity inserts a new activity and returns its payload', async () => {
   const creator = await createUser('creator');

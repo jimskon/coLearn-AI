@@ -9,6 +9,7 @@ import {
   Button,
   ButtonGroup,
   Badge,
+  Modal,
   Row,
   Col,
   Form,
@@ -16,7 +17,7 @@ import {
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
 import { FaUserCheck, FaLaptop, FaRandom } from 'react-icons/fa';
-import { parseUtcDbDatetime } from '../utils/time';
+import { formatUtcToLocal, parseUtcDbDatetime } from '../utils/time';
 
 const STATUS_LABELS = {
   active_thinking: 'Active thinking',
@@ -35,6 +36,15 @@ const STATUS_VARIANTS = {
 };
 
 function progressLabelFromInstanceRow(g) {
+  // For assignments, use submitted_at / has_responses rather than the
+  // progress_status field (which the group-navigation flow never updates for
+  // assignment instances — it stays 'not_started' forever).
+  if (g.is_assignment) {
+    if (g.submitted_at) return g.submitted_late ? 'Submitted late' : 'Submitted on time';
+    if (g.has_responses) return 'In progress';
+    return 'Not started';
+  }
+
   const tg = Number(g.total_groups || 0);
   const cg = Number(g.completed_groups || 0);
   const status = String(g.progress_status || '').toLowerCase();
@@ -55,6 +65,8 @@ function progressStatusVariant(value) {
 }
 
 function isCompleteFromInstanceRow(g) {
+  if (g.is_assignment) return !!g.submitted_at;
+
   const tg = Number(g.total_groups ?? 0);
   const cg = Number(g.completed_groups ?? 0);
 
@@ -216,11 +228,14 @@ export default function ViewGroupsPage() {
   const { user } = useUser();
 
   const [activityTitle, setActivityTitle] = useState('');
+  const [activityType, setActivityType] = useState('activity'); // 'test' | 'assignment' | 'activity'
   const [courseName, setCourseName] = useState(incomingCourseName || '');
   const [groups, setGroups] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [clearing, setClearing] = useState(new Set());
+  const [deleting, setDeleting] = useState(new Set());
+  const [dangerModal, setDangerModal] = useState(null); // { instanceId, label, action: null|'clear'|'delete' }
 
   // Live-edit state
   const [available, setAvailable] = useState([]);
@@ -233,10 +248,77 @@ export default function ViewGroupsPage() {
   const [rotatingGroups, setRotatingGroups] = useState(new Set());
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
+  // Due date editing state (assignment mode)
+  const [dueEdit, setDueEdit] = useState(null); // { instanceId, dueAt, reopen, isSubmitted }
+  const [savingDue, setSavingDue] = useState(false);
+  const [bulkDue, setBulkDue] = useState({ dueAt: '', reopen: false, saving: false });
   const [isDemoClass, setIsDemoClass] = useState(false);
   const [clearingDemoRoster, setClearingDemoRoster] = useState(false);
   const [liveProgressRows, setLiveProgressRows] = useState([]);
   const isDemoInstructor = user?.demo_mode === 'instructor';
+  // Tests and assignments give each student a private instance — 'add to group' = 'enroll student'
+  const isSoloMode = activityType === 'test' || activityType === 'assignment';
+
+  // Convert UTC db string to datetime-local input value
+  const toLocalInput = (utcStr) => {
+    if (!utcStr) return '';
+    const d = new Date(utcStr);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  };
+
+  const saveDueDate = async () => {
+    if (!dueEdit || !dueEdit.dueAt) return;
+    setSavingDue(true);
+    try {
+      const dueUtc = new Date(dueEdit.dueAt).toISOString();
+      const res = await fetch(
+        API_BASE_URL + '/api/activity-instances/' + dueEdit.instanceId + '/assignment-due-at',
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ assignmentDueAt: dueUtc, reopen: dueEdit.reopen }),
+        }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to update due date');
+      setDueEdit(null);
+      await fetchGroups({ quiet: true });
+    } catch (err) {
+      alert(err.message || 'Failed to update due date.');
+    } finally {
+      setSavingDue(false);
+    }
+  };
+
+  const saveBulkDueDate = async () => {
+    if (!bulkDue.dueAt) return;
+    setBulkDue(function(p) { return Object.assign({}, p, { saving: true }); });
+    try {
+      const dueUtc = new Date(bulkDue.dueAt).toISOString();
+      // Update all assignment instances for this activity
+      const promises = groups.map(function(g) {
+        return fetch(
+          API_BASE_URL + '/api/activity-instances/' + g.instance_id + '/assignment-due-at',
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ assignmentDueAt: dueUtc, reopen: bulkDue.reopen }),
+          }
+        );
+      });
+      await Promise.all(promises);
+      setBulkDue({ dueAt: '', reopen: false, saving: false });
+      await fetchGroups({ quiet: true });
+    } catch (err) {
+      alert(err.message || 'Failed to update due dates.');
+      setBulkDue(function(p) { return Object.assign({}, p, { saving: false }); });
+    }
+  };
 
   const fetchGroups = async ({ quiet = false } = {}) => {
     if (!quiet) {
@@ -259,7 +341,14 @@ export default function ViewGroupsPage() {
 
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
-      setGroups(data.groups);
+      if (data.activityType) setActivityType(data.activityType);
+      // Tag each row so helper functions can branch on assignment vs other modes
+      // without threading activityType as an argument everywhere.
+      const taggedGroups = (data.groups || []).map((g) => ({
+        ...g,
+        is_assignment: data.activityType === 'assignment',
+      }));
+      setGroups(taggedGroups);
       if (Array.isArray(data.groups) && data.groups.length > 0) {
         setRotationMode(String(data.groups[0].active_rotation_mode || 'submit'));
       }
@@ -388,6 +477,33 @@ export default function ViewGroupsPage() {
       const n2 = new Set(clearing);
       n2.delete(instanceId);
       setClearing(n2);
+    }
+  };
+
+  const deleteInstance = async (instanceId) => {
+    const confirmed = window.confirm(
+      'Delete this activity instance permanently? This removes its members, saved drafts, submissions, scores, and feedback. This cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    setDeleting((previous) => new Set(previous).add(instanceId));
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) throw new Error(data?.error || 'Failed to delete the activity instance.');
+      await Promise.all([fetchGroups(), refreshStudents()]);
+    } catch (err) {
+      console.error('Delete activity instance failed:', err);
+      alert(err?.message || 'Failed to delete the activity instance.');
+    } finally {
+      setDeleting((previous) => {
+        const next = new Set(previous);
+        next.delete(instanceId);
+        return next;
+      });
     }
   };
 
@@ -664,6 +780,118 @@ export default function ViewGroupsPage() {
               Demo instructor mode: roster and rotation controls are visible but disabled. Use <strong>View Activity</strong> to open the group activity.
             </Alert>
           ) : null}
+          {/* ── Assignment mode: compact table ── */}
+          {activityType === 'assignment' && (
+            <div className="table-responsive mb-4">
+              <table className="table table-sm table-hover align-middle">
+                <thead className="table-light">
+                  <tr>
+                    <th>Student</th>
+                    <th>Status</th>
+                    <th>Due</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groups.map((group) => {
+                    const isComplete = isCompleteFromInstanceRow(group);
+                    const instanceId = Number(group.instance_id);
+                    const student = (group.members || [])[0];
+                    const label = progressLabelFromInstanceRow(group);
+                    const statusVariant =
+                      isComplete
+                        ? group.submitted_late ? 'text-warning-emphasis' : 'text-success'
+                        : group.has_responses ? 'text-primary' : 'text-muted';
+
+                    return (
+                      <tr key={group.instance_id}>
+                        <td>
+                          <div className="fw-semibold">{student?.name || '—'}</div>
+                          {!isDemoClass && student?.email && (
+                            <div className="small text-muted">{student.email}</div>
+                          )}
+                        </td>
+                        <td>
+                          <span className={statusVariant}>{label}</span>
+                        </td>
+                        <td>
+                          {dueEdit && dueEdit.instanceId === group.instance_id ? (
+                            <div style={{ minWidth: 220 }}>
+                              <Form.Control
+                                type="datetime-local"
+                                size="sm"
+                                className="mb-1"
+                                value={dueEdit.dueAt}
+                                onChange={(e) => setDueEdit((p) => ({ ...p, dueAt: e.target.value }))}
+                              />
+                              {dueEdit.isSubmitted && (
+                                <Form.Check
+                                  type="checkbox"
+                                  label="Reopen"
+                                  checked={dueEdit.reopen}
+                                  onChange={(e) => setDueEdit((p) => ({ ...p, reopen: e.target.checked }))}
+                                  className="mb-1 small"
+                                />
+                              )}
+                              <div className="d-flex gap-1">
+                                <Button size="sm" variant="primary" onClick={saveDueDate} disabled={savingDue}>
+                                  {savingDue ? 'Saving…' : 'Save'}
+                                </Button>
+                                <Button size="sm" variant="secondary" onClick={() => setDueEdit(null)} disabled={savingDue}>
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="d-flex align-items-center gap-1">
+                              <span className="small">
+                                {group.assignment_due_at ? formatUtcToLocal(group.assignment_due_at) : '—'}
+                              </span>
+                              {!isDemoInstructor && (
+                                <Button
+                                  size="sm" variant="outline-secondary" className="py-0 px-1"
+                                  title="Edit due date"
+                                  onClick={() => setDueEdit({
+                                    instanceId: group.instance_id,
+                                    dueAt: toLocalInput(group.assignment_due_at),
+                                    reopen: false,
+                                    isSubmitted: !!group.submitted_at,
+                                  })}
+                                >✏️</Button>
+                              )}
+                            </div>
+                          )}
+                        </td>
+                        <td className="text-end">
+                          <div className="d-flex gap-1 justify-content-end flex-wrap">
+                            <Button
+                              variant="primary" size="sm"
+                              onClick={() => navigate(`/run/${group.instance_id}`, { state: { courseName } })}
+                            >
+                              {isComplete ? 'Review' : 'View'}
+                            </Button>
+                            {!isDemoInstructor && (
+                              <Button
+                                variant="outline-danger" size="sm"
+                                title="Danger zone"
+                                onClick={() => {
+                                  const lbl = student?.name || 'Student';
+                                  setDangerModal({ instanceId: group.instance_id, label: lbl, action: null });
+                                }}
+                              >⚠️</Button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ── Activity / test mode: card grid ── */}
+          {activityType !== 'assignment' && (
           <Row>
           {groups.map((group) => {
             const isComplete = isCompleteFromInstanceRow(group);
@@ -713,17 +941,6 @@ export default function ViewGroupsPage() {
                           )}
                         </Button>
                       ) : null}
-                      {!isDemoInstructor ? (
-                        <Button
-                          variant="outline-danger"
-                          size="sm"
-                          disabled={clearing.has(group.instance_id) || timerPaused}
-                          onClick={() => clearGroupAnswers(group.instance_id)}
-                        >
-                          {clearing.has(group.instance_id) ? 'Clearing…' : 'Clear Answers'}
-                        </Button>
-                      ) : null}
-
                       <Button
                         variant="primary"
                         size="sm"
@@ -731,6 +948,22 @@ export default function ViewGroupsPage() {
                       >
                         {isComplete ? 'Review Activity' : 'View Activity'}
                       </Button>
+
+                      {!isDemoInstructor ? (
+                        <Button
+                          variant="outline-danger"
+                          size="sm"
+                          title="Danger zone: clear answers or delete instance"
+                          onClick={() => {
+                            const label = isSoloMode
+                              ? ((group.members || [])[0]?.name || 'Student')
+                              : 'Group ' + group.group_number;
+                            setDangerModal({ instanceId: group.instance_id, label, action: null });
+                          }}
+                        >
+                          ⚠️
+                        </Button>
+                      ) : null}
                     </div>
                   </Card.Header>
 
@@ -753,13 +986,76 @@ export default function ViewGroupsPage() {
                         </li>
                       ))}
                     </ul>
-                    <GroupProgressBars group={group} />
+                    {activityType === 'assignment' && (
+                      <div className="small mb-2">
+                        {dueEdit && dueEdit.instanceId === group.instance_id ? (
+                          <div>
+                            <Form.Control
+                              type="datetime-local"
+                              size="sm"
+                              className="mb-1"
+                              value={dueEdit.dueAt}
+                              onChange={function(e) { setDueEdit(function(p) { return Object.assign({}, p, { dueAt: e.target.value }); }); }}
+                            />
+                            {dueEdit.isSubmitted && (
+                              <Form.Check
+                                type="checkbox"
+                                label="Reopen for resubmission"
+                                checked={dueEdit.reopen}
+                                onChange={function(e) { setDueEdit(function(p) { return Object.assign({}, p, { reopen: e.target.checked }); }); }}
+                                className="mb-1"
+                              />
+                            )}
+                            <div className="d-flex gap-1">
+                              <Button size="sm" variant="primary" onClick={saveDueDate} disabled={savingDue}>
+                                {savingDue ? 'Saving…' : 'Save'}
+                              </Button>
+                              <Button size="sm" variant="secondary" onClick={function() { setDueEdit(null); }} disabled={savingDue}>
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="d-flex align-items-center gap-2">
+                            <span>
+                              <strong>Due:</strong>{' '}
+                              {group.assignment_due_at ? formatUtcToLocal(group.assignment_due_at) : 'No due date'}
+                            </span>
+                            {!isDemoInstructor && (
+                              <Button
+                                size="sm"
+                                variant="outline-secondary"
+                                className="py-0 px-1"
+                                title="Edit due date"
+                                onClick={function() {
+                                  setDueEdit({
+                                    instanceId: group.instance_id,
+                                    dueAt: toLocalInput(group.assignment_due_at),
+                                    reopen: false,
+                                    isSubmitted: !!group.submitted_at,
+                                  });
+                                }}
+                              >
+                                ✏️
+                              </Button>
+                            )}
+                            {group.submitted_at ? (
+                              <span className={group.submitted_late ? 'text-warning-emphasis' : 'text-success'}>
+                                {group.submitted_late ? '· Submitted late' : '· Submitted on time'}
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {activityType !== 'assignment' && <GroupProgressBars group={group} />}
                   </Card.Body>
                 </Card>
               </Col>
             );
           })}
           </Row>
+          )}
         </>
       )}
 
@@ -814,15 +1110,17 @@ export default function ViewGroupsPage() {
                 onClick={handleAddToGroup}
                 disabled={!selectedAdd || timerPaused || isDemoInstructor}
               >
-                Add to group
+                {isSoloMode ? 'Add student' : 'Add to group'}
               </Button>
-              <Button
-                variant="outline-secondary"
-                onClick={handleAddAsSoloGroup}
-                disabled={!selectedAdd || timerPaused || isDemoInstructor}
-              >
-                Group of one
-              </Button>
+              {!isSoloMode && (
+                <Button
+                  variant="outline-secondary"
+                  onClick={handleAddAsSoloGroup}
+                  disabled={!selectedAdd || timerPaused || isDemoInstructor}
+                >
+                  Group of one
+                </Button>
+              )}
             </div>
 
             <Form.Select
@@ -853,6 +1151,113 @@ export default function ViewGroupsPage() {
           </div>
         </Card.Body>
       </Card>
+      {activityType === 'assignment' && !isDemoInstructor && (
+        <Card className="my-4">
+          <Card.Body>
+            <div className="fw-semibold mb-2">Change Due Date for All Students</div>
+            <div className="small text-muted mb-3">
+              Sets the same due date on every student instance, overriding any individual dates.
+            </div>
+            <Form.Group className="mb-2">
+              <Form.Label className="small">New due date (your local time)</Form.Label>
+              <Form.Control
+                type="datetime-local"
+                value={bulkDue.dueAt}
+                onChange={function(e) { setBulkDue(function(p) { return Object.assign({}, p, { dueAt: e.target.value }); }); }}
+                disabled={bulkDue.saving}
+              />
+            </Form.Group>
+            <Form.Check
+              type="checkbox"
+              label="Reopen submitted students for resubmission (clears their submission & grading, keeps answers)"
+              checked={bulkDue.reopen}
+              onChange={function(e) { setBulkDue(function(p) { return Object.assign({}, p, { reopen: e.target.checked }); }); }}
+              className="mb-3 small"
+              disabled={bulkDue.saving}
+            />
+            <Button
+              variant="primary"
+              disabled={!bulkDue.dueAt || bulkDue.saving}
+              onClick={saveBulkDueDate}
+            >
+              {bulkDue.saving ? 'Updating…' : 'Update All'}
+            </Button>
+          </Card.Body>
+        </Card>
+      )}
+      {/* Danger zone modal */}
+      <Modal show={!!dangerModal} onHide={() => setDangerModal(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Danger zone</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="mb-3">
+            <strong>{dangerModal && dangerModal.label}</strong>
+          </p>
+          {dangerModal && dangerModal.action === 'clear' ? (
+            <div className="alert alert-danger">
+              <strong>Are you sure?</strong> This will permanently delete all answers for{' '}
+              <strong>{dangerModal.label}</strong>. This cannot be undone.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="danger"
+                  disabled={clearing.has(dangerModal.instanceId)}
+                  onClick={() => {
+                    clearGroupAnswers(dangerModal.instanceId);
+                    setDangerModal(null);
+                  }}
+                >
+                  {clearing.has(dangerModal && dangerModal.instanceId) ? 'Clearing…' : 'Yes, clear all answers'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: null }); })}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : dangerModal && dangerModal.action === 'delete' ? (
+            <div className="alert alert-danger">
+              <strong>Are you sure?</strong> This will permanently delete the instance and all data for{' '}
+              <strong>{dangerModal.label}</strong>. This cannot be undone.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="danger"
+                  disabled={deleting.has(dangerModal.instanceId)}
+                  onClick={() => {
+                    deleteInstance(Number(dangerModal.instanceId));
+                    setDangerModal(null);
+                  }}
+                >
+                  {deleting.has(dangerModal && dangerModal.instanceId) ? 'Deleting…' : 'Yes, delete instance'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: null }); })}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="d-flex flex-column gap-2">
+              <Button
+                variant="outline-danger"
+                onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: 'clear' }); })}
+              >
+                Clear Answers
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: 'delete' }); })}
+              >
+                Delete Instance
+              </Button>
+            </div>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setDangerModal(null)}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
     </Container>
   );
 }

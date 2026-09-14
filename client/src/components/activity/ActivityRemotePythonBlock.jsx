@@ -6,6 +6,7 @@ import { FitAddon } from 'xterm-addon-fit';
 import 'xterm/css/xterm.css';
 
 import 'prismjs/components/prism-python';
+import useCodeHistory from '../../hooks/useCodeHistory';
 
 export default function ActivityRemotePythonBlock({
   code: initialCode,
@@ -13,6 +14,7 @@ export default function ActivityRemotePythonBlock({
   onCodeChange,
   timeLimit = 50000,
   editable = true,
+  onEditStart,
   blockIndex = 0,
   localOnly = false,
   codeFeedbackShown = {},
@@ -26,6 +28,14 @@ export default function ActivityRemotePythonBlock({
   const [isEditing, setIsEditing] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [layoutMode, setLayoutMode] = useState('side');
+  const {
+    record: recordHistory,
+    undo,
+    redo,
+    reset: resetHistory,
+    canUndo,
+    canRedo,
+  } = useCodeHistory(initialCode ?? '');
 
   const lastInitialRef = useRef(initialCode ?? '');
   useEffect(() => {
@@ -35,20 +45,22 @@ export default function ActivityRemotePythonBlock({
     if (!isEditing) {
       setCode(next);
       setSavedCode(next);
+      resetHistory(next);
       lastSentRef.current = next;
       pendingRemoteRef.current = null;
     } else {
       pendingRemoteRef.current = next;
     }
-  }, [initialCode, isEditing]);
+  }, [initialCode, isEditing, resetHistory]);
 
   useEffect(() => {
     if (localOnly) {
       const base = initialCode ?? '';
       setCode(base);
       setSavedCode(base);
+      resetHistory(base);
     }
-  }, [localOnly, initialCode]);
+  }, [localOnly, initialCode, resetHistory]);
 
   const termRef = useRef(null);
   const term = useRef(null);
@@ -100,6 +112,13 @@ export default function ActivityRemotePythonBlock({
   const handleKeyDown = (e) => {
     if (!isEditing || !editable) return;
 
+    const key = e.key.toLowerCase();
+    if ((e.metaKey || e.ctrlKey) && (key === 'z' || key === 'y')) {
+      e.preventDefault();
+      applyHistorySnapshot((key === 'y' || e.shiftKey) ? redo() : undo());
+      return;
+    }
+
     const el = e.target;
     const value = code;
     const start = el.selectionStart ?? 0;
@@ -112,6 +131,7 @@ export default function ActivityRemotePythonBlock({
       const newPos = start + indent.length;
 
       setCode(newValue);
+      recordHistory(newValue, { start: newPos, end: newPos });
       if (editable) scheduleBroadcast(newValue);
       selectionRef.current = { start: newPos, end: newPos };
       return;
@@ -130,6 +150,7 @@ export default function ActivityRemotePythonBlock({
       const newPos = start + insert.length;
 
       setCode(newValue);
+      recordHistory(newValue, { start: newPos, end: newPos });
       if (editable) scheduleBroadcast(newValue);
       selectionRef.current = { start: newPos, end: newPos };
     }
@@ -141,8 +162,16 @@ export default function ActivityRemotePythonBlock({
       pendingRemoteRef.current = null;
       setCode(incoming);
       setSavedCode(incoming);
+      resetHistory(incoming);
       lastSentRef.current = incoming;
     }
+  };
+
+  const applyHistorySnapshot = (snapshot) => {
+    if (!snapshot) return;
+    setCode(snapshot.value);
+    selectionRef.current = snapshot.selection;
+    if (editable) scheduleBroadcast(snapshot.value);
   };
 
   useEffect(() => {
@@ -211,9 +240,20 @@ export default function ActivityRemotePythonBlock({
       }
     };
     window.addEventListener('resize', onResize);
+    // A terminal can be created while its Bootstrap column is narrow, then
+    // become wider when the student switches from Beside to Above. Observe the
+    // element itself, not just the browser window, so xterm recalculates its
+    // columns and reflows long program-output lines.
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(onResize);
+    resizeObserver?.observe(termRef.current);
+    const initialFitFrame = requestAnimationFrame(onResize);
 
     return () => {
       window.removeEventListener('resize', onResize);
+      resizeObserver?.disconnect();
+      cancelAnimationFrame(initialFitFrame);
       try {
         onDataDisposeRef.current?.dispose();
       } catch {
@@ -233,6 +273,17 @@ export default function ActivityRemotePythonBlock({
       fit.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      try {
+        fit.current?.fit();
+      } catch {
+        /* ignore */
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [layoutMode]);
 
   const LINE_H = 1.45;
   const EOL_SPLIT = /\r\n|\n|\r/;
@@ -620,7 +671,7 @@ export default function ActivityRemotePythonBlock({
           onClick={() => {
             setIsEditing((prev) => {
               const next = !prev;
-              if (next) flushPendingRemoteIfAny();
+              if (next) { onEditStart?.(); flushPendingRemoteIfAny(); }
               return next;
             });
           }}
@@ -646,6 +697,27 @@ export default function ActivityRemotePythonBlock({
           disabled={isRunning || !runnerEnabled}
         >
           {isRunning ? 'Running…' : 'Run Python'}
+        </Button>
+
+        <Button
+          variant="outline-secondary"
+          size="sm"
+          disabled={!isEditing || !canUndo}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => applyHistorySnapshot(undo())}
+          title="Undo (Ctrl/Cmd+Z)"
+        >
+          Undo
+        </Button>
+        <Button
+          variant="outline-secondary"
+          size="sm"
+          disabled={!isEditing || !canRedo}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => applyHistorySnapshot(redo())}
+          title="Redo (Ctrl/Cmd+Shift+Z or Ctrl+Y)"
+        >
+          Redo
         </Button>
 
         <Button
@@ -694,6 +766,10 @@ export default function ActivityRemotePythonBlock({
             onChange={(e) => {
               const v = e.target.value;
               setCode(v);
+              recordHistory(v, {
+                start: e.target.selectionStart,
+                end: e.target.selectionEnd,
+              });
               if (editable) scheduleBroadcast(v);
             }}
             onKeyDown={handleKeyDown}

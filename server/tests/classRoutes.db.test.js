@@ -7,6 +7,7 @@ const express = require('express');
 const classRoutes = require('../classes/routes');
 const db = require('../db');
 const activityCreator = require('../utils/activityCreator');
+const { sourceHash } = require('../utils/activityContent');
 
 function uniqueName(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -42,7 +43,8 @@ async function ensureSchema() {
     ALTER TABLE pogil_classes
       ADD COLUMN IF NOT EXISTS level VARCHAR(255) DEFAULT NULL,
       ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL,
-      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0
+      ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS ai_guidance TEXT DEFAULT NULL
   `);
 }
 
@@ -86,9 +88,15 @@ async function createClassRecord() {
   return remember('classes', result.insertId);
 }
 
-function createTestServer() {
+function createTestServer(user = null) {
   const app = express();
   app.use(express.json());
+  if (user) {
+    app.use((req, _res, next) => {
+      req.user = user;
+      next();
+    });
+  }
   app.use('/api/classes', classRoutes);
 
   const server = http.createServer(app);
@@ -110,8 +118,8 @@ function createTestServer() {
   });
 }
 
-async function requestJson(path, { method = 'GET', body } = {}) {
-  const server = await createTestServer();
+async function requestJson(path, { method = 'GET', body, user = null } = {}) {
+  const server = await createTestServer(user);
   try {
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
@@ -193,6 +201,9 @@ test('class routes create, list, update, fetch, and delete a class', async () =>
     level: updatedLevel,
     topic_domain: updatedTopicDomain,
     demo_mode: false,
+    // The class-level AI guidance policy layer added this column. The PUT above
+    // does not set it, so the controller echoes back its default.
+    ai_guidance: null,
   });
 
   const fetchOne = await requestJson(`/api/classes/${create.body.id}`);
@@ -246,6 +257,16 @@ test('class activity routes create, list, update, and delete an activity', async
   assert.equal(list.body[0].id, create.body.id);
   assert.equal(list.body[0].name, activityName);
 
+  await db.query(
+    `UPDATE pogil_activities
+        SET remote_source_hash = 'old-remote-hash',
+            remote_updated_at = NOW(3),
+            last_synced_hash = 'old-sync-hash',
+            last_synced_at = NOW(3)
+      WHERE id = ?`,
+    [create.body.id]
+  );
+
   const update = await requestJson(`/api/classes/${classId}/activities/${activityName}`, {
     method: 'PUT',
     body: {
@@ -262,7 +283,18 @@ test('class activity routes create, list, update, and delete an activity', async
     sheet_url: 'https://docs.google.com/document/d/1BcdEfGhIjKlMnOpQrStUvWxYz1234567890A/edit',
     order_index: 5,
     class_id: String(classId),
+    remote_link_changed: true,
   });
+
+  const [[updatedRow]] = await db.query(
+    `SELECT remote_source_hash, remote_updated_at, last_synced_hash, last_synced_at
+       FROM pogil_activities WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(updatedRow.remote_source_hash, null);
+  assert.equal(updatedRow.remote_updated_at, null);
+  assert.equal(updatedRow.last_synced_hash, null);
+  assert.equal(updatedRow.last_synced_at, null);
 
   const remove = await requestJson(`/api/classes/${classId}/activities/${create.body.id}`, {
     method: 'DELETE',
@@ -273,6 +305,87 @@ test('class activity routes create, list, update, and delete an activity', async
   const listAfterDelete = await requestJson(`/api/classes/${classId}/activities`);
   assert.equal(listAfterDelete.status, 200);
   assert.deepEqual(listAfterDelete.body, []);
+});
+
+test('Google export mapping attaches only matching local markup to new Google Docs', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const activityName = uniqueName('local-google-export').toLowerCase();
+  const contentText = '\\title{Local activity}\n\\question{Keep this local.}\n\\endquestion';
+
+  const create = await requestJson(`/api/classes/${classId}/activities`, {
+    method: 'POST',
+    body: {
+      name: activityName,
+      title: 'Local activity',
+      source_type: 'local',
+      content_text: contentText,
+      order_index: 0,
+      createdBy: creatorId,
+    },
+  });
+  assert.equal(create.status, 201);
+  remember('activities', create.body.id);
+
+  await db.query(
+    `UPDATE pogil_activities
+        SET remote_source_hash = 'old-remote-hash',
+            remote_updated_at = NOW(3),
+            last_synced_hash = 'old-sync-hash',
+            last_synced_at = NOW(3)
+      WHERE id = ?`,
+    [create.body.id]
+  );
+
+  const googleDocUrl = 'https://docs.google.com/document/d/1BcdEfGhIjKlMnOpQrStUvWxYz1234567890A/edit';
+  const attach = await requestJson(`/api/classes/${classId}/activities/import-google-export`, {
+    method: 'POST',
+    user: { id: creatorId, role: 'creator' },
+    body: {
+      format: 'colearn-google-export-mapping/v1',
+      class_id: classId,
+      activities: [{
+        activity_id: create.body.id,
+        content_hash: sourceHash(contentText),
+        google_doc_url: googleDocUrl,
+      }],
+    },
+  });
+
+  assert.equal(attach.status, 200);
+  assert.equal(attach.body.attached.length, 1);
+  assert.deepEqual(attach.body.skipped, []);
+
+  const [[updated]] = await db.query(
+    `SELECT source_type, sheet_url, local_source_hash, remote_source_hash,
+            remote_updated_at, last_synced_hash, last_synced_at
+       FROM pogil_activities WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(updated.source_type, 'local');
+  assert.equal(updated.sheet_url, googleDocUrl);
+  assert.equal(updated.local_source_hash, sourceHash(contentText));
+  assert.equal(updated.remote_source_hash, null);
+  assert.equal(updated.remote_updated_at, null);
+  assert.equal(updated.last_synced_hash, null);
+  assert.equal(updated.last_synced_at, null);
+
+  const stale = await requestJson(`/api/classes/${classId}/activities/import-google-export`, {
+    method: 'POST',
+    user: { id: creatorId, role: 'creator' },
+    body: {
+      class_id: classId,
+      activities: [{
+        activity_id: create.body.id,
+        content_hash: sourceHash('older local version'),
+        google_doc_url: googleDocUrl,
+      }],
+    },
+  });
+  assert.equal(stale.status, 200);
+  assert.equal(stale.body.attached.length, 0);
+  assert.match(stale.body.skipped[0].reason, /changed after this export/i);
 });
 
 test('class activity delete also removes assigned activity instances through cascade', async () => {
@@ -366,6 +479,41 @@ test('class activity routes can create a local stored activity', async () => {
   assert.equal(row.sheet_url, null);
 });
 
+test('class activity routes can create an empty local activity shell', async () => {
+  await ensureSchema();
+  const classId = await createClassRecord();
+  const creatorId = await createUser('creator');
+  const activityName = uniqueName('blank-activity').toLowerCase();
+
+  const create = await requestJson(`/api/classes/${classId}/activities`, {
+    method: 'POST',
+    body: {
+      name: activityName,
+      title: 'Blank Activity',
+      source_type: 'local',
+      content_text: '',
+      order_index: 2,
+      createdBy: creatorId,
+    },
+  });
+
+  assert.equal(create.status, 201);
+  assert.equal(create.body.name, activityName);
+  assert.equal(create.body.title, 'Blank Activity');
+  assert.equal(create.body.source_type, 'local');
+  assert.equal(create.body.content_text, '');
+  remember('activities', create.body.id);
+
+  const [[row]] = await db.query(
+    `SELECT source_type, content_text
+       FROM pogil_activities
+      WHERE id = ?`,
+    [create.body.id]
+  );
+  assert.equal(row.source_type, 'local');
+  assert.equal(row.content_text, '');
+});
+
 test('creator draft route creates a local draft from the template and class metadata', async () => {
   await ensureSchema();
   const creatorId = await createUser('creator');
@@ -454,6 +602,148 @@ test('creator draft route creates a local draft from the template and class meta
     assert.equal(row.source_type, 'local');
     assert.equal(row.is_test, 0);
     assert.match(row.content_text, /What do you predict insertion sort will do first\?/);
+  } finally {
+    activityCreator.generateActivityDraft = originalGenerator;
+  }
+});
+
+test('creator draft route creates a test draft without section requirements', async () => {
+  await ensureSchema();
+  const creatorId = await createUser('creator');
+  const className = uniqueName('CreatorTestClass');
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, level, topic_domain, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+    [className, 'This class focuses on assessment only.', 'First-year college', 'Computer Science', creatorId]
+  );
+  const classId = remember('classes', classResult.insertId);
+
+  const originalGenerator = activityCreator.generateActivityDraft;
+  let capturedInput = null;
+  activityCreator.generateActivityDraft = async (input) => {
+    capturedInput = input;
+    return {
+      text: [
+        '\\title{Final Exam}',
+        '\\mode{test}',
+        '\\studentlevel{First-year college}',
+        '\\activitycontext{Computer Science}',
+        '\\retries{0}',
+        '\\questiongroup{Exam Questions}',
+        '\\question{What does the program print?}',
+        '\\textresponse{3}',
+        '\\sampleresponses{It prints a greeting.}',
+        '\\feedbackprompt{Explain the output clearly.}',
+        '\\endquestion',
+        '\\endquestiongroup',
+      ].join('\n'),
+      generation_status: 'generated',
+      generation_error: null,
+    };
+  };
+
+  try {
+    const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
+      method: 'POST',
+      body: {
+        title: 'Final Exam',
+        duration_minutes: 60,
+        mode: 'test',
+        description: 'Create a full test without section structure.',
+        selected_model: 'gpt-5-mini',
+        major_sections: [],
+        use_timed_sections: false,
+        timed_sections: [],
+        retries_required: 0,
+        createdBy: creatorId,
+      },
+    });
+
+    assert.equal(create.status, 201);
+    assert.equal(create.body.title, 'Final Exam');
+    assert.equal(create.body.mode, 'test');
+    assert.deepEqual(create.body.major_sections, []);
+    assert.equal(create.body.use_timed_sections, false);
+    assert.deepEqual(create.body.timed_sections, []);
+    assert.equal(create.body.retries_required, 0);
+    assert.deepEqual(capturedInput?.majorSections, []);
+    assert.deepEqual(capturedInput?.timedSections, []);
+    assert.match(create.body.content_text, /\\mode\{test\}/);
+    assert.doesNotMatch(create.body.content_text, /\\section\{/);
+    remember('activities', create.body.id);
+  } finally {
+    activityCreator.generateActivityDraft = originalGenerator;
+  }
+});
+
+test('creator draft route creates an assignment draft without section requirements', async () => {
+  await ensureSchema();
+  const creatorId = await createUser('creator');
+  const className = uniqueName('CreatorAssignmentClass');
+  const [classResult] = await db.query(
+    `INSERT INTO pogil_classes (name, description, level, topic_domain, created_by)
+     VALUES (?, ?, ?, ?, ?)`,
+    [className, 'This class focuses on lab assignments.', 'First-year college', 'Computer Science', creatorId]
+  );
+  const classId = remember('classes', classResult.insertId);
+
+  const originalGenerator = activityCreator.generateActivityDraft;
+  let capturedInput = null;
+  activityCreator.generateActivityDraft = async (input) => {
+    capturedInput = input;
+    return {
+      text: [
+        '\\title{Lab Project}',
+        '\\mode{assignment}',
+        '\\studentlevel{First-year college}',
+        '\\activitycontext{Computer Science}',
+        '\\retries{2}',
+        '\\questiongroup{Project Goal}',
+        '\\question{Describe the first milestone you will complete.}',
+        '\\textresponse{3}',
+        '\\sampleresponses{Describe a concrete first step.}',
+        '\\feedbackprompt{Keep the answer tied to an actual project milestone.}',
+        '\\endquestion',
+        '\\endquestiongroup',
+      ].join('\n'),
+      generation_status: 'generated',
+      generation_error: null,
+    };
+  };
+
+  try {
+    const create = await requestJson(`/api/classes/${classId}/creator-draft`, {
+      method: 'POST',
+      body: {
+        title: 'Lab Project',
+        duration_minutes: 90,
+        mode: 'assignment',
+        description: 'Create a project-style lab assignment.',
+        selected_model: 'gpt-5-mini',
+        major_sections: [],
+        use_timed_sections: false,
+        timed_sections: [],
+        retries_required: 2,
+        language: 'Swedish',
+        createdBy: creatorId,
+      },
+    });
+
+    assert.equal(create.status, 201);
+    assert.equal(create.body.title, 'Lab Project');
+    assert.equal(create.body.mode, 'assignment');
+    assert.deepEqual(create.body.major_sections, []);
+    assert.equal(create.body.use_timed_sections, false);
+    assert.deepEqual(create.body.timed_sections, []);
+    assert.equal(create.body.retries_required, 2);
+    assert.equal(create.body.language, 'Swedish');
+    assert.deepEqual(capturedInput?.majorSections, []);
+    assert.deepEqual(capturedInput?.timedSections, []);
+    assert.equal(capturedInput?.language, 'Swedish');
+    assert.match(create.body.content_text, /\\mode\{assignment\}/);
+    assert.match(create.body.content_text, /\\language\{Swedish\}/);
+    assert.doesNotMatch(create.body.content_text, /\\section\{/);
+    remember('activities', create.body.id);
   } finally {
     activityCreator.generateActivityDraft = originalGenerator;
   }

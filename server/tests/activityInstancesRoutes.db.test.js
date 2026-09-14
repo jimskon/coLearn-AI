@@ -5,7 +5,10 @@ const { pathToFileURL } = require('node:url');
 const test = require('node:test');
 const { Server } = require('socket.io');
 
-process.env.OPENAI_API_KEY ||= 'test-key';
+// Unconditional, not ||=: these tests never intend to reach the model, and a
+// real key in a developer's .env would otherwise make them issue live,
+// billable OpenAI calls. 'test-key' selects the stub client.
+process.env.OPENAI_API_KEY = 'test-key';
 
 const express = require('express');
 
@@ -35,20 +38,31 @@ function remember(kind, id) {
 }
 
 async function cleanupCreatedRows() {
-  const instanceIds = [...created.instances];
+  const instanceIds = new Set(created.instances);
   const activityIds = [...created.activities];
   const courseIds = [...created.courses];
   const classIds = [...created.classes];
   const userIds = [...created.users];
 
-  if (instanceIds.length) {
-    await db.query(`DELETE FROM audit_log WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM followups WHERE response_id IN (SELECT id FROM responses WHERE activity_instance_id IN (?))`, [instanceIds]);
-    await db.query(`DELETE FROM feedback WHERE response_id IN (SELECT id FROM responses WHERE activity_instance_id IN (?))`, [instanceIds]);
-    await db.query(`DELETE FROM response_drafts WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM responses WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [instanceIds]);
-    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [instanceIds]);
+  // Some routes create their own attempts, so discover every instance linked
+  // to this test's activities instead of relying only on helper-created IDs.
+  if (activityIds.length) {
+    const [rows] = await db.query(
+      `SELECT id FROM activity_instances WHERE activity_id IN (?)`,
+      [activityIds],
+    );
+    rows.forEach((row) => instanceIds.add(Number(row.id)));
+  }
+
+  const allInstanceIds = [...instanceIds].filter(Number.isFinite);
+  if (allInstanceIds.length) {
+    await db.query(`DELETE FROM audit_log WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM followups WHERE response_id IN (SELECT id FROM responses WHERE activity_instance_id IN (?))`, [allInstanceIds]);
+    await db.query(`DELETE FROM feedback WHERE response_id IN (SELECT id FROM responses WHERE activity_instance_id IN (?))`, [allInstanceIds]);
+    await db.query(`DELETE FROM response_drafts WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM responses WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM group_members WHERE activity_instance_id IN (?)`, [allInstanceIds]);
+    await db.query(`DELETE FROM activity_instances WHERE id IN (?)`, [allInstanceIds]);
   }
   if (activityIds.length) {
     await db.query(`DELETE FROM pogil_activities WHERE id IN (?)`, [activityIds]);
@@ -169,7 +183,9 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS points_possible DECIMAL(10,2) NULL,
       ADD COLUMN IF NOT EXISTS hidden TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_before_start TINYINT(1) NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0
+      ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS test_focus_enforcement TINYINT(1) NOT NULL DEFAULT 0
   `);
 
   await db.query(`
@@ -308,14 +324,16 @@ async function createCourse({ instructorId, classId, code = uniqueValue('AI').to
   return remember('courses', result.insertId);
 }
 
-async function createActivity({ classId, createdBy }) {
+async function createActivity({ classId, createdBy, sourceType = 'remote', contentText = null }) {
   const [result] = await db.query(
-    `INSERT INTO pogil_activities (name, title, sheet_url, class_id, order_index, created_by, is_test)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO pogil_activities (name, title, sheet_url, source_type, content_text, class_id, order_index, created_by, is_test)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       uniqueValue('activity').toLowerCase(),
       uniqueValue('Activity Title'),
       'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/edit',
+      sourceType,
+      contentText,
       classId,
       1,
       createdBy ?? null,
@@ -787,7 +805,7 @@ test('submit-group advances progress, rotates active student in submit mode, and
   assert.equal(drafts.length, 0);
 });
 
-test('submit-group only stores changed questions and freezes accepted ones', async () => {
+test('submit-group freezes accepted answers but persists final AI feedback', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');
   const studentB = await createUser('student');
@@ -831,7 +849,7 @@ test('submit-group only stores changed questions and freezes accepted ones', asy
         unanswered: [],
         answers: {
           '1a': 'new attempt that should be ignored',
-          '1aF1': 'ignored feedback',
+          '1aF1': 'final feedback',
           '1aFM': 'accepted',
           '1aAF': 'resolved',
           '1aS': 'complete',
@@ -861,9 +879,14 @@ test('submit-group only stores changed questions and freezes accepted ones', asy
   const latest = (qid) => [...rows].reverse().find((row) => row.question_id === qid)?.response ?? null;
 
   assert.equal(count('1a'), 1);
-  assert.equal(count('1aF1'), 0);
-  assert.equal(count('1aFM'), 1);
+  assert.equal(count('1aF1'), 1);
+  assert.equal(count('1aFM'), 2);
+  assert.equal(count('1aAF'), 2);
+  assert.equal(count('1aS'), 1);
   assert.equal(latest('1a'), 'already accepted');
+  assert.equal(latest('1aF1'), 'final feedback');
+  assert.equal(latest('1aFM'), 'accepted');
+  assert.equal(latest('1aAF'), 'resolved');
 
   assert.equal(count('1b'), 2);
   assert.equal(count('1bF1'), 1);
@@ -1389,6 +1412,46 @@ test('setup-groups returns 409 when group 1 already exists for the activity', as
   assert.equal(Number(countRow.instance_count), 1);
 });
 
+test('test setup ignores an unscheduled placeholder instance', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({
+    classId,
+    createdBy: instructor.id,
+    sourceType: 'local',
+    contentText: '\\mode{test}',
+  });
+  await db.query('UPDATE pogil_activities SET is_test = 1 WHERE id = ?', [activityId]);
+  await createInstance({ activityId, courseId, groupNumber: 1 });
+
+  const response = await requestJson(instructor, '/api/activity-instances/setup-groups', {
+    method: 'POST',
+    body: {
+      activityId,
+      courseId,
+      selectedStudentIds: [student.id],
+      testStartAt: new Date(Date.now() + (60 * 60 * 1000)).toISOString(),
+      testDurationMinutes: 30,
+    },
+  });
+
+  assert.equal(response.status, 200);
+  const [[scheduledCount]] = await db.query(
+    `SELECT COUNT(*) AS count FROM activity_instances
+      WHERE activity_id = ? AND course_id = ?
+        AND test_start_at IS NOT NULL AND test_duration_minutes > 0`,
+    [activityId, courseId],
+  );
+  assert.equal(Number(scheduledCount.count), 1);
+
+  const roster = await requestJson(instructor, `/api/activity-instances/by-activity/${courseId}/${activityId}`);
+  assert.equal(roster.status, 200);
+  assert.equal(roster.body.groups.length, 1);
+  assert.equal(Number(roster.body.groups[0].members[0].student_id), student.id);
+});
+
 test('submit-test regrade fails cleanly when legacy ownership is ambiguous', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');
@@ -1493,7 +1556,7 @@ test('test-settings rejects invalid scheduling payloads without changing stored 
   assert.equal(String(instance.test_reopen_until).slice(0, 19), '2026-05-01 13:20:00');
 });
 
-test('reopen rejects already-submitted timed tests so instructors must clear answers first', async () => {
+test('reopen allows already-submitted timed tests and clears submission + grading', async () => {
   const instructor = await createUser('instructor');
   const classId = await createClassRecord();
   const courseId = await createCourse({ instructorId: instructor.id, classId });
@@ -1505,6 +1568,9 @@ test('reopen rejects already-submitted timed tests so instructors must clear ans
         SET test_start_at = '2026-05-01 13:00:00',
             test_duration_minutes = 30,
             submitted_at = '2026-05-01 13:25:00',
+            graded_at = '2026-05-01 14:00:00',
+            points_earned = 8,
+            points_possible = 10,
             test_reopen_until = NULL
       WHERE id = ?`,
     [instanceId]
@@ -1515,16 +1581,224 @@ test('reopen rejects already-submitted timed tests so instructors must clear ans
     body: { minutes: 15 },
   });
 
-  assert.equal(response.status, 400);
-  assert.equal(response.body.error, 'Test already submitted; clear answers to reopen.');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.wasSubmitted, true);
 
   const [[instance]] = await db.query(
-    `SELECT test_reopen_until
+    `SELECT test_reopen_until, submitted_at, graded_at, points_earned, points_possible
        FROM activity_instances
       WHERE id = ?`,
     [instanceId]
   );
-  assert.equal(instance.test_reopen_until, null);
+  // Reopen window should be set
+  assert.notEqual(instance.test_reopen_until, null);
+  // Submission + grading should be cleared so student can resubmit
+  assert.equal(instance.submitted_at, null);
+  assert.equal(instance.graded_at, null);
+  assert.equal(instance.points_earned, null);
+  assert.equal(instance.points_possible, null);
+});
+
+test('preview-doc redacts multiple-choice answers for students in tests', async () => {
+  const creator = await createUser('creator');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: creator.id, classId });
+  const sourceText = [
+    '\\mode{test}',
+    '\\questiongroup{Trivia}',
+    '\\question{What is the capital of Canada?}',
+    '\\multiplechoice{Ottawa}',
+    '\\choice{Toronto}',
+    '\\choice{Ottawa}',
+    '\\choice{Montreal}',
+    '\\endmultiplechoice',
+    '\\score{2,response}',
+    '\\endscore',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const activityId = await createActivity({
+    classId,
+    createdBy: creator.id,
+    sourceType: 'local',
+    contentText: sourceText,
+  });
+  await db.query(`UPDATE pogil_activities SET is_test = 1 WHERE id = ?`, [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+
+  const studentResponse = await requestJson(student, `/api/activity-instances/${instanceId}/preview-doc`);
+  assert.equal(studentResponse.status, 200);
+  assert.ok(Array.isArray(studentResponse.body.lines));
+  assert.ok(studentResponse.body.lines.includes('\\multiplechoice{}'));
+  assert.ok(!studentResponse.body.lines.includes('\\multiplechoice{Ottawa}'));
+
+  const creatorResponse = await requestJson(creator, `/api/activity-instances/${instanceId}/preview-doc`);
+  assert.equal(creatorResponse.status, 200);
+  assert.ok(creatorResponse.body.lines.includes('\\multiplechoice{Ottawa}'));
+});
+
+test('submit-test grades multiple-choice answers deterministically on the server', async () => {
+  const creator = await createUser('creator');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: creator.id, classId });
+  const sourceText = [
+    '\\mode{test}',
+    '\\questiongroup{Trivia}',
+    '\\question{What is the capital of Canada?}',
+    '\\multiplechoice{Ottawa}',
+    '\\choice{Toronto}',
+    '\\choice{Ottawa}',
+    '\\choice{Montreal}',
+    '\\endmultiplechoice',
+    '\\score{2,response}',
+    '\\endscore',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const activityId = await createActivity({
+    classId,
+    createdBy: creator.id,
+    sourceType: 'local',
+    contentText: sourceText,
+  });
+  await db.query(`UPDATE pogil_activities SET is_test = 1 WHERE id = ?`, [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+
+  const response = await requestJson(student, `/api/activity-instances/${instanceId}/submit-test`, {
+    method: 'POST',
+    body: {
+      studentId: student.id,
+      answers: {
+        '1a': 'Ottawa',
+      },
+      questions: [
+        {
+          qid: '1a',
+          questionText: 'What is the capital of Canada?',
+          scores: { response: { points: 2 } },
+        },
+      ],
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(response.body.earned, 2);
+  assert.equal(response.body.max, 2);
+  assert.equal(response.body.questions[0].responseScore, 2);
+
+  const [rows] = await db.query(
+    `SELECT response
+       FROM responses
+      WHERE activity_instance_id = ? AND question_id = ?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [instanceId, '1a']
+  );
+  assert.equal(rows[0]?.response, 'Ottawa');
+});
+
+test('submit-test awards per-choice multiple-choice points, including partial credit', async () => {
+  const creator = await createUser('creator');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: creator.id, classId });
+  const sourceText = [
+    '\\mode{test}',
+    '\\questiongroup{Trivia}',
+    '\\question{Which answer is partly correct?}',
+    '\\multiplechoice{}',
+    '\\choice{Incorrect}{0}',
+    '\\choice{Partly correct}{1}',
+    '\\choice{Correct}{2}',
+    '\\endmultiplechoice',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const activityId = await createActivity({
+    classId,
+    createdBy: creator.id,
+    sourceType: 'local',
+    contentText: sourceText,
+  });
+  await db.query(`UPDATE pogil_activities SET is_test = 1 WHERE id = ?`, [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+
+  const response = await requestJson(student, `/api/activity-instances/${instanceId}/submit-test`, {
+    method: 'POST',
+    body: {
+      studentId: student.id,
+      answers: { '1a': 'Partly correct' },
+      questions: [{ qid: '1a', questionText: 'Which answer is partly correct?', scores: { response: { points: 2 } } }],
+    },
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.earned, 1);
+  assert.equal(response.body.max, 2);
+  assert.equal(response.body.questions[0].responseScore, 1);
+
+  const [feedbackRows] = await db.query(
+    `SELECT response
+       FROM responses
+      WHERE activity_instance_id = ? AND question_id = ?
+      ORDER BY id DESC
+      LIMIT 1`,
+    [instanceId, '1aResponseFeedback'],
+  );
+  assert.match(feedbackRows[0]?.response || '', /Full-credit answer: Correct/);
+});
+
+test('first test focus loss warns and the second requires submission', async () => {
+  const instructor = await createUser('instructor');
+  const student = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  await db.query('UPDATE pogil_activities SET is_test = 1 WHERE id = ?', [activityId]);
+  const instanceId = await createInstance({ activityId, courseId });
+  await addGroupMember({ instanceId, studentId: student.id });
+
+  const instructorAttempt = await requestJson(instructor, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(instructorAttempt.status, 403);
+  assert.equal(instructorAttempt.body.error, 'Only students can record test focus events.');
+
+  const disabled = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(disabled.status, 200);
+  assert.equal(disabled.body.action, 'ignore');
+  assert.equal(disabled.body.focusLossCount, 0);
+
+  await db.query('UPDATE activity_instances SET test_focus_enforcement = 1 WHERE id = ?', [instanceId]);
+
+  const first = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(first.status, 200);
+  assert.equal(first.body.action, 'warn');
+  assert.equal(first.body.focusLossCount, 1);
+
+  const second = await requestJson(student, `/api/activity-instances/${instanceId}/focus-loss`, {
+    method: 'POST',
+  });
+  assert.equal(second.status, 200);
+  assert.equal(second.body.action, 'submit');
+  assert.equal(second.body.focusLossCount, 2);
+
+  const [[instance]] = await db.query(
+    'SELECT test_focus_loss_count FROM activity_instances WHERE id = ?',
+    [instanceId],
+  );
+  assert.equal(Number(instance.test_focus_loss_count), 2);
 });
 
 test("classifyProgressStatus respects the active-thinking guard and feedback/fall-behind states", async () => {

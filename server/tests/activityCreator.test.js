@@ -2,13 +2,16 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  buildActivityGenerationInstructions,
   buildQuestionRevisionInstructions,
   buildQuestionRevisionResponseFormat,
   isOutputTokenTruncation,
   normalizeGeneratedDraft,
   normalizeQuestionMarkup,
   parseQuestionRevisionOutput,
+  renderFallbackTemplate,
 } = require('../utils/activityCreator');
+const { validateActivityMarkup } = require('../../shared/activityMarkupValidation.cjs');
 
 test('question revision instructions require learner-facing prompt updates when the task changes', () => {
   const instructions = buildQuestionRevisionInstructions();
@@ -17,6 +20,32 @@ test('question revision instructions require learner-facing prompt updates when 
   assert.match(instructions, /explicitly rewrite the learner-facing \\question\{\.\.\.\} text/i);
   assert.match(instructions, /Do not leave that text unchanged merely because you updated starter code/i);
   assert.match(instructions, /question prompt, code, response type, sample responses, feedback prompts, follow-up prompts/i);
+  assert.match(instructions, /\\responsemode\{answer\}/i);
+  assert.match(instructions, /\\responsemode\{questions\}/i);
+  assert.match(instructions, /\\multiplechoice\{exact correct choice text\}/i);
+  assert.match(instructions, /one \\choice\{\.\.\.\} line for each option/i);
+  assert.match(instructions, /never use A\/B\/C letter labels/i);
+  assert.match(instructions, /keep \\multiplechoice\{\} blank for survey or opinion questions/i);
+  assert.match(instructions, /Never invent a placeholder answer to satisfy the parser/i);
+  assert.match(instructions, /\\score\{points,type\}/i);
+  assert.match(instructions, /place the \\ai block between questions/i);
+});
+
+test('test-mode activity generation instructions require explicit scoring rubrics', () => {
+  const instructions = buildActivityGenerationInstructions(true);
+
+  assert.match(instructions, /mode=test/i);
+  assert.match(instructions, /no \\section commands and no section timers/i);
+  assert.match(instructions, /every question must include an explicit \\score\{points,type\} rubric block/i);
+});
+
+test('assignment-mode activity generation instructions describe a project-style lab draft', () => {
+  const instructions = buildActivityGenerationInstructions('assignment');
+
+  assert.match(instructions, /mode=assignment/i);
+  assert.match(instructions, /project-style lab assignment/i);
+  assert.match(instructions, /milestone/i);
+  assert.match(instructions, /do not use section headings or section timers/i);
 });
 
 test('question revision uses strict structured output and recovers a complete direct-markup response', () => {
@@ -110,6 +139,54 @@ test('normalizeGeneratedDraft salvages structured plain-text activity output int
   assert.match(result.text, /\\feedbackprompt\{Compare your prediction with the actual output\.\}/);
 });
 
+test('renderFallbackTemplate omits section markup for test drafts', () => {
+  const text = renderFallbackTemplate({
+    title: 'Final Exam',
+    mode: 'test',
+    durationMinutes: 60,
+    selectedModel: 'gpt-5-mini',
+    majorSections: ['Learning Objectives', 'Exploration'],
+    timedSections: [
+      { title: 'Learning Objectives', minutes: 20 },
+      { title: 'Exploration', minutes: 40 },
+    ],
+    retriesRequired: 0,
+    classLevel: 'First Year College',
+    classTopicDomain: 'Programming',
+    classDescription: 'A closed-book assessment.',
+    activityDescription: 'A final test draft.',
+  });
+
+  assert.match(text, /\\mode\{test\}/);
+  assert.doesNotMatch(text, /\\section\{/);
+  assert.doesNotMatch(text, /Learning Objectives: 20 minutes/);
+  assert.match(text, /\\questiongroup\{Question Group 1\}/);
+});
+
+test('renderFallbackTemplate omits section markup for assignment drafts', () => {
+  const text = renderFallbackTemplate({
+    title: 'Lab Project',
+    mode: 'assignment',
+    durationMinutes: 90,
+    selectedModel: 'gpt-5-mini',
+    majorSections: ['Learning Objectives', 'Exploration'],
+    timedSections: [
+      { title: 'Learning Objectives', minutes: 30 },
+      { title: 'Exploration', minutes: 60 },
+    ],
+    retriesRequired: 0,
+    classLevel: 'First Year College',
+    classTopicDomain: 'Programming',
+    classDescription: 'A project-style lab assignment.',
+    activityDescription: 'A lab assignment draft.',
+  });
+
+  assert.match(text, /\\mode\{assignment\}/);
+  assert.doesNotMatch(text, /\\section\{/);
+  assert.doesNotMatch(text, /Learning Objectives: 30 minutes/);
+  assert.match(text, /\\questiongroup\{Question Group 1\}/);
+});
+
 test('normalizeGeneratedDraft repairs missing endquestion markers in generated markup', () => {
   const raw = [
     '\\title{Introduction to Python}',
@@ -143,6 +220,41 @@ test('normalizeGeneratedDraft repairs missing endquestion markers in generated m
   assert.equal((result.text.match(/^\\endquestion$/gm) || []).length, 2);
   assert.match(result.text, /\\feedbackprompt\{Describe the output in your own words\.\}\n\\endquestion\n\\question\{/);
   assert.match(result.text, /\\feedbackprompt\{Connect the changed input to the new output\.\}\n\\endquestion\n\\endquestiongroup/);
+});
+
+test('normalizeGeneratedDraft moves ai blocks out of question bodies', () => {
+  const raw = [
+    '\\title{AI helper}',
+    '\\mode{group}',
+    '\\studentlevel{Any}',
+    '\\activitycontext{Any}',
+    '\\section{Exploration}',
+    '\\questiongroup{Try it}',
+    '\\question{Draft a plan for your program.}',
+    '\\ai{guided}',
+    '\\aiprompt{Suggest a short Python plan.}',
+    '\\aiguardrail{Keep it beginner-friendly.}',
+    '\\endai',
+    '\\textresponse{3}',
+    '\\feedbackprompt{Explain your plan.}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'AI helper',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [],
+    majorSections: ['Exploration'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.match(result.text, /\\question\{Draft a plan for your program\.\}\n\\textresponse\{3\}\n\\feedbackprompt\{Explain your plan\.\}\n\\endquestion\n\\ai\{guided\}/);
+  assert.match(result.text, /\\endai\n\\endquestiongroup/);
+  assert.equal(validateActivityMarkup(result.text).valid, true);
 });
 
 test('normalizeGeneratedDraft replaces textresponse with python block for code-writing markup prompts', () => {
@@ -278,4 +390,32 @@ test('normalizeGeneratedDraft removes unsupported one-per-line and per-member te
   assert.doesNotMatch(result.text, /\(one per line\)/i);
   assert.match(result.text, /\\question\{List the four POGIL roles used in this course\.\}/);
   assert.match(result.text, /\\question\{As a group, briefly note which roles were assigned within your group\.\}/);
+});
+
+test('normalizeGeneratedDraft applies requested timers to matching sections', () => {
+  const raw = [
+    '\\title{Timed activity}',
+    '\\mode{group}',
+    '\\studentlevel{Any}',
+    '\\activitycontext{Any}',
+    '\\section{Exploration}',
+    '\\questiongroup{Try it}',
+    '\\question{What do you notice?}',
+    '\\textresponse{2}',
+    '\\endquestion',
+    '\\endquestiongroup',
+  ].join('\n');
+
+  const result = normalizeGeneratedDraft(raw, {
+    title: 'Timed activity',
+    mode: 'group',
+    retriesRequired: 3,
+    timedSections: [{ title: 'Exploration', minutes: 12 }],
+    majorSections: ['Exploration'],
+    classLevel: 'Any',
+    classTopicDomain: 'Any',
+  });
+
+  assert.equal(result.usedFallback, false);
+  assert.match(result.text, /\\section\{Exploration\}\{12\}/);
 });

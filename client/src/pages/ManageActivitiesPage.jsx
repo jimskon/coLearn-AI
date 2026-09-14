@@ -21,6 +21,12 @@ const emptyUploadActivity = {
   order_index: '',
 };
 
+const emptyBlankActivity = {
+  name: '',
+  title: '',
+  order_index: '',
+};
+
 const emptyCloneActivity = {
   name: '',
   title: '',
@@ -112,6 +118,35 @@ function SourceBadge({ sourceType }) {
   );
 }
 
+function ModeBadge({ activity }) {
+  const normalizedMode = String(
+    activity?.authored_mode
+    || activity?.mode
+    || (Number(activity?.is_test) === 1 ? 'test' : '')
+  ).trim().toLowerCase();
+
+  const label = normalizedMode === 'test'
+    ? 'Test'
+    : normalizedMode === 'playground'
+      ? 'Playground'
+      : normalizedMode === 'demo'
+        ? 'Demo'
+        : normalizedMode === 'assignment'
+          ? 'Assignment'
+          : 'Group';
+  const variant = normalizedMode === 'test'
+    ? 'danger'
+    : normalizedMode === 'playground'
+      ? 'info'
+      : normalizedMode === 'demo'
+        ? 'info'
+        : normalizedMode === 'assignment'
+          ? 'success'
+          : 'secondary';
+
+  return <Badge bg={variant}>{label}</Badge>;
+}
+
 function cloneActivityDefaults(activity) {
   const sourceType = String(activity?.source_type || 'remote').toLowerCase();
   return {
@@ -133,23 +168,39 @@ export default function ManageActivitiesPage() {
 
   const [classInfo, setClassInfo] = useState(null);
   const [activities, setActivities] = useState([]);
+  // Which row was just saved, so Update can show that it did something. Without
+  // this, a successful update changes nothing on screen -- the fields already
+  // hold the new values, because they are what you typed -- and the button is
+  // indistinguishable from a dead one. Only failure produced an alert.
+  const [savedActivityName, setSavedActivityName] = useState('');
   const [newActivity, setNewActivity] = useState(emptyUploadActivity);
 
   const [showGoogleModal, setShowGoogleModal] = useState(false);
+  const [showGoogleExportMapModal, setShowGoogleExportMapModal] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showBlankModal, setShowBlankModal] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
 
   const [downloadSelection, setDownloadSelection] = useState({});
   const [selectedUploadFile, setSelectedUploadFile] = useState(null);
   const [uploadNote, setUploadNote] = useState('');
+  const [uploadBlocked, setUploadBlocked] = useState([]);
+  const [pendingReplaceItems, setPendingReplaceItems] = useState([]);
+  const [uploadBusy, setUploadBusy] = useState(false);
   const [googleImportUrl, setGoogleImportUrl] = useState('');
   const [googleImportMode, setGoogleImportMode] = useState('remote');
   const [googleImportNote, setGoogleImportNote] = useState('');
+  const [selectedGoogleExportMapFile, setSelectedGoogleExportMapFile] = useState(null);
+  const [googleExportMapBusy, setGoogleExportMapBusy] = useState(false);
+  const [googleExportMapNote, setGoogleExportMapNote] = useState('');
   const [createDraft, setCreateDraft] = useState(emptyCreateDraft);
   const [createNote, setCreateNote] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
+  const [blankActivity, setBlankActivity] = useState(emptyBlankActivity);
+  const [blankBusy, setBlankBusy] = useState(false);
+  const [blankNote, setBlankNote] = useState('');
   const [cloneSourceActivity, setCloneSourceActivity] = useState(null);
   const [cloneDraft, setCloneDraft] = useState(emptyCloneActivity);
   const [cloneNote, setCloneNote] = useState('');
@@ -222,12 +273,17 @@ export default function ManageActivitiesPage() {
       }
 
       if (name === 'mode') {
+        const nextMode = String(value || '').trim().toLowerCase();
+        const nextIsSectionlessMode = nextMode === 'test' || nextMode === 'assignment';
         const nextMajorSections = [...majorSectionOptions];
         return {
           ...prev,
-          mode: value,
-          major_sections: nextMajorSections,
-          section_minutes: distributeMinutes(prev.duration_minutes, nextMajorSections),
+          mode: nextMode,
+          major_sections: nextIsSectionlessMode ? [] : nextMajorSections,
+          use_timed_sections: nextIsSectionlessMode ? false : prev.use_timed_sections,
+          section_minutes: nextIsSectionlessMode
+            ? {}
+            : distributeMinutes(prev.duration_minutes, nextMajorSections),
         };
       }
 
@@ -242,6 +298,9 @@ export default function ManageActivitiesPage() {
       return { ...prev, [name]: value };
     });
   };
+
+  const createDraftMode = String(createDraft.mode || '').trim().toLowerCase();
+  const isCreateDraftSectionlessMode = createDraftMode === 'test' || createDraftMode === 'assignment';
 
   const handleSectionMinutesChange = (sectionName, value) => {
     setCreateDraft((prev) => ({
@@ -276,6 +335,8 @@ export default function ManageActivitiesPage() {
     setNewActivity(emptyUploadActivity);
     setSelectedUploadFile(null);
     setUploadNote('');
+    setUploadBlocked([]);
+    setPendingReplaceItems([]);
     setShowUploadModal(false);
   };
 
@@ -305,14 +366,70 @@ export default function ManageActivitiesPage() {
     await refreshActivities();
   };
 
+  // Like saveActivity, but for bundle-create items: doesn't close the upload
+  // modal or navigate away, since it may run alongside a replace-bundle call
+  // whose blocked-item warning needs the modal to stay open.
+  const createActivityFromBundleItem = async (activity) => {
+    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(activity),
+      credentials: 'include',
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || `Failed to create activity "${activity.title}".`);
+    }
+    return data;
+  };
+
+  // Sends matched-by-id bundle items to the replace endpoint. Activities that
+  // already have student responses come back in `blocked` and are left
+  // unchanged unless their id is included in forceIds.
+  const submitReplaceBundle = async (items, forceIds = []) => {
+    const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/replace-bundle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ activities: items, force_ids: forceIds }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to replace activities.');
+    }
+    return data;
+  };
+
+  const handleForceReplaceBlocked = async () => {
+    if (!pendingReplaceItems.length || !uploadBlocked.length) return;
+    setUploadBusy(true);
+    try {
+      const forceIds = uploadBlocked.map((b) => b.id);
+      const result = await submitReplaceBundle(pendingReplaceItems, forceIds);
+      const replaced = Array.isArray(result.replaced) ? result.replaced : [];
+      setUploadBlocked([]);
+      setPendingReplaceItems([]);
+      setUploadNote(`Replaced ${replaced.length} activit${replaced.length === 1 ? 'y' : 'ies'}.`);
+      await refreshActivities();
+    } catch (err) {
+      console.error('Force replace failed:', err);
+      setUploadNote(err.message || 'Failed to replace activities.');
+    } finally {
+      setUploadBusy(false);
+    }
+  };
+
   const handleUpload = async () => {
     setUploadNote('');
+    setUploadBlocked([]);
+    setPendingReplaceItems([]);
 
     if (!selectedUploadFile) {
       setUploadNote('Choose a local text file or JSON bundle first.');
       return;
     }
 
+    setUploadBusy(true);
     try {
       const raw = await selectedUploadFile.text();
       const filename = selectedUploadFile.name || 'activity.txt';
@@ -331,13 +448,28 @@ export default function ManageActivitiesPage() {
           return;
         }
 
-        for (let index = 0; index < importedItems.length; index += 1) {
-          const item = importedItems[index] || {};
+        // Items whose id matches an activity already in this class are
+        // replaced in place; everything else is created as new.
+        const existingIds = new Set(activities.map((a) => Number(a.id)));
+        const replaceItems = [];
+        const createItems = [];
+
+        importedItems.forEach((item, index) => {
+          const itemId = Number(item?.id);
+          if (itemId && existingIds.has(itemId)) {
+            replaceItems.push(item);
+          } else {
+            createItems.push({ item, index });
+          }
+        });
+
+        let createdCount = 0;
+        for (const { item, index } of createItems) {
           const contentText = String(item.content_text || item.text || '');
           const title = item.title || extractTitleFromMarkup(contentText) || `Imported Activity ${index + 1}`;
           const name = slugifyActivityName(item.name || title || `${fileBase}_${index + 1}`) || `activity_${Date.now()}_${index + 1}`;
 
-          await saveActivity({
+          await createActivityFromBundleItem({
             name,
             title,
             source_type: 'local',
@@ -345,8 +477,26 @@ export default function ManageActivitiesPage() {
             order_index: item.order_index ?? activities.length + index,
             createdBy: user?.id,
           });
+          createdCount += 1;
         }
 
+        let replacedCount = 0;
+        if (replaceItems.length) {
+          const result = await submitReplaceBundle(replaceItems, []);
+          replacedCount = Array.isArray(result.replaced) ? result.replaced.length : 0;
+          const blocked = Array.isArray(result.blocked) ? result.blocked : [];
+          if (blocked.length) {
+            setUploadBlocked(blocked);
+            setPendingReplaceItems(replaceItems);
+          }
+        }
+
+        const parts = [];
+        if (createdCount) parts.push(`Created ${createdCount} activit${createdCount === 1 ? 'y' : 'ies'}.`);
+        if (replacedCount) parts.push(`Replaced ${replacedCount} activit${replacedCount === 1 ? 'y' : 'ies'}.`);
+        setUploadNote(parts.join(' ') || 'Nothing to import.');
+
+        await refreshActivities();
         return;
       }
 
@@ -363,7 +513,9 @@ export default function ManageActivitiesPage() {
       });
     } catch (err) {
       console.error('Local upload failed:', err);
-      setUploadNote('Unable to read that file. Use a plain text activity file or a JSON bundle.');
+      setUploadNote(err.message || 'Unable to read that file. Use a plain text activity file or a JSON bundle.');
+    } finally {
+      setUploadBusy(false);
     }
   };
 
@@ -403,6 +555,60 @@ export default function ManageActivitiesPage() {
     }
   };
 
+  const openGoogleExportMapModal = () => {
+    setSelectedGoogleExportMapFile(null);
+    setGoogleExportMapNote('');
+    setShowGoogleExportMapModal(true);
+  };
+
+  const handleGoogleExportMapping = async () => {
+    setGoogleExportMapNote('');
+    if (!selectedGoogleExportMapFile) {
+      setGoogleExportMapNote('Choose the colearn-google-export-mapping.json file first.');
+      return;
+    }
+
+    let mapping;
+    try {
+      mapping = JSON.parse(await selectedGoogleExportMapFile.text());
+    } catch (err) {
+      setGoogleExportMapNote('That file is not valid JSON. Choose the mapping file created by the Google Apps Script.');
+      return;
+    }
+    if (!Array.isArray(mapping?.activities)) {
+      setGoogleExportMapNote('This is not a coLearn Google export mapping: no activities list was found.');
+      return;
+    }
+
+    setGoogleExportMapBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/import-google-export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(mapping),
+      });
+      const data = await readJsonResponse(res);
+      if (!res.ok) {
+        setGoogleExportMapNote(data.error || 'Could not attach the exported Google Docs.');
+        return;
+      }
+
+      await refreshActivities();
+      const attachedCount = Array.isArray(data.attached) ? data.attached.length : 0;
+      const skipped = Array.isArray(data.skipped) ? data.skipped : [];
+      const skippedDetail = skipped.length
+        ? ` ${skipped.length} skipped: ${skipped.map((item) => item.name || `#${item.activity_id}`).join(', ')}.`
+        : '';
+      setGoogleExportMapNote(`Attached ${attachedCount} new Google Doc${attachedCount === 1 ? '' : 's'}.${skippedDetail}`);
+    } catch (err) {
+      console.error('Google export mapping import failed:', err);
+      setGoogleExportMapNote(err?.message || 'Could not attach the exported Google Docs.');
+    } finally {
+      setGoogleExportMapBusy(false);
+    }
+  };
+
   const handleDelete = async (activityId) => {
     const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/${activityId}`, {
       method: 'DELETE',
@@ -436,6 +642,10 @@ export default function ManageActivitiesPage() {
           activityRow.name === updated.name ? { ...activityRow, ...updated } : activityRow
         )
       );
+      setSavedActivityName(activity.name);
+      setTimeout(() => {
+        setSavedActivityName((current) => (current === activity.name ? '' : current));
+      }, 2500);
     } else {
       const err = await res.text();
       console.error('Update failed:', err);
@@ -445,6 +655,12 @@ export default function ManageActivitiesPage() {
 
   const openCreateWorkbench = () => {
     navigate(`/class/${classId}/create`);
+  };
+
+  const openBlankActivityModal = () => {
+    setBlankActivity(emptyBlankActivity);
+    setBlankNote('');
+    setShowBlankModal(true);
   };
 
   const openDownloadPlaceholder = () => {
@@ -461,6 +677,11 @@ export default function ManageActivitiesPage() {
   const handleCloneFieldChange = (e) => {
     const { name, value } = e.target;
     setCloneDraft((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleBlankFieldChange = (e) => {
+    const { name, value } = e.target;
+    setBlankActivity((prev) => ({ ...prev, [name]: value }));
   };
 
   const triggerBrowserDownload = (filename, text, mimeType = 'text/plain;charset=utf-8') => {
@@ -501,6 +722,9 @@ export default function ManageActivitiesPage() {
           sheet_url: activity.sheet_url || null,
           order_index: activity.order_index,
           content_text: body.text || '',
+          source_revision: body.metadata?.source_revision || 0,
+          source_updated_at: body.metadata?.source_updated_at || null,
+          content_hash: body.metadata?.local_source_hash || null,
         });
       }
 
@@ -596,6 +820,61 @@ export default function ManageActivitiesPage() {
     }
   };
 
+  const handleCreateBlankActivity = async () => {
+    setBlankNote('');
+
+    if (!blankActivity.title.trim()) {
+      setBlankNote('Enter a title for the blank activity.');
+      return;
+    }
+
+    const normalizedName = slugifyActivityName(blankActivity.name.trim() || blankActivity.title.trim());
+    if (!normalizedName) {
+      setBlankNote('Enter a valid activity ID or title.');
+      return;
+    }
+
+    const parsedOrderIndex = blankActivity.order_index === ''
+      ? 0
+      : parseInt(blankActivity.order_index, 10);
+    if (!Number.isFinite(parsedOrderIndex) || parsedOrderIndex < 0) {
+      setBlankNote('Enter a valid order number.');
+      return;
+    }
+
+    setBlankBusy(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: normalizedName,
+          title: blankActivity.title.trim(),
+          source_type: 'local',
+          content_text: '',
+          order_index: parsedOrderIndex,
+          createdBy: user?.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || 'Failed to create the blank activity.');
+      }
+
+      setShowBlankModal(false);
+      setBlankActivity(emptyBlankActivity);
+      await refreshActivities();
+      navigate(`/creator/${data.id}?blank=1`);
+    } catch (err) {
+      console.error('Blank activity creation failed:', err);
+      setBlankNote(err?.message || 'Failed to create the blank activity.');
+    } finally {
+      setBlankBusy(false);
+    }
+  };
+
   const handleCreateDraft = async () => {
     setCreateNote('');
 
@@ -616,13 +895,13 @@ export default function ManageActivitiesPage() {
       return;
     }
 
-    if (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length) {
+    if (!isCreateDraftSectionlessMode && (!Array.isArray(createDraft.major_sections) || !createDraft.major_sections.length)) {
       setCreateNote('Select at least one major section for the draft structure.');
       return;
     }
 
     let timedSections = [];
-    if (createDraft.use_timed_sections) {
+    if (!isCreateDraftSectionlessMode && createDraft.use_timed_sections) {
       timedSections = createDraft.major_sections.map((sectionName) => ({
         title: sectionName,
         minutes: parseInt(createDraft.section_minutes?.[sectionName], 10),
@@ -651,9 +930,9 @@ export default function ManageActivitiesPage() {
           duration_minutes: durationMinutes,
           mode: createDraft.mode,
           selected_model: createDraft.selected_model,
-          major_sections: createDraft.major_sections,
-          use_timed_sections: createDraft.use_timed_sections,
-          timed_sections: timedSections,
+          major_sections: isCreateDraftSectionlessMode ? [] : createDraft.major_sections,
+          use_timed_sections: isCreateDraftSectionlessMode ? false : createDraft.use_timed_sections,
+          timed_sections: isCreateDraftSectionlessMode ? [] : timedSections,
           retries_required: retriesRequired,
           description: createDraft.description,
           createdBy: user?.id,
@@ -710,6 +989,7 @@ export default function ManageActivitiesPage() {
             <th>Name</th>
             <th>Title</th>
             <th>Source</th>
+            <th>Mode</th>
             <th>Sheet URL</th>
             <th>Order</th>
             <th style={{ width: '30%' }}>Actions</th>
@@ -729,6 +1009,9 @@ export default function ManageActivitiesPage() {
               </td>
               <td className="align-middle text-center">
                 <SourceBadge sourceType={activity.source_type} />
+              </td>
+              <td className="align-middle text-center">
+                <ModeBadge activity={activity} />
               </td>
               <td>
                 <Form.Control
@@ -752,7 +1035,7 @@ export default function ManageActivitiesPage() {
                     size="sm"
                     onClick={() => handleUpdate(activity)}
                   >
-                    Update
+                    {savedActivityName === activity.name ? 'Saved \u2713' : 'Update'}
                   </Button>
                   <Button
                     variant="info"
@@ -793,7 +1076,18 @@ export default function ManageActivitiesPage() {
         <Button variant="success" onClick={openCreateWorkbench}>
           Create
         </Button>
-        <Button variant="primary" onClick={() => setShowUploadModal(true)}>
+        <Button variant="outline-primary" onClick={openBlankActivityModal}>
+          Blank Activity
+        </Button>
+        <Button
+          variant="primary"
+          onClick={() => {
+            setUploadNote('');
+            setUploadBlocked([]);
+            setPendingReplaceItems([]);
+            setShowUploadModal(true);
+          }}
+        >
           Upload
         </Button>
         <Button variant="secondary" onClick={openDownloadPlaceholder}>
@@ -801,6 +1095,9 @@ export default function ManageActivitiesPage() {
         </Button>
         <Button variant="outline-secondary" onClick={() => setShowGoogleModal(true)}>
           Google
+        </Button>
+        <Button variant="outline-success" onClick={openGoogleExportMapModal}>
+          Attach Google Export
         </Button>
       </div>
       <div className="text-muted small mb-4">
@@ -838,16 +1135,21 @@ export default function ManageActivitiesPage() {
             </div>
             <div className="col-md-8">
               <Form.Group>
-                <Form.Label>Activity Type</Form.Label>
+                <Form.Label>Mode</Form.Label>
                 <Form.Select
                   name="mode"
                   value={createDraft.mode}
                   onChange={handleCreateDraftFieldChange}
                 >
                   <option value="group">Group</option>
+                  <option value="playground">Playground</option>
                   <option value="demo">Demo</option>
                   <option value="test">Test</option>
+                  <option value="assignment">Assignment</option>
                 </Form.Select>
+                <div className="text-muted small mt-2">
+                  Assignment mode is best for project-style labs and does not require section structure.
+                </div>
               </Form.Group>
             </div>
           </div>
@@ -907,27 +1209,29 @@ export default function ManageActivitiesPage() {
             />
           </Form.Group>
 
-          <Form.Group className="mt-3">
-            <Form.Label>Major Sections</Form.Label>
-            <div className="row g-2">
-              {majorSectionOptions.map((sectionName) => (
-                <div className="col-md-6" key={sectionName}>
-                  <Form.Check
-                    type="checkbox"
-                    id={`major-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
-                    label={sectionName}
-                    checked={createDraft.major_sections.includes(sectionName)}
-                    onChange={() => handleMajorSectionToggle(sectionName)}
-                  />
-                </div>
-              ))}
-            </div>
-            <div className="text-muted small mt-2">
-              We will use these as the high-level structure for the first draft.
-            </div>
-          </Form.Group>
+          {!isCreateDraftSectionlessMode ? (
+            <Form.Group className="mt-3">
+              <Form.Label>Major Sections</Form.Label>
+              <div className="row g-2">
+                {majorSectionOptions.map((sectionName) => (
+                  <div className="col-md-6" key={sectionName}>
+                    <Form.Check
+                      type="checkbox"
+                      id={`major-section-${sectionName.replace(/\s+/g, '-').toLowerCase()}`}
+                      label={sectionName}
+                      checked={createDraft.major_sections.includes(sectionName)}
+                      onChange={() => handleMajorSectionToggle(sectionName)}
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="text-muted small mt-2">
+                We will use these as the high-level structure for the first draft.
+              </div>
+            </Form.Group>
+          ) : null}
 
-          {createDraft.use_timed_sections ? (
+          {!isCreateDraftSectionlessMode && createDraft.use_timed_sections ? (
             <Form.Group className="mt-3">
               <Form.Label>Section Timing</Form.Label>
               <div className="row g-2">
@@ -947,6 +1251,12 @@ export default function ManageActivitiesPage() {
                 Total selected minutes: {selectedSectionMinuteTotal} / {createDraft.duration_minutes || 0}
               </div>
             </Form.Group>
+          ) : null}
+
+          {isCreateDraftSectionlessMode ? (
+            <Alert variant="info" className="mt-3">
+              This mode is generated without section structure or section timing.
+            </Alert>
           ) : null}
 
           <div className="text-muted small mt-3">
@@ -969,8 +1279,69 @@ export default function ManageActivitiesPage() {
         </Modal.Footer>
       </Modal>
 
-      <Modal show={showUploadModal} onHide={() => setShowUploadModal(false)}>
-        <Modal.Header closeButton>
+      <Modal show={showBlankModal} onHide={() => !blankBusy && setShowBlankModal(false)}>
+        <Modal.Header closeButton={!blankBusy}>
+          <Modal.Title>Create Blank Activity</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <Form.Group className="mb-3">
+            <Form.Label>Activity ID</Form.Label>
+            <Form.Control
+              name="name"
+              value={blankActivity.name}
+              onChange={handleBlankFieldChange}
+              placeholder="optional_slug_id"
+            />
+            <div className="text-muted small mt-2">
+              If you leave this blank, we’ll generate one from the title.
+            </div>
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Title</Form.Label>
+            <Form.Control
+              name="title"
+              value={blankActivity.title}
+              onChange={handleBlankFieldChange}
+              placeholder="Untitled Activity"
+              autoFocus
+            />
+          </Form.Group>
+
+          <Form.Group className="mb-3">
+            <Form.Label>Order</Form.Label>
+            <Form.Control
+              type="number"
+              min="0"
+              name="order_index"
+              value={blankActivity.order_index}
+              onChange={handleBlankFieldChange}
+              placeholder="0"
+            />
+          </Form.Group>
+
+          <Alert variant="info" className="mb-0">
+            This creates an empty local activity with no AI draft. You can paste or type source directly and save it.
+          </Alert>
+
+          {blankNote ? (
+            <Alert variant="warning" className="mt-3 mb-0">
+              {blankNote}
+            </Alert>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowBlankModal(false)} disabled={blankBusy}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={handleCreateBlankActivity} disabled={blankBusy}>
+            Create Blank Activity
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal show={showUploadModal} onHide={() => !uploadBusy && resetUploadState()}>
+        <Modal.Header closeButton={!uploadBusy}>
           <Modal.Title>Upload Activity</Modal.Title>
         </Modal.Header>
         <Modal.Body>
@@ -980,9 +1351,12 @@ export default function ManageActivitiesPage() {
               type="file"
               accept=".txt,.md,.tex,.json,.zip"
               onChange={(e) => setSelectedUploadFile(e.target.files?.[0] || null)}
+              disabled={uploadBusy}
             />
             <div className="text-muted small mt-2">
-              Upload a single activity text file now, or a JSON activity bundle. Zip support is next.
+              Upload a single activity text file now, or a JSON activity bundle. An activity in the
+              bundle whose id matches one already in this class replaces that activity's content;
+              other items are created as new activities. Zip support is next.
             </div>
           </Form.Group>
           <Form.Group className="mb-2">
@@ -991,6 +1365,7 @@ export default function ManageActivitiesPage() {
               placeholder="Optional Activity ID override"
               value={newActivity.name}
               onChange={handleUploadFieldChange}
+              disabled={uploadBusy}
             />
           </Form.Group>
           <Form.Group>
@@ -1000,20 +1375,42 @@ export default function ManageActivitiesPage() {
               placeholder="Optional Order Index"
               value={newActivity.order_index}
               onChange={handleUploadFieldChange}
+              disabled={uploadBusy}
             />
           </Form.Group>
           {uploadNote ? (
-            <Alert variant="warning" className="mt-3 mb-0">
+            <Alert variant={uploadBlocked.length ? 'warning' : 'info'} className="mt-3 mb-0">
               {uploadNote}
+            </Alert>
+          ) : null}
+          {uploadBlocked.length ? (
+            <Alert variant="danger" className="mt-3 mb-0">
+              <div className="mb-2">
+                These activities already have student responses and were <strong>not</strong> replaced:
+              </div>
+              <ul className="mb-2">
+                {uploadBlocked.map((b) => (
+                  <li key={b.id}>
+                    {b.title || b.name} ({b.response_count} response{b.response_count === 1 ? '' : 's'})
+                  </li>
+                ))}
+              </ul>
+              <div className="mb-2">
+                Replacing them will not change existing student answers, but the question text and
+                content they already responded to will no longer match what students see going forward.
+              </div>
+              <Button variant="danger" size="sm" onClick={handleForceReplaceBlocked} disabled={uploadBusy}>
+                {uploadBusy ? 'Replacing...' : 'Replace Anyway'}
+              </Button>
             </Alert>
           ) : null}
         </Modal.Body>
         <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowUploadModal(false)}>
+          <Button variant="secondary" onClick={resetUploadState} disabled={uploadBusy}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={handleUpload}>
-            Upload File
+          <Button variant="primary" onClick={handleUpload} disabled={uploadBusy}>
+            {uploadBusy ? 'Uploading...' : 'Upload File'}
           </Button>
         </Modal.Footer>
       </Modal>
@@ -1161,6 +1558,48 @@ export default function ManageActivitiesPage() {
           </Button>
           <Button variant="primary" onClick={handleGoogleImport}>
             Import from Google
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      <Modal
+        show={showGoogleExportMapModal}
+        onHide={() => !googleExportMapBusy && setShowGoogleExportMapModal(false)}
+      >
+        <Modal.Header closeButton={!googleExportMapBusy}>
+          <Modal.Title>Attach New Google Docs</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p>
+            Use this after the Google Apps Script has created a new folder and one new Google Doc
+            for each activity in a downloaded local bundle. Upload its
+            {' '}<code>colearn-google-export-mapping.json</code> file here.
+          </p>
+          <Alert variant="info">
+            This replaces old Google links with the new Docs while retaining the local database
+            markup as the authoritative copy. It does not overwrite any Google document.
+          </Alert>
+          <Form.Group>
+            <Form.Label>Google export mapping</Form.Label>
+            <Form.Control
+              type="file"
+              accept="application/json,.json"
+              onChange={(e) => setSelectedGoogleExportMapFile(e.target.files?.[0] || null)}
+              disabled={googleExportMapBusy}
+            />
+          </Form.Group>
+          {googleExportMapNote ? (
+            <Alert variant={googleExportMapNote.startsWith('Attached ') ? 'success' : 'warning'} className="mt-3 mb-0">
+              {googleExportMapNote}
+            </Alert>
+          ) : null}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setShowGoogleExportMapModal(false)} disabled={googleExportMapBusy}>
+            Close
+          </Button>
+          <Button variant="success" onClick={handleGoogleExportMapping} disabled={googleExportMapBusy}>
+            {googleExportMapBusy ? 'Attaching...' : 'Attach Docs'}
           </Button>
         </Modal.Footer>
       </Modal>

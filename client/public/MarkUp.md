@@ -12,11 +12,13 @@ The system supports:
 
 - Collaborative learning mode (AI-guided)
 - Test / quiz mode (graded)
-- Demo mode (all groups visible, per-student sandbox)
+- Playground mode (all groups visible, saved per-student sandbox)
+- Demo mode (all groups visible, temporary disposable session)
 - Runnable Python blocks (with optional timeout)
 - Runnable Python Remote blocks (with optional timeout)
 - Runnable C++ blocks (with optional timeout)
 - Runnable Python Turtle blocks (with window size + timeout)
+- Read-only Python and C++ display blocks for examples that should be shown but not edited or run
 - Editable and readonly file blocks
 - Inline AI help blocks for guided student questions
 - Structured AI feedback directives
@@ -38,9 +40,12 @@ All interactive content must appear inside a `\questiongroup`.
 | `\studentlevel{...}` | Target audience | `\studentlevel{Second Year}` |
 | `\activitycontext{...}` | Introductory paragraph | `\activitycontext{This activity explores...}` |
 | `\aicodeguidance{...}` | Global AI behavior rules | See AI Guidance section below |
+| `\language{...}` | Required language for AI feedback and inline AI help | `\language{Swedish}` |
 | `\mode{group}` | Normal in-class group activity. This is also the default when no mode is set. | `\mode{group}` |
+| `\mode{assignment}` | Project-style lab assignment mode. Every milestone is visible, work is saved as a draft, and students submit the complete lab once at the end. | `\mode{assignment}` |
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
-| `\mode{demo}` | In-class demonstration mode. All question groups are visible, there is no submit button, and each student edits their own saved sandbox. | `\mode{demo}` |
+| `\mode{playground}` | Instructor/student experimentation mode. All question groups are visible, there is no submit button, and each student edits a saved personal workspace. | `\mode{playground}` |
+| `\mode{demo}` | Temporary demo or conference mode. All question groups are visible, there is no submit button, and the session is meant to be disposable. | `\mode{demo}` |
 | `\test` | Marks activity as graded assessment | `\test` |
 | `\section{...}` | Structural heading (non-interactive) | `\section{Introduction}` |
 
@@ -48,9 +53,12 @@ Notes:
 
 - If no mode is set, the activity runs as `\mode{group}`.
 - `\mode{group}` is the normal collaborative activity mode: each question group must be submitted before the next one opens.
+- `\mode{assignment}` is for project-style lab assignments. It is a good fit for milestone-based work, code building, and revision over time. All question groups remain visible, AI coaching can be used while drafting, and there is one final **Submit Lab** action rather than a submit button for each group. After submission, scored questions show a preliminary grade and feedback until the instructor marks the lab reviewed. It usually skips the section structure unless the creator explicitly wants sections.
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
-- `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
+- `\mode{playground}` opens every question group at once, hides submit controls, and saves each student's answers/code separately so the work can be revisited later.
+- `\mode{demo}` opens every question group at once, hides submit controls, and is intended for temporary or disposable demo sessions.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
+- `\language{...}` sets the language that AI feedback and inline AI help must use. It is metadata and is hidden from students in the activity workspace. If omitted, English is used.
 - `\section` is structural only.
 
 ---
@@ -84,12 +92,26 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 |--------|-------------|---------|
 | `\question{...}` | Begins a question | `\question{Explain Dijkstra’s algorithm.}` |
 | `\endquestion` | Ends the question (required) | `\endquestion` |
+| `\responsemode{answer}` | Declares a normal answer question; optional because `answer` is the default | `\responsemode{answer}` |
+| `\responsemode{questions}` | Declares a question-writing task where the student should submit questions instead of answers | `\responsemode{questions}` |
 | `\textresponse{n}` | Student response box (n lines tall) | `\textresponse{5}` |
 | `\sampleresponses{...}` | Sample instructor solution (hidden) | `\sampleresponses{Chooses a local optimum.}` |
 | `\feedbackprompt{...}` | AI grading guidance | `\feedbackprompt{Encourage elaboration.}` |
 | `\followupprompt{...}` | Optional AI follow-up hint | `\followupprompt{Why might greedy fail?}` |
+| `\multiplechoice{...}` | Begins a multiple-choice block; the optional value is the legacy answer key | `\multiplechoice{Ottawa}` |
+| `\multiplechoice{multiple}` | Begins an ungraded “select all that apply” survey block | `\multiplechoice{multiple}` |
+| `\choice{value}{points}` | A multiple-choice option with optional test-mode points | `\choice{Ottawa}{2}` |
 
 Every `\question` must explicitly end with `\endquestion`.
+
+Notes:
+
+- If `\responsemode{...}` is omitted, the default is `answer`.
+- Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
+- In test mode, include an explicit `\score{points,type}` rubric block for every question that is not self-scoring multiple choice. Use only `response`, `code`, and `output` as score types.
+- Scoring rubrics are documented in Section 5 below. A `\score{points,type}` block gives the grader the points possible and the grading category for a question.
+- A blank `\multiplechoice{}` with unscored `\choice{...}` entries is a survey and remains ungraded. For self-scoring multiple choice (including partial credit), put points on every choice, such as `\choice{Partly correct}{1}`. The highest choice value becomes the question total; do not also add a `\score{...,response}` block.
+- Use `\multiplechoice{multiple}` when students may select more than one survey answer. It displays checkboxes, saves the selected choice texts together, and is never automatically graded. Do not add choice points or a `\score` block.
 
 ---
 
@@ -97,6 +119,7 @@ Every `\question` must explicitly end with `\endquestion`.
 
 ```text
 \ai{explain}
+\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{Ask the AI for help understanding what this code does.}
 \aiguardrail{Help the student reason about the code without giving away the whole worksheet answer.}
@@ -105,11 +128,16 @@ Every `\question` must explicitly end with `\endquestion`.
 \endai
 ```
 
-`\\ai` blocks are currently supported only inside a `\\question`.
+`\\ai` is a standalone learning-tool block placed directly inside a
+`\\questiongroup`. It is not a question, creates no student response, and is
+never included in scoring or retry evaluation. Existing `\\ai` blocks inside
+questions remain supported for compatibility, but new activities should place
+them between questions.
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
 | `\ai{mode}` | Starts an inline AI help block | `\ai{explain}` |
+| `\aimodel{model}` | Model for this AI interaction; defaults to `gpt-5-mini` | `\aimodel{gpt-4o-mini}` |
 | `\aititle{...}` | Visible card title | `\aititle{AI Coach}` |
 | `\aiprompt{...}` | Student-facing instructions | `\aiprompt{Ask the AI for help interpreting the loop.}` |
 | `\aiguardrail{...}` | Creator-facing AI restriction / scope | `\aiguardrail{Guide the student but do not provide the final worksheet answer.}` |
@@ -124,6 +152,12 @@ Every `\question` must explicitly end with `\endquestion`.
 - `testgen`
 - `generate`
 
+### Supported Models
+
+- `gpt-5-mini` is the default for new and existing AI blocks.
+- `gpt-4o-mini` is available when a faster, lower-cost response is preferred.
+- Any other `\aimodel` value safely falls back to `gpt-5-mini`.
+
 ### Supported Initial Context Sources
 
 - `current-question`
@@ -134,6 +168,7 @@ Every `\question` must explicitly end with `\endquestion`.
 ### Example
 
 ```text
+\questiongroup{Tracing a loop}
 \question{What does this loop do?}
 \textresponse{4}
 
@@ -141,16 +176,17 @@ Every `\question` must explicitly end with `\endquestion`.
 for i in range(5):
     print(i * 2)
 \endpython
+\endquestion
 
 \ai{explain}
+\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{If you are unsure, ask the AI for help understanding the loop.}
 \aiguardrail{Explain the behavior of the code and guide the student toward the pattern. Do not give away broader worksheet answers.}
 \aicontext{current-question,current-code,student-response}
 \aiinput{5}
 \endai
-
-\endquestion
+\endquestiongroup
 ```
 
 ---
@@ -241,7 +277,8 @@ for i in range(5):
 | `response` | Written answer | `\score{6,response}` |
 | `code` | Student-written code | `\score{10,code}` |
 | `output` | Program output | `\score{4,output}` |
-| custom | Custom metadata | `\score{5,analysis}` |
+
+Multiple-choice questions also use `response`; do not invent a separate `choice` score type.
 
 Scoring is controlled only by `\score{}` blocks.
 
@@ -306,6 +343,16 @@ Supports optional timeout: `\python{50000}`
 \endpython
 ```
 
+### Python Display
+
+Use this when you want to show Python code without letting students edit or run it.
+
+```text
+\pythondisplay
+# read-only example code
+\endpythondisplay
+```
+
 ### Python Remote
 
 Runs on the server with the same file-handling pattern as C++.
@@ -327,6 +374,17 @@ Supports optional timeout: `\cpp{50000}`
 #include <iostream>
 int main() { }
 \endcpp
+```
+
+### C++ Display
+
+Use this when you want to show C++ code without letting students edit or run it.
+
+```text
+\cppdisplay
+#include <iostream>
+int main() { }
+\endcppdisplay
 ```
 
 ---

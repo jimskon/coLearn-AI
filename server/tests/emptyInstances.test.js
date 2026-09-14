@@ -1,0 +1,164 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const {
+  ABANDONED_INSTANCE_SQL,
+  findAbandonedInstances,
+  deleteAbandonedInstances,
+  deleteAbandonedSandboxes,
+} = require('../utils/emptyInstances');
+
+// ---------------------------------------------------------------------------
+// The predicate is a safety property, not a convenience
+//
+// Deleting an activity_instance cascades to its responses, so a predicate that
+// is too loose destroys a student's test. These assertions are what stop
+// someone relaxing it later without meaning to -- the previous version of this
+// cleanup was commented out rather than fixed precisely because nobody could
+// convince themselves it was safe.
+// ---------------------------------------------------------------------------
+
+test('every table that can hold student work is checked', () => {
+  for (const table of ['group_members', 'responses', 'response_drafts']) {
+    assert.match(
+      ABANDONED_INSTANCE_SQL,
+      new RegExp(`NOT EXISTS[\\s\\S]*?FROM\\s+${table}\\b`),
+      `${table} must be excluded by a NOT EXISTS clause`,
+    );
+  }
+});
+
+test('an instance with any completion signal is not abandoned', () => {
+  for (const guard of ['submitted_at IS NULL', 'graded_at IS NULL', 'completed_groups', 'points_earned']) {
+    assert.ok(ABANDONED_INSTANCE_SQL.includes(guard), `missing guard: ${guard}`);
+  }
+  assert.match(ABANDONED_INSTANCE_SQL, /progress_status\s*=\s*'not_started'/);
+});
+
+test('the predicate is a conjunction -- one failing clause keeps the row', () => {
+  // Every top-level clause must be required. An OR joining two of them would
+  // let a row qualify on one weak signal alone. ORs *inside* a parenthesised
+  // clause are fine -- "progress_status IS NULL OR = 'not_started'" is one
+  // condition written two ways -- so strip the bracketed groups first and
+  // check what joins the rest.
+  let topLevel = ABANDONED_INSTANCE_SQL;
+  let previous;
+  do {
+    previous = topLevel;
+    topLevel = topLevel.replace(/\([^()]*\)/g, ' ');
+  } while (topLevel !== previous);
+
+  assert.ok(!/\bOR\b/i.test(topLevel), 'top-level clauses must all be required');
+});
+
+// ---------------------------------------------------------------------------
+// Query shape
+// ---------------------------------------------------------------------------
+
+function fakeConn(capture) {
+  return {
+    async query(sql, params) {
+      capture.push({ sql, params });
+      return [[], []];
+    },
+  };
+}
+
+test('scoping narrows by course and activity, and is parameterised', async () => {
+  const calls = [];
+  await findAbandonedInstances(fakeConn(calls), { courseId: 12, activityId: 87 });
+  const [{ sql, params }] = calls;
+  assert.match(sql, /ai\.course_id = \?/);
+  assert.match(sql, /ai\.activity_id = \?/);
+  assert.deepEqual(params, [12, 87]);
+});
+
+test('an unscoped search still carries the predicate', async () => {
+  const calls = [];
+  await findAbandonedInstances(fakeConn(calls), {});
+  const [{ sql, params }] = calls;
+  assert.deepEqual(params, []);
+  assert.match(sql, /NOT EXISTS/);
+});
+
+test('the delete re-checks the predicate rather than trusting gathered ids', async () => {
+  // A student can join a group between the report and the delete. The DELETE
+  // must not take a list of ids on faith.
+  const calls = [];
+  await deleteAbandonedInstances(fakeConn(calls), { courseId: 12, activityId: 87 });
+  const [{ sql }] = calls;
+  assert.match(sql, /DELETE FROM activity_instances/);
+  assert.match(sql, /NOT EXISTS/, 'the predicate must appear inside the delete');
+  assert.match(sql, /FROM\s+group_members/, 'membership must be re-checked at delete time');
+});
+
+// ---------------------------------------------------------------------------
+// Columns must actually exist
+//
+// The first run of this against a real database failed on `ai.created_at`,
+// a column this table does not have. A non-DB test suite cannot catch that by
+// executing the query, but it can read the schema and check the names.
+// ---------------------------------------------------------------------------
+
+test('every activity_instances column the module names exists in the schema', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const schema = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'schema.sql'),
+    'utf8',
+  );
+  // Anchored on the table name straight after CREATE TABLE: a looser pattern
+  // matches the first statement that merely REFERENCES this table.
+  const table = schema.match(
+    /CREATE TABLE\s+(?:IF NOT EXISTS\s+)?`activity_instances`\s*\([\s\S]*?\n\)/,
+  );
+  assert.ok(table, 'activity_instances must be defined in schema.sql');
+
+  const declared = new Set(
+    [...table[0].matchAll(/^\s*`([a-z_]+)`\s+\w/gim)].map((m) => m[1]),
+  );
+
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'utils', 'emptyInstances.js'),
+    'utf8',
+  );
+  const referenced = new Set(
+    [...source.matchAll(/\bai\.([a-z_]+)\b/g)].map((m) => m[1]),
+  );
+
+  const missing = [...referenced].filter((column) => !declared.has(column));
+  assert.deepEqual(missing, [], `not columns of activity_instances: ${missing.join(', ')}`);
+});
+
+// ---------------------------------------------------------------------------
+// The sandbox sweep must stay in its lane
+// ---------------------------------------------------------------------------
+
+test('the sweep is scoped to one owner and keeps the sandbox being handed back', async () => {
+  const calls = [];
+  await deleteAbandonedSandboxes(fakeConn(calls), {
+    courseId: 4170, activityId: 4738, ownerId: 9, exceptId: 555,
+  });
+  const [{ sql, params }] = calls;
+  assert.match(sql, /sandbox_owner_id = \?/, 'must be limited to one owner');
+  assert.match(sql, /active_rotation_mode = 'sandbox'/, 'must only ever touch sandboxes');
+  assert.match(sql, /ai\.id <> \?/, 'the reused sandbox must survive');
+  assert.match(sql, /NOT EXISTS/, 'the abandoned predicate still applies');
+  assert.deepEqual(params, [4170, 4738, 9, 555]);
+});
+
+test('the sweep does nothing without a complete scope', async () => {
+  for (const scope of [
+    { courseId: null, activityId: 1, ownerId: 1 },
+    { courseId: 1, activityId: null, ownerId: 1 },
+    { courseId: 1, activityId: 1, ownerId: null },
+  ]) {
+    const calls = [];
+    const removed = await deleteAbandonedSandboxes(fakeConn(calls), scope);
+    assert.equal(removed, 0);
+    assert.deepEqual(calls, [], 'a missing scope must not become an unbounded delete');
+  }
+});

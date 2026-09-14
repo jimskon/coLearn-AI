@@ -38,6 +38,8 @@ All interactive content must appear inside a `\questiongroup`.
 | `\studentlevel{...}` | Target audience | `\studentlevel{Second Year}` |
 | `\activitycontext{...}` | Introductory paragraph | `\activitycontext{This activity explores...}` |
 | `\aicodeguidance{...}` | Global AI behavior rules | See AI Guidance section below |
+| `\aimode{...}` | AI feedback display and evaluator guidance | `\aimode{positive, brief}` |
+| `\language{...}` | Required language for AI feedback and inline AI help | `\language{Swedish}` |
 | `\mode{group}` | Normal in-class group activity. This is also the default when no mode is set. | `\mode{group}` |
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
 | `\mode{demo}` | In-class demonstration mode. All question groups are visible, there is no submit button, and each student edits their own saved sandbox. | `\mode{demo}` |
@@ -51,6 +53,10 @@ Notes:
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
 - `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
+- `\aimode` controls AI feedback display and evaluator guidance. Its values are comma-separated so that new options can be added later. The default is `no-positive`; an accepted answer advances without an extra AI message. Use `\aimode{positive}` when you want a short affirmative AI message shown in green before the activity advances.
+- A question may include its own `\aimode{...}`; that setting overrides the activity-level setting for that question only. Use `\aimode{no-positive}` in a question to suppress praise when the activity default is `positive`.
+- `\aimode{lenient}` tells the evaluator to accept relevant, on-track work without demanding minor refinements. It does not override a `revise` decision: work the evaluator identifies as incorrect still receives yellow guidance. After the configured retries, the group may explicitly continue without addressing it.
+- `\language{...}` sets the language that AI feedback and inline AI help must use. It is metadata and is hidden from students in the activity workspace. If omitted, English is used.
 - `\section` is structural only.
 
 ---
@@ -84,12 +90,64 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 |--------|-------------|---------|
 | `\question{...}` | Begins a question | `\question{Explain Dijkstra’s algorithm.}` |
 | `\endquestion` | Ends the question (required) | `\endquestion` |
+| `\responsemode{answer}` | Declares a normal answer question; optional because `answer` is the default | `\responsemode{answer}` |
+| `\responsemode{questions}` | Declares a question-writing task where the student should submit questions instead of answers | `\responsemode{questions}` |
 | `\textresponse{n}` | Student response box (n lines tall) | `\textresponse{5}` |
 | `\sampleresponses{...}` | Sample instructor solution (hidden) | `\sampleresponses{Chooses a local optimum.}` |
 | `\feedbackprompt{...}` | AI grading guidance | `\feedbackprompt{Encourage elaboration.}` |
 | `\followupprompt{...}` | Optional AI follow-up hint | `\followupprompt{Why might greedy fail?}` |
+| `\aimode{...}` | Overrides the activity's accepted-answer feedback display for this question | `\aimode{positive}` |
+| `\multiplechoice{...}` | Begins a single-answer multiple-choice block; the optional value is its answer key | `\multiplechoice{Ottawa}` |
+| `\multiplechoice{multiple}` | Begins an ungraded “select all that apply” survey block | `\multiplechoice{multiple}` |
+| `\choice{value}` | Adds a choice to a multiple-choice block | `\choice{Writing code}` |
 
 Every `\question` must explicitly end with `\endquestion`.
+
+Notes:
+
+- If `\responsemode{...}` is omitted, the default is `answer`.
+- Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
+- Use `\multiplechoice{multiple}` for a multi-select survey. It displays checkboxes, stores all selected choice texts, and has no automatic grading. Do not attach choice points or a `\score` block.
+
+### AI evaluation feedback mode
+
+`\aimode` is a comma-separated list of feedback-display flags. It may appear
+once in the activity preamble and once within a `\question`.
+
+| Value | Meaning |
+|-------|---------|
+| `no-positive` | Default. If the evaluator accepts the answer, advance without displaying a separate praise message. |
+| `positive` | If the evaluator accepts the answer, show its affirmative feedback in green, then allow the group to continue. |
+| `brief` | When used with `positive`, limit the green accepted-answer message to one short sentence. |
+| `lenient` | Tell the evaluator to accept relevant, on-track work without demanding minor refinement. A `revise` decision remains yellow and follows the normal retry/Continue policy. |
+
+Resolution is question → activity → default. Thus a question-level setting wins
+over the preamble, and an omitted setting means `no-positive`.
+
+```text
+\title{Variables}
+\aimode{positive, brief}
+
+\question{What is an assignment statement?}
+\textresponse{3}
+\feedbackprompt{Accept a reasonable description of storing a value in a variable.}
+\endquestion
+
+\question{Give one example.}
+\aimode{no-positive}
+\textresponse{2}
+\feedbackprompt{Accept any valid Python assignment.}
+\endquestion
+```
+
+There are only two student-facing decisions: `accepted` and `revise`.
+`\aimode{lenient}` guides the evaluator toward accepting close, relevant work,
+but never changes a returned `revise` into `accepted`. A `revise` result is
+yellow; after the configured retries, `canContinue` enables the explicit
+Continue button without changing the decision or its color. Other `\aimode`
+flags only control presentation. The normal standard still follows course guidance,
+activity `\aicodeguidance`, and the question's `\feedbackprompt`, with question
+guidance taking precedence.
 
 ---
 
@@ -97,6 +155,7 @@ Every `\question` must explicitly end with `\endquestion`.
 
 ```text
 \ai{explain}
+\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{Ask the AI for help understanding what this code does.}
 \aiguardrail{Help the student reason about the code without giving away the whole worksheet answer.}
@@ -105,11 +164,16 @@ Every `\question` must explicitly end with `\endquestion`.
 \endai
 ```
 
-`\ai` blocks are currently supported only inside a `\question`.
+`\\ai` is a standalone learning-tool block placed directly inside a
+`\\questiongroup`. It is not a question, creates no student response, and is
+never included in scoring or retry evaluation. Existing `\\ai` blocks inside
+questions remain supported for compatibility, but new activities should place
+them between questions.
 
 | Syntax | Description | Example |
 |--------|-------------|---------|
 | `\ai{mode}` | Starts an inline AI help block | `\ai{explain}` |
+| `\aimodel{model}` | Model for this AI interaction; defaults to `gpt-5-mini` | `\aimodel{gpt-4o-mini}` |
 | `\aititle{...}` | Visible card title | `\aititle{AI Coach}` |
 | `\aiprompt{...}` | Student-facing instructions | `\aiprompt{Ask the AI for help interpreting the loop.}` |
 | `\aiguardrail{...}` | Creator-facing AI restriction / scope | `\aiguardrail{Guide the student but do not provide the final worksheet answer.}` |
@@ -124,6 +188,12 @@ Every `\question` must explicitly end with `\endquestion`.
 - `testgen`
 - `generate`
 
+### Supported Models
+
+- `gpt-5-mini` is the default for new and existing AI blocks.
+- `gpt-4o-mini` is available when a faster, lower-cost response is preferred.
+- Any other `\aimodel` value safely falls back to `gpt-5-mini`.
+
 ### Supported Initial Context Sources
 
 - `current-question`
@@ -134,6 +204,7 @@ Every `\question` must explicitly end with `\endquestion`.
 ### Example
 
 ```text
+\questiongroup{Tracing a loop}
 \question{What does this loop do?}
 \textresponse{4}
 
@@ -141,16 +212,17 @@ Every `\question` must explicitly end with `\endquestion`.
 for i in range(5):
     print(i * 2)
 \endpython
+\endquestion
 
 \ai{explain}
+\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{If you are unsure, ask the AI for help understanding the loop.}
 \aiguardrail{Explain the behavior of the code and guide the student toward the pattern. Do not give away broader worksheet answers.}
 \aicontext{current-question,current-code,student-response}
 \aiinput{5}
 \endai
-
-\endquestion
+\endquestiongroup
 ```
 
 ---

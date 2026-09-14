@@ -85,7 +85,9 @@ async function main() {
 
       ALTER TABLE pogil_classes
         ADD COLUMN IF NOT EXISTS level VARCHAR(255) DEFAULT NULL,
-        ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL;
+        ADD COLUMN IF NOT EXISTS topic_domain VARCHAR(255) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS demo_mode TINYINT(1) NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS ai_guidance TEXT DEFAULT NULL;
 
       CREATE TABLE IF NOT EXISTS courses (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -122,6 +124,14 @@ async function main() {
         sheet_url TEXT DEFAULT NULL,
         source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         content_text LONGTEXT DEFAULT NULL,
+        source_updated_at DATETIME(3) DEFAULT NULL,
+        source_revision INT UNSIGNED NOT NULL DEFAULT 0,
+        source_origin VARCHAR(32) DEFAULT NULL,
+        local_source_hash CHAR(64) DEFAULT NULL,
+        remote_source_hash CHAR(64) DEFAULT NULL,
+        remote_updated_at DATETIME(3) DEFAULT NULL,
+        last_synced_hash CHAR(64) DEFAULT NULL,
+        last_synced_at DATETIME(3) DEFAULT NULL,
         class_id INT NOT NULL,
         order_index INT NOT NULL DEFAULT 0,
         created_by INT DEFAULT NULL,
@@ -134,8 +144,27 @@ async function main() {
       );
 
       ALTER TABLE pogil_activities
+        ADD COLUMN IF NOT EXISTS source_updated_at DATETIME(3) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS source_revision INT UNSIGNED NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS source_origin VARCHAR(32) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS local_source_hash CHAR(64) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS remote_source_hash CHAR(64) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS remote_updated_at DATETIME(3) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS last_synced_hash CHAR(64) DEFAULT NULL,
+        ADD COLUMN IF NOT EXISTS last_synced_at DATETIME(3) DEFAULT NULL,
         MODIFY COLUMN source_type VARCHAR(16) NOT NULL DEFAULT 'remote',
         MODIFY COLUMN content_text LONGTEXT NULL;
+
+      CREATE TABLE IF NOT EXISTS activity_edit_locks (
+        activity_id INT NOT NULL PRIMARY KEY,
+        user_id INT NOT NULL,
+        lease_token CHAR(36) NOT NULL,
+        acquired_at DATETIME(3) NOT NULL,
+        expires_at DATETIME(3) NOT NULL,
+        KEY activity_edit_locks_expires_at_idx (expires_at),
+        CONSTRAINT activity_edit_locks_activity_fk
+          FOREIGN KEY (activity_id) REFERENCES pogil_activities(id) ON DELETE CASCADE
+      );
 
       CREATE TABLE IF NOT EXISTS activity_instances (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -152,6 +181,10 @@ async function main() {
         CONSTRAINT activity_instances_student_fk
           FOREIGN KEY (active_student_id) REFERENCES users(id)
       );
+
+      ALTER TABLE activity_instances
+        ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS test_focus_enforcement TINYINT(1) NOT NULL DEFAULT 0;
 
       CREATE TABLE IF NOT EXISTS audit_log (
         id INT AUTO_INCREMENT PRIMARY KEY,

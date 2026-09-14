@@ -171,7 +171,7 @@ exports.getProgressMonitorBoard = async (req, res) => {
            GROUP BY activity_instance_id
          ) latest_suggestion ON latest_suggestion.max_id = ps1.id
        ) sugg ON sugg.activity_instance_id = ai.id
-       
+       ${clause}
        ORDER BY c.year DESC, c.semester ASC, c.section ASC, a.order_index ASC, ai.group_number ASC, ai.id ASC`,
       params
     );

@@ -209,6 +209,90 @@ function formatSubmitter(rows = [], userNameById = {}) {
   return speakerName(humanRow, userNameById);
 }
 
+// AI turns are stored one row per exchange, as JSON, under <baseQid>AI<n>.
+// They deliberately sit outside the answer/feedback/output state machine that
+// buildQuestionThread models: a conversation is not a sequence of revisions to
+// an answer, so it reads far better as its own transcript per question.
+const AI_TURN_KEY = /^(\d+[A-Za-z]+)AI(\d+)$/i;
+
+function buildAiConversations(historyRows = []) {
+  const byQuestion = new Map();
+
+  for (const row of historyRows) {
+    const match = AI_TURN_KEY.exec(String(row?.question_id || '').trim());
+    if (!match) continue;
+
+    let turn;
+    try {
+      turn = JSON.parse(asString(row.response));
+    } catch {
+      continue;
+    }
+    if (!turn || (!turn.prompt && !turn.reply)) continue;
+
+    const baseQid = match[1];
+    if (!byQuestion.has(baseQid)) byQuestion.set(baseQid, []);
+    byQuestion.get(baseQid).push({
+      index: Number(match[2]) || 0,
+      rowId: Number(row.id) || 0,
+      prompt: asString(turn.prompt),
+      reply: asString(turn.reply),
+      at: turn.at || row.submitted_at || row.updated_at || '',
+      by: turn.by ?? row.answered_by_user_id ?? null,
+    });
+  }
+
+  return Array.from(byQuestion.entries())
+    .map(([qid, turns]) => ({
+      qid,
+      turns: turns.sort((a, b) => a.index - b.index || a.rowId - b.rowId),
+    }))
+    .sort((a, b) => a.qid.localeCompare(b.qid, undefined, { numeric: true }));
+}
+
+function AiConversationCard({ conversation, userNameById = {} }) {
+  const { qid, turns } = conversation;
+
+  return (
+    <div className="border rounded-3 bg-light p-3 mb-3">
+      <div className="d-flex justify-content-between gap-3 align-items-start flex-wrap">
+        <div className="fw-semibold">{qid}. AI conversation</div>
+        <div className="small text-muted text-nowrap">
+          {turns.length} exchange{turns.length === 1 ? '' : 's'}
+        </div>
+      </div>
+
+      <div className="mt-3 d-grid gap-3">
+        {turns.map((turn) => {
+          const who = (turn.by != null && userNameById[turn.by]) || 'Student';
+          return (
+            <div key={`${qid}-ai-${turn.index}`}>
+              <div className="small text-muted mb-1">
+                {who}
+                {turn.at ? ` \u00b7 ${new Date(turn.at).toLocaleString()}` : ''}
+              </div>
+              <div
+                className="rounded-3 px-3 py-2 mb-2 bg-primary-subtle border border-primary-subtle"
+                style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              >
+                <div className="small text-uppercase fw-semibold opacity-75 mb-1">Student</div>
+                {turn.prompt}
+              </div>
+              <div
+                className="rounded-3 px-3 py-2 bg-white border"
+                style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              >
+                <div className="small text-uppercase fw-semibold opacity-75 mb-1">AI</div>
+                {turn.reply}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function buildSubmitGroups(historyRows = []) {
   const sorted = [...historyRows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
   const groups = new Map();
@@ -457,6 +541,8 @@ export default function RunActivityHistoryView({
     });
   }, [submitGroups, userNameById]);
 
+  const aiConversations = useMemo(() => buildAiConversations(historyRows), [historyRows]);
+
   if (!historyRows.length) {
     return (
       <Alert variant="secondary">
@@ -498,6 +584,37 @@ export default function RunActivityHistoryView({
           background: #f8f9fa;
         }
       `}</style>
+
+      {aiConversations.length > 0 && (
+        <details className="history-submit-details" open>
+          <summary>
+            <div className="d-flex justify-content-between align-items-start gap-3 flex-wrap">
+              <div>
+                <div className="fw-semibold">AI conversations</div>
+                <div className="small text-muted">
+                  Every question the student asked the AI, and what it answered.
+                </div>
+              </div>
+              <div className="small text-muted text-nowrap">
+                {aiConversations.reduce((total, conversation) => total + conversation.turns.length, 0)}
+                {' '}exchange
+                {aiConversations.reduce((total, conversation) => total + conversation.turns.length, 0) === 1 ? '' : 's'}
+                {' across '}
+                {aiConversations.length} question{aiConversations.length === 1 ? '' : 's'}
+              </div>
+            </div>
+          </summary>
+          <div className="history-submit-body">
+            {aiConversations.map((conversation) => (
+              <AiConversationCard
+                key={`ai-convo-${conversation.qid}`}
+                conversation={conversation}
+                userNameById={userNameById}
+              />
+            ))}
+          </div>
+        </details>
+      )}
 
       {timeline.map((submit, index) => {
         const changedQids = submit.threads.map((thread) => thread.qid);

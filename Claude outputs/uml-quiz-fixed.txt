@@ -1,0 +1,80 @@
+\title{UML Class Diagrams Quiz}
+\name{UMLClassDiagramsQuiz}
+\mode{test}
+\studentlevel{Data Structures}
+\activitycontext{A short quiz reviewing the basic UML class-diagram notation introduced in the Reading and Designing UML Class Diagrams activity.}
+\retries{1}
+\aicodeguidance{This is a short introductory quiz. Evaluate only the concepts explicitly tested.}
+\section{UML Class Diagrams}{5}
+\questiongroup{UML Basics}
+\question{In a standard UML class box, what is normally shown in the three compartments from top to bottom?}
+\responsemode{answer}
+\multiplechoice{Class name, attributes, operations}
+\choice{Class name, attributes, operations}
+\choice{Attributes, class name, operations}
+\choice{Class name, operations, attributes}
+\choice{Public members, protected members, private members}
+\endmultiplechoice
+\score{1,response}
+1: Selects Class name, attributes, operations
+0: Selects any other response or leaves the question unanswered
+\endscore
+\feedbackprompt{The correct answer is Class name, attributes, operations.}
+\endquestion
+\question{What does a minus sign (-) before an attribute or operation mean in UML?}
+\responsemode{answer}
+\multiplechoice{Private}
+\choice{Private}
+\choice{Public}
+\choice{Protected}
+\choice{Inherited}
+\endmultiplechoice
+\score{1,response}
+1: Selects Private
+0: Selects any other response or leaves the question unanswered
+\endscore
+\feedbackprompt{The correct answer is Private. In UML, + means public, - means private, and # means protected.}
+\endquestion
+\question{Which UML notation correctly represents this private C++ data member: double x;}
+\responsemode{answer}
+\multiplechoice{-x : double}
+\choice{-x : double}
+\choice{+x : double}
+\choice{x(double)}
+\choice{-double : x}
+\endmultiplechoice
+\score{1,response}
+1: Selects -x : double
+0: Selects any other response or leaves the question unanswered
+\endscore
+\feedbackprompt{The correct answer is -x : double. The minus sign indicates private visibility, followed by the attribute name and its type.}
+\endquestion
+\question{Which UML relationship represents an is-a relationship between a subclass and a superclass?}
+\responsemode{answer}
+\multiplechoice{Inheritance}
+\choice{Inheritance}
+\choice{Composition}
+\choice{Aggregation}
+\choice{Dependency}
+\endmultiplechoice
+\score{1,response}
+1: Selects Inheritance
+0: Selects any other response or leaves the question unanswered
+\endscore
+\feedbackprompt{The correct answer is Inheritance. A subclass is a specialized kind of its superclass, such as Polygon is a Shape.}
+\endquestion
+\question{What does the multiplicity 0..* mean at one end of an association?}
+\responsemode{answer}
+\multiplechoice{Zero or more}
+\choice{Zero or more}
+\choice{Exactly one}
+\choice{Zero or one}
+\choice{One or more}
+\endmultiplechoice
+\score{1,response}
+1: Selects Zero or more
+0: Selects any other response or leaves the question unanswered
+\endscore
+\feedbackprompt{The correct answer is Zero or more. An asterisk indicates many, and the zero indicates that no related objects are also allowed.}
+\endquestion
+\endquestiongroup

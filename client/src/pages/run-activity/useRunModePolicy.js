@@ -9,6 +9,7 @@ export default function useRunModePolicy({
   activity,
   isPlaygroundMode = false,
   isTestMode = false,
+  isAssignmentMode = false,
 }) {
   return useMemo(() => computeRunModePolicy({
     mode,
@@ -17,5 +18,6 @@ export default function useRunModePolicy({
     activity,
     isPlaygroundMode,
     isTestMode,
-  }), [mode, user, activeStudentId, activity?.section_timer_paused, isPlaygroundMode, isTestMode]);
+    isAssignmentMode,
+  }), [mode, user, activeStudentId, activity?.section_timer_paused, isPlaygroundMode, isTestMode, isAssignmentMode]);
 }

@@ -285,8 +285,10 @@ ensure_repo() {
 ensure_database_schema_if_empty() {
   [[ -n "$SCHEMA_FILE" && -f "$SCHEMA_FILE" ]] || die "Could not find schema.sql in the repo."
   local table_count
-  table_count="$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';" 2>/dev/null || echo 0)"
-  table_count="${table_count:-0}"
+  if ! table_count="$(mariadb -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASSWORD" -N -B -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB_NAME}';")"; then
+    die "Cannot inspect database ${DB_NAME}. Verify DB_HOST, DB_PORT, DB_USER, and DB_PASSWORD before rerunning; schema import was not attempted."
+  fi
+  [[ "$table_count" =~ ^[0-9]+$ ]] || die "Unexpected database table-count response: ${table_count@Q}"
   if [[ "$table_count" -eq 0 ]]; then
     info "Database is empty; importing schema from $SCHEMA_FILE"
     {
@@ -312,7 +314,16 @@ run_repo_migrations() {
   fi
 }
 
+backup_existing_env_file() {
+  [[ -f "$ENV_FILE" ]] || return 0
+  local backup_file="${ENV_FILE}.bak.$(date +%Y%m%d%H%M%S)"
+  cp -p "$ENV_FILE" "$backup_file"
+  chmod 600 "$backup_file"
+  info "Backed up existing server environment to $backup_file"
+}
+
 write_env_files() {
+  backup_existing_env_file
   info "Writing server environment to $ENV_FILE"
   write_key_value PORT "$PORT" "$ENV_FILE"
   write_key_value NODE_ENV "production" "$ENV_FILE"
@@ -506,9 +517,11 @@ main() {
   validate_user_context
   resolve_settings
   ensure_repo
+  # Validate configured database access before changing server/.env. This avoids
+  # replacing a working runtime configuration with bad deployment credentials.
+  ensure_database_schema_if_empty
   write_env_files
   install_app_deps_and_build
-  ensure_database_schema_if_empty
   run_repo_migrations
   bootstrap_app_root
   setup_cxx_runner

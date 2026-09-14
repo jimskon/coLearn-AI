@@ -19,9 +19,9 @@ export default function useRunActivityResponses({
   // a key that still has an unresolved fetch (Race A fix).
   const dirtyKeysRef = useRef({
     _counts: new Map(),
-    add(k)    { this._counts.set(k, (this._counts.get(k) || 0) + 1); },
+    add(k) { this._counts.set(k, (this._counts.get(k) || 0) + 1); },
     delete(k) { const n = (this._counts.get(k) || 1) - 1; if (n <= 0) { this._counts.delete(k); } else { this._counts.set(k, n); } },
-    has(k)    { return (this._counts.get(k) || 0) > 0; },
+    has(k) { return (this._counts.get(k) || 0) > 0; },
     // Temporarily mark a key dirty for `ms` ms — used by socket handler so
     // loadActivity doesn't overwrite a freshly socket-received value (Race B/D fix).
     addTemp(k, ms = 3000) { this.add(k); setTimeout(() => this.delete(k), ms); },
@@ -161,8 +161,37 @@ export default function useRunActivityResponses({
     codeByKeyRef.current[responseKey] = updatedCode;
 
     if (broadcastOnly) {
-      if (!emitLiveUpdates || !isActive) return;
-      meta.socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user?.id });
+      if (emitLiveUpdates && isActive) {
+        meta.socket?.emit('response:update', { instanceId, responseKey, value: updatedCode, answeredBy: user?.id });
+      }
+      if (persistResponses && isActive) {
+        if (saveDebounceRef.current.has(responseKey)) {
+          clearTimeout(saveDebounceRef.current.get(responseKey));
+        }
+        dirtyKeysRef.current.add(responseKey);
+        const timerId = setTimeout(async () => {
+          saveDebounceRef.current.delete(responseKey);
+          const latestCode = codeByKeyRef.current[responseKey];
+          try {
+            await fetch(`${API_BASE_URL}/api/responses/draft`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({
+                question_id: responseKey,
+                activity_instance_id: instanceId,
+                user_id: user?.id,
+                response: latestCode,
+              }),
+            });
+          } catch (err) {
+            console.error('broadcastOnly DB save failed:', err);
+          } finally {
+            dirtyKeysRef.current.delete(responseKey);
+          }
+        }, 300);
+        saveDebounceRef.current.set(responseKey, timerId);
+      }
       return;
     }
 

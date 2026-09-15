@@ -420,7 +420,7 @@ export default function useRunActivityData({
               let h = ((base ^ salt ^ (i * 2654435761)) >>> 0);
               h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
               h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
-              const j = (h ^ (h >>> 16)) % (i + 1);
+              const j = ((h ^ (h >>> 16)) >>> 0) % (i + 1);
               [out[i], out[j]] = [out[j], out[i]];
             }
             return out;

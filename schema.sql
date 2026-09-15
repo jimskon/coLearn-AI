@@ -63,6 +63,7 @@ CREATE TABLE `activity_instances` (
   `locked_after_end` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'If 1, students cannot open the test after the window closes (end or reopen_until)',
   `lock_before_start` tinyint(1) NOT NULL DEFAULT 0,
   `lock_after_end` tinyint(1) NOT NULL DEFAULT 0,
+  `randomize_order` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'If 1, MC answer choices are shuffled per student',
   PRIMARY KEY (`id`),
   KEY `activity_id` (`activity_id`),
   KEY `active_student_id` (`active_student_id`),

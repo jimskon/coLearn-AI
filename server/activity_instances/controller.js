@@ -1101,6 +1101,7 @@ async function getActivityInstanceById(req, res) {
          ai.points_earned,
          ai.points_possible,
          ai.hidden,
+         ai.randomize_order,
          a.title       AS title,
          a.name        AS activity_name,
          a.sheet_url
@@ -1497,6 +1498,7 @@ async function setupMultipleGroupInstances(req, res) {
     lockedAfterEnd,
     focusEnforcement,
     assignmentDueAt,
+    randomizeOrder,
   } = req.body;
 
   if (!activityId || !courseId) {
@@ -1629,8 +1631,8 @@ async function setupMultipleGroupInstances(req, res) {
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
             test_start_at, test_duration_minutes, locked_before_start, locked_after_end, assignment_due_at,
-            test_focus_enforcement, active_rotation_mode)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, ?, 'submit')`,
+            test_focus_enforcement, active_rotation_mode, randomize_order)
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, ?, 'submit', ?)`,
         [
           courseId,
           activityId,
@@ -1642,6 +1644,7 @@ async function setupMultipleGroupInstances(req, res) {
           isTest ? (lockedAfterEnd ? 1 : 0) : 0,
           isAssignment ? assignmentDueForDb : null,
           isTest && focusEnforcement ? 1 : 0,
+          randomizeOrder ? 1 : 0,
         ]
       );
       return instanceResult.insertId;

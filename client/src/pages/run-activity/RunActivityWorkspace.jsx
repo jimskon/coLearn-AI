@@ -536,7 +536,7 @@ export default function RunActivityWorkspace({
         )}
 
         {canRegradeTests && isAssessmentMode && isInstructor && !isSandbox && isSubmitted && (
-          <div className="mt-3 d-flex gap-2">
+          <div className="mt-3 d-flex align-items-center gap-2 flex-wrap">
             <Button
               variant="warning"
               onClick={() => handleRegradeTest()}
@@ -550,9 +550,14 @@ export default function RunActivityWorkspace({
                 onClick={handleMarkTestReviewed}
                 disabled={isSubmitting}
               >
-                Mark Reviewed
+                Mark as Reviewed
               </Button>
             )}
+            {Number(activity?.review_complete) ? (
+              <Badge bg="primary" className="fs-6">Reviewed</Badge>
+            ) : activity?.graded_at ? (
+              <Badge bg="info" className="fs-6">Graded</Badge>
+            ) : null}
           </div>
         )}
 

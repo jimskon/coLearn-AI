@@ -21,6 +21,7 @@ export default function TestSetupPage() {
   const [lockedBeforeStart, setLockedBeforeStart] = useState(true);
   const [lockedAfterEnd, setLockedAfterEnd] = useState(true);
   const [focusEnforcement, setFocusEnforcement] = useState(false);
+  const [randomizeOrder, setRandomizeOrder] = useState(false);
 
   // preview of "attempts" to be created (groups of 1)
   const [attempts, setAttempts] = useState([]); // [{student_id}...]
@@ -108,6 +109,7 @@ export default function TestSetupPage() {
           lockedBeforeStart: !!lockedBeforeStart,
           lockedAfterEnd: !!lockedAfterEnd,
           focusEnforcement: !!focusEnforcement,
+          randomizeOrder: !!randomizeOrder,
         }),
 
       });
@@ -190,6 +192,18 @@ export default function TestSetupPage() {
                   />
                   <Form.Text muted>
                     The first time is recorded and shows a warning. The second time submits the test.
+                  </Form.Text>
+                </Col>
+                <Col md={12} className="mt-2">
+                  <Form.Check
+                    type="checkbox"
+                    id="randomize-order"
+                    label="Randomize answer choices"
+                    checked={randomizeOrder}
+                    onChange={(e) => setRandomizeOrder(e.target.checked)}
+                  />
+                  <Form.Text muted>
+                    Each student sees the choices for multiple-choice questions in a different randomized order.
                   </Form.Text>
                 </Col>
               </Row>

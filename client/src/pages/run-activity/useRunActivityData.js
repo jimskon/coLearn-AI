@@ -406,6 +406,38 @@ export default function useRunActivityData({
           else preamble.push(...betweenGroups);
         }
 
+        // If randomize_order is set on this instance, shuffle the choices
+        // within every multiple-choice block using a per-student deterministic
+        // seed so the same student always sees the same order, but different
+        // students see different orders.
+        // Responses are saved as choice.value (the text), not a position index,
+        // so this has no effect on grading or the database.
+        if (instanceData?.randomize_order) {
+          const base = (Number(user?.id ?? 0) * 1000003) ^ (Number(instanceId ?? 0) * 999983);
+          function seededShuffle(arr, salt) {
+            const out = arr.slice();
+            for (let i = out.length - 1; i > 0; i--) {
+              let h = ((base ^ salt ^ (i * 2654435761)) >>> 0);
+              h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+              h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+              const j = ((h ^ (h >>> 16)) >>> 0) % (i + 1);
+              [out[i], out[j]] = [out[j], out[i]];
+            }
+            return out;
+          }
+          let qIdx = 0;
+          for (const grp of grouped) {
+            for (const b of [grp.intro, ...(grp.content || [])]) {
+              if (b?.type === 'question') {
+                if (b.multipleChoice?.choices?.length > 1) {
+                  b.multipleChoice = { ...b.multipleChoice, choices: seededShuffle(b.multipleChoice.choices, qIdx) };
+                }
+                qIdx++;
+              }
+            }
+          }
+        }
+
         setGroups(grouped);
 
         const noSet = new Set();

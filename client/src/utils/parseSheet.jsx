@@ -259,6 +259,7 @@ export function InlineAiAssistBlock({
   canAsk = true,
   lockReason = '',
   onTurnSaved,
+  isInstructor = false,
 }) {
   const [inputValue, setInputValue] = useState('');
   const [localTurns, setLocalTurns] = useState([]);
@@ -420,20 +421,24 @@ export function InlineAiAssistBlock({
         ) : (
           <h5 className="mb-0">AI Coach</h5>
         )}
-        <Badge bg="secondary" pill className="ms-1">{modeMeta.label}</Badge>
+        {(isInstructor || runMode === 'preview') && (
+          <Badge bg="secondary" pill className="ms-1">{modeMeta.label}</Badge>
+        )}
         {persisted && !canAsk ? (
           <Badge bg="light" text="dark" className="border">Read only</Badge>
         ) : null}
-        <span className="ms-auto small text-muted">
-          {turnCount ? `${turnCount} exchange${turnCount === 1 ? '' : 's'}` : 'No questions yet'}
-        </span>
+        {(isInstructor || runMode === 'preview') && (
+          <span className="ms-auto small text-muted">
+            {turnCount ? `${turnCount} exchange${turnCount === 1 ? '' : 's'}` : 'No questions yet'}
+          </span>
+        )}
       </div>
 
-      {aiBlock.prompt ? (
-        <div className="mb-2" dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
+      {aiBlock.prompt && (isInstructor || runMode === 'preview') ? (
+        <div className="mb-2 small text-muted fst-italic border-start ps-2" dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
       ) : null}
 
-      {/* The full mode guide is an authoring aid; students only need the mode. */}
+      {/* The full mode guide is an authoring aid; students never see mode metadata. */}
       {runMode === 'preview' ? (
         <div className="d-flex flex-wrap gap-2 mb-3">
           {INLINE_AI_MODE_GUIDE.map((entry) => (
@@ -449,9 +454,9 @@ export function InlineAiAssistBlock({
             </Badge>
           ))}
         </div>
-      ) : (
+      ) : isInstructor ? (
         <div className="small text-muted mb-3">{modeMeta.description}</div>
-      )}
+      ) : null}
 
       <div
         ref={historyScrollRef}
@@ -2423,6 +2428,7 @@ export function renderBlocks(blocks, options = {}) {
           canAsk={options.mode === 'run' ? !!isActive && !options.isObserver && !options.isSubmitted : true}
           lockReason={options.aiLockReason}
           onTurnSaved={options.onAiTurnSaved}
+          isInstructor={isInstructor}
         />
       );
     }
@@ -3435,6 +3441,7 @@ export function renderBlocks(blocks, options = {}) {
                 canAsk={options.mode === 'run' ? !!isActive && !options.isObserver && !options.isSubmitted : true}
                 lockReason={options.aiLockReason}
                 onTurnSaved={options.onAiTurnSaved}
+                isInstructor={isInstructor}
               />
             );
           })}

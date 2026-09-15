@@ -79,6 +79,7 @@ CREATE TABLE `activity_instances` (
   `assignment_due_at` datetime DEFAULT NULL,
   `submitted_late` tinyint(1) NOT NULL DEFAULT 0,
   `sandbox_owner_id` int(11) DEFAULT NULL,
+  `randomize_order` tinyint(1) NOT NULL DEFAULT 0 COMMENT 'If 1, MC answer choices are shuffled per student at render time',
   PRIMARY KEY (`id`),
   KEY `activity_id` (`activity_id`),
   KEY `active_student_id` (`active_student_id`),

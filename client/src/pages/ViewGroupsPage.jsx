@@ -735,6 +735,7 @@ export default function ViewGroupsPage() {
                   <tr>
                     <th>Student</th>
                     <th>Status</th>
+                    <th>Score</th>
                     <th>Due</th>
                     <th></th>
                   </tr>
@@ -745,6 +746,12 @@ export default function ViewGroupsPage() {
                     const instanceId = Number(group.instance_id);
                     const student = (group.members || [])[0];
                     const label = progressLabelFromInstanceRow(group);
+                    const isGraded = !!group.graded_at;
+                    const isReviewed = !!group.review_complete;
+                    const earned = group.points_earned != null ? Number(group.points_earned) : null;
+                    const possible = group.points_possible != null ? Number(group.points_possible) : null;
+                    const hasScore = Number.isFinite(earned) && Number.isFinite(possible);
+                    const scorePercent = hasScore && possible > 0 ? Math.round((earned / possible) * 100) : null;
                     const statusVariant =
                       isComplete
                         ? group.submitted_late ? 'text-warning-emphasis' : 'text-success'
@@ -760,6 +767,19 @@ export default function ViewGroupsPage() {
                         </td>
                         <td>
                           <span className={statusVariant}>{label}</span>
+                          {isReviewed ? (
+                            <Badge bg="primary" className="ms-1">Reviewed</Badge>
+                          ) : isGraded ? (
+                            <Badge bg="info" className="ms-1">Graded</Badge>
+                          ) : null}
+                        </td>
+                        <td>
+                          {hasScore ? (
+                            <span className="fw-semibold">{earned}/{possible}</span>
+                          ) : null}
+                          {scorePercent !== null ? (
+                            <span className="text-muted small ms-1">({scorePercent}%)</span>
+                          ) : null}
                         </td>
                         <td>
                           {dueEdit && dueEdit.instanceId === group.instance_id ? (

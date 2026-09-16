@@ -554,7 +554,7 @@ async function addMemberToInstance(req, res) {
 
     // Check student is enrolled in this course
     const [[enroll]] = await conn.query(
-      `SELECT id FROM enrollments WHERE user_id = ? AND course_id = ? LIMIT 1`,
+      `SELECT student_id FROM course_enrollments WHERE student_id = ? AND course_id = ? LIMIT 1`,
       [studentId, inst.course_id]
     );
     if (!enroll) {

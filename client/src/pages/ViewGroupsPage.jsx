@@ -1242,15 +1242,21 @@ export default function ViewGroupsPage() {
               disabled={timerPaused || isDemoInstructor}
             >
               <option value="">Remove student from group...</option>
-              {active.map((s) => (
-                <option
-                  key={`${s.activity_instance_id}:${s.id}`}
-                  value={`${s.activity_instance_id}:${s.id}`}
-                >
-                  {isSoloMode ? s.name : `G${s.group_number} -- ${s.name}`}
-                  {s.role ? ` (${s.role})` : ''}
-                </option>
-              ))}
+              {active.map((s) => {
+                const grp = groups.find((g) => g.instance_id === s.activity_instance_id);
+                const started = grp && grp.progress_status !== 'not_started';
+                return (
+                  <option
+                    key={`${s.activity_instance_id}:${s.id}`}
+                    value={started ? '' : `${s.activity_instance_id}:${s.id}`}
+                    disabled={started}
+                  >
+                    {isSoloMode ? s.name : `G${s.group_number} -- ${s.name}`}
+                    {s.role ? ` (${s.role})` : ''}
+                    {started ? ' (group started)' : ''}
+                  </option>
+                );
+              })}
             </Form.Select>
             <Button
               variant="danger"
@@ -1306,8 +1312,13 @@ export default function ViewGroupsPage() {
                       >
                         <option value="">Pick group...</option>
                         {groups.map((g) => (
-                          <option key={g.instance_id} value={g.instance_id}>
+                          <option
+                            key={g.instance_id}
+                            value={g.progress_status !== 'not_started' ? '' : g.instance_id}
+                            disabled={g.progress_status !== 'not_started'}
+                          >
                             Group {g.group_number}
+                            {g.progress_status !== 'not_started' ? ' (started)' : ''}
                           </option>
                         ))}
                       </Form.Select>

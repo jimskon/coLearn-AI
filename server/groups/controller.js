@@ -422,6 +422,20 @@ async function removeStudentFromGroup(req, res) {
   try {
     await conn.beginTransaction();
 
+    // Block removal if the group has already started
+    const [[inst]] = await conn.query(
+      `SELECT progress_status FROM activity_instances WHERE id = ?`,
+      [activityInstanceId]
+    );
+    if (!inst) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Activity instance not found' });
+    }
+    if (inst.progress_status !== 'not_started') {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Cannot remove a student from a group that has already started' });
+    }
+
     const [delRes] = await conn.query(
       `DELETE FROM group_members WHERE activity_instance_id = ? AND student_id = ?`,
       [activityInstanceId, studentId]
@@ -559,6 +573,26 @@ async function addMemberToInstance(req, res) {
     );
     if (!enroll) {
       return res.status(400).json({ error: 'Student is not enrolled in this course' });
+    }
+
+    // Block move if either the target group or the student's current group has started
+    if (inst.progress_status !== 'not_started') {
+      return res.status(409).json({ error: 'Cannot move a student into a group that has already started' });
+    }
+
+    const [[currentInst]] = await conn.query(
+      `SELECT ai.progress_status
+         FROM group_members gm
+         JOIN activity_instances ai ON ai.id = gm.activity_instance_id
+        WHERE gm.student_id = ?
+          AND ai.activity_id = ?
+          AND ai.course_id = ?
+          AND COALESCE(ai.active_rotation_mode, '') <> 'sandbox'
+        LIMIT 1`,
+      [studentId, inst.activity_id, inst.course_id]
+    );
+    if (currentInst && currentInst.progress_status !== 'not_started') {
+      return res.status(409).json({ error: 'Cannot move a student who is already in a started group' });
     }
 
     // Remove from any other group in this activity first

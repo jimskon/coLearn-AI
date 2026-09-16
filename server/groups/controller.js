@@ -277,7 +277,7 @@ async function getAvailableStudents(req, res) {
   try {
     const [rows] = await db.query(
       `
-      SELECT u.id, u.name, u.email
+      SELECT u.id, u.name, u.email, u.role
         FROM course_enrollments ce
         JOIN users u ON u.id = ce.student_id
        WHERE ce.course_id = ?

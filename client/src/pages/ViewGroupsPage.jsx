@@ -1270,37 +1270,58 @@ export default function ViewGroupsPage() {
                   ))}
                 </div>
 
-                {/* Add selected to an existing group */}
-                {groups.length > 0 && (
-                  <div className="d-flex gap-2 align-items-center flex-wrap mb-3">
-                    <Form.Select
-                      value={selectedGroupInstance}
-                      onChange={(e) => setSelectedGroupInstance(e.target.value)}
-                      style={{ maxWidth: 180 }}
-                      disabled={selectedUnassigned.size === 0}
-                    >
-                      <option value="">Pick group...</option>
-                      {groups.map((g) => (
-                        <option key={g.instance_id} value={g.instance_id}>
-                          Group {g.group_number}
-                        </option>
-                      ))}
-                    </Form.Select>
-                    <Button
-                      variant="primary"
-                      disabled={!selectedGroupInstance || selectedUnassigned.size === 0}
-                      onClick={() => {
-                        handleAddSelectedToGroup(selectedGroupInstance);
-                        setSelectedGroupInstance('');
-                      }}
-                    >
-                      Add to Group
-                    </Button>
-                    <span className="small text-muted">
-                      ({selectedUnassigned.size} selected)
-                    </span>
-                  </div>
-                )}
+                {/* Add selected to an existing group, or create solo groups */}
+                <div className="d-flex gap-2 align-items-center flex-wrap mb-3">
+                  {groups.length > 0 && (
+                    <>
+                      <Form.Select
+                        value={selectedGroupInstance}
+                        onChange={(e) => setSelectedGroupInstance(e.target.value)}
+                        style={{ maxWidth: 180 }}
+                        disabled={selectedUnassigned.size === 0}
+                      >
+                        <option value="">Pick group...</option>
+                        {groups.map((g) => (
+                          <option key={g.instance_id} value={g.instance_id}>
+                            Group {g.group_number}
+                          </option>
+                        ))}
+                      </Form.Select>
+                      <Button
+                        variant="primary"
+                        disabled={!selectedGroupInstance || selectedUnassigned.size === 0}
+                        onClick={() => {
+                          handleAddSelectedToGroup(selectedGroupInstance);
+                          setSelectedGroupInstance('');
+                        }}
+                      >
+                        Add to Group
+                      </Button>
+                      <span className="text-muted small">or</span>
+                    </>
+                  )}
+                  <Button
+                    variant="outline-primary"
+                    disabled={selectedUnassigned.size === 0}
+                    onClick={async () => {
+                      const ids = [...selectedUnassigned];
+                      for (const studentId of ids) {
+                        await fetch(`${API_BASE_URL}/api/groups/${activityId}/${courseId}/add-solo`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          credentials: 'include',
+                          body: JSON.stringify({ studentId }),
+                        });
+                      }
+                      await Promise.all([refreshStudents(), fetchGroups()]);
+                    }}
+                  >
+                    Add as Solo Groups
+                  </Button>
+                  <span className="small text-muted">
+                    ({selectedUnassigned.size} selected)
+                  </span>
+                </div>
 
                 {/* Generate new groups */}
                 <div className="d-flex gap-2 align-items-center flex-wrap mb-2">

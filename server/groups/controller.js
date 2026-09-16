@@ -559,7 +559,7 @@ async function addMemberToInstance(req, res) {
   try {
     // Verify the instance exists and get its activity/course for permission check
     const [[inst]] = await conn.query(
-      `SELECT id, activity_id, course_id FROM activity_instances WHERE id = ?`,
+      `SELECT id, activity_id, course_id, progress_status FROM activity_instances WHERE id = ?`,
       [instanceId]
     );
     if (!inst) {

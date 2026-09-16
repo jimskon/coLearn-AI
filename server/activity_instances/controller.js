@@ -3537,6 +3537,77 @@ async function getInstanceResponseHistory(req, res) {
 }
 
 // Export it as part of the module
+async function forceAdvanceQuestionGroup(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [[inst]] = await conn.query(
+      `SELECT id, completed_groups, total_groups, progress_status,
+              COALESCE(active_rotation_mode, '') AS active_rotation_mode
+         FROM activity_instances WHERE id = ? FOR UPDATE`,
+      [instanceId]
+    );
+    if (!inst) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Instance not found' });
+    }
+    if (inst.active_rotation_mode === 'sandbox') {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Cannot force-advance a sandbox instance' });
+    }
+
+    const current = Math.max(0, Number(inst.completed_groups) || 0);
+    const total   = Number(inst.total_groups) || 0;
+
+    if (total > 0 && current >= total) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Group is already on the last question group' });
+    }
+
+    const next           = current + 1;
+    const nowComplete    = total > 0 && next >= total;
+    const progressStatus = nowComplete ? 'completed' : 'in_progress';
+
+    if (nowComplete) {
+      await conn.query(
+        `UPDATE activity_instances
+            SET completed_groups = ?, progress_status = ?, active_student_id = NULL
+          WHERE id = ?`,
+        [next, progressStatus, instanceId]
+      );
+    } else {
+      await conn.query(
+        `UPDATE activity_instances
+            SET completed_groups = ?, progress_status = ?
+          WHERE id = ?`,
+        [next, progressStatus, instanceId]
+      );
+    }
+
+    await conn.commit();
+
+    const patch = {
+      completed_groups: next,
+      progress_status:  progressStatus,
+      ...(nowComplete ? { activeStudentId: null } : {}),
+    };
+    global.emitInstanceState?.(instanceId, patch);
+
+    return res.json({ ok: true, completed_groups: next, progress_status: progressStatus });
+  } catch (err) {
+    try { await conn.rollback(); } catch { /* ignore */ }
+    console.error('❌ forceAdvanceQuestionGroup:', err);
+    return res.status(500).json({ error: 'Failed to advance question group', details: err?.message });
+  } finally {
+    conn.release();
+  }
+}
+
+
 module.exports = {
   clearResponsesForInstance,
   recordTestFocusLoss,
@@ -3550,6 +3621,7 @@ module.exports = {
   recordHeartbeat,
   getActiveStudent,
   rotateActiveStudent,
+  forceAdvanceQuestionGroup,
   setupMultipleGroupInstances,
   submitGroupResponses,
   getInstanceGroups,

@@ -15,8 +15,13 @@ export default defineConfig(() => {
     process.env.VITE_DEV_REACT_BUILD === 'true';
 
   let gitCommitSha = 'unknown';
+  let gitBranch = '';
   try {
     gitCommitSha = execSync('git rev-parse --short=7 HEAD', {
+      cwd: projectRoot,
+      encoding: 'utf8',
+    }).trim();
+    gitBranch = execSync('git branch --show-current', {
       cwd: projectRoot,
       encoding: 'utf8',
     }).trim();
@@ -32,6 +37,7 @@ export default defineConfig(() => {
       __APP_RELEASE_VERSION__: JSON.stringify(releaseVersion),
       __APP_BUILD_TIME_UTC__: JSON.stringify(buildTimeUtc),
       __APP_GIT_COMMIT_SHA__: JSON.stringify(gitCommitSha),
+      __APP_GIT_BRANCH__: JSON.stringify(gitBranch),
     },
     server: {
       host: true,

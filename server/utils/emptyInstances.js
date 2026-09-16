@@ -40,7 +40,8 @@
  * it.
  */
 const ABANDONED_INSTANCE_SQL = `
-      ai.submitted_at IS NULL
+      COALESCE(ai.active_rotation_mode, '') <> 'sandbox'
+  AND ai.submitted_at IS NULL
   AND ai.graded_at IS NULL
   AND COALESCE(ai.completed_groups, 0) = 0
   AND COALESCE(ai.points_earned, 0) = 0

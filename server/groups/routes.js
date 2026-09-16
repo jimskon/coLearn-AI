@@ -12,6 +12,7 @@ router.get('/:activityId/:courseId/active-students', controller.getActiveStudent
 router.post('/:activityId/:courseId/smart-add', controller.smartAddStudent);
 router.post('/:activityId/:courseId/add-solo', controller.addSoloStudent);
 
+router.post('/:instanceId/add-member', controller.addMemberToInstance);
 router.delete('/:activityInstanceId/remove/:studentId', controller.removeStudentFromGroup);
 
 module.exports = router;

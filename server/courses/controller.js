@@ -1028,13 +1028,16 @@ async function getGroupsConfigForActivity(req, res) {
       `
       SELECT
         ai.id AS instance_id,
+        ai.group_number,
         gm.student_id,
         gm.role
       FROM activity_instances ai
       JOIN group_members gm ON gm.activity_instance_id = ai.id
       WHERE ai.course_id = ?
         AND ai.activity_id = ?
-      ORDER BY ai.id ASC, gm.id ASC
+        AND COALESCE(ai.active_rotation_mode, '') <> 'sandbox'
+        AND ai.group_number IS NOT NULL
+      ORDER BY ai.group_number ASC, gm.id ASC
       `,
       [courseId, sourceActivityId]
     );

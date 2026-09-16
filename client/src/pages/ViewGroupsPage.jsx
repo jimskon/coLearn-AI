@@ -234,6 +234,15 @@ export default function ViewGroupsPage() {
   // Tests and assignments give each student a private instance — 'add to group' = 'enroll student'
   const isSoloMode = activityType === 'test' || activityType === 'assignment';
 
+  // Group setup / unassigned-students panel
+  const [selectedUnassigned, setSelectedUnassigned] = useState(new Set());
+  const [groupSize, setGroupSize] = useState(4);
+  const [useRoles, setUseRoles] = useState(true);
+  const [cloneFromActivityId, setCloneFromActivityId] = useState('');
+  const [courseActivities, setCourseActivities] = useState([]);
+  const [pendingGroups, setPendingGroups] = useState([]); // generated/cloned groups awaiting save
+  const [savingGroups, setSavingGroups] = useState(false);
+
   // Convert UTC db string to datetime-local input value
   const toLocalInput = (utcStr) => {
     if (!utcStr) return '';
@@ -355,8 +364,11 @@ export default function ViewGroupsPage() {
           credentials: 'include',
         }).then((r) => r.json()),
       ]);
-      setAvailable(a.students || []);
+      const avail = a.students || [];
+      setAvailable(avail);
       setActive(b.students || []);
+      // default: all unassigned students checked
+      setSelectedUnassigned(new Set(avail.map((s) => s.id)));
     } catch (err) {
       console.error('❌ Error fetching students:', err);
     }
@@ -366,6 +378,16 @@ export default function ViewGroupsPage() {
     if (courseId && activityId) refreshStudents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, activityId]);
+
+  // Load sibling activities for "Clone groups from" dropdown
+  useEffect(() => {
+    if (!courseId || isSoloMode) return;
+    fetch(`${API_BASE_URL}/api/courses/${courseId}/activities`, { credentials: 'include' })
+      .then((r) => r.json())
+      .then((d) => setCourseActivities(Array.isArray(d) ? d : []))
+      .catch((err) => console.error('Error loading course activities:', err));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courseId, isSoloMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -535,6 +557,138 @@ export default function ViewGroupsPage() {
       alert(err?.message || 'Failed to remove student');
     }
   };
+
+  // --- Unassigned students panel helpers ---
+
+  const toggleUnassigned = (id) =>
+    setSelectedUnassigned((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+
+  const selectAllUnassigned = () => setSelectedUnassigned(new Set(available.map((s) => s.id)));
+  const deselectAllUnassigned = () => setSelectedUnassigned(new Set());
+
+  const rolePriority = ['facilitator', 'analyst', 'qc', 'spokesperson'];
+
+  const generateGroupsFromUnassigned = () => {
+    const present = available.filter((s) => selectedUnassigned.has(s.id));
+    if (present.length === 0) { alert('No students selected.'); return; }
+
+    const shuffled = [...present].sort(() => Math.random() - 0.5);
+    const size = Math.min(Math.max(groupSize, 1), 5);
+
+    const rawGroups = [];
+    for (let i = 0; i < shuffled.length; i += size) rawGroups.push(shuffled.slice(i, i + size));
+
+    // Merge small tail groups (same logic as GroupSetupPage)
+    if (size === 4 && rawGroups.length > 0) {
+      const last = rawGroups[rawGroups.length - 1];
+      if (last.length === 1 && rawGroups.length >= 3) {
+        const merged = rawGroups.splice(-3).flat();
+        rawGroups.push(merged.slice(0, 3), merged.slice(3, 6), merged.slice(6));
+      } else if (last.length === 2 && rawGroups.length >= 2) {
+        const merged = rawGroups.splice(-2).flat();
+        rawGroups.push(merged.slice(0, 3), merged.slice(3));
+      }
+    }
+    if (size === 3 && rawGroups.length >= 2) {
+      const last = rawGroups[rawGroups.length - 1];
+      if (last.length === 1) {
+        const one = rawGroups.pop();
+        const three = rawGroups.pop();
+        const merged = [...three, ...one];
+        rawGroups.push(merged.slice(0, 2), merged.slice(2, 4));
+      }
+    }
+
+    const finalGroups = rawGroups.map((group) => ({
+      members: group.map((student, index) => {
+        let role = null;
+        if (useRoles) {
+          if (group.length <= 4) role = rolePriority[index] || null;
+          else role = index < 4 ? rolePriority[index] : null;
+        }
+        return { student_id: student.id, role };
+      }),
+      _preview: group.map((s) => s.name || s.id),
+    }));
+
+    setPendingGroups(finalGroups);
+  };
+
+  const handleCloneGroupsForSetup = async () => {
+    if (!cloneFromActivityId) return;
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/courses/${courseId}/activities/${cloneFromActivityId}/groups-config`,
+        { credentials: 'include' }
+      );
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Failed to load groups'); return; }
+      // attach preview names using the available + active lists
+      const allStudents = [...available, ...active];
+      const withPreview = (data.groups || []).map((g) => ({
+        ...g,
+        _preview: (g.members || []).map((m) => {
+          const s = allStudents.find((x) => x.id === m.student_id);
+          return s ? s.name : `Student ${m.student_id}`;
+        }),
+      }));
+      setPendingGroups(withPreview);
+    } catch (err) {
+      console.error('clone groups failed:', err);
+      alert('Failed to clone groups');
+    }
+  };
+
+  const handleSavePendingGroups = async () => {
+    if (!pendingGroups.length) return;
+    setSavingGroups(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activity-instances/setup-groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          activityId: Number(activityId),
+          courseId: Number(courseId),
+          groups: pendingGroups.map(({ _preview, ...g }) => g),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Failed to save groups'); return; }
+      setPendingGroups([]);
+      await Promise.all([refreshStudents(), fetchGroups()]);
+    } catch (err) {
+      console.error('save groups failed:', err);
+      alert('Failed to save groups');
+    } finally {
+      setSavingGroups(false);
+    }
+  };
+
+  const handleAddSelectedToGroup = async (instanceId) => {
+    if (!instanceId || selectedUnassigned.size === 0) return;
+    const ids = [...selectedUnassigned];
+    try {
+      await Promise.all(ids.map((studentId) =>
+        fetch(`${API_BASE_URL}/api/groups/${instanceId}/add-member`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ studentId }),
+        })
+      ));
+      await Promise.all([refreshStudents(), fetchGroups()]);
+    } catch (err) {
+      console.error('add to group failed:', err);
+      alert('Failed to add students to group');
+    }
+  };
+
+  // --- End unassigned students panel helpers ---
 
   const anyStudentsActive = groups.some((group) =>
     (group.members || []).some((member) => member.connected)
@@ -1019,88 +1173,60 @@ export default function ViewGroupsPage() {
         </>
       )}
 
+      {/* ======= GROUP MANAGEMENT CARD ======= */}
       <Card className="my-4">
         <Card.Body className="d-flex flex-column gap-3">
-          <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
-            <div>
-              <div className="fw-semibold">Active-student rotation</div>
-              <div className="small text-muted">
-                Choose whether the active student changes on every submit or only when the group advances to the next question group.
+
+          {/* Active-student rotation (group activities only) */}
+          {!isSoloMode && (
+            <div className="d-flex align-items-center justify-content-between gap-3 flex-wrap">
+              <div>
+                <div className="fw-semibold">Active-student rotation</div>
+                <div className="small text-muted">
+                  Choose whether the active student changes on every submit or only when the group advances to the next question group.
+                </div>
               </div>
-            </div>
-            {isDemoInstructor ? (
-              <div className="small text-muted">Instructor demo mode: controls are shown but disabled.</div>
-            ) : null}
-            <ButtonGroup>
-              <Button
-                variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
-                disabled={updatingRotationMode || isDemoInstructor}
-                onClick={() => handleSetRotationMode('submit')}
-              >
-                Submit
-              </Button>
-              <Button
-                variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
-                disabled={updatingRotationMode || isDemoInstructor}
-                onClick={() => handleSetRotationMode('group')}
-              >
-                Q Group
-              </Button>
-            </ButtonGroup>
-          </div>
-
-          <div className="d-flex gap-3 align-items-center flex-wrap">
-            <Form.Select
-              value={selectedAdd}
-              onChange={(e) => setSelectedAdd(e.target.value)}
-              style={{ maxWidth: 320 }}
-              disabled={timerPaused || isDemoInstructor}
-            >
-              <option value="">Add student...</option>
-              {available.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.name} ({s.email})
-                </option>
-              ))}
-            </Form.Select>
-
-            <div className="d-flex gap-2">
-              <Button
-                variant="primary"
-                onClick={handleAddToGroup}
-                disabled={!selectedAdd || timerPaused || isDemoInstructor}
-              >
-                {isSoloMode ? 'Add student' : 'Add to group'}
-              </Button>
-              {!isSoloMode && (
+              {isDemoInstructor ? (
+                <div className="small text-muted">Instructor demo mode: controls are shown but disabled.</div>
+              ) : null}
+              <ButtonGroup>
                 <Button
-                  variant="outline-secondary"
-                  onClick={handleAddAsSoloGroup}
-                  disabled={!selectedAdd || timerPaused || isDemoInstructor}
+                  variant={rotationMode === 'submit' ? 'primary' : 'outline-primary'}
+                  disabled={updatingRotationMode || isDemoInstructor}
+                  onClick={() => handleSetRotationMode('submit')}
                 >
-                  Group of one
+                  Submit
                 </Button>
-              )}
+                <Button
+                  variant={rotationMode === 'group' ? 'primary' : 'outline-primary'}
+                  disabled={updatingRotationMode || isDemoInstructor}
+                  onClick={() => handleSetRotationMode('group')}
+                >
+                  Q Group
+                </Button>
+              </ButtonGroup>
             </div>
+          )}
 
+          {/* Remove student */}
+          <div className="d-flex gap-3 align-items-center flex-wrap">
             <Form.Select
               value={selectedRemove}
               onChange={(e) => setSelectedRemove(e.target.value)}
               style={{ maxWidth: 380 }}
               disabled={timerPaused || isDemoInstructor}
             >
-              <option value="">Remove student...</option>
+              <option value="">Remove student from group...</option>
               {active.map((s) => (
                 <option
                   key={`${s.activity_instance_id}:${s.id}`}
                   value={`${s.activity_instance_id}:${s.id}`}
                 >
-                  G{s.group_number} — {s.name}
+                  {isSoloMode ? s.name : `G${s.group_number} -- ${s.name}`}
                   {s.role ? ` (${s.role})` : ''}
                 </option>
               ))}
             </Form.Select>
-
             <Button
               variant="danger"
               onClick={handleRemove}
@@ -1109,8 +1235,149 @@ export default function ViewGroupsPage() {
               Remove
             </Button>
           </div>
+
         </Card.Body>
       </Card>
+
+      {/* ======= UNASSIGNED STUDENTS PANEL ======= */}
+      {!isSoloMode && !isDemoInstructor && (
+        <Card className="my-4">
+          <Card.Header className="fw-semibold">
+            Unassigned Students {available.length > 0 && <Badge bg="secondary" className="ms-1">{available.length}</Badge>}
+          </Card.Header>
+          <Card.Body>
+            {available.length === 0 ? (
+              <div className="text-muted">All enrolled students are assigned to a group.</div>
+            ) : (
+              <>
+                {/* Checkbox list */}
+                <div className="d-flex gap-2 mb-2">
+                  <Button size="sm" variant="outline-secondary" onClick={selectAllUnassigned}>Select All</Button>
+                  <Button size="sm" variant="outline-secondary" onClick={deselectAllUnassigned}>Deselect All</Button>
+                </div>
+                <div className="mb-3" style={{ columns: '3 160px', gap: '0.5rem' }}>
+                  {available.map((s) => (
+                    <div key={s.id} className="mb-1">
+                      <Form.Check
+                        type="checkbox"
+                        id={`unassigned-${s.id}`}
+                        label={s.name || s.email || `Student ${s.id}`}
+                        checked={selectedUnassigned.has(s.id)}
+                        onChange={() => toggleUnassigned(s.id)}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Add selected to an existing group */}
+                {groups.length > 0 && (
+                  <div className="d-flex gap-2 align-items-center flex-wrap mb-3">
+                    <Form.Select
+                      id="add-to-group-select"
+                      style={{ maxWidth: 220 }}
+                      defaultValue=""
+                      onChange={(e) => {
+                        if (e.target.value) handleAddSelectedToGroup(e.target.value);
+                        e.target.value = '';
+                      }}
+                      disabled={selectedUnassigned.size === 0}
+                    >
+                      <option value="">Add to group...</option>
+                      {groups.map((g) => (
+                        <option key={g.instance_id} value={g.instance_id}>
+                          Group {g.group_number}
+                        </option>
+                      ))}
+                    </Form.Select>
+                    <span className="small text-muted">
+                      ({selectedUnassigned.size} selected)
+                    </span>
+                  </div>
+                )}
+
+                {/* Generate new groups */}
+                <div className="d-flex gap-2 align-items-center flex-wrap mb-2">
+                  <Form.Select
+                    value={groupSize}
+                    onChange={(e) => setGroupSize(Number(e.target.value))}
+                    style={{ maxWidth: 120 }}
+                  >
+                    {[2, 3, 4, 5].map((n) => (
+                      <option key={n} value={n}>Size {n}</option>
+                    ))}
+                  </Form.Select>
+                  <Form.Check
+                    type="checkbox"
+                    id="use-roles-check"
+                    label="Assign roles"
+                    checked={useRoles}
+                    onChange={(e) => setUseRoles(e.target.checked)}
+                    className="mb-0"
+                  />
+                  <Button variant="outline-primary" onClick={generateGroupsFromUnassigned}>
+                    Randomly Generate Groups
+                  </Button>
+                </div>
+
+                {/* Clone groups from another activity */}
+                {courseActivities.filter((a) => a.has_groups && Number(a.activity_id) !== Number(activityId)).length > 0 && (
+                  <div className="d-flex gap-2 align-items-center flex-wrap mb-2">
+                    <Form.Select
+                      value={cloneFromActivityId}
+                      onChange={(e) => setCloneFromActivityId(e.target.value)}
+                      style={{ maxWidth: 280 }}
+                    >
+                      <option value="">Clone groups from activity...</option>
+                      {courseActivities
+                        .filter((a) => a.has_groups && Number(a.activity_id) !== Number(activityId))
+                        .map((a) => (
+                          <option key={a.activity_id} value={a.activity_id}>
+                            {a.title || a.activity_name || `Activity ${a.activity_id}`}
+                          </option>
+                        ))}
+                    </Form.Select>
+                    <Button
+                      variant="outline-secondary"
+                      disabled={!cloneFromActivityId}
+                      onClick={handleCloneGroupsForSetup}
+                    >
+                      Clone
+                    </Button>
+                  </div>
+                )}
+
+                {/* Pending groups preview */}
+                {pendingGroups.length > 0 && (
+                  <div className="mt-3">
+                    <div className="fw-semibold mb-2">Preview -- {pendingGroups.length} new group{pendingGroups.length !== 1 ? 's' : ''}:</div>
+                    <div className="d-flex flex-wrap gap-2 mb-3">
+                      {pendingGroups.map((g, idx) => (
+                        <div key={idx} className="border rounded p-2 small" style={{ minWidth: 140 }}>
+                          <div className="fw-semibold mb-1">Group {idx + 1}</div>
+                          <ul className="mb-0 ps-3">
+                            {(g._preview || g.members || []).map((item, i) => (
+                              <li key={i}>{typeof item === 'string' ? item : `Student ${item.student_id}`}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="d-flex gap-2">
+                      <Button variant="success" onClick={handleSavePendingGroups} disabled={savingGroups}>
+                        {savingGroups ? 'Saving...' : 'Save Groups'}
+                      </Button>
+                      <Button variant="outline-secondary" onClick={() => setPendingGroups([])} disabled={savingGroups}>
+                        Discard
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </Card.Body>
+        </Card>
+      )}
+
       {activityType === 'assignment' && !isDemoInstructor && (
         <Card className="my-4">
           <Card.Body>

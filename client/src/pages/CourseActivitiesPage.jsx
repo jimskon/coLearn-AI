@@ -151,9 +151,7 @@ export default function CourseActivitiesPage() {
         ? `/test-setup/${courseId}/${activityId}`   // ✅ tests go here
         : isDemoLike
           ? `/run/${instanceId}`
-          : isDemoClassGroup
-            ? `/view-groups/${courseId}/${activityId}`
-            : `/setup-groups/${courseId}/${activityId}` // ✅ non-tests go here
+          : `/view-groups/${courseId}/${activityId}` // groups + setup unified
       )
       : `/run/${instanceId}`;
 

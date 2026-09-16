@@ -242,6 +242,7 @@ export default function ViewGroupsPage() {
   const [courseActivities, setCourseActivities] = useState([]);
   const [pendingGroups, setPendingGroups] = useState([]); // generated/cloned groups awaiting save
   const [savingGroups, setSavingGroups] = useState(false);
+  const [selectedGroupInstance, setSelectedGroupInstance] = useState('');
 
   // Convert UTC db string to datetime-local input value
   const toLocalInput = (utcStr) => {
@@ -368,7 +369,7 @@ export default function ViewGroupsPage() {
       setAvailable(avail);
       setActive(b.students || []);
       // default: all unassigned students checked
-      setSelectedUnassigned(new Set(avail.map((s) => s.id)));
+      setSelectedUnassigned(new Set(avail.filter((s) => s.role === 'student').map((s) => s.id)));
     } catch (err) {
       console.error('❌ Error fetching students:', err);
     }
@@ -567,7 +568,7 @@ export default function ViewGroupsPage() {
       return next;
     });
 
-  const selectAllUnassigned = () => setSelectedUnassigned(new Set(available.map((s) => s.id)));
+  const selectAllUnassigned = () => setSelectedUnassigned(new Set(available.filter((s) => s.role === 'student').map((s) => s.id)));
   const deselectAllUnassigned = () => setSelectedUnassigned(new Set());
 
   const rolePriority = ['facilitator', 'analyst', 'qc', 'spokesperson'];
@@ -1273,22 +1274,28 @@ export default function ViewGroupsPage() {
                 {groups.length > 0 && (
                   <div className="d-flex gap-2 align-items-center flex-wrap mb-3">
                     <Form.Select
-                      id="add-to-group-select"
-                      style={{ maxWidth: 220 }}
-                      defaultValue=""
-                      onChange={(e) => {
-                        if (e.target.value) handleAddSelectedToGroup(e.target.value);
-                        e.target.value = '';
-                      }}
+                      value={selectedGroupInstance}
+                      onChange={(e) => setSelectedGroupInstance(e.target.value)}
+                      style={{ maxWidth: 180 }}
                       disabled={selectedUnassigned.size === 0}
                     >
-                      <option value="">Add to group...</option>
+                      <option value="">Pick group...</option>
                       {groups.map((g) => (
                         <option key={g.instance_id} value={g.instance_id}>
                           Group {g.group_number}
                         </option>
                       ))}
                     </Form.Select>
+                    <Button
+                      variant="primary"
+                      disabled={!selectedGroupInstance || selectedUnassigned.size === 0}
+                      onClick={() => {
+                        handleAddSelectedToGroup(selectedGroupInstance);
+                        setSelectedGroupInstance('');
+                      }}
+                    >
+                      Add to Group
+                    </Button>
                     <span className="small text-muted">
                       ({selectedUnassigned.size} selected)
                     </span>

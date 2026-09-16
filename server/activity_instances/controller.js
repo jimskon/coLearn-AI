@@ -12,6 +12,7 @@ const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
 const { ensureAssignmentDueSchema } = require('../utils/assignmentDueSchema');
+const { ensureRandomizeOrderSchema } = require('../utils/randomizeOrderSchema');
 
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1072,6 +1073,7 @@ async function getActivityInstanceById(req, res) {
   try {
     await ensureTestFocusSchema();
     await ensureAssignmentDueSchema();
+    await ensureRandomizeOrderSchema();
     const [[instance]] = await db.query(
       `SELECT
          ai.id,
@@ -1507,6 +1509,7 @@ async function setupMultipleGroupInstances(req, res) {
 
   await ensureTestFocusSchema();
   await ensureAssignmentDueSchema();
+  await ensureRandomizeOrderSchema();
   const lockName = `setupGroups:${courseId}:${activityId}`;
   const conn = await db.getConnection();
 

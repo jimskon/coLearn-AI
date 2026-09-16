@@ -380,9 +380,14 @@ export default function ViewGroupsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [courseId, activityId]);
 
+  // For assignments, each student gets their own instance (group of 1)
+  useEffect(() => {
+    if (activityType === 'assignment') setGroupSize(1);
+  }, [activityType]);
+
   // Load sibling activities for "Clone groups from" dropdown
   useEffect(() => {
-    if (!courseId || isSoloMode) return;
+    if (!courseId || activityType === 'test') return;
     fetch(`${API_BASE_URL}/api/courses/${courseId}/activities`, { credentials: 'include' })
       .then((r) => r.json())
       .then((d) => setCourseActivities(Array.isArray(d) ? d : []))
@@ -1241,7 +1246,7 @@ export default function ViewGroupsPage() {
       </Card>
 
       {/* ======= UNASSIGNED STUDENTS PANEL ======= */}
-      {!isSoloMode && !isDemoInstructor && (
+      {activityType !== 'test' && !isDemoInstructor && (
         <Card className="my-4">
           <Card.Header className="fw-semibold">
             Unassigned Students {available.length > 0 && <Badge bg="secondary" className="ms-1">{available.length}</Badge>}
@@ -1325,25 +1330,29 @@ export default function ViewGroupsPage() {
 
                 {/* Generate new groups */}
                 <div className="d-flex gap-2 align-items-center flex-wrap mb-2">
-                  <Form.Select
-                    value={groupSize}
-                    onChange={(e) => setGroupSize(Number(e.target.value))}
-                    style={{ maxWidth: 120 }}
-                  >
-                    {[2, 3, 4, 5].map((n) => (
-                      <option key={n} value={n}>Size {n}</option>
-                    ))}
-                  </Form.Select>
-                  <Form.Check
-                    type="checkbox"
-                    id="use-roles-check"
-                    label="Assign roles"
-                    checked={useRoles}
-                    onChange={(e) => setUseRoles(e.target.checked)}
-                    className="mb-0"
-                  />
+                  {activityType !== 'assignment' && (
+                    <Form.Select
+                      value={groupSize}
+                      onChange={(e) => setGroupSize(Number(e.target.value))}
+                      style={{ maxWidth: 120 }}
+                    >
+                      {[2, 3, 4, 5].map((n) => (
+                        <option key={n} value={n}>Size {n}</option>
+                      ))}
+                    </Form.Select>
+                  )}
+                  {activityType !== 'assignment' && (
+                    <Form.Check
+                      type="checkbox"
+                      id="use-roles-check"
+                      label="Assign roles"
+                      checked={useRoles}
+                      onChange={(e) => setUseRoles(e.target.checked)}
+                      className="mb-0"
+                    />
+                  )}
                   <Button variant="outline-primary" onClick={generateGroupsFromUnassigned}>
-                    Randomly Generate Groups
+                    {activityType === 'assignment' ? 'Enroll Selected Students' : 'Randomly Generate Groups'}
                   </Button>
                 </div>
 

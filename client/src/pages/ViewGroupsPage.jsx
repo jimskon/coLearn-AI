@@ -211,7 +211,8 @@ export default function ViewGroupsPage() {
   const [error, setError] = useState('');
   const [clearing, setClearing] = useState(new Set());
   const [deleting, setDeleting] = useState(new Set());
-  const [dangerModal, setDangerModal] = useState(null); // { instanceId, label, action: null|'clear'|'delete' }
+  const [dangerModal, setDangerModal] = useState(null); // { instanceId, label, totalGroups, completedGroups, action: null|'clear'|'delete'|'advance' }
+  const [advancing, setAdvancing] = useState(new Set());
 
   // Live-edit state
   const [available, setAvailable] = useState([]);
@@ -649,6 +650,24 @@ export default function ViewGroupsPage() {
     }
   };
 
+  const forceAdvanceGroup = async (instanceId) => {
+    setAdvancing((s) => new Set(s).add(instanceId));
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/force-advance`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json();
+      if (!res.ok) { alert(data.error || 'Failed to advance'); return; }
+      await fetchGroups();
+    } catch (err) {
+      console.error('force-advance failed:', err);
+      alert('Failed to advance question group');
+    } finally {
+      setAdvancing((s) => { const n = new Set(s); n.delete(instanceId); return n; });
+    }
+  };
+
   const handleSavePendingGroups = async () => {
     if (!pendingGroups.length) return;
     setSavingGroups(true);
@@ -1003,7 +1022,7 @@ export default function ViewGroupsPage() {
                                 title="Danger zone"
                                 onClick={() => {
                                   const lbl = student?.name || 'Student';
-                                  setDangerModal({ instanceId: group.instance_id, label: lbl, action: null });
+                                  setDangerModal({ instanceId: group.instance_id, label: lbl, totalGroups: group.total_groups, completedGroups: group.completed_groups, action: null });
                                 }}
                               >⚠️</Button>
                             )}
@@ -1078,7 +1097,7 @@ export default function ViewGroupsPage() {
                             const label = isSoloMode
                               ? ((group.members || [])[0]?.name || 'Student')
                               : 'Group ' + group.group_number;
-                            setDangerModal({ instanceId: group.instance_id, label, action: null });
+                            setDangerModal({ instanceId: group.instance_id, label, totalGroups: group.total_groups, completedGroups: group.completed_groups, action: null });
                           }}
                         >
                           ⚠️
@@ -1223,15 +1242,21 @@ export default function ViewGroupsPage() {
               disabled={timerPaused || isDemoInstructor}
             >
               <option value="">Remove student from group...</option>
-              {active.map((s) => (
-                <option
-                  key={`${s.activity_instance_id}:${s.id}`}
-                  value={`${s.activity_instance_id}:${s.id}`}
-                >
-                  {isSoloMode ? s.name : `G${s.group_number} -- ${s.name}`}
-                  {s.role ? ` (${s.role})` : ''}
-                </option>
-              ))}
+              {active.map((s) => {
+                const grp = groups.find((g) => g.instance_id === s.activity_instance_id);
+                const started = grp && grp.progress_status !== 'not_started';
+                return (
+                  <option
+                    key={`${s.activity_instance_id}:${s.id}`}
+                    value={started ? '' : `${s.activity_instance_id}:${s.id}`}
+                    disabled={started}
+                  >
+                    {isSoloMode ? s.name : `G${s.group_number} -- ${s.name}`}
+                    {s.role ? ` (${s.role})` : ''}
+                    {started ? ' (group started)' : ''}
+                  </option>
+                );
+              })}
             </Form.Select>
             <Button
               variant="danger"
@@ -1287,8 +1312,13 @@ export default function ViewGroupsPage() {
                       >
                         <option value="">Pick group...</option>
                         {groups.map((g) => (
-                          <option key={g.instance_id} value={g.instance_id}>
+                          <option
+                            key={g.instance_id}
+                            value={g.progress_status !== 'not_started' ? '' : g.instance_id}
+                            disabled={g.progress_status !== 'not_started'}
+                          >
                             Group {g.group_number}
+                            {g.progress_status !== 'not_started' ? ' (started)' : ''}
                           </option>
                         ))}
                       </Form.Select>
@@ -1498,6 +1528,28 @@ export default function ViewGroupsPage() {
                 </Button>
               </div>
             </div>
+          ) : dangerModal && dangerModal.action === 'advance' ? (
+            <div className="alert alert-warning">
+              <strong>Are you sure?</strong> This will immediately move{' '}
+              <strong>{dangerModal && dangerModal.label}</strong> to the next question group,
+              even if they have not submitted their current answers.
+              Students on the activity page will advance automatically.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="warning"
+                  disabled={advancing.has(dangerModal && dangerModal.instanceId)}
+                  onClick={() => {
+                    forceAdvanceGroup(dangerModal.instanceId);
+                    setDangerModal(null);
+                  }}
+                >
+                  {advancing.has(dangerModal && dangerModal.instanceId) ? 'Advancing...' : 'Yes, advance now'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: null }); })}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="d-flex flex-column gap-2">
               <Button
@@ -1506,6 +1558,14 @@ export default function ViewGroupsPage() {
               >
                 Clear Answers
               </Button>
+              {dangerModal && !(dangerModal.totalGroups > 0 && dangerModal.completedGroups >= dangerModal.totalGroups) && (
+                <Button
+                  variant="outline-warning"
+                  onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: 'advance' }); })}
+                >
+                  Force Advance to Next Question Group
+                </Button>
+              )}
               <Button
                 variant="danger"
                 onClick={() => setDangerModal(function(p) { return Object.assign({}, p, { action: 'delete' }); })}

@@ -1,5 +1,5 @@
 // server/ai/controller.js
-const OpenAI = require("openai");
+const { chatCompletion, textCompletion, isAiConfigured, getModel, getInlineAiModel, PROVIDER } = require('./llm-provider');
 const {
   resolveActivityLanguage,
   configuredDefaultLanguage,
@@ -24,44 +24,6 @@ const { gradeTestQuestionHttp, gradeTestQuestion } = require("./grading");
 //
 // Tests that drive the model swap methods onto __testHooks.openai, which is this
 // same object, so their stubs continue to take precedence.
-function createStubOpenAI() {
-  return {
-    chat: {
-      completions: {
-        // Callers request response_format json_object and JSON.parse the content.
-        // An unavailable evaluator must never silently approve an answer. It
-        // returns the normal revise shape so the retry gate can offer the
-        // explicit Continue option instead of treating an outage as success.
-        create: async () => ({
-          choices: [{ message: { content: JSON.stringify({
-            decision: 'revise',
-            feedback: 'AI feedback is temporarily unavailable. Please review your response and try again, or continue when that option is available.',
-            revision_requirement: 'Provide a response that addresses the question.',
-            revision_severity: 'normal',
-          }) } }],
-        }),
-      },
-    },
-    responses: {
-      create: async () => ({ output_text: '', status: 'completed', output: [] }),
-    },
-  };
-}
-
-const openai = isAiConfigured()
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : createStubOpenAI();
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
-const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
-const INLINE_AI_ALLOWED_MODELS = new Set([
-  'gpt-5-mini',
-  'gpt-4o-mini',
-]);
-
-function getInlineAiModel(value) {
-  const model = String(value || '').trim();
-  return INLINE_AI_ALLOWED_MODELS.has(model) ? model : INLINE_AI_DEFAULT_MODEL;
-}
 
 // An activity that names no language falls through to the deployment default
 // (DEFAULT_ACTIVITY_LANGUAGE) and only then to English. Read from the
@@ -251,17 +213,13 @@ function normalizeAIResult(obj) {
 // Tests that DO want the model path set a non-placeholder key and intercept the
 // network (see tests/aiRoutes.validation.test.js, which uses 'live-test-key').
 // ---------------------------------------------------------------------------
-function isAiConfigured() {
-  const key = process.env.OPENAI_API_KEY;
-  return !!key && key !== 'test-key';
-}
-
 let warnedAiUnconfigured = false;
 function warnAiUnconfigured(where) {
   if (warnedAiUnconfigured) return;
   warnedAiUnconfigured = true;
+  const keyName = PROVIDER === 'claude' ? 'ANTHROPIC_API_KEY' : 'OPENAI_API_KEY';
   console.warn(
-    `[ai] OPENAI_API_KEY is missing or a placeholder; skipping model calls ` +
+    `[ai] ${keyName} is missing or a placeholder; skipping model calls ` +
     `(first hit: ${where}). Submissions will remain in revise state until explicitly continued.`
   );
 }
@@ -370,31 +328,15 @@ async function runInlineAiCompletion({
     `Student input:\n${cleanedInput}`,
   ].filter(Boolean).join('\n\n');
 
-  // GPT-5 mini is a reasoning model.  A 500-token total allowance can be
-  // consumed entirely by reasoning before it emits visible text, which the
-  // API reports as incomplete/max_output_tokens.  Inline classroom help is
-  // short and direct, so use minimal reasoning with room for an answer.
-  const request = {
-    model: selectedModel,
-    instructions: system,
+  const inlineMaxTokens = selectedModel === 'gpt-5-mini' ? 1600 : 500;
+  const { text: outputText } = await textCompletion({
+    system,
     input: user,
-    text: { format: { type: 'text' } },
-    max_output_tokens: selectedModel === 'gpt-5-mini' ? 1600 : 500,
-  };
-  if (selectedModel === 'gpt-5-mini') {
-    request.reasoning = { effort: 'minimal' };
-  }
-
-  const response = await openai.responses.create(request);
-
-  const outputText = getResponseOutputText(response);
+    max_tokens: inlineMaxTokens,
+    model: selectedModel,
+  });
   if (!outputText) {
-    console.warn('[inline-ai] empty model response', {
-      model: selectedModel,
-      status: response?.status || null,
-      incompleteReason: response?.incomplete_details?.reason || null,
-      outputItems: Array.isArray(response?.output) ? response.output.length : 0,
-    });
+    console.warn('[inline-ai] empty model response', { model: selectedModel });
   }
 
   return {
@@ -2039,8 +1981,7 @@ async function evaluateStudentResponse(req, res) {
         activityLanguage,
       });
 
-      const chat = await openai.chat.completions.create({
-        model: MODEL,
+      const { text: raw } = await chatCompletion({
         messages: [
           { role: "system", content: promptParts.sys },
           { role: "user", content: promptParts.user },
@@ -2048,8 +1989,6 @@ async function evaluateStudentResponse(req, res) {
         temperature: 0.2,
         max_tokens: 180,
       });
-
-      const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
       feedback = raw || buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
     } catch (err) {
       if (AI_DEBUG) {
@@ -2120,18 +2059,15 @@ async function evaluateStudentResponse(req, res) {
   const obviouslyBad = !answerRaw || looksGibberish(answerRaw);
 
   try {
-    const chat = await openai.chat.completions.create({
-      model: MODEL,
+    const { text: raw } = await chatCompletion({
       messages: [
         { role: "system", content: sys },
         { role: "user", content: user },
       ],
       temperature: 0.2,
       max_tokens: 220,
-      response_format: { type: "json_object" },
+      jsonMode: true,
     });
-
-    const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
 
     let obj;
@@ -2411,18 +2347,16 @@ async function callLLMJsonStrict({
   async function doCall(extraMsg) {
     const msgs = extraMsg ? [...messages, extraMsg] : messages;
 
-    return await openai.chat.completions.create({
-      model: MODEL,
+    return await chatCompletion({
       messages: msgs,
       temperature,
       max_tokens,
-      response_format: { type: "json_object" }, // ✅ force JSON output
+      jsonMode: true,
     });
   }
 
   // Try #1
-  let chat = await doCall(null);
-  let raw = (chat.choices?.[0]?.message?.content ?? "").trim();
+  let { text: raw } = await doCall(null);
 
   if (AI_DEBUG) logModelRaw("[callLLMJsonStrict#1]", raw);
 
@@ -2430,13 +2364,11 @@ async function callLLMJsonStrict({
 
   // Retry once if parse fails anyway
   if (!obj) {
-    chat = await doCall({
+    ({ text: raw } = await doCall({
       role: "user",
       content:
         'Your previous reply was not valid JSON. Reply again with ONLY a JSON object. No markdown, no commentary.',
-    });
-
-    raw = (chat.choices?.[0]?.message?.content ?? "").trim();
+    }));
     if (AI_DEBUG) logModelRaw("[callLLMJsonStrict#2]", raw);
 
     obj = safeJsonObject(raw);
@@ -2609,10 +2541,9 @@ ${rules ? "\n" + rules : ""}
     console.log("[AI_DEBUG] PROMPT len:", prompt.length);
   }
 
-  let chat;
+  let raw;
   try {
-    chat = await openai.chat.completions.create({
-      model: MODEL,
+    ({ text: raw } = await chatCompletion({
       messages: [
         {
           role: "system",
@@ -2628,14 +2559,11 @@ ${rules ? "\n" + rules : ""}
       ],
       temperature: 0.2,
       max_tokens: 220,
-    });
+    }));
   } catch (err) {
-    console.error("❌ OpenAI evaluateCode failed:", err);
+    console.error("❌ LLM evaluateCode failed:", err);
     return base;
   }
-
-  // ✅ define raw BEFORE any logging that references it
-  const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
 
   if (process.env.AI_DEBUG === "1") {
     console.log("[AI_DEBUG] OpenAI raw (first 400):", raw.slice(0, 400));

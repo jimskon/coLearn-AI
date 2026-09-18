@@ -1458,12 +1458,20 @@ export default function RunActivityPage({
       const t0 = performance.now();
       const url = `${API_BASE_URL}/api/ai/evaluate-response`;
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(body),
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      let res;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
 
       const raw = await res.text();
@@ -2862,21 +2870,29 @@ export default function RunActivityPage({
     }
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            studentId: user.id,
-            groupNum,
-            retriesRequired,
-            forceOverride: !!forceOverride,
-            attempt,
-          }),
-        }
-      );
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      let response;
+      try {
+        response = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              studentId: user.id,
+              groupNum,
+              retriesRequired,
+              forceOverride: !!forceOverride,
+              attempt,
+            }),
+            signal: controller.signal,
+          }
+        );
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));

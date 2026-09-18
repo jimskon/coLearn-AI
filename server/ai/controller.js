@@ -33,12 +33,16 @@ function createStubOpenAI() {
         // returns the normal revise shape so the retry gate can offer the
         // explicit Continue option instead of treating an outage as success.
         create: async () => ({
-          choices: [{ message: { content: JSON.stringify({
-            decision: 'revise',
-            feedback: 'AI feedback is temporarily unavailable. Please review your response and try again, or continue when that option is available.',
-            revision_requirement: 'Provide a response that addresses the question.',
-            revision_severity: 'normal',
-          }) } }],
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                decision: 'revise',
+                feedback: 'AI feedback is temporarily unavailable. Please review your response and try again, or continue when that option is available.',
+                revision_requirement: 'Provide a response that addresses the question.',
+                revision_severity: 'normal',
+              })
+            }
+          }],
         }),
       },
     },
@@ -51,7 +55,8 @@ function createStubOpenAI() {
 const openai = isAiConfigured()
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : createStubOpenAI();
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+const GRADING_MODEL = process.env.OPENAI_GRADING_MODEL || "gpt-5.6-luna";
 const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
 const INLINE_AI_ALLOWED_MODELS = new Set([
   'gpt-5-mini',
@@ -1011,10 +1016,10 @@ async function buildStudentResponsePrompt({
     timerPressure === 'expired'
       ? "TIMER EXPIRED: The section time has run out. Set accepted=true for any answer that is on-topic. Do not ask for more work."
       : timerPressure === 'critical'
-      ? "TIME CRITICAL: Less than 2 minutes remain. If the answer shows any reasonable understanding of the question, set accepted=true. Do not request elaboration."
-      : timerPressure === 'low'
-      ? "TIME PRESSURE: About 5 minutes remain. Prefer accepting answers that show understanding even if incomplete. Keep any feedback very brief."
-      : "",
+        ? "TIME CRITICAL: Less than 2 minutes remain. If the answer shows any reasonable understanding of the question, set accepted=true. Do not request elaboration."
+        : timerPressure === 'low'
+          ? "TIME PRESSURE: About 5 minutes remain. Prefer accepting answers that show understanding even if incomplete. Keep any feedback very brief."
+          : "",
   ].filter(Boolean).join("\n");
 
   const schema = `Return JSON only:
@@ -1061,8 +1066,8 @@ async function buildStudentResponsePrompt({
     timerPressure === 'expired' || timerPressure === 'critical'
       ? "Timer rule: time has run out or is critically low — override other criteria and set accepted=true if the answer is at all on-topic."
       : timerPressure === 'low'
-      ? "Timer rule: time is running low — be generous and accept answers that show reasonable engagement with the question."
-      : "",
+        ? "Timer rule: time is running low — be generous and accept answers that show reasonable engagement with the question."
+        : "",
     "",
     schema,
     "Default to decision=accepted unless the answer is clearly off-track or incoherent. A partial but engaged answer should move forward.",
@@ -1952,13 +1957,13 @@ async function evaluateStudentResponse(req, res) {
     const gate = isDryRunAIRequest(req)
       ? dryRunRetryGate({ accepted: acceptedForGate, retriesRequired: Number(retriesRequired) })
       : await applyGroupRetryGate({
-          instanceId: Number(instanceId),
-          groupNum: Number(groupNum),
-          answeredByUserId: Number(answeredByUserId),
-          retriesRequired: Number(retriesRequired),
-          accepted: acceptedForGate,
-          submissionString: String(submissionString ?? ""),
-        });
+        instanceId: Number(instanceId),
+        groupNum: Number(groupNum),
+        answeredByUserId: Number(answeredByUserId),
+        retriesRequired: Number(retriesRequired),
+        accepted: acceptedForGate,
+        submissionString: String(submissionString ?? ""),
+      });
 
     return sendAI(res, {
       accepted: acceptedForGate,
@@ -2040,13 +2045,14 @@ async function evaluateStudentResponse(req, res) {
       });
 
       const chat = await openai.chat.completions.create({
-        model: MODEL,
+        model: GRADING_MODEL,
+        
         messages: [
           { role: "system", content: promptParts.sys },
           { role: "user", content: promptParts.user },
         ],
-        temperature: 0.2,
-        max_tokens: 180,
+        temperature: 0.1,
+        max_tokens: 220,
       });
 
       const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
@@ -2308,17 +2314,17 @@ async function evaluatePythonCode(req, res) {
   // ---- EXISTING CALL ----
   const gate = isDryRunAIRequest(req)
     ? dryRunRetryGate({
-        accepted: result.accepted === true,
-        retriesRequired: Number(retriesRequired),
-      })
+      accepted: result.accepted === true,
+      retriesRequired: Number(retriesRequired),
+    })
     : await applyGroupRetryGate({
-        instanceId: Number(instanceId),
-        groupNum: Number(groupNum),
-        answeredByUserId: Number(answeredByUserId),
-        retriesRequired: Number(retriesRequired),
-        accepted: result.accepted === true,
-        submissionString: req.body?.submissionString ?? "",
-      });
+      instanceId: Number(instanceId),
+      groupNum: Number(groupNum),
+      answeredByUserId: Number(answeredByUserId),
+      retriesRequired: Number(retriesRequired),
+      accepted: result.accepted === true,
+      submissionString: req.body?.submissionString ?? "",
+    });
 
   // ✅ ADD THIS → Step 3 OUTPUT LOG (RIGHT AFTER CALL)
   console.log("[RETRY_GATE RESULT]", gate);
@@ -2545,10 +2551,10 @@ async function evaluateCode({
     codeTimerPressure === 'expired'
       ? "- TIMER EXPIRED: Section time is up. If the code is on-task and makes a reasonable attempt, set accepted=true."
       : codeTimerPressure === 'critical'
-      ? "- TIME CRITICAL: Under 2 minutes left. Accept any code that makes a reasonable attempt at the task."
-      : codeTimerPressure === 'low'
-      ? "- TIME PRESSURE: About 5 minutes left. Be generous — accept code that is mostly correct or shows clear intent."
-      : "",
+        ? "- TIME CRITICAL: Under 2 minutes left. Accept any code that makes a reasonable attempt at the task."
+        : codeTimerPressure === 'low'
+          ? "- TIME PRESSURE: About 5 minutes left. Be generous — accept code that is mostly correct or shows clear intent."
+          : "",
   ].filter(Boolean).join("\n");
 
   const fence =
@@ -2589,7 +2595,7 @@ ${studentCode}
 \`\`\`
 
 Return STRICT JSON with exactly these keys:
-{"accepted":true|false,"feedback":string|null}
+{"accepted":true|false,"feedback":string|null,"error_line":string|null,"error_reason":string|null}
 
 Rules:
 - accepted=true if the code correctly satisfies the task, even if it uses a different approach than the sample.
@@ -2601,6 +2607,11 @@ Rules:
 - if rejected, feedback must be ONE short actionable hint.
 - No style/naming/formatting nits. No extra features beyond the prompt.
 - Use prior group attempts to avoid repeating feedback and to choose the right scaffolding level, but decide accepted=true/false from the current code and output.
+- If accepted=false, error_line and error_reason MUST both be non-null.
+- error_line must identify the exact line or expression in the student's current code that is wrong or missing.
+- error_reason must explain the specific functional or mathematical error.
+- If you cannot identify a specific incorrect or missing line in the current code, accepted MUST be true.
+- If no execution output is provided, judge correctness directly from the current code. Do not invent execution values or assume the student used any suggested test inputs.
 ${rules ? "\n" + rules : ""}
 `.trim();
 
@@ -2641,22 +2652,27 @@ ${rules ? "\n" + rules : ""}
     console.log("[AI_DEBUG] OpenAI raw (first 400):", raw.slice(0, 400));
   }
 
-  const obj = safeJsonObject(raw);
-  if (!obj) return base;
+const obj = safeJsonObject(raw);
+if (!obj) return base;
 
+const norm = normalizeAIResult(obj);
+let { accepted } = norm;
+let feedback = norm.feedback;
 
-  // modelAccepted is the model’s real gate
-  const norm = normalizeAIResult(obj);
-  let { accepted } = norm;
-  let feedback = norm.feedback;
+const errorLine = String(obj.error_line || "").trim();
+const errorReason = String(obj.error_reason || "").trim();
 
-  // strip soft nitpicks, etc (keep your existing filters)
-  if (isSoftNitpick(feedback) && !isFatal(feedback)) feedback = null;
+if (!accepted && (!errorLine || !errorReason)) {
+  accepted = true;
+  feedback = null;
+}
 
-  // If NOT accepted, we require a feedback (a real actionable hint)
-  if (!accepted && !feedback) {
-    feedback = "Make one small change that directly moves the code toward the stated task.";
-  }
+// strip soft nitpicks, etc
+if (isSoftNitpick(feedback) && !isFatal(feedback)) feedback = null;
+
+if (!accepted && !feedback) {
+  feedback = "Make one small change that directly moves the code toward the stated task.";
+}
 
   // If accepted and positive feedback disabled, feedback must be null
   if (accepted && !positiveEnabled) feedback = null;
@@ -2732,17 +2748,17 @@ async function evaluateCppCode(req, res) {
     req.body?.groupSubmissionString ?? req.body?.submissionString ?? null;
   const gate = isDryRunAIRequest(req)
     ? dryRunRetryGate({
-        accepted: result.accepted === true,
-        retriesRequired: Number(retriesRequired),
-      })
+      accepted: result.accepted === true,
+      retriesRequired: Number(retriesRequired),
+    })
     : await applyGroupRetryGate({
-        instanceId: Number(instanceId),
-        groupNum: Number(groupNum),
-        answeredByUserId: Number(answeredByUserId),
-        retriesRequired: Number(retriesRequired),
-        accepted: result.accepted === true,
-        submissionString: groupSubmissionString ?? studentCode,
-      });
+      instanceId: Number(instanceId),
+      groupNum: Number(groupNum),
+      answeredByUserId: Number(answeredByUserId),
+      retriesRequired: Number(retriesRequired),
+      accepted: result.accepted === true,
+      submissionString: groupSubmissionString ?? studentCode,
+    });
 
   return sendAI(res, { ...result, ...gate });
 }

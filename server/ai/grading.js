@@ -208,7 +208,7 @@ async function gradeTestQuestion({
         { role: "user", content: user },
       ],
       temperature: 0.1,
-      max_tokens: 260,
+      max_completion_tokens: 260,
       response_format: { type: "json_object" },
     });
 

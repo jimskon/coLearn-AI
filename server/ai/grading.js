@@ -120,7 +120,7 @@ async function gradeTestQuestion({
     "For every written-response requirement you claim is present, you must provide a short verbatim excerpt from the student's response or supplied execution output that proves it.",
     "If you cannot quote evidence for a requirement, treat that requirement as missing.",
     "Never paraphrase invented evidence and never use text from the question itself as evidence of student work.",
-    
+
     "CRITICAL TEST-CASE RULE:",
     "Values described in the question as a suggested test, example test, sample test, or phrases such as 'try' and 'should produce' are examples only unless the question explicitly says those exact values MUST be submitted.",
     "A student may use different valid inputs.",
@@ -308,13 +308,39 @@ async function gradeTestQuestion({
     let runScore = Number(obj.runScore ?? 0);
     let responseScore = Number(obj.responseScore ?? 0);
 
+    // Deterministically cap written-response credit based on
+    // evidence that actually survived literal verification.
+    if (maxRespPts > 0 && Array.isArray(obj.responseEvidence) && obj.responseEvidence.length > 0) {
+      const totalRequirements = obj.responseEvidence.length;
+      const presentRequirements = obj.responseEvidence.filter(
+        item => item && item.present === true
+      ).length;
+
+      const evidenceBasedMax =
+        maxRespPts * (presentRequirements / totalRequirements);
+
+      if (responseScore > evidenceBasedMax) {
+        console.warn("⚠️ Capping response score based on verified evidence:", {
+          originalScore: responseScore,
+          evidenceBasedMax,
+          presentRequirements,
+          totalRequirements,
+          responseEvidence: obj.responseEvidence,
+        });
+
+        responseScore = evidenceBasedMax;
+      }
+    }
+    console.log("GRADE VERIFIED RESPONSE EVIDENCE:", obj.responseEvidence);
     if (!Number.isFinite(codeScore)) codeScore = 0;
     if (!Number.isFinite(runScore)) runScore = 0;
     if (!Number.isFinite(responseScore)) responseScore = 0;
 
     codeScore = Math.max(0, Math.min(maxCodePts, codeScore));
     runScore = Math.max(0, Math.min(maxRunPts, runScore));
-    responseScore = Math.max(0, Math.min(maxRespPts, responseScore));
+    responseScore = Math.floor(
+      Math.max(0, Math.min(maxRespPts, responseScore))
+    );
 
     const codeFeedback = obj.codeFeedback ? String(obj.codeFeedback).trim() : "";
     const runFeedback = obj.runFeedback ? String(obj.runFeedback).trim() : "";

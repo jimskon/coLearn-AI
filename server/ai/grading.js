@@ -116,7 +116,11 @@ async function gradeTestQuestion({
     "For example, if a testing question asks for inputs, expected results, actual results, and a pass/fail conclusion, a response containing only inputs and expected results is incomplete.",
     "Do not claim that actual results or a pass/fail conclusion were provided when they are absent.",
 
-
+    "EVIDENCE QUOTING REQUIREMENT:",
+    "For every written-response requirement you claim is present, you must provide a short verbatim excerpt from the student's response or supplied execution output that proves it.",
+    "If you cannot quote evidence for a requirement, treat that requirement as missing.",
+    "Never paraphrase invented evidence and never use text from the question itself as evidence of student work.",
+    
     "CRITICAL TEST-CASE RULE:",
     "Values described in the question as a suggested test, example test, sample test, or phrases such as 'try' and 'should produce' are examples only unless the question explicitly says those exact values MUST be submitted.",
     "A student may use different valid inputs.",
@@ -212,15 +216,34 @@ async function gradeTestQuestion({
     userLines.push("");
   }
   userLines.push(
+    `Before assigning scores, first identify only the evidence that is literally present.\n\n` +
+
+    `For RESPONSE questions, list each distinct requirement from the question and whether the ` +
+    `student response actually contains evidence for it. Do not infer missing evidence.\n\n` +
+
     `Return strict JSON only in this form:\n` +
-    `{"codeScore": number, "codeFeedback": string, ` +
-    `"runScore": number, "runFeedback": string, ` +
-    `"responseScore": number, "responseFeedback": string}\n` +
+    `{\n` +
+    `  "responseEvidence": [\n` +
+    `    {"requirement": "short description", "present": true, "evidence": "exact short excerpt from student response"},\n` +
+    `    {"requirement": "short description", "present": false, "evidence": ""}\n` +
+    `  ],\n` +
+    `  "codeScore": number,\n` +
+    `  "codeFeedback": string,\n` +
+    `  "runScore": number,\n` +
+    `  "runFeedback": string,\n` +
+    `  "responseScore": number,\n` +
+    `  "responseFeedback": string\n` +
+    `}\n` +
+
+    `IMPORTANT: If present is true, the evidence field MUST contain a short verbatim excerpt ` +
+    `from the student's response or supplied program output proving that requirement is present.\n` +
+    `If you cannot quote such evidence, present MUST be false.\n` +
+
     `- codeScore must be between 0 and ${maxCodePts}.\n` +
     `- runScore must be between 0 and ${maxRunPts}.\n` +
     `- responseScore must be between 0 and ${maxRespPts}.\n` +
-    `- Feedback should always be present, even for full-credit work.\n` +
-    `- DO NOT mention grading, points, rubrics, or scores.\n`
+    `- Feedback should always be present for bands with points available.\n` +
+    `- DO NOT mention grading, points, rubrics, or scores in feedback.\n`
   );
 
   const user = userLines.join("\n");
@@ -252,6 +275,25 @@ async function gradeTestQuestion({
     let obj;
     try {
       obj = JSON.parse(raw);
+      const literalResponse = stripHtml(responseText || "");
+      const literalOutput = stripHtml(outputText || "");
+      const evidenceSource = `${literalResponse}\n${literalOutput}`;
+
+      if (Array.isArray(obj.responseEvidence)) {
+        for (const item of obj.responseEvidence) {
+          if (!item || item.present !== true) continue;
+
+          const evidence = String(item.evidence || "").trim();
+
+          // A "present" claim must quote something that literally exists
+          // in the student's response or supplied output.
+          if (!evidence || !evidenceSource.includes(evidence)) {
+            console.warn("⚠️ Rejecting unsupported response evidence:", item);
+            item.present = false;
+            item.evidence = "";
+          }
+        }
+      }
     } catch (parseErr) {
       console.error("❌ gradeTestQuestion invalid JSON response:", {
         model: MODEL,

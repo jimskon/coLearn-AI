@@ -70,71 +70,71 @@ async function gradeTestQuestion({
 
   const codeBundle = Array.isArray(codeCells)
     ? codeCells
-        .map((cell, idx) => {
-          const lang = (cell.lang || "").toLowerCase();
-          const label = cell.label ? ` (${cell.label})` : "";
-          const fence =
-            lang === "cpp" || lang === "c++"
-              ? "cpp"
-              : lang === "python"
-                ? "python"
-                : "";
-          return [
-            `Code cell ${idx + 1}${label}:`,
-            "```" + fence,
-            cell.code || "",
-            "```",
-          ].join("\n");
-        })
-        .join("\n\n")
+      .map((cell, idx) => {
+        const lang = (cell.lang || "").toLowerCase();
+        const label = cell.label ? ` (${cell.label})` : "";
+        const fence =
+          lang === "cpp" || lang === "c++"
+            ? "cpp"
+            : lang === "python"
+              ? "python"
+              : "";
+        return [
+          `Code cell ${idx + 1}${label}:`,
+          "```" + fence,
+          cell.code || "",
+          "```",
+        ].join("\n");
+      })
+      .join("\n\n")
     : "";
 
-const sys = [
-  "You are grading one question from an introductory programming assignment.",
+  const sys = [
+    "You are grading one question from an introductory programming assignment.",
 
-  "GRADING PRIORITY:",
-  "Functional correctness matters much more than presentation or style.",
-  "Award full credit when the submitted work satisfies the explicit requirements of the current question.",
+    "GRADING PRIORITY:",
+    "Functional correctness matters much more than presentation or style.",
+    "Award full credit when the submitted work satisfies the explicit requirements of the current question.",
 
-  "QUESTION ISOLATION:",
-  "Grade ONLY the code, response, and output supplied for this question.",
-  "Never assume anything from another question in the assignment.",
+    "QUESTION ISOLATION:",
+    "Grade ONLY the code, response, and output supplied for this question.",
+    "Never assume anything from another question in the assignment.",
 
-  "CRITICAL TEST-CASE RULE:",
-  "Values described in the question as a suggested test, example test, sample test, or phrases such as 'try' and 'should produce' are examples only unless the question explicitly says those exact values MUST be submitted.",
-  "A student may use different valid inputs.",
-  "NEVER deduct because actual execution output differs from the result of a suggested test when the student used different inputs.",
+    "CRITICAL TEST-CASE RULE:",
+    "Values described in the question as a suggested test, example test, sample test, or phrases such as 'try' and 'should produce' are examples only unless the question explicitly says those exact values MUST be submitted.",
+    "A student may use different valid inputs.",
+    "NEVER deduct because actual execution output differs from the result of a suggested test when the student used different inputs.",
 
-  "IMPORTANT OUTPUT RULE:",
-  "Do not compare program output with suggested-test expected values unless the supplied evidence establishes that the student actually used those suggested-test inputs.",
-  "If the actual runtime input values are not available, do not infer that an output is wrong merely because it differs from a suggested example.",
-  "Instead, inspect the submitted code directly and determine whether the formula or computation is correct.",
+    "IMPORTANT OUTPUT RULE:",
+    "Do not compare program output with suggested-test expected values unless the supplied evidence establishes that the student actually used those suggested-test inputs.",
+    "If the actual runtime input values are not available, do not infer that an output is wrong merely because it differs from a suggested example.",
+    "Instead, inspect the submitted code directly and determine whether the formula or computation is correct.",
 
-  "VERIFY BEFORE DEDUCTING:",
-  "Before deducting for a computational error, you must be able to identify a specific incorrect expression in the submitted code, OR identify the exact actual runtime inputs, calculate the correct result from those inputs, and identify the different result the program produced.",
-  "If you cannot identify a specific functional or computational error from the evidence for this question, do not deduct points.",
+    "VERIFY BEFORE DEDUCTING:",
+    "Before deducting for a computational error, you must be able to identify a specific incorrect expression in the submitted code, OR identify the exact actual runtime inputs, calculate the correct result from those inputs, and identify the different result the program produced.",
+    "If you cannot identify a specific functional or computational error from the evidence for this question, do not deduct points.",
 
-  "DO NOT DEDUCT FOR:",
-  "- spelling or grammar",
-  "- capitalization or punctuation",
-  "- prompt wording or output label wording",
-  "- formatting or spacing",
-  "- variable names",
-  "- comments or lack of comments",
-  "- input or output order unless explicitly required",
-  "- int versus float when either works",
-  "- equivalent numeric output such as 200 and 200.0",
-  "- extra harmless input or output",
-  "- lack of input validation",
-  "- programming style",
-  "- not matching a sample solution exactly",
+    "DO NOT DEDUCT FOR:",
+    "- spelling or grammar",
+    "- capitalization or punctuation",
+    "- prompt wording or output label wording",
+    "- formatting or spacing",
+    "- variable names",
+    "- comments or lack of comments",
+    "- input or output order unless explicitly required",
+    "- int versus float when either works",
+    "- equivalent numeric output such as 200 and 200.0",
+    "- extra harmless input or output",
+    "- lack of input validation",
+    "- programming style",
+    "- not matching a sample solution exactly",
 
-  "You will assign numeric points separately for CODE, RUN, and RESPONSE.",
-  "Use the rubric to determine required functionality, but distinguish requirements from examples, suggested tests, and sample outputs.",
-  "Partial credit is allowed.",
-  "Always provide concise, concrete feedback for every band that has points available.",
-  "Return ONLY JSON, no commentary.",
-].join("\n");
+    "You will assign numeric points separately for CODE, RUN, and RESPONSE.",
+    "Use the rubric to determine required functionality, but distinguish requirements from examples, suggested tests, and sample outputs.",
+    "Partial credit is allowed.",
+    "Always provide concise, concrete feedback for every band that has points available.",
+    "Return ONLY JSON, no commentary.",
+  ].join("\n");
 
   const userLines = [];
   userLines.push("Question:");
@@ -162,32 +162,40 @@ const sys = [
   userLines.push(stripHtml(responseText || "(none)"));
   userLines.push("");
 
-userLines.push("Student CODE submission(s):");
-userLines.push(codeBundle || "(none)");
-userLines.push("");
+  userLines.push("Student CODE submission(s):");
+  userLines.push(codeBundle || "(none)");
+  userLines.push("");
 
-userLines.push("CODE VERIFICATION RULE:");
-userLines.push(
-  "Inspect the student's actual expressions before claiming that a formula is wrong. " +
-  "If the submitted code contains the formula requested by the question, do not deduct " +
-  "for that formula merely because an observed output differs from a suggested example."
-);
-userLines.push("");
+  userLines.push("CODE VERIFICATION RULE:");
+  userLines.push(
+    "Inspect the student's actual expressions before claiming that a formula is wrong. " +
+    "If the submitted code contains the formula requested by the question, do not deduct " +
+    "for that formula merely because an observed output differs from a suggested example."
+  );
+  userLines.push("");
 
-userLines.push("PROGRAM OUTPUT / TEST OUTPUT:");
-userLines.push(outputText ? stripHtml(outputText) : "(none provided)");
-userLines.push("");
+  userLines.push("PROGRAM OUTPUT / TEST OUTPUT:");
+  userLines.push(outputText ? stripHtml(outputText) : "(none provided)");
+  userLines.push("");
 
+  if (maxRunPts <= 0) {
+    userLines.push(
+      "There is no separately scored RUN/OUTPUT component for this question. " +
+      "Program output may be used only as supporting evidence. " +
+      "Do not override visibly correct code merely because output differs from a suggested example."
+    );
+    userLines.push("");
+  }
   userLines.push(
     `Return strict JSON only in this form:\n` +
-      `{"codeScore": number, "codeFeedback": string, ` +
-      `"runScore": number, "runFeedback": string, ` +
-      `"responseScore": number, "responseFeedback": string}\n` +
-      `- codeScore must be between 0 and ${maxCodePts}.\n` +
-      `- runScore must be between 0 and ${maxRunPts}.\n` +
-      `- responseScore must be between 0 and ${maxRespPts}.\n` +
-      `- Feedback should always be present, even for full-credit work.\n` +
-      `- DO NOT mention grading, points, rubrics, or scores.\n`
+    `{"codeScore": number, "codeFeedback": string, ` +
+    `"runScore": number, "runFeedback": string, ` +
+    `"responseScore": number, "responseFeedback": string}\n` +
+    `- codeScore must be between 0 and ${maxCodePts}.\n` +
+    `- runScore must be between 0 and ${maxRunPts}.\n` +
+    `- responseScore must be between 0 and ${maxRespPts}.\n` +
+    `- Feedback should always be present, even for full-credit work.\n` +
+    `- DO NOT mention grading, points, rubrics, or scores.\n`
   );
 
   const user = userLines.join("\n");

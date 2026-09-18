@@ -63,6 +63,30 @@ const INLINE_AI_ALLOWED_MODELS = new Set([
   'gpt-4o-mini',
 ]);
 
+function isGpt5FamilyModel(model) {
+  return /^gpt-5(?:[.\-]|$)/i.test(String(model || '').trim());
+}
+
+function buildChatCompletionOptions({
+  model,
+  messages,
+  temperature = 0.2,
+  maxTokens = 700,
+  responseFormat = null,
+}) {
+  const request = { model, messages };
+
+  if (isGpt5FamilyModel(model)) {
+    request.max_completion_tokens = maxTokens;
+  } else {
+    request.max_tokens = maxTokens;
+    if (temperature != null) request.temperature = temperature;
+  }
+
+  if (responseFormat) request.response_format = responseFormat;
+  return request;
+}
+
 function getInlineAiModel(value) {
   const model = String(value || '').trim();
   return INLINE_AI_ALLOWED_MODELS.has(model) ? model : INLINE_AI_DEFAULT_MODEL;
@@ -2044,16 +2068,15 @@ async function evaluateStudentResponse(req, res) {
         activityLanguage,
       });
 
-      const chat = await openai.chat.completions.create({
+      const chat = await openai.chat.completions.create(buildChatCompletionOptions({
         model: GRADING_MODEL,
-        
         messages: [
           { role: "system", content: promptParts.sys },
           { role: "user", content: promptParts.user },
         ],
         temperature: 0.1,
-        max_tokens: 220,
-      });
+        maxTokens: 350,
+      }));
 
       const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
       feedback = raw || buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
@@ -2126,16 +2149,16 @@ async function evaluateStudentResponse(req, res) {
   const obviouslyBad = !answerRaw || looksGibberish(answerRaw);
 
   try {
-    const chat = await openai.chat.completions.create({
+    const chat = await openai.chat.completions.create(buildChatCompletionOptions({
       model: MODEL,
       messages: [
         { role: "system", content: sys },
         { role: "user", content: user },
       ],
       temperature: 0.2,
-      max_tokens: 220,
-      response_format: { type: "json_object" },
-    });
+      maxTokens: 700,
+      responseFormat: { type: "json_object" },
+    }));
 
     const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -2417,13 +2440,13 @@ async function callLLMJsonStrict({
   async function doCall(extraMsg) {
     const msgs = extraMsg ? [...messages, extraMsg] : messages;
 
-    return await openai.chat.completions.create({
+    return await openai.chat.completions.create(buildChatCompletionOptions({
       model: MODEL,
       messages: msgs,
       temperature,
-      max_tokens,
-      response_format: { type: "json_object" }, // ✅ force JSON output
-    });
+      maxTokens: max_tokens,
+      responseFormat: { type: "json_object" }, // ✅ force JSON output
+    }));
   }
 
   // Try #1
@@ -2622,7 +2645,7 @@ ${rules ? "\n" + rules : ""}
 
   let chat;
   try {
-    chat = await openai.chat.completions.create({
+    chat = await openai.chat.completions.create(buildChatCompletionOptions({
       model: MODEL,
       messages: [
         {
@@ -2638,8 +2661,8 @@ ${rules ? "\n" + rules : ""}
         { role: "user", content: prompt },
       ],
       temperature: 0.2,
-      max_tokens: 220,
-    });
+      maxTokens: 700,
+    }));
   } catch (err) {
     console.error("❌ OpenAI evaluateCode failed:", err);
     return base;

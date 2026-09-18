@@ -1778,9 +1778,10 @@ export default function RunActivityPage({
         })
         .filter((c) => c.code.trim() !== '');
 
-      // 5) Decide what becomes the "responseText" for grading
-      //    Priority: written -> table -> output
-      const finalResponse = baseAnswer || tableMarkdown || outputText || (codeCells.length ? '[code submitted]' : '');
+      // 5) Decide what becomes the written "responseText" for grading.
+      //    Keep artifact types separate: program output and code submissions
+      //    must not be stored under the main written-response key.
+      const finalResponse = baseAnswer || tableMarkdown || '';
 
       if (finalResponse) {
         // Store main response for this question under its qid

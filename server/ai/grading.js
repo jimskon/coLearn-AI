@@ -24,51 +24,27 @@ function normalizeScoreBands(scores = {}, rubric = {}) {
   };
 }
 
-// ---------------------- TEST-MODE: gradeTestQuestion ----------------------
-async function gradeTestQuestion({
-  questionText,
-  scores = {},
-  responseText = "",
-  codeCells = [],
-  outputText = "",
-  rubric = {},
-  detailedFeedback = true,
-}) {
-  const bucketPoints = (bucket) => {
-    if (bucket == null) return 0;
-    if (typeof bucket === "number") return bucket;
-    if (typeof bucket === "object" && typeof bucket.points === "number") {
-      return bucket.points;
-    }
-    return 0;
-  };
-
-  const normalizedScores = normalizeScoreBands(scores, rubric);
-  const codeBucket = normalizedScores.code || {};
-  const runBucket = normalizedScores.output || {};
-  const respBucket = normalizedScores.response || {};
-
-  const maxCodePts = bucketPoints(codeBucket);
-  const maxRunPts = bucketPoints(runBucket);
-  const maxRespPts = bucketPoints(respBucket);
-
-  const maxTotal = maxCodePts + maxRunPts + maxRespPts;
-  if (maxTotal <= 0) {
-    return {
-      codeScore: 0, codeFeedback: "",
-      runScore: 0, runFeedback: "",
-      responseScore: 0, responseFeedback: "",
-    };
+function bucketPoints(bucket) {
+  if (bucket == null) return 0;
+  if (typeof bucket === "number") return bucket;
+  if (typeof bucket === "object" && typeof bucket.points === "number") {
+    return bucket.points;
   }
+  return 0;
+}
 
-  const codeRubricText =
-    stripHtml(codeBucket.instructionsRaw || codeBucket.instructionsHtml || "") || "(none)";
-  const runRubricText =
-    stripHtml(runBucket.instructionsRaw || runBucket.instructionsHtml || "") || "(none)";
-  const responseRubricText =
-    stripHtml(respBucket.instructionsRaw || respBucket.instructionsHtml || "") || "(none)";
+function bucketRubricText(bucket) {
+  return stripHtml(bucket?.instructionsRaw || bucket?.instructionsHtml || "") || "(none)";
+}
 
-  const codeBundle = Array.isArray(codeCells)
+function clampScore(value, maxPoints) {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return 0;
+  return Math.floor(Math.max(0, Math.min(maxPoints, n)));
+}
+
+function formatCodeBundle(codeCells = []) {
+  return Array.isArray(codeCells)
     ? codeCells
       .map((cell, idx) => {
         const lang = (cell.lang || "").toLowerCase();
@@ -88,265 +64,231 @@ async function gradeTestQuestion({
       })
       .join("\n\n")
     : "";
+}
 
-  const sys = [
-    "You are grading one question from an introductory programming assignment.",
+async function requestJsonGrade(messages, maxCompletionTokens = 700) {
+  const chat = await openai.chat.completions.create({
+    model: MODEL,
+    messages,
+    max_completion_tokens: maxCompletionTokens,
+    response_format: { type: "json_object" },
+  });
 
-    "GRADING PRIORITY:",
-    "Functional correctness matters much more than presentation or style.",
-    "Award full credit when the submitted work satisfies the explicit requirements of the current question.",
+  const choice = chat.choices?.[0];
+  const raw = (choice?.message?.content ?? "").trim();
 
-    "QUESTION ISOLATION:",
-    "Grade ONLY the code, response, and output supplied for this question.",
-    "Never assume anything from another question in the assignment.",
-
-    "EVIDENCE-ONLY GRADING RULE:",
-    "Grade ONLY what is explicitly present in the student's submitted response, code, or execution output for the current question.",
-    "NEVER infer that the student performed a step merely because the question asked for it.",
-    "NEVER invent or assume actual test results that are not written or shown.",
-    "NEVER claim that a test passed or failed unless the student explicitly says so or execution output directly demonstrates it.",
-    "NEVER invent or assume inputs, outputs, explanations, calculations, or conclusions that are not present in the supplied evidence.",
-    "If a question asks for several distinct components, check independently that each requested component is actually present.",
-    "Do not complete missing work on the student's behalf.",
-    "Feedback must describe only evidence that actually appears in the submission.",
-
-    "WRITTEN RESPONSE COMPLETENESS:",
-    "For written-response questions, compare each requested component against the student's literal submitted response.",
-    "Do not award credit for a requested component unless evidence for that component appears in the response or supplied execution output.",
-    "For example, if a testing question asks for inputs, expected results, actual results, and a pass/fail conclusion, a response containing only inputs and expected results is incomplete.",
-    "Do not claim that actual results or a pass/fail conclusion were provided when they are absent.",
-
-    "EVIDENCE QUOTING REQUIREMENT:",
-    "For every written-response requirement you claim is present, you must provide a short verbatim excerpt from the student's response or supplied execution output that proves it.",
-    "If you cannot quote evidence for a requirement, treat that requirement as missing.",
-    "Never paraphrase invented evidence and never use text from the question itself as evidence of student work.",
-
-    "CRITICAL TEST-CASE RULE:",
-    "Values described in the question as a suggested test, example test, sample test, or phrases such as 'try' and 'should produce' are examples only unless the question explicitly says those exact values MUST be submitted.",
-    "A student may use different valid inputs.",
-    "NEVER deduct because actual execution output differs from the result of a suggested test when the student used different inputs.",
-
-    "IMPORTANT OUTPUT RULE:",
-    "Do not compare program output with suggested-test expected values unless the supplied evidence establishes that the student actually used those suggested-test inputs.",
-    "If the actual runtime input values are not available, do not infer that an output is wrong merely because it differs from a suggested example.",
-    "Instead, inspect the submitted code directly and determine whether the formula or computation is correct.",
-
-    "VERIFY BEFORE DEDUCTING:",
-    "Before deducting for a computational error, you must be able to identify a specific incorrect expression in the submitted code, OR identify the exact actual runtime inputs, calculate the correct result from those inputs, and identify the different result the program produced.",
-    "If you cannot identify a specific functional or computational error from the evidence for this question, do not deduct points.",
-
-    "DO NOT DEDUCT FOR:",
-    "- spelling or grammar",
-    "- capitalization or punctuation",
-    "- prompt wording or output label wording",
-    "- formatting or spacing",
-    "- variable names",
-    "- comments or lack of comments",
-    "- input or output order unless explicitly required",
-    "- int versus float when either works",
-    "- equivalent numeric output such as 200 and 200.0",
-    "- extra harmless input or output",
-    "- lack of input validation",
-    "- programming style",
-    "- not matching a sample solution exactly",
-
-    "You will assign numeric points separately for CODE, RUN, and RESPONSE.",
-    "Use the rubric to determine required functionality, but distinguish requirements from examples, suggested tests, and sample outputs.",
-    "Partial credit is allowed.",
-    "Always provide concise, concrete feedback for every band that has points available.",
-    "Return ONLY JSON, no commentary.",
-  ].join("\n");
-
-  const userLines = [];
-  userLines.push("Question:");
-  userLines.push(stripHtml(questionText || "(missing)"));
-  userLines.push("");
-
-  userLines.push(`Max code points: ${maxCodePts}`);
-  userLines.push(`Max run/output points: ${maxRunPts}`);
-  userLines.push(`Max response points: ${maxRespPts}`);
-  userLines.push("");
-
-  userLines.push("Rubric for CODE band:");
-  userLines.push(codeRubricText);
-  userLines.push("");
-
-  userLines.push("Rubric for RUN/OUTPUT band:");
-  userLines.push(runRubricText);
-  userLines.push("");
-
-  userLines.push("Rubric for RESPONSE band:");
-  userLines.push(responseRubricText);
-  userLines.push("");
-
-  userLines.push("Student written RESPONSE (if any):");
-  userLines.push(stripHtml(responseText || "(none)"));
-  userLines.push("");
-
-  userLines.push("RESPONSE EVIDENCE RULE:");
-  userLines.push(
-    "Treat the text above literally. Do not infer missing statements, test results, pass/fail conclusions, " +
-    "or explanations merely because the question requested them. Award credit only for components that are " +
-    "actually present in the response or directly demonstrated by supplied output."
-  );
-  userLines.push("");
-
-  userLines.push("Student CODE submission(s):");
-  userLines.push(codeBundle || "(none)");
-  userLines.push("");
-
-  userLines.push("CODE VERIFICATION RULE:");
-  userLines.push(
-    "Inspect the student's actual expressions before claiming that a formula is wrong. " +
-    "If the submitted code contains the formula requested by the question, do not deduct " +
-    "for that formula merely because an observed output differs from a suggested example."
-  );
-  userLines.push("");
-
-  userLines.push("PROGRAM OUTPUT / TEST OUTPUT:");
-  userLines.push(outputText ? stripHtml(outputText) : "(none provided)");
-  userLines.push("");
-
-  if (maxRunPts <= 0) {
-    userLines.push(
-      "There is no separately scored RUN/OUTPUT component for this question. " +
-      "Program output may be used only as supporting evidence. " +
-      "Do not override visibly correct code merely because output differs from a suggested example."
-    );
-    userLines.push("");
+  if (!raw) {
+    console.error("❌ gradeTestQuestion empty OpenAI response:", {
+      model: MODEL,
+      finishReason: choice?.finish_reason,
+      usage: chat.usage,
+    });
+    throw new Error("OpenAI returned an empty grading response");
   }
-  userLines.push(
-    `Before assigning scores, first identify only the evidence that is literally present.\n\n` +
-
-    `For RESPONSE questions, list each distinct requirement from the question and whether the ` +
-    `student response actually contains evidence for it. Do not infer missing evidence.\n\n` +
-
-    `Return strict JSON only in this form:\n` +
-    `{\n` +
-    `  "responseEvidence": [\n` +
-    `    {"requirement": "short description", "present": true, "evidence": "exact short excerpt from student response"},\n` +
-    `    {"requirement": "short description", "present": false, "evidence": ""}\n` +
-    `  ],\n` +
-    `  "codeScore": number,\n` +
-    `  "codeFeedback": string,\n` +
-    `  "runScore": number,\n` +
-    `  "runFeedback": string,\n` +
-    `  "responseScore": number,\n` +
-    `  "responseFeedback": string\n` +
-    `}\n` +
-
-    `IMPORTANT: If present is true, the evidence field MUST contain a short verbatim excerpt ` +
-    `from the student's response or supplied program output proving that requirement is present.\n` +
-    `If you cannot quote such evidence, present MUST be false.\n` +
-
-    `- codeScore must be between 0 and ${maxCodePts}.\n` +
-    `- runScore must be between 0 and ${maxRunPts}.\n` +
-    `- responseScore must be between 0 and ${maxRespPts}.\n` +
-    `- Feedback should always be present for bands with points available.\n` +
-    `- DO NOT mention grading, points, rubrics, or scores in feedback.\n`
-  );
-
-  const user = userLines.join("\n");
 
   try {
-    const chat = await openai.chat.completions.create({
+    return JSON.parse(raw);
+  } catch (parseErr) {
+    console.error("❌ gradeTestQuestion invalid JSON response:", {
       model: MODEL,
-      messages: [
-        { name: "grader", role: "system", content: sys },
-        { role: "user", content: user },
-      ],
-      //temperature: 0.1,
-      max_completion_tokens: 1000,
-      response_format: { type: "json_object" },
+      finishReason: choice?.finish_reason,
+      raw,
+      usage: chat.usage,
+    });
+    throw parseErr;
+  }
+}
+
+async function gradeResponseBand({
+  questionText,
+  responseText,
+  responseRubricText,
+  maxRespPts,
+}) {
+  if (maxRespPts <= 0) {
+    return { responseScore: 0, responseFeedback: "" };
+  }
+
+  const literalResponse = stripHtml(responseText || "").trim();
+  if (!literalResponse) {
+    return {
+      responseScore: 0,
+      responseFeedback: "No written response was provided.",
+    };
+  }
+
+  const sys = [
+    "You grade only the written-response part of one assignment question.",
+    "The question text describes what the student was asked to do.",
+    "The rubric is the grading authority and may be more lenient than the question text.",
+    "Award the score the rubric allows, even when the answer omits something the question asked for, if the rubric permits that leniency.",
+    "However, feedback must be evidence-honest.",
+    "Never claim the student included something unless it is literally present in the written response.",
+    "Do not infer actual results, pass/fail conclusions, tests run, calculations, or explanations that are not written in the response.",
+    "Do not use code, program output, or other questions as evidence; they are not provided to you.",
+    "If the rubric allows full credit for a partial but good-faith response, you may give full credit, but your feedback should honestly say what is present and what is missing or not explicit.",
+    "Return only JSON.",
+  ].join("\n");
+
+  const user = [
+    "Question:",
+    stripHtml(questionText || "(missing)"),
+    "",
+    `Max response points: ${maxRespPts}`,
+    "",
+    "Rubric for RESPONSE band:",
+    responseRubricText || "(none)",
+    "",
+    "Literal student written response:",
+    literalResponse,
+    "",
+    "Return strict JSON only in this form:",
+    "{",
+    '  "responseScore": number,',
+    '  "responseFeedback": string',
+    "}",
+    `responseScore must be between 0 and ${maxRespPts}.`,
+    "Do not mention points, scores, grading, or rubrics in the feedback.",
+  ].join("\n");
+
+  const obj = await requestJsonGrade([
+    { name: "response_grader", role: "system", content: sys },
+    { role: "user", content: user },
+  ]);
+
+  return {
+    responseScore: clampScore(obj.responseScore, maxRespPts),
+    responseFeedback: obj.responseFeedback ? String(obj.responseFeedback).trim() : "",
+  };
+}
+
+async function gradeCodeRunBands({
+  questionText,
+  codeCells,
+  outputText,
+  codeRubricText,
+  runRubricText,
+  maxCodePts,
+  maxRunPts,
+}) {
+  if (maxCodePts <= 0 && maxRunPts <= 0) {
+    return {
+      codeScore: 0,
+      codeFeedback: "",
+      runScore: 0,
+      runFeedback: "",
+    };
+  }
+
+  const codeBundle = formatCodeBundle(codeCells);
+  const cleanOutput = stripHtml(outputText || "").trim();
+
+  const sys = [
+    "You grade the code and/or run-output part of one introductory programming assignment question.",
+    "Grade only the submitted code and output supplied for this question.",
+    "Functional correctness matters more than presentation, prompt wording, formatting, variable names, comments, or style.",
+    "Suggested test values in the question are examples only unless the question explicitly says they must be submitted.",
+    "If actual runtime inputs are not available, inspect the submitted code formulas directly instead of comparing output to a suggested example.",
+    "Before deducting for a computational error, identify a specific incorrect or missing expression in the submitted code, or identify exact runtime inputs and the mismatching output.",
+    "Do not grade any written-response requirements here.",
+    "Return only JSON.",
+  ].join("\n");
+
+  const user = [
+    "Question:",
+    stripHtml(questionText || "(missing)"),
+    "",
+    `Max code points: ${maxCodePts}`,
+    `Max run/output points: ${maxRunPts}`,
+    "",
+    "Rubric for CODE band:",
+    codeRubricText || "(none)",
+    "",
+    "Rubric for RUN/OUTPUT band:",
+    runRubricText || "(none)",
+    "",
+    "Student code submission(s):",
+    codeBundle || "(none)",
+    "",
+    "Program/run output:",
+    cleanOutput || "(none provided)",
+    "",
+    "Return strict JSON only in this form:",
+    "{",
+    '  "codeScore": number,',
+    '  "codeFeedback": string,',
+    '  "runScore": number,',
+    '  "runFeedback": string',
+    "}",
+    `codeScore must be between 0 and ${maxCodePts}.`,
+    `runScore must be between 0 and ${maxRunPts}.`,
+    "Do not mention points, scores, grading, or rubrics in the feedback.",
+  ].join("\n");
+
+  const obj = await requestJsonGrade([
+    { name: "code_run_grader", role: "system", content: sys },
+    { role: "user", content: user },
+  ]);
+
+  return {
+    codeScore: clampScore(obj.codeScore, maxCodePts),
+    codeFeedback: obj.codeFeedback ? String(obj.codeFeedback).trim() : "",
+    runScore: clampScore(obj.runScore, maxRunPts),
+    runFeedback: obj.runFeedback ? String(obj.runFeedback).trim() : "",
+  };
+}
+
+// ---------------------- TEST-MODE: gradeTestQuestion ----------------------
+async function gradeTestQuestion({
+  questionText,
+  scores = {},
+  responseText = "",
+  codeCells = [],
+  outputText = "",
+  rubric = {},
+  detailedFeedback = true,
+}) {
+  const normalizedScores = normalizeScoreBands(scores, rubric);
+  const codeBucket = normalizedScores.code || {};
+  const runBucket = normalizedScores.output || {};
+  const respBucket = normalizedScores.response || {};
+
+  const maxCodePts = bucketPoints(codeBucket);
+  const maxRunPts = bucketPoints(runBucket);
+  const maxRespPts = bucketPoints(respBucket);
+
+  const maxTotal = maxCodePts + maxRunPts + maxRespPts;
+  if (maxTotal <= 0) {
+    return {
+      codeScore: 0, codeFeedback: "",
+      runScore: 0, runFeedback: "",
+      responseScore: 0, responseFeedback: "",
+    };
+  }
+
+  const codeRubricText = bucketRubricText(codeBucket);
+  const runRubricText = bucketRubricText(runBucket);
+  const responseRubricText = bucketRubricText(respBucket);
+
+  try {
+    const codeRun = await gradeCodeRunBands({
+      questionText,
+      codeCells,
+      outputText,
+      codeRubricText,
+      runRubricText,
+      maxCodePts,
+      maxRunPts,
     });
 
-    const choice = chat.choices?.[0];
-    const raw = (choice?.message?.content ?? "").trim();
+    const response = await gradeResponseBand({
+      questionText,
+      responseText,
+      responseRubricText,
+      maxRespPts,
+    });
 
-    if (!raw) {
-      console.error("❌ gradeTestQuestion empty OpenAI response:", {
-        model: MODEL,
-        finishReason: choice?.finish_reason,
-        usage: chat.usage,
-      });
-      throw new Error("OpenAI returned an empty grading response");
-    }
-
-    let obj;
-    try {
-      obj = JSON.parse(raw);
-      const literalResponse = stripHtml(responseText || "");
-      const literalOutput = stripHtml(outputText || "");
-      const evidenceSource = `${literalResponse}\n${literalOutput}`;
-
-      if (Array.isArray(obj.responseEvidence)) {
-        for (const item of obj.responseEvidence) {
-          if (!item || item.present !== true) continue;
-
-          const evidence = String(item.evidence || "").trim();
-
-          // A "present" claim must quote something that literally exists
-          // in the student's response or supplied output.
-          if (!evidence || !evidenceSource.includes(evidence)) {
-            console.warn("⚠️ Rejecting unsupported response evidence:", item);
-            item.present = false;
-            item.evidence = "";
-          }
-        }
-      }
-    } catch (parseErr) {
-      console.error("❌ gradeTestQuestion invalid JSON response:", {
-        model: MODEL,
-        finishReason: choice?.finish_reason,
-        raw,
-        usage: chat.usage,
-      });
-      throw parseErr;
-    }
-
-    let codeScore = Number(obj.codeScore ?? 0);
-    let runScore = Number(obj.runScore ?? 0);
-    let responseScore = Number(obj.responseScore ?? 0);
-
-    // Deterministically cap written-response credit based on
-    // evidence that actually survived literal verification.
-    if (maxRespPts > 0 && Array.isArray(obj.responseEvidence) && obj.responseEvidence.length > 0) {
-      const totalRequirements = obj.responseEvidence.length;
-      const presentRequirements = obj.responseEvidence.filter(
-        item => item && item.present === true
-      ).length;
-
-      const evidenceBasedMax =
-        maxRespPts * (presentRequirements / totalRequirements);
-
-      if (responseScore > evidenceBasedMax) {
-        console.warn("⚠️ Capping response score based on verified evidence:", {
-          originalScore: responseScore,
-          evidenceBasedMax,
-          presentRequirements,
-          totalRequirements,
-          responseEvidence: obj.responseEvidence,
-        });
-
-        responseScore = evidenceBasedMax;
-      }
-    }
-    console.log("GRADE VERIFIED RESPONSE EVIDENCE:", obj.responseEvidence);
-    if (!Number.isFinite(codeScore)) codeScore = 0;
-    if (!Number.isFinite(runScore)) runScore = 0;
-    if (!Number.isFinite(responseScore)) responseScore = 0;
-
-    codeScore = Math.max(0, Math.min(maxCodePts, codeScore));
-    runScore = Math.max(0, Math.min(maxRunPts, runScore));
-    responseScore = Math.floor(
-      Math.max(0, Math.min(maxRespPts, responseScore))
-    );
-
-    const codeFeedback = obj.codeFeedback ? String(obj.codeFeedback).trim() : "";
-    const runFeedback = obj.runFeedback ? String(obj.runFeedback).trim() : "";
-    const responseFeedback = obj.responseFeedback ? String(obj.responseFeedback).trim() : "";
-
-    return { codeScore, codeFeedback, runScore, runFeedback, responseScore, responseFeedback };
+    return { ...codeRun, ...response };
   } catch (err) {
     console.error("❌ gradeTestQuestion OpenAI error:", err);
     return {

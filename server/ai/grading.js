@@ -100,6 +100,23 @@ async function gradeTestQuestion({
     "Grade ONLY the code, response, and output supplied for this question.",
     "Never assume anything from another question in the assignment.",
 
+    "EVIDENCE-ONLY GRADING RULE:",
+    "Grade ONLY what is explicitly present in the student's submitted response, code, or execution output for the current question.",
+    "NEVER infer that the student performed a step merely because the question asked for it.",
+    "NEVER invent or assume actual test results that are not written or shown.",
+    "NEVER claim that a test passed or failed unless the student explicitly says so or execution output directly demonstrates it.",
+    "NEVER invent or assume inputs, outputs, explanations, calculations, or conclusions that are not present in the supplied evidence.",
+    "If a question asks for several distinct components, check independently that each requested component is actually present.",
+    "Do not complete missing work on the student's behalf.",
+    "Feedback must describe only evidence that actually appears in the submission.",
+
+    "WRITTEN RESPONSE COMPLETENESS:",
+    "For written-response questions, compare each requested component against the student's literal submitted response.",
+    "Do not award credit for a requested component unless evidence for that component appears in the response or supplied execution output.",
+    "For example, if a testing question asks for inputs, expected results, actual results, and a pass/fail conclusion, a response containing only inputs and expected results is incomplete.",
+    "Do not claim that actual results or a pass/fail conclusion were provided when they are absent.",
+
+
     "CRITICAL TEST-CASE RULE:",
     "Values described in the question as a suggested test, example test, sample test, or phrases such as 'try' and 'should produce' are examples only unless the question explicitly says those exact values MUST be submitted.",
     "A student may use different valid inputs.",
@@ -162,6 +179,14 @@ async function gradeTestQuestion({
   userLines.push(stripHtml(responseText || "(none)"));
   userLines.push("");
 
+  userLines.push("RESPONSE EVIDENCE RULE:");
+  userLines.push(
+    "Treat the text above literally. Do not infer missing statements, test results, pass/fail conclusions, " +
+    "or explanations merely because the question requested them. Award credit only for components that are " +
+    "actually present in the response or directly demonstrated by supplied output."
+  );
+  userLines.push("");
+
   userLines.push("Student CODE submission(s):");
   userLines.push(codeBundle || "(none)");
   userLines.push("");
@@ -212,8 +237,30 @@ async function gradeTestQuestion({
       response_format: { type: "json_object" },
     });
 
-    const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
-    const obj = JSON.parse(raw);
+    const choice = chat.choices?.[0];
+    const raw = (choice?.message?.content ?? "").trim();
+
+    if (!raw) {
+      console.error("❌ gradeTestQuestion empty OpenAI response:", {
+        model: MODEL,
+        finishReason: choice?.finish_reason,
+        usage: chat.usage,
+      });
+      throw new Error("OpenAI returned an empty grading response");
+    }
+
+    let obj;
+    try {
+      obj = JSON.parse(raw);
+    } catch (parseErr) {
+      console.error("❌ gradeTestQuestion invalid JSON response:", {
+        model: MODEL,
+        finishReason: choice?.finish_reason,
+        raw,
+        usage: chat.usage,
+      });
+      throw parseErr;
+    }
 
     let codeScore = Number(obj.codeScore ?? 0);
     let runScore = Number(obj.runScore ?? 0);

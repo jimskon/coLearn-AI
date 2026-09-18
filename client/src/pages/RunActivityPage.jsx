@@ -1458,12 +1458,20 @@ export default function RunActivityPage({
       const t0 = performance.now();
       const url = `${API_BASE_URL}/api/ai/evaluate-response`;
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(body),
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      let res;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
 
       const raw = await res.text();
@@ -1778,9 +1786,10 @@ export default function RunActivityPage({
         })
         .filter((c) => c.code.trim() !== '');
 
-      // 5) Decide what becomes the "responseText" for grading
-      //    Priority: written -> table -> output
-      const finalResponse = baseAnswer || tableMarkdown || outputText || (codeCells.length ? '[code submitted]' : '');
+      // 5) Decide what becomes the written "responseText" for grading.
+      //    Keep artifact types separate: program output and code submissions
+      //    must not be stored under the main written-response key.
+      const finalResponse = baseAnswer || tableMarkdown || '';
 
       if (finalResponse) {
         // Store main response for this question under its qid
@@ -2861,21 +2870,29 @@ export default function RunActivityPage({
     }
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            studentId: user.id,
-            groupNum,
-            retriesRequired,
-            forceOverride: !!forceOverride,
-            attempt,
-          }),
-        }
-      );
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      let response;
+      try {
+        response = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              studentId: user.id,
+              groupNum,
+              retriesRequired,
+              forceOverride: !!forceOverride,
+              attempt,
+            }),
+            signal: controller.signal,
+          }
+        );
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));

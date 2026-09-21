@@ -3026,6 +3026,21 @@ async function submitTest(req, res) {
         });
       }
 
+      // Persist individual table cell values so they survive the draft-clear on submit
+      const tableRx = new RegExp(`^${escapeRegExp(baseId)}table\\d+cell\\d+_\\d+$`);
+      const allAnsKeys = Object.keys(answers);
+      const tableAnsKeys = allAnsKeys.filter(k => tableRx.test(String(k)));
+      console.log('[TABLE_DEBUG] qid=%s allKeys=%j tableMatches=%j', baseId, allAnsKeys, tableAnsKeys);
+      for (const [key, value] of Object.entries(answers)) {
+        if (tableRx.test(String(key)) && String(value).trim()) {
+          console.log('[TABLE_DEBUG] saving cell key=%s val=%j', key, String(value));
+          await appendResponse(conn, instanceId, submitId, key, String(value), {
+            type: 'text',
+            answeredBy: resolvedStudentId,
+          });
+        }
+      }
+
       console.log('[SUBMIT_TEST] artifacts', {
         baseId,
         writtenPresent: !!written,

@@ -1586,9 +1586,8 @@ export default function RunActivityPage({
           if (cell.type === 'static') return cell.content || '';
           if (cell.type === 'input') {
             const key = `${block.groupId}${block.id}table${t}cell${row}_${col}`;
-            const val =
-              container.querySelector(`[data-response-key="${key}"]`)
-                ?.value?.trim() || '';
+            const domVal = container.querySelector(`[data-response-key="${key}"]`)?.value?.trim() || '';
+            const val = domVal || existingAnswers?.[key]?.response?.trim() || '';
             return val;
           }
           return '';
@@ -1721,9 +1720,10 @@ export default function RunActivityPage({
               const cell = table.rows[row][col];
               if (cell.type === 'input') {
                 const key = `${qid}table${t}cell${row}_${col}`;
-                const val =
-                  container.querySelector(`[data-response-key="${key}"]`)
-                    ?.value?.trim() || '';
+                const domVal = container.querySelector(`[data-response-key="${key}"]`)?.value?.trim() || '';
+                // Fall back to existingAnswers so table cells are captured even if the DOM
+                // element is momentarily absent (e.g. React hasn't flushed yet).
+                const val = domVal || existingAnswers?.[key]?.response?.trim() || '';
                 if (val !== '') {
                   answers[key] = val;
                   tableHasInput = true;
@@ -2109,8 +2109,9 @@ export default function RunActivityPage({
           existingAnswers
         );
         console.log('[TEST SUBMIT payload]', {
-          answersCount: Object.keys(answers).length,
+          answersKeys: Object.keys(answers),
           questionsCount: questions.length,
+          tableKeys: Object.keys(answers).filter(k => /table\d+cell/.test(k)),
         });
 
         const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';

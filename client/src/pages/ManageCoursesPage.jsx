@@ -177,6 +177,14 @@ export default function ManageCoursesPage() {
 
                   <Button
                     size="sm"
+                    variant="outline-success"
+                    onClick={() => navigate(`/courses/${course.id}/hw`)}
+                  >
+                    HW Results
+                  </Button>
+
+                  <Button
+                    size="sm"
                     variant="info"
                     onClick={() => navigate(`/courses/${course.id}/students`)}
                   >

@@ -673,6 +673,8 @@ async function getCourseProgress(req, res) {
     ai.activity_id,
     ai.points_earned,
     ai.points_possible,
+    ai.total_groups,
+    ai.completed_groups,
     ai.progress_status,
     gm.student_id,
     ai.id AS instance_id,
@@ -684,21 +686,23 @@ async function getCourseProgress(req, res) {
     SELECT
       gm2.student_id,
       ai2.activity_id,
-      MAX(COALESCE(ai2.graded_at, ai2.submitted_at)) AS last_ts,
+      MAX(COALESCE(ai2.graded_at, ai2.submitted_at, ai2.start_time)) AS last_ts,
       MAX(ai2.id) AS last_id
     FROM activity_instances ai2
     JOIN pogil_activities a2 ON a2.id = ai2.activity_id
     JOIN group_members gm2   ON gm2.activity_instance_id = ai2.id
     WHERE ai2.course_id = ?
-      AND a2.is_test = 1
+      AND a2.is_test = 0
+      AND (ai2.assignment_due_at IS NULL)
     GROUP BY gm2.student_id, ai2.activity_id
   ) latest
     ON latest.student_id = gm.student_id
    AND latest.activity_id = ai.activity_id
-   AND COALESCE(ai.graded_at, ai.submitted_at) = latest.last_ts
+   AND COALESCE(ai.graded_at, ai.submitted_at, ai.start_time) = latest.last_ts
    AND ai.id = latest.last_id
   WHERE ai.course_id = ?
-    AND a.is_test = 1
+    AND a.is_test = 0
+    AND (ai.assignment_due_at IS NULL)
   `,
       [courseId, courseId]
     );
@@ -1068,6 +1072,141 @@ async function getGroupsConfigForActivity(req, res) {
 }
 
 
+
+// GET hw results for a course (assignment activities — is_test = 0, assignment_due_at set)
+// Shape mirrors getCourseTestResults
+async function getCourseHWResults(req, res) {
+  const { courseId } = req.params;
+
+  try {
+    // 1) Enrolled students
+    const [studentsRows] = await db.query(
+      `SELECT u.id, u.name, u.email
+       FROM course_enrollments ce
+       JOIN users u ON ce.student_id = u.id
+       WHERE ce.course_id = ?`,
+      [courseId]
+    );
+
+    // 2) Non-test (assignment/lab/homework) activities for this course's class_id
+    const [hwRows] = await db.query(
+      `SELECT id, name, is_test
+       FROM pogil_activities
+       WHERE class_id = (
+         SELECT class_id FROM courses WHERE id = ?
+       )
+       AND is_test = 0
+       ORDER BY order_index`,
+      [courseId]
+    );
+
+    if (hwRows.length === 0) {
+      return res.json({ activities: [], students: [] });
+    }
+
+    // 3) Pull LATEST assignment instance scores for this course (one row per student x activity)
+    const [instanceRows] = await db.query(
+      `
+  SELECT
+    ai.activity_id,
+    ai.points_earned,
+    ai.points_possible,
+    ai.progress_status,
+    gm.student_id,
+    ai.id AS instance_id
+  FROM activity_instances ai
+  JOIN pogil_activities a ON a.id = ai.activity_id
+  JOIN group_members gm   ON gm.activity_instance_id = ai.id
+  JOIN (
+    SELECT
+      gm2.student_id,
+      ai2.activity_id,
+      MAX(COALESCE(ai2.graded_at, ai2.submitted_at, ai2.start_time)) AS last_ts,
+      MAX(ai2.id) AS last_id
+    FROM activity_instances ai2
+    JOIN pogil_activities a2 ON a2.id = ai2.activity_id
+    JOIN group_members gm2   ON gm2.activity_instance_id = ai2.id
+    WHERE ai2.course_id = ?
+      AND a2.is_test = 0
+      AND ai2.assignment_due_at IS NOT NULL
+    GROUP BY gm2.student_id, ai2.activity_id
+  ) latest
+    ON latest.student_id = gm.student_id
+   AND latest.activity_id = ai.activity_id
+   AND COALESCE(ai.graded_at, ai.submitted_at, ai.start_time) = latest.last_ts
+   AND ai.id = latest.last_id
+  WHERE ai.course_id = ?
+    AND a.is_test = 0
+    AND ai.assignment_due_at IS NOT NULL
+  `,
+      [courseId, courseId]
+    );
+
+    // 4) Build per-student structure
+    const resultsByStudent = new Map();
+    for (const s of studentsRows) {
+      resultsByStudent.set(s.id, {
+        id: s.id,
+        name: s.name,
+        email: s.email,
+        scores: {}
+      });
+    }
+
+    // 5) Fill per-student per-activity from latest instance rows
+    for (const row of instanceRows) {
+      const {
+        student_id,
+        activity_id,
+        points_earned,
+        points_possible,
+        progress_status,
+      } = row;
+
+      const student = resultsByStudent.get(student_id);
+      if (!student) continue;
+
+      let status = progress_status || 'not_started';
+      if (!status || status === 'in_progress') {
+        if (points_possible && Number(points_possible) > 0) {
+          status = 'completed';
+        } else if (points_earned && Number(points_earned) > 0) {
+          status = 'in_progress';
+        } else {
+          status = 'not_started';
+        }
+      }
+
+      student.scores[activity_id] = {
+        status,
+        pointsEarned: points_earned != null ? Number(points_earned) : null,
+        pointsPossible: points_possible != null ? Number(points_possible) : null,
+      };
+    }
+
+    // 6) Ensure every activity has a slot for every student
+    for (const student of resultsByStudent.values()) {
+      for (const hw of hwRows) {
+        if (!student.scores[hw.id]) {
+          student.scores[hw.id] = {
+            status: 'not_started',
+            pointsEarned: null,
+            pointsPossible: null,
+          };
+        }
+      }
+    }
+
+    res.json({
+      activities: hwRows.map(a => ({ id: a.id, name: a.name })),
+      students: Array.from(resultsByStudent.values()),
+    });
+  } catch (err) {
+    console.error("❌ Failed to load HW results:", err);
+    res.status(500).json({ error: "Failed to get HW results" });
+  }
+}
+
 module.exports = {
   getAllCourses,
   createCourse,
@@ -1082,6 +1221,7 @@ module.exports = {
   getCourseInfo,
   getCourseProgress,
   getCourseTestResults,
+  getCourseHWResults,
   setCourseActivityHidden,
   getGroupsConfigForActivity,
 };

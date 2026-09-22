@@ -23,7 +23,8 @@ import ForgotPasswordPage from '../pages/ForgotPasswordPage';
 import ResetPasswordPage from '../pages/ResetPasswordPage';
 import ManageCourseStudentsPage from '../pages/ManageCourseStudentsPage';
 import ManageCourseProgressPage from '../pages/ManageCourseProgressPage';
-import ManageCourseTestsPage from '../pages/ManageCourseTestsPage'; // 👈 NEW
+import ManageCourseTestsPage from '../pages/ManageCourseTestsPage';
+import ManageCourseHWPage from '../pages/ManageCourseHWPage'; // 👈 NEW
 import DemoLandingPage from '../pages/DemoLandingPage';
 import DemoPathPage from '../pages/DemoPathPage';
 import DemoInfoRequestsAdminPage from '../pages/DemoInfoRequestsAdminPage';
@@ -116,7 +117,8 @@ function AppRoutes() {
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/courses/:courseId/students" element={<ManageCourseStudentsPage />} />
         <Route path="/courses/:courseId/progress" element={<ManageCourseProgressPage />} />
-        <Route path="/courses/:courseId/tests" element={<ManageCourseTestsPage />} /> {/* 👈 NEW */}
+        <Route path="/courses/:courseId/tests" element={<ManageCourseTestsPage />} />
+        <Route path="/courses/:courseId/hw" element={<ManageCourseHWPage />} />
       </Routes>
 
       <AppFooter />

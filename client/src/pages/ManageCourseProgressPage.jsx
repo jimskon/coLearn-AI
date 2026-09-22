@@ -97,7 +97,7 @@ export default function ManageCourseProgressPage() {
 
   return (
     <Container className="mt-4">
-      <h3>Student Progress</h3>
+      <h3>Group Activity Results</h3>
       <Table bordered>
         <thead>
           <tr>

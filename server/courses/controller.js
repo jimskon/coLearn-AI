@@ -654,26 +654,19 @@ async function getCourseProgress(req, res) {
       [courseId]
     );
 
-    // 2) Get NON-TEST activities for this course's class_id, infer type from content
-    const [rawActivities] = await db.query(
-      `SELECT id, name, is_test, sheet_url, source_type, content_text
+    // 2) Group-mode activities for this course's class — filter by stored DB columns,
+    //    same logic the client uses: activity_type || authored_mode || (is_test→'test':'group')
+    const [activitiesRows] = await db.query(
+      `SELECT id, name, is_test, activity_type, authored_mode
        FROM pogil_activities
        WHERE class_id = (
          SELECT class_id FROM courses WHERE id = ?
        )
          AND is_test = 0
+         AND COALESCE(activity_type, authored_mode, 'group') = 'group'
        ORDER BY order_index`,
       [courseId]
     );
-
-    // Filter to group-mode activities only (exclude assignment, demo, playground)
-    const activitiesWithType = await Promise.all(
-      rawActivities.map(async (a) => {
-        const actType = await inferActivityTypeFromActivity(a);
-        return { ...a, actType };
-      })
-    );
-    const activitiesRows = activitiesWithType.filter(a => a.actType === 'group');
 
     if (activitiesRows.length === 0) {
       return res.json({ activities: [], students: studentsRows.map(s => ({
@@ -1045,25 +1038,19 @@ async function getCourseHWResults(req, res) {
       [courseId]
     );
 
-    // 2) All non-test activities for this class, then filter to assignment mode
-    const [rawActivities] = await db.query(
-      `SELECT id, name, is_test, sheet_url, source_type, content_text
+    // 2) Assignment-mode activities for this course's class — filter by stored DB columns,
+    //    same logic the client uses: activity_type || authored_mode || (is_test→'test':'group')
+    const [hwRows] = await db.query(
+      `SELECT id, name, is_test, activity_type, authored_mode
        FROM pogil_activities
        WHERE class_id = (
          SELECT class_id FROM courses WHERE id = ?
        )
-       AND is_test = 0
+         AND is_test = 0
+         AND COALESCE(activity_type, authored_mode, 'group') = 'assignment'
        ORDER BY order_index`,
       [courseId]
     );
-
-    const activitiesWithType = await Promise.all(
-      rawActivities.map(async (a) => {
-        const actType = await inferActivityTypeFromActivity(a);
-        return { ...a, actType };
-      })
-    );
-    const hwRows = activitiesWithType.filter(a => a.actType === 'assignment');
 
     if (hwRows.length === 0) {
       return res.json({ activities: [], students: [] });

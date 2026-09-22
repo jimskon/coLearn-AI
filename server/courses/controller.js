@@ -654,19 +654,27 @@ async function getCourseProgress(req, res) {
       [courseId]
     );
 
-    // 2) Group-mode activities for this course's class — filter by stored DB columns,
-    //    same logic the client uses: activity_type || authored_mode || (is_test→'test':'group')
-    const [activitiesRows] = await db.query(
-      `SELECT id, name, is_test, activity_type, authored_mode
+    // 2) Non-test activities for this course's class (only real DB columns used)
+    //    is_test IS NULL = never set, treat as non-test (same as 0)
+    const [allNonTestRows] = await db.query(
+      `SELECT id, name, is_test, content_text, source_type, sheet_url
        FROM pogil_activities
        WHERE class_id = (
          SELECT class_id FROM courses WHERE id = ?
        )
-         AND is_test = 0
-         AND COALESCE(activity_type, authored_mode, 'group') = 'group'
+         AND (is_test = 0 OR is_test IS NULL)
        ORDER BY order_index`,
       [courseId]
     );
+
+    // Filter to group-mode activities using the same utility the API uses
+    const activitiesRows = [];
+    for (const row of allNonTestRows) {
+      const aType = await inferActivityTypeFromActivity(row);
+      if (aType === 'group' || aType === 'playground') {
+        activitiesRows.push(row);
+      }
+    }
 
     if (activitiesRows.length === 0) {
       return res.json({ activities: [], students: studentsRows.map(s => ({
@@ -1038,19 +1046,27 @@ async function getCourseHWResults(req, res) {
       [courseId]
     );
 
-    // 2) Assignment-mode activities for this course's class — filter by stored DB columns,
-    //    same logic the client uses: activity_type || authored_mode || (is_test→'test':'group')
-    const [hwRows] = await db.query(
-      `SELECT id, name, is_test, activity_type, authored_mode
+    // 2) Assignment-mode activities — only real DB columns, filter by type in JS
+    //    is_test IS NULL = never set, treat as non-test
+    const [allNonTestHwRows] = await db.query(
+      `SELECT id, name, is_test, content_text, source_type, sheet_url
        FROM pogil_activities
        WHERE class_id = (
          SELECT class_id FROM courses WHERE id = ?
        )
-         AND is_test = 0
-         AND COALESCE(activity_type, authored_mode, 'group') = 'assignment'
+         AND (is_test = 0 OR is_test IS NULL)
        ORDER BY order_index`,
       [courseId]
     );
+
+    // Filter to assignment-mode activities using the same utility the API uses
+    const hwRows = [];
+    for (const row of allNonTestHwRows) {
+      const aType = await inferActivityTypeFromActivity(row);
+      if (aType === 'assignment') {
+        hwRows.push(row);
+      }
+    }
 
     if (hwRows.length === 0) {
       return res.json({ activities: [], students: [] });

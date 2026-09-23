@@ -75,8 +75,10 @@ test('accepted answers still get no praise field when positive is off', async ()
 });
 
 test('positive mode is reported as enabled so the rest of the pipeline agrees', async () => {
-  const { positiveEnabled } = await buildStudentResponsePrompt({
+  const { positiveEnabled, sys } = await buildStudentResponsePrompt({
     ...BASE, activityAiMode: 'positive',
   });
   assert.equal(positiveEnabled, true);
+  assert.match(sys, /only for a notably strong answer/i);
+  assert.match(sys, /ordinary sufficient or mostly-correct answer, feedback MUST be null/i);
 });

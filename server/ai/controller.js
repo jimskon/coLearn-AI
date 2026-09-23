@@ -988,12 +988,12 @@ async function buildStudentResponsePrompt({
     "Classify the group's current submission as accepted or revise.",
     "Return ONLY JSON matching the schema exactly.",
     "The instructor feedbackprompt identifies concepts to coach toward; it is not an exact-answer checklist. Do not invent additional criteria.",
-    "Use decision=accepted when the answer is sufficient to proceed.",
+    "Use decision=accepted when the answer is sufficient to proceed. Relevance alone is not sufficient: a response that only repeats a surface detail from the code, while failing the central task the question asks students to do, must be revise.",
     "Use decision=revise only when the answer needs a meaningful correction or addition. A blank, incoherent, off-topic, or fundamentally wrong answer is also revise; there is no third student-facing state.",
     "For revise, revision_requirement MUST name the one specific unmet requirement. feedback MUST be a short coaching nudge (1–2 sentences) tied to that requirement. Never frame it as a list of failures.",
     "For accepted, feedback must be null when positive feedback is disabled.",
     positiveEnabled
-      ? "When positive feedback is enabled and decision=accepted, feedback MAY be one short, specific affirmative sentence only for a notably strong answer. For ordinary sufficient answers, use feedback=null. If you do give accepted feedback, name what the group did well; never use generic praise and never ask for more work or suggest a revision."
+      ? "When positive feedback is enabled and decision=accepted, use feedback only for a notably strong answer that shows clear, complete reasoning. For an ordinary sufficient or mostly-correct answer, feedback MUST be null so the group can move on quietly. When you do give positive feedback, make it one short, specific affirmative sentence that names a concrete idea the group got right; never use generic praise and never ask for more work or suggest a revision."
       : "",
     "DECISION CONSISTENCY RULE: Decide accepted/revise before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. Put that requirement in revision_requirement. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise.",
     effectiveLenientAcceptance
@@ -1001,7 +1001,7 @@ async function buildStudentResponsePrompt({
       : "",
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
-    "If the group has the core answer plus reasonable reasoning, accept it rather than asking for more detail.",
+    "If the group has the core answer plus reasonable reasoning, accept it rather than asking for more detail. But do not accept an answer that merely names one broad effect when the question asks for several predictions, quantities, or relationships.",
     "As attempts increase, weaken the requirements: prefer a good-enough answer that shows understanding over a perfectly complete one.",
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
@@ -1069,7 +1069,7 @@ async function buildStudentResponsePrompt({
     `Feedback language rule: write only in ${feedbackLanguage}, not the student's answer language if it differs.`,
     "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
     "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
-    "Acceptance rule: if the group has the core answer plus reasonable reasoning, accept it instead of asking for more detail.",
+    "Acceptance rule: if the group has the core answer plus reasonable reasoning, accept it instead of asking for more detail. Relevance alone is not enough: do not accept a response that merely repeats a surface detail from the code while failing the central task.",
     "Acceptance rule: use the instructor feedbackprompt as guidance for the core idea, not as an exact-answer checklist. Do not add criteria from the sample or your own expectations.",
     "Acceptance rule: as attempts increase, weaken the requirements and let a good-enough answer move on.",
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
@@ -1796,6 +1796,30 @@ function looksGibberish(ans) {
   return a.length < 2;
 }
 
+function looksClearlyIncompleteStructuredPrediction({
+  questionText = '',
+  feedbackPrompt = '',
+  studentAnswer = '',
+}) {
+  const question = stripHtml(questionText);
+  const requiredBullets = question.match(/^\s*[-*]\s+/gm) || [];
+  if (requiredBullets.length < 3) return false;
+
+  // This deliberately handles only a narrow, high-confidence case: a prompt
+  // with several listed predictions and a feedbackprompt that supplies two or
+  // more numerical targets. A response containing none of those quantities
+  // cannot yet be a sufficient trace, even when it mentions a surface effect
+  // such as "it prints the name." Other short or differently worded answers
+  // still go to the normal AI evaluator.
+  const expectedNumbers = [...new Set(
+    (stripHtml(feedbackPrompt).match(/\b\d+(?:\.\d+)?\b/g) || [])
+  )];
+  if (expectedNumbers.length < 2) return false;
+
+  const answerNumbers = String(studentAnswer).match(/\b\d+(?:\.\d+)?\b/g) || [];
+  return answerNumbers.length === 0;
+}
+
 function detectLangFromCode(src = "") {
   const s = String(src).trim();
   if (!s) return null;
@@ -2021,6 +2045,17 @@ async function evaluateStudentResponse(req, res) {
     // judgment. Do not synthesize praise here: any final feedback that belongs
     // with the accepted answer should already be persisted as F1/FA rows.
     feedback = null;
+    return await applyGateAndSend();
+  }
+
+  if (looksClearlyIncompleteStructuredPrediction({
+    questionText,
+    feedbackPrompt,
+    studentAnswer: answerRaw,
+  })) {
+    accepted = false;
+    decision = 'revise';
+    feedback = 'Start with one concrete prediction from the code, such as a requested quantity or loop role; a general statement alone does not yet answer the trace.';
     return await applyGateAndSend();
   }
 

@@ -345,6 +345,53 @@ test('keyboard-mash is rejected for ordinary activities before a permissive mode
   }
 });
 
+test('a surface-only answer cannot pass a multi-part prediction question', async () => {
+  const originalCreate = __testHooks.openai.chat.completions.create;
+  let modelCalls = 0;
+  __testHooks.openai.chat.completions.create = async () => {
+    modelCalls += 1;
+    return {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            decision: 'accepted',
+            feedback: 'This permissive mock must not be reached.',
+          }),
+        },
+      }],
+    };
+  };
+
+  try {
+    const response = await postJson('/api/ai/evaluate-response', {
+      questionText: `Suppose the user enters Ada. Predict:
+- how many rows are printed
+- how many times Ada appears on each row
+- how many times Ada is printed in total
+- which loop is the outer loop
+- which loop is the inner loop`,
+      studentAnswer: 'Prints the name',
+      feedbackPrompt: 'Check for 5 rows, 3 names per row, 15 total names, and correct identification of inner and outer loops.',
+      guidance: 'Accept relevant reasoning unless it is clearly incorrect or fails to address the task.',
+      activityAiMode: 'positive',
+      instanceId: 0,
+      groupNum: 1,
+      answeredByUserId: 13,
+      retriesRequired: 1,
+      submissionString: 'Prints the name',
+      dryRun: true,
+    });
+
+    assert.equal(modelCalls, 0);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.decision, 'revise');
+    assert.equal(response.body.accepted, false);
+    assert.match(response.body.feedback, /concrete prediction|quantity|loop role/i);
+  } finally {
+    __testHooks.openai.chat.completions.create = originalCreate;
+  }
+});
+
 test('positive mode does not turn keyboard-mash table answers into accepted feedback', async () => {
   const originalCreate = __testHooks.openai.chat.completions.create;
 

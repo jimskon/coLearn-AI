@@ -142,13 +142,18 @@ export function VisualEditorPanel({ rawText, setRawText, activityId }) {
 
     // Generate markup
     let newMarkup;
-    let wrapAs = editState.type;
+    const isNew = editState.type.startsWith('new-');
+    let wrapAs = editState.type.replace('new-', '');
     try {
       switch (editState.type) {
-        case 'preamble':  newMarkup = generatePreamble(newValues); break;
-        case 'section':   newMarkup = generateSection(newValues); break;
-        case 'group':     newMarkup = generateQuestionGroupHeader(newValues); break;
-        case 'question':  newMarkup = generateQuestion(newValues); break;
+        case 'preamble':      newMarkup = generatePreamble(newValues); break;
+        case 'section':       newMarkup = generateSection(newValues); break;
+        case 'group':         newMarkup = generateQuestionGroupHeader(newValues); break;
+        case 'question':      newMarkup = generateQuestion(newValues); break;
+        case 'new-question':  newMarkup = generateQuestion(newValues); break;
+        case 'new-group':
+          newMarkup = `\\questiongroup{${newValues.title || ''}}\n\\endquestiongroup`;
+          break;
         default: return;
       }
     } catch (e) {
@@ -164,10 +169,14 @@ export function VisualEditorPanel({ rawText, setRawText, activityId }) {
       return;
     }
 
-    // Replace placeholder
+    // Replace placeholder (edit) or insert at position (new)
     let updatedSource;
     try {
-      updatedSource = replaceElement(rawText, editState.placeholder, newMarkup);
+      if (isNew) {
+        updatedSource = insertBeforeLine(rawText, editState.meta.insertBeforeLine, newMarkup);
+      } else {
+        updatedSource = replaceElement(rawText, editState.placeholder, newMarkup);
+      }
     } catch (e) {
       setEditErrors([{ type: 'error', message: String(e) }]);
       return;
@@ -220,6 +229,35 @@ export function VisualEditorPanel({ rawText, setRawText, activityId }) {
     }
     setRawText(updated);
   }, [editState, rawText, setRawText]);
+
+  // ── Delete question group ─────────────────────────────────────────────────
+
+  const deleteGroup = useCallback((group) => {
+    if (editState) return;
+    if (!group.startLine || !group.endLine) return;
+    if (!window.confirm(`Delete group "${(group.rawTitle || 'Untitled').slice(0, 60)}" and all its questions? This cannot be undone.`)) return;
+
+    const updated = deleteElement(rawText, { startLine: group.startLine, endLine: group.endLine });
+    const issues = validateFullDocument(updated);
+    if (issues.some((i) => i.type === 'error')) {
+      setEditErrors([{ type: 'error', message: 'Deletion would break the document structure. Cancelled.' }]);
+      return;
+    }
+    setRawText(updated);
+  }, [editState, rawText, setRawText]);
+
+  // ── Open add (new element, no extract step) ───────────────────────────────
+
+  const openAdd = useCallback((type, insertBeforeLine) => {
+    if (editState) return;
+    const blankValues = type === 'new-question'
+      ? { prompt: '', aiMode: '', responseType: 'text', responseValues: { lines: 4 },
+          feedbackPrompt: '', sampleResponses: '', followupPrompt: '', scoreBlock: null }
+      : { title: '' }; // new-group
+    setEditErrors([]);
+    setEditState({ type, formValues: blankValues, placeholder: null,
+                   backup: rawText, meta: { insertBeforeLine } });
+  }, [editState, rawText]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
 
@@ -279,6 +317,9 @@ export function VisualEditorPanel({ rawText, setRawText, activityId }) {
           onEditQuestion={(q) => openEdit('question', q)}
           onReorderQ={reorderQuestions}
           onDeleteQ={deleteQuestion}
+          onDeleteGroup={deleteGroup}
+          onAddQ={(g) => openAdd('new-question', g.endLine)}
+          onAddGroup={() => openAdd('new-group', section.endLine + 1)}
         />
       ))}
 
@@ -317,7 +358,7 @@ function PreambleCard({ preamble, locked, onEdit }) {
 
 // ─── Section Card ──────────────────────────────────────────────────────────
 
-function SectionCard({ section, locked, onEditSection, onEditGroup, onEditQuestion, onReorderQ, onDeleteQ }) {
+function SectionCard({ section, locked, onEditSection, onEditGroup, onEditQuestion, onReorderQ, onDeleteQ, onDeleteGroup, onAddQ, onAddGroup }) {
   return (
     <Card className="mb-3" style={{ opacity: locked ? 0.5 : 1, borderLeft: '4px solid #0d6efd' }}>
       <Card.Header className="d-flex justify-content-between align-items-center">
@@ -345,8 +386,15 @@ function SectionCard({ section, locked, onEditSection, onEditGroup, onEditQuesti
             onEditQuestion={onEditQuestion}
             onReorderQ={onReorderQ}
             onDeleteQ={onDeleteQ}
+            onDeleteGroup={() => onDeleteGroup(group)}
+            onAddQ={() => onAddQ(group)}
           />
         ))}
+        <div className="d-flex justify-content-end mt-2">
+          <Button size="sm" variant="outline-primary" disabled={locked} onClick={onAddGroup}>
+            ＋ Add Question Group
+          </Button>
+        </div>
       </Card.Body>
     </Card>
   );
@@ -354,7 +402,7 @@ function SectionCard({ section, locked, onEditSection, onEditGroup, onEditQuesti
 
 // ─── Group Card ────────────────────────────────────────────────────────────
 
-function GroupCard({ group, locked, onEditGroup, onEditQuestion, onReorderQ, onDeleteQ }) {
+function GroupCard({ group, locked, onEditGroup, onEditQuestion, onReorderQ, onDeleteQ, onDeleteGroup, onAddQ }) {
   return (
     <Card className="mb-2" style={{ borderLeft: '4px solid #6c757d' }}>
       <Card.Header className="d-flex justify-content-between align-items-center py-1 bg-light">
@@ -362,9 +410,10 @@ function GroupCard({ group, locked, onEditGroup, onEditQuestion, onReorderQ, onD
           <Badge bg="secondary" className="me-2">Q-Group</Badge>
           <strong>{group.rawTitle || <em className="text-muted">Untitled Group</em>}</strong>
         </span>
-        <Button size="sm" variant="outline-secondary" disabled={locked} onClick={onEditGroup}>
-          Rename
-        </Button>
+        <div className="d-flex gap-1">
+          <Button size="sm" variant="outline-secondary" disabled={locked} onClick={onEditGroup}>Rename</Button>
+          <Button size="sm" variant="outline-danger" disabled={locked} onClick={onDeleteGroup} title="Delete this group and all its questions">✕ Del</Button>
+        </div>
       </Card.Header>
       <Card.Body className="p-2">
         {group.questions.length === 0 && (
@@ -383,6 +432,11 @@ function GroupCard({ group, locked, onEditGroup, onEditQuestion, onReorderQ, onD
             onDelete={() => onDeleteQ(q)}
           />
         ))}
+        <div className="d-flex justify-content-end mt-2">
+          <Button size="sm" variant="outline-success" disabled={locked} onClick={onAddQ}>
+            ＋ Add Question
+          </Button>
+        </div>
       </Card.Body>
     </Card>
   );
@@ -425,6 +479,8 @@ function EditModal({ editState, errors, onSave, onCancel }) {
     section: 'Rename Section',
     group: 'Rename Question Group',
     question: 'Edit Question',
+    'new-question': 'Add New Question',
+    'new-group': 'Add New Question Group',
   };
 
   return (
@@ -442,10 +498,10 @@ function EditModal({ editState, errors, onSave, onCancel }) {
         {editState.type === 'preamble' && (
           <PreambleForm values={values} set={set} />
         )}
-        {(editState.type === 'section' || editState.type === 'group') && (
+        {(editState.type === 'section' || editState.type === 'group' || editState.type === 'new-group') && (
           <TitleForm values={values} set={set} label={editState.type === 'section' ? 'Section title' : 'Group title'} />
         )}
-        {editState.type === 'question' && (
+        {(editState.type === 'question' || editState.type === 'new-question') && (
           <QuestionForm values={values} set={set} />
         )}
       </Modal.Body>

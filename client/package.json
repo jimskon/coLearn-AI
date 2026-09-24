@@ -7,7 +7,7 @@
     "start": "vite",
     "build": "vite build",
     "test:ci": "npm run test:unit && npm run build",
-    "test:unit": "node --test scripts/*.test.mjs",
+    "test:unit": "node --test scripts/visual-editor-templates.test.mjs scripts/creator-serialization.test.mjs scripts/creator-component-serialization.test.mjs scripts/display-code-blocks.test.mjs scripts/parse-sheet-multiple-choice.test.mjs && node --import ./scripts/jsx-stub-loader.mjs --test scripts/visual-editor-engine.test.mjs",
     "test:parser": "node --test scripts/parse-sheet-multiple-choice.test.mjs"
   },
   "dependencies": {

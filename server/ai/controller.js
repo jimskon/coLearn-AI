@@ -1002,6 +1002,7 @@ async function buildStudentResponsePrompt({
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
     "If the group has the core answer plus reasonable reasoning, accept it rather than asking for more detail. But do not accept an answer that merely names one broad effect when the question asks for several predictions, quantities, or relationships.",
+    "ACCURACY RULE: Leniency permits omitted secondary details and informal wording, never an explicit claim that contradicts the shown code, context, or question. If the group states a wrong count, output, loop role, relationship, or causal claim, set decision=revise and coach that one error, even if another part of the answer is relevant or correct.",
     "As attempts increase, weaken the requirements: prefer a good-enough answer that shows understanding over a perfectly complete one.",
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",

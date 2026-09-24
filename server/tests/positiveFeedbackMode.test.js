@@ -82,3 +82,11 @@ test('positive mode is reported as enabled so the rest of the pipeline agrees', 
   assert.match(sys, /only for a notably strong answer/i);
   assert.match(sys, /ordinary sufficient or mostly-correct answer, feedback MUST be null/i);
 });
+
+test('leniency does not permit an explicitly wrong claim', async () => {
+  const { sys } = await buildStudentResponsePrompt({
+    ...BASE, activityAiMode: 'lenient',
+  });
+  assert.match(sys, /Leniency permits omitted secondary details and informal wording, never an explicit claim that contradicts/i);
+  assert.match(sys, /wrong count, output, loop role, relationship, or causal claim/i);
+});

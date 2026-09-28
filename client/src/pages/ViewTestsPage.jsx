@@ -22,6 +22,7 @@ export default function ViewTestsPage() {
   const [deleting, setDeleting] = useState(new Set());
   const [reviewing, setReviewing] = useState(new Set());
   const [accessCode, setAccessCode] = useState(null);
+  const [codeVisible, setCodeVisible] = useState(false);
 
   const [editing, setEditing] = useState(null); // { instanceId, startAtLocal, durationMinutes }
   const [savingEdit, setSavingEdit] = useState(false);
@@ -251,11 +252,22 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
       {accessCode && (
         <div className="alert alert-warning d-flex align-items-center gap-4 mt-3" style={{fontSize:'1.1rem'}}>
           <div>
-            <span className="fw-bold">🔑 Exam access code — write this on the board:</span>
+            <span className="fw-bold">🔑 Exam access code</span>
           </div>
-          <div style={{fontSize:'2.5rem', letterSpacing:'0.4em', fontFamily:'monospace', fontWeight:'bold'}}>
-            {accessCode}
-          </div>
+          {codeVisible ? (
+            <>
+              <div style={{fontSize:'2.5rem', letterSpacing:'0.4em', fontFamily:'monospace', fontWeight:'bold'}}>
+                {accessCode}
+              </div>
+              <button className="btn btn-sm btn-outline-secondary" onClick={() => setCodeVisible(false)}>
+                Hide
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-sm btn-warning fw-bold" onClick={() => setCodeVisible(true)}>
+              Reveal Code
+            </button>
+          )}
           <div className="small text-muted">Students must type this to start the exam.</div>
         </div>
       )}

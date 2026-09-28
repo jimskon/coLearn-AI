@@ -1217,7 +1217,8 @@ export default function RunActivityPage({
       Number(activity?.test_focus_enforcement) === 1 &&
       !!instanceId &&
       !activity?.submitted_at &&
-      !testLockState.lockedBefore;
+      !testLockState.lockedBefore &&
+      (!activity?.has_access_code || codeVerified);
 
     if (!canMonitor) return undefined;
 

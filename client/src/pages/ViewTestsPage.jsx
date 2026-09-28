@@ -21,6 +21,8 @@ export default function ViewTestsPage() {
   const [clearing, setClearing] = useState(new Set());
   const [deleting, setDeleting] = useState(new Set());
   const [reviewing, setReviewing] = useState(new Set());
+  const [accessCode, setAccessCode] = useState(null);
+  const [codeVisible, setCodeVisible] = useState(false);
 
   const [editing, setEditing] = useState(null); // { instanceId, startAtLocal, durationMinutes }
   const [savingEdit, setSavingEdit] = useState(false);
@@ -54,6 +56,9 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
       setTests(data.groups);
+      // Access code is the same for all instances in this run; grab from first one that has it.
+      const codeInst = data.groups.find((g) => g.test_access_code);
+      setAccessCode(codeInst?.test_access_code || null);
     } catch (err) {
       console.error('❌ Error loading tests:', err);
       setError('Could not load tests.');
@@ -244,6 +249,28 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
         </Badge>
       </h2>
       {courseName && <h4 className="text-muted">{courseName}</h4>}
+      {accessCode && (
+        <div className="alert alert-warning d-flex align-items-center gap-4 mt-3" style={{fontSize:'1.1rem'}}>
+          <div>
+            <span className="fw-bold">🔑 Exam access code</span>
+          </div>
+          {codeVisible ? (
+            <>
+              <div style={{fontSize:'2.5rem', letterSpacing:'0.4em', fontFamily:'monospace', fontWeight:'bold'}}>
+                {accessCode}
+              </div>
+              <button className="btn btn-sm btn-outline-secondary" onClick={() => setCodeVisible(false)}>
+                Hide
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-sm btn-warning fw-bold" onClick={() => setCodeVisible(true)}>
+              Reveal Code
+            </button>
+          )}
+          <div className="small text-muted">Students must type this to start the exam.</div>
+        </div>
+      )}
       <Alert variant="info" className="mt-3">
         This page shows the instructor-managed exam attempts. Students only see the exam workspace;
         this roster is for scheduling, reopening, reviewing, and clearing submissions.

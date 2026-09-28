@@ -14,6 +14,15 @@ const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
 const { ensureAssignmentDueSchema } = require('../utils/assignmentDueSchema');
 const { ensureRandomizeOrderSchema } = require('../utils/randomizeOrderSchema');
 
+function generateAccessCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -1074,7 +1083,7 @@ async function getActivityInstanceById(req, res) {
     await ensureTestFocusSchema();
     await ensureAssignmentDueSchema();
     await ensureRandomizeOrderSchema();
-    const [[instance]] = await db.query(
+      const [[instance]] = await db.query(
       `SELECT
          ai.id,
          ai.activity_id,
@@ -1104,6 +1113,7 @@ async function getActivityInstanceById(req, res) {
          ai.points_possible,
          ai.hidden,
          ai.randomize_order,
+         ai.test_access_code,
          a.title       AS title,
          a.name        AS activity_name,
          a.sheet_url
@@ -1119,6 +1129,17 @@ async function getActivityInstanceById(req, res) {
 
     if (instance.hidden && req.user?.role === 'student') {
       return res.status(403).json({ error: 'This activity is currently hidden.' });
+    }
+
+    // Strip the raw code from student responses; expose only a boolean.
+    // Professors (instructor/admin) see the actual code so they can display it.
+    if (req.user?.role === 'student' && instance.test_access_code) {
+      instance.has_access_code = true;
+      delete instance.test_access_code;
+    } else if (instance.test_access_code) {
+      instance.has_access_code = true;
+    } else {
+      instance.has_access_code = false;
     }
 
     const [[activitySource]] = await db.query(
@@ -1501,6 +1522,7 @@ async function setupMultipleGroupInstances(req, res) {
     focusEnforcement,
     assignmentDueAt,
     randomizeOrder,
+    requireAccessCode,
   } = req.body;
 
   if (!activityId || !courseId) {
@@ -1629,13 +1651,16 @@ async function setupMultipleGroupInstances(req, res) {
       console.log('[SETUP] pruned abandoned instances', { courseId, activityId, prunedAbandoned });
     }
 
+    // Generate one code for all instances in this test run, if requested.
+    const accessCode = isTest && requireAccessCode ? generateAccessCode() : null;
+
     async function insertInstance({ group_number }) {
       const [instanceResult] = await conn.query(
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
             test_start_at, test_duration_minutes, locked_before_start, locked_after_end, assignment_due_at,
-            test_focus_enforcement, active_rotation_mode, randomize_order)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, ?, 'submit', ?)`,
+            test_focus_enforcement, active_rotation_mode, randomize_order, test_access_code)
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, ?, 'submit', ?, ?)`,
         [
           courseId,
           activityId,
@@ -1648,6 +1673,7 @@ async function setupMultipleGroupInstances(req, res) {
           isAssignment ? assignmentDueForDb : null,
           isTest && focusEnforcement ? 1 : 0,
           randomizeOrder ? 1 : 0,
+          accessCode,
         ]
       );
       return instanceResult.insertId;
@@ -1716,6 +1742,7 @@ async function setupMultipleGroupInstances(req, res) {
       isTest,
       total_groups: computedTotalGroups,
       instance_count: isTest ? selectedStudentIds.length : groups.length,
+      accessCode: accessCode || null,
     });
   } catch (err) {
     try { await conn.rollback(); } catch { }
@@ -2138,7 +2165,7 @@ async function getInstancesForActivityInCourse(req, res) {
   try {
     await ensureTestFocusSchema();
     await ensureAssignmentDueSchema();
-    const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
+      const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
     const [[activity]] = await db.query(
       `SELECT title, is_test, sheet_url, source_type, content_text
          FROM pogil_activities WHERE id = ?`,
@@ -2195,7 +2222,8 @@ async function getInstancesForActivityInCourse(req, res) {
               review_complete,
               reviewed_at,
               points_earned,
-              points_possible
+              points_possible,
+              test_access_code
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
@@ -2319,6 +2347,7 @@ async function getInstancesForActivityInCourse(req, res) {
         reviewed_at: inst.reviewed_at,
         points_earned: inst.points_earned,
         points_possible: inst.points_possible,
+        test_access_code: inst.test_access_code || null,
         has_responses: hasResponsesSet.has(Number(inst.instance_id)),
         group_submit_counts: groupSubmitCounts,
         members: members.map(m => ({
@@ -3623,6 +3652,32 @@ async function forceAdvanceQuestionGroup(req, res) {
 }
 
 
+async function verifyAccessCode(req, res) {
+  const { instanceId } = req.params;
+  const { code } = req.body || {};
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ error: 'code is required' });
+  }
+  try {
+      const [[instance]] = await db.query(
+      `SELECT test_access_code FROM activity_instances WHERE id = ?`,
+      [instanceId]
+    );
+    if (!instance) return res.status(404).json({ error: 'Instance not found' });
+    if (!instance.test_access_code) {
+      // No code required for this instance — treat as verified.
+      return res.json({ ok: true });
+    }
+    if (code.trim().toUpperCase() !== instance.test_access_code.toUpperCase()) {
+      return res.status(403).json({ error: 'Incorrect access code.' });
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('verifyAccessCode error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
 module.exports = {
   clearResponsesForInstance,
   recordTestFocusLoss,
@@ -3632,6 +3687,7 @@ module.exports = {
   ensureDemoInstance,
   ensureActivitySandboxInstance,
   getActivityInstanceById,
+  verifyAccessCode,
   getEnrolledStudents,
   recordHeartbeat,
   getActiveStudent,

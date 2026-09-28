@@ -22,6 +22,8 @@ export default function TestSetupPage() {
   const [lockedAfterEnd, setLockedAfterEnd] = useState(true);
   const [focusEnforcement, setFocusEnforcement] = useState(false);
   const [randomizeOrder, setRandomizeOrder] = useState(false);
+  const [requireAccessCode, setRequireAccessCode] = useState(false);
+  const [generatedCode, setGeneratedCode] = useState('');
 
   // preview of "attempts" to be created (groups of 1)
   const [attempts, setAttempts] = useState([]); // [{student_id}...]
@@ -110,6 +112,7 @@ export default function TestSetupPage() {
           lockedAfterEnd: !!lockedAfterEnd,
           focusEnforcement: !!focusEnforcement,
           randomizeOrder: !!randomizeOrder,
+          requireAccessCode: !!requireAccessCode,
         }),
 
       });
@@ -121,8 +124,14 @@ export default function TestSetupPage() {
         return;
       }
 
-      alert('✅ Test setup saved.');
-      navigate(`/view-tests/${courseId}/${activityId}`, { state: { courseName } });
+      const code = data.accessCode || null;
+      if (code) {
+        setGeneratedCode(code);
+        // Don't navigate yet — show the code first so the professor can note it.
+      } else {
+        alert('✅ Test setup saved.');
+        navigate(`/view-tests/${courseId}/${activityId}`, { state: { courseName } });
+      }
     } catch (err) {
       console.error('❌ Save test setup failed:', err);
       alert('❌ Failed to save test setup.');
@@ -206,10 +215,37 @@ export default function TestSetupPage() {
                     Each student sees the choices for multiple-choice questions in a different randomized order.
                   </Form.Text>
                 </Col>
+                <Col md={12} className="mt-2">
+                  <Form.Check
+                    type="checkbox"
+                    id="require-access-code"
+                    label="Require an access code to start the exam"
+                    checked={requireAccessCode}
+                    onChange={(e) => setRequireAccessCode(e.target.checked)}
+                  />
+                  <Form.Text muted>
+                    A random 6-character code will be generated. Display it on the board;
+                    students must type it in before the exam unlocks.
+                  </Form.Text>
+                </Col>
               </Row>
             </Card.Body>
           </Card>
 
+          {generatedCode && (
+            <div className="alert alert-success mb-3 text-center" style={{fontSize:'1.4rem'}}>
+              <div className="fw-bold mb-1">✅ Exam setup saved — Access Code</div>
+              <div style={{fontSize:'3rem', letterSpacing:'0.4em', fontFamily:'monospace', fontWeight:'bold', color:'#155724'}}>
+                {generatedCode}
+              </div>
+              <div className="small mt-2 text-muted">Write this on the board. Students must enter it to start the exam.</div>
+              <div className="mt-3">
+                <button className="btn btn-success btn-sm me-2" onClick={() => navigate(`/view-tests/${courseId}/${activityId}`, { state: { courseName } })}>
+                  Go to exam roster
+                </button>
+              </div>
+            </div>
+          )}
           <h5>Select students allowed to take this exam:</h5>
           <Row>
             {students.filter((s) => s.role === 'student').length > 0 ? (

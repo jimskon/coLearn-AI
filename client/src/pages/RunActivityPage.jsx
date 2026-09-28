@@ -372,6 +372,14 @@ export default function RunActivityPage({
   const [canBypassGroups, setCanBypassGroups] = useState({});
   // { [groupIndex]: true }
 
+  // Access-code gate: students must enter the professor's code before the exam unlocks.
+  const [codeVerified, setCodeVerified] = useState(() => {
+    try { return !!sessionStorage.getItem(`accessCode:${instanceId}`); } catch { return false; }
+  });
+  const [codeInput, setCodeInput] = useState('');
+  const [codeError, setCodeError] = useState('');
+  const [codeChecking, setCodeChecking] = useState(false);
+
   const [testLockState, setTestLockState] = useState({
     lockedBefore: false,
     lockedAfter: false,
@@ -3375,11 +3383,67 @@ export default function RunActivityPage({
   const isSubmitted = !!activity?.submitted_at;
 
 
+  const handleVerifyCode = async () => {
+    if (!codeInput.trim()) { setCodeError('Please enter the access code.'); return; }
+    setCodeChecking(true);
+    setCodeError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/verify-access-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ code: codeInput.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        try { sessionStorage.setItem(`accessCode:${instanceId}`, '1'); } catch {}
+        setCodeVerified(true);
+      } else {
+        setCodeError(data.error || 'Incorrect code. Try again.');
+      }
+    } catch {
+      setCodeError('Could not verify code. Check your connection.');
+    } finally {
+      setCodeChecking(false);
+    }
+  };
+
   return (
     <>
       <ActivityLoadingOverlay
         show={isSubmitting}
       />
+      {isStudent && activity?.has_access_code && !codeVerified ? (
+        <Container className="pt-3 mt-2">
+          <div className="d-flex justify-content-center align-items-center" style={{minHeight:'50vh'}}>
+            <div className="card shadow" style={{maxWidth:420,width:'100%'}}>
+              <div className="card-body text-center p-4">
+                <h4 className="mb-1">🔑 Exam Access Code</h4>
+                <p className="text-muted mb-3">Enter the 6-character code your professor has displayed to begin.</p>
+                <input
+                  className="form-control form-control-lg text-center mb-2"
+                  style={{letterSpacing:'0.35em',fontFamily:'monospace',fontSize:'1.6rem',textTransform:'uppercase'}}
+                  maxLength={6}
+                  value={codeInput}
+                  onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleVerifyCode(); }}
+                  placeholder="XXXXXX"
+                  autoFocus
+                />
+                {codeError && <div className="alert alert-danger py-2 small mb-2">{codeError}</div>}
+                <button
+                  className="btn btn-primary btn-lg w-100"
+                  onClick={handleVerifyCode}
+                  disabled={codeChecking}
+                >
+                  {codeChecking ? 'Checking…' : 'Enter Exam'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Container>
+      ) : (
+        <>
       <Container className="pt-3 mt-2">
         <h2>
           {activity?.title
@@ -3582,6 +3646,9 @@ export default function RunActivityPage({
         formatRemainingSeconds={formatRemainingSeconds}
         sectionTimer={sectionTimer}
       />
+
+        </>
+      )}
 
     </>
   );

@@ -2347,6 +2347,7 @@ async function getInstancesForActivityInCourse(req, res) {
         reviewed_at: inst.reviewed_at,
         points_earned: inst.points_earned,
         points_possible: inst.points_possible,
+        test_access_code: inst.test_access_code || null,
         has_responses: hasResponsesSet.has(Number(inst.instance_id)),
         group_submit_counts: groupSubmitCounts,
         members: members.map(m => ({

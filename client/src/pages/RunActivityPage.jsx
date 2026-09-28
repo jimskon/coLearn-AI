@@ -1273,7 +1273,9 @@ export default function RunActivityPage({
     instanceId,
     activity?.submitted_at,
     activity?.test_focus_enforcement,
+    activity?.has_access_code,
     testLockState.lockedBefore,
+    codeVerified,
   ]);
 
 

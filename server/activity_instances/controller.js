@@ -14,6 +14,15 @@ const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
 const { ensureAssignmentDueSchema } = require('../utils/assignmentDueSchema');
 const { ensureRandomizeOrderSchema } = require('../utils/randomizeOrderSchema');
 
+function generateAccessCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

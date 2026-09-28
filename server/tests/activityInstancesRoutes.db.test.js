@@ -177,7 +177,9 @@ async function ensureSchema() {
       ADD COLUMN IF NOT EXISTS locked_before_start TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS locked_after_end TINYINT(1) NOT NULL DEFAULT 0,
       ADD COLUMN IF NOT EXISTS test_focus_loss_count INT NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS test_focus_enforcement TINYINT(1) NOT NULL DEFAULT 0
+      ADD COLUMN IF NOT EXISTS test_focus_enforcement TINYINT(1) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS randomize_order TINYINT(1) NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS test_access_code VARCHAR(6) DEFAULT NULL
   `);
 
   await db.query(`

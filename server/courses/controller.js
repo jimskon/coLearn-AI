@@ -440,10 +440,26 @@ async function resolveStudentActivityLaunch(req, res) {
     }
 
     if (user.role !== 'student') {
+      // Mirror the same routing logic CourseActivitiesPage uses for instructors:
+      // tests → test-setup, demo/playground → run/:instanceId, groups → view-groups
+      const [[activityMeta]] = await db.query(
+        `SELECT authored_mode, is_test FROM pogil_activities WHERE id = ?`,
+        [activityId]
+      );
+      const isTest = activityMeta?.is_test === 1 || activityMeta?.authored_mode === 'test';
+      const isDemoLike = activityMeta?.authored_mode === 'demo' || activityMeta?.authored_mode === 'playground';
+      let destination;
+      if (isTest) {
+        destination = `/test-setup/${courseId}/${activityId}`;
+      } else if (isDemoLike) {
+        // For demo/playground the instance is ephemeral; send to activity list to launch
+        destination = `/courses/${courseId}/activities`;
+      } else {
+        destination = `/view-groups/${courseId}/${activityId}`;
+      }
       return res.json({
-        destination: `/courses/${courseId}/activities`,
+        destination,
         activity_title: courseActivity.title,
-        message: 'Instructors manage this activity from the course activity list.',
       });
     }
 

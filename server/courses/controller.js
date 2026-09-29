@@ -429,7 +429,7 @@ async function resolveStudentActivityLaunch(req, res) {
 
   try {
     const [[courseActivity]] = await db.query(
-      `SELECT a.id, a.title
+      `SELECT a.id, a.title, a.is_test
          FROM courses c
          JOIN pogil_activities a ON a.class_id = c.class_id
         WHERE c.id = ? AND a.id = ?`,
@@ -440,10 +440,15 @@ async function resolveStudentActivityLaunch(req, res) {
     }
 
     if (user.role !== 'student') {
+      // Mirror the same routing logic CourseActivitiesPage uses for instructors:
+      // tests → test-setup, groups → view-groups
+      const isTest = Number(courseActivity.is_test) === 1;
+      const destination = isTest
+        ? `/test-setup/${courseId}/${activityId}`
+        : `/view-groups/${courseId}/${activityId}`;
       return res.json({
-        destination: `/courses/${courseId}/activities`,
+        destination,
         activity_title: courseActivity.title,
-        message: 'Instructors manage this activity from the course activity list.',
       });
     }
 

@@ -18,8 +18,13 @@ const METRICS = [
   {
     group: 'Revision',
     label: 'Average revisions per question',
-    help: 'Submitted versions of a written answer, minus the first.',
+    help: 'Submitted versions of an answer (text or code), minus the first.',
     get: (s) => s.revisions.avgRevisionsPerQuestion,
+  },
+  {
+    group: 'Revision',
+    label: 'Questions answered',
+    get: (s) => `${s.revisions.questions} (${s.revisions.codeQuestions} with code)`,
   },
   {
     group: 'Revision',
@@ -46,13 +51,13 @@ const METRICS = [
   {
     group: 'AI gating',
     label: 'Questions the AI sent back at least once',
-    help: 'Of questions the AI evaluated.',
+    help: 'Of text and code questions the AI evaluated.',
     get: (s) => `${show(s.aiGate.pctQuestionsSentBack, '%')} (${s.aiGate.questionsSentBack} of ${s.aiGate.evaluatedQuestions})`,
   },
   {
     group: 'AI gating',
     label: 'Group submits held back by the AI',
-    help: 'Submits where every question was answered but the group could not advance.',
+    help: 'Submits where the AI asked for a revision on at least one question, so the group could not advance.',
     get: (s) => `${show(s.aiGate.pctSubmitsHeldBackByAI, '%')} (${s.aiGate.heldBackByAI} of ${s.aiGate.groupSubmits})`,
   },
   {
@@ -300,7 +305,7 @@ export default function StatisticsPage() {
             </Table>
           </Card.Body>
           <Card.Footer className="small text-muted">
-            Revisions count written answers only; code-only questions are not included.
+            Revisions and AI decisions include both written and code answers.
             Participation uses who clicked Submit for the group.
           </Card.Footer>
         </Card>

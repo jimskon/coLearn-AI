@@ -85,8 +85,8 @@ router.post('/generate', async (req, res) => {
     );
 
     let members = [];
-    let answerKeys = [];
-    let fmRows = [];
+    let answerRows = [];
+    let decisionRows = [];
     let states = [];
     let attempts = [];
 
@@ -97,18 +97,19 @@ router.post('/generate', async (req, res) => {
            FROM group_members WHERE activity_instance_id IN (?)`,
         [instanceIds]
       );
-      // Counts only; compute.js re-checks the key shape case-sensitively.
-      [answerKeys] = await db.query(
-        `SELECT activity_instance_id AS instanceId, question_id AS questionId, COUNT(*) AS n
+      // Answer and code-cell keys only, without their text. The REGEXP is
+      // case-insensitive here; compute.js re-checks the key shape exactly.
+      [answerRows] = await db.query(
+        `SELECT id, activity_instance_id AS instanceId, question_id AS questionId, submit_id AS submitId
            FROM responses
-          WHERE activity_instance_id IN (?) AND question_id REGEXP '^[0-9]+[a-z]{1,2}$'
-          GROUP BY activity_instance_id, BINARY question_id`,
+          WHERE activity_instance_id IN (?) AND question_id REGEXP '^[0-9]+[a-z]{1,2}(code[0-9]+)?$'`,
         [instanceIds]
       );
-      [fmRows] = await db.query(
+      [decisionRows] = await db.query(
         `SELECT activity_instance_id AS instanceId, question_id AS questionId, response
            FROM responses
-          WHERE activity_instance_id IN (?) AND question_id LIKE '%FM'`,
+          WHERE activity_instance_id IN (?)
+            AND (question_id LIKE '%FM' OR question_id LIKE '%CodeAccepted')`,
         [instanceIds]
       );
       [states] = await db.query(
@@ -119,7 +120,7 @@ router.post('/generate', async (req, res) => {
         [instanceIds]
       );
       [attempts] = await db.query(
-        `SELECT submit_id AS submitId, response
+        `SELECT activity_instance_id AS instanceId, submit_id AS submitId, response
            FROM responses
           WHERE activity_instance_id IN (?) AND question_id LIKE 'attempt:%'`,
         [instanceIds]
@@ -134,10 +135,10 @@ router.post('/generate', async (req, res) => {
       return summarize({
         instances: inst,
         members: byInstance(members),
-        answerKeys: byInstance(answerKeys),
-        fmRows: byInstance(fmRows),
+        answerRows: byInstance(answerRows),
+        decisionRows: byInstance(decisionRows),
         states: byInstance(states),
-        attempts, // joined by submit_id inside summarize
+        attempts: byInstance(attempts),
         enrolledStudentIds: enrollments.filter((e) => keep.has(e.courseId)).map((e) => e.studentId),
       });
     };

@@ -93,6 +93,11 @@ test('an activity that opens mid-document is not truncated further', () => {
   assert.equal(extractMarkupFromPaste(fragment), fragment);
 });
 
+test('instructions with no activity markup are not mistaken for a revision', () => {
+  assert.equal(extractMarkupFromPaste('Add timings. And shorten question 2.'), '');
+  assert.equal(extractMarkupFromPaste('```\nAdd timings.\n```'), '');
+});
+
 test('nothing pasted yields nothing, not a crash', () => {
   for (const value of ['', '   ', null, undefined]) {
     assert.equal(extractMarkupFromPaste(value), '');

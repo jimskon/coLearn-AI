@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Navbar, Nav, Container, Button } from 'react-bootstrap';
+import { Navbar, Nav, NavDropdown, Container, Button } from 'react-bootstrap';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 import { Modal } from 'react-bootstrap';
@@ -91,14 +91,17 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
                     </Nav.Link>
                   )}
                   {user.role === "root" && (
-                    <>
-                      <Nav.Link as={Link} to="/admin/logs" className="px-2">
+                    <NavDropdown title="Management" id="management-nav-dropdown" className="px-2">
+                      <NavDropdown.Item as={Link} to="/admin/users">
+                        Users
+                      </NavDropdown.Item>
+                      <NavDropdown.Item as={Link} to="/admin/logs">
                         Log
-                      </Nav.Link>
-                      <Nav.Link as={Link} to="/admin/users" className="px-2">
-                        Manage Users
-                      </Nav.Link>
-                    </>
+                      </NavDropdown.Item>
+                      <NavDropdown.Item as={Link} to="/admin/statistics">
+                        Statistics
+                      </NavDropdown.Item>
+                    </NavDropdown>
                   )}
                 </>
               )}

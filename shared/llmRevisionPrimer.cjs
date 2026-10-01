@@ -164,7 +164,11 @@
     const fenced = text.match(/```[a-zA-Z]*\n([\s\S]*?)```/);
     const body = (fenced ? fenced[1] : text).trim();
     const start = body.search(/^\\(title|name|mode|section|questiongroup)\{/m);
-    return (start > 0 ? body.slice(start) : body).trim();
+    // No structural tag at all means this is not an activity -- most often the
+    // instructor's own instructions typed into the paste box. Passing it through
+    // would propose replacing the whole activity with that sentence.
+    if (start < 0) return '';
+    return body.slice(start).trim();
   }
 
   return { LLM_REVISION_PRIMER, buildLlmRevisionPrompt, buildPrimer, extractMarkupFromPaste };

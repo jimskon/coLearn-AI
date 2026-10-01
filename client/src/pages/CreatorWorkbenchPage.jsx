@@ -1760,7 +1760,9 @@ export default function CreatorWorkbenchPage() {
   const reviewPastedRevision = () => {
     const text = extractMarkupFromPaste(pastedRevision);
     if (!text) {
-      setError('Paste the revised activity before reviewing it.');
+      setError(pastedRevision.trim()
+        ? 'That does not look like activity markup, so nothing was changed. This box takes the revised activity your LLM sends back. Click Copy for LLM, paste it into your LLM with your instructions, then paste its reply here.'
+        : 'Paste the revised activity before reviewing it.');
       return;
     }
     setError('');

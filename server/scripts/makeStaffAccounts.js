@@ -1,16 +1,18 @@
-// server/scripts/makeInstructors.js
-// Create (or reuse) N instructor accounts from an email template.
-// - If the user exists, reuse it: set role to "instructor" and reset the password.
-//   (root/creator accounts keep their role.)
+// server/scripts/makeStaffAccounts.js
+// Create (or reuse) N instructor, creator, or root accounts from an email template.
+// - If the user exists, reuse it: set the chosen role and reset the password.
+//   (An existing root account is never demoted.)
 // - Else insert it directly into the DB (no email verification step).
 //
-// Run with: node server/scripts/makeInstructors.js
+// Run with: node server/scripts/makeStaffAccounts.js
 
 const bcrypt = require('bcrypt');
 const readline = require('readline');
 const db = require('../db');
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+const ROLES = ['instructor', 'creator', 'root'];
 
 function prompt(q) {
   return new Promise(resolve => rl.question(q, resolve));
@@ -40,16 +42,22 @@ function makeEmailFromTemplate(template, i) {
   return template.replace('@', `${i}@`);
 }
 
-const KEEP_ROLES = new Set(['root', 'creator']);
+async function promptRole() {
+  const answer = (await prompt('Account type — 1) instructor  2) creator  3) root: ')).trim().toLowerCase();
+  const byNumber = ROLES[parseInt(answer, 10) - 1];
+  const role = byNumber || (ROLES.includes(answer) ? answer : null);
+  if (!role) throw new Error(`Unknown account type "${answer}". Choose instructor, creator, or root.`);
+  return role;
+}
 
-async function createOrReuseInstructor(email, passwordHash) {
+async function createOrReuseUser(email, passwordHash, desiredRole) {
   const [[existing]] = await db.query(
     'SELECT id, name, email, role FROM users WHERE email = ?',
     [email]
   );
 
   if (existing) {
-    const role = KEEP_ROLES.has(existing.role) ? existing.role : 'instructor';
+    const role = existing.role === 'root' ? 'root' : desiredRole;
     await db.query(
       'UPDATE users SET role = ?, password_hash = ? WHERE id = ?',
       [role, passwordHash, existing.id]
@@ -60,41 +68,51 @@ async function createOrReuseInstructor(email, passwordHash) {
 
   const name = getRandomName();
   const [result] = await db.query(
-    "INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, 'instructor')",
-    [name, email, passwordHash]
+    'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
+    [name, email, passwordHash, desiredRole]
   );
-  console.log(`✔ Created ${email} (id ${result.insertId}) as ${name}`);
-  return { id: result.insertId, name, email, role: 'instructor', reused: false };
+  console.log(`✔ Created ${desiredRole} ${email} (id ${result.insertId}) as ${name}`);
+  return { id: result.insertId, name, email, role: desiredRole, reused: false };
 }
 
 async function main() {
   try {
-    console.log('=== Create Instructor Accounts (idempotent) ===');
+    console.log('=== Create Instructor / Creator / Root Accounts (idempotent) ===');
 
-    const template = (await prompt('\nInstructor email template (e.g., demo-instructor@demo.local OR demo-instructor+{i}@demo.local): ')).trim();
+    const role = await promptRole();
+
+    const template = (await prompt(`\nEmail template (e.g., demo-${role}@demo.local OR demo-${role}+{i}@demo.local): `)).trim();
     if (!template.includes('@')) {
       throw new Error('Email template must include an "@".');
     }
 
-    const password = (await prompt('Password for all instructor accounts: ')).trim();
+    const password = (await prompt('Password for all accounts: ')).trim();
     if (!password) throw new Error('Password is required.');
 
-    const countStr = await prompt('Number of instructors to create (e.g., 3): ');
+    const countStr = await prompt(`Number of ${role} accounts to create (e.g., 3): `);
     const count = Math.max(1, parseInt(countStr, 10) || 1);
+
+    if (role === 'root') {
+      const ok = (await prompt(`\nThis will create ${count} ROOT account(s) with full admin access. Type "yes" to continue: `)).trim().toLowerCase();
+      if (ok !== 'yes') {
+        console.log('Cancelled.');
+        return;
+      }
+    }
 
     const passwordHash = await bcrypt.hash(password, 10);
 
-    const instructors = [];
+    const users = [];
     for (let i = 1; i <= count; i++) {
       const email = makeEmailFromTemplate(template, i);
-      instructors.push(await createOrReuseInstructor(email, passwordHash));
+      users.push(await createOrReuseUser(email, passwordHash, role));
     }
 
     console.log('\n🎉 Done.');
     console.log(`All accounts use password: ${password}`);
-    console.log('Instructors:');
-    for (const u of instructors) {
-      console.log(`  ${u.email}${u.reused ? '  (existing)' : ''}`);
+    console.log('Accounts:');
+    for (const u of users) {
+      console.log(`  ${u.email}  [${u.role}]${u.reused ? '  (existing)' : ''}`);
     }
   } catch (error) {
     console.error('\n❌ Error:', error.message);

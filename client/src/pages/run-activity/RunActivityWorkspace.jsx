@@ -101,6 +101,24 @@ export default function RunActivityWorkspace({
   const isAssessmentMode = isTestMode || isAssignmentMode;
   let globalQuestionCounter = 0;
 
+  // Saved \file blocks (shared files, or every editable file in a test). Files
+  // often sit outside question groups, so every renderBlocks call gets this.
+  const savedFiles = {
+    editable: isSandbox
+      ? canEditAnswers
+      : isAssessmentMode
+        ? (canEditAnswers && isTestRunner && !isSubmitted && !timeExpired && !testLockState?.lockedBefore)
+        : (canEditAnswers && isActive),
+    onChange: (responseKey, text) =>
+      handleCodeChange(responseKey, text, { socket, baseQidFromResponseKey }),
+    isObserver,
+    isInstructor,
+    codeViewMode,
+    localCode,
+    onToggleViewMode: toggleCodeViewMode,
+    onLocalCodeChange: updateLocalCode,
+  };
+
   // An activity that uses AI anywhere is laid out as a split pane for its whole
   // duration, so the panel does not appear and vanish as the student advances.
   // An activity with no \ai block keeps the single-column layout unchanged.
@@ -185,6 +203,7 @@ export default function RunActivityWorkspace({
           fileContents,
           setFileContents: handleUpdateFileContents,
           onFileChange: handleFileChange,
+          savedFiles,
           infoBubbleSession,
           runtimeFeatures,
           activityLanguage: activity?.language || activity?.meta?.language || '',
@@ -243,6 +262,10 @@ export default function RunActivityWorkspace({
                   mode: 'run',
                   isTestMode,
                   prefill: existingAnswers,
+                  fileContents,
+                  setFileContents: handleUpdateFileContents,
+                  onFileChange: handleFileChange,
+                  savedFiles,
                   currentGroupIndex: index,
                   codeFeedbackShown,
                   unansweredShown,
@@ -287,6 +310,7 @@ export default function RunActivityWorkspace({
                   fileContents,
                   setFileContents: handleUpdateFileContents,
                   onFileChange: handleFileChange,
+                  savedFiles,
                   onCodeChange: (responseKey, code, extra) =>
                     handleCodeChange(responseKey, code, {
                       ...extra,

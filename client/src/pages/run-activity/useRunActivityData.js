@@ -16,6 +16,7 @@ const RELOAD_BURST_COOLDOWN_MS = 5000;
 import { API_BASE_URL } from '../../config';
 import { parseSheetToBlocks } from '../../utils/parseSheet';
 import { parseUtcDbDatetime } from '../../utils/time';
+import { fileResponseKey } from '../../utils/fileBlocks';
 
 export default function useRunActivityData({
   instanceId,
@@ -191,11 +192,13 @@ export default function useRunActivityData({
         }
       }
 
+      let loadedAnswers = null;
       if (loadResponses) {
         const answersRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/responses`, {
           credentials: 'include',
         });
         const answersData = await answersRes.json();
+        loadedAnswers = answersData;
 
         setExistingAnswers((prev) => {
           const next = { ...prev };
@@ -345,7 +348,11 @@ export default function useRunActivityData({
         const files = {};
         for (const block of blocks) {
           if (block.type === 'file' && block.filename) {
-            files[block.filename] = block.content || '';
+            // Saved files (shared, or edited in a test) run with the saved
+            // version even before their block is on screen.
+            const key = block.readonly ? null : fileResponseKey(block.filename);
+            const savedText = key ? loadedAnswers?.[key]?.response : undefined;
+            files[block.filename] = savedText ?? (block.content || '');
           }
         }
         setFileContents(() => {

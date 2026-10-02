@@ -2317,6 +2317,7 @@ async function evaluatePythonCode(req, res) {
     activityLanguage = '',
     timerRemainingMs = null,
     timerDurationMs = null,
+    supportingFiles = [],
   } = req.body || {};
 
   if (!questionText || !studentCode) {
@@ -2351,6 +2352,7 @@ async function evaluatePythonCode(req, res) {
     activityLanguage,
     timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
     timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
+    supportingFiles,
   });
 
   // ✅ ADD THIS (Step 2 already, but keep it)
@@ -2516,6 +2518,42 @@ async function callLLMJsonStrict({
   return obj;
 }
 
+// Files the program runs with (\file blocks), capped so a large data file
+// cannot crowd out the student's code.
+const SUPPORTING_FILE_MAX_CHARS = 6000;
+const SUPPORTING_FILES_MAX_TOTAL = 20000;
+
+function normalizeSupportingFiles(files) {
+  if (!Array.isArray(files)) return [];
+  const out = [];
+  let total = 0;
+  for (const f of files.slice(0, 12)) {
+    const name = String(f?.name || '').trim();
+    let content = String(f?.content ?? '');
+    if (!name || !content.trim()) continue;
+    if (content.length > SUPPORTING_FILE_MAX_CHARS) {
+      content = `${content.slice(0, SUPPORTING_FILE_MAX_CHARS)}\n... (truncated)`;
+    }
+    if (total + content.length > SUPPORTING_FILES_MAX_TOTAL) break;
+    total += content.length;
+    out.push({ name, content });
+  }
+  return out;
+}
+
+function hasSupportingFiles(files) {
+  return normalizeSupportingFiles(files).length > 0;
+}
+
+function formatSupportingFiles(files) {
+  const list = normalizeSupportingFiles(files);
+  if (!list.length) return '';
+  const body = list
+    .map((f) => `File: ${f.name}\n\`\`\`\n${f.content}\n\`\`\``)
+    .join('\n\n');
+  return `\nSupporting files used by the program (the group may have edited these):\n${body}\n`;
+}
+
 async function evaluateCode({
   questionText,
   studentCode,
@@ -2535,6 +2573,7 @@ async function evaluateCode({
   activityLanguage = '',
   timerRemainingMs = null,
   timerDurationMs = null,
+  supportingFiles = [],
 }) {
   // Default: fail-open (don’t block if AI fails)
   const base = { accepted: true, feedback: null };
@@ -2652,7 +2691,7 @@ Current group code (v${codeVersion}):
 \`\`\`${fence}
 ${studentCode}
 \`\`\`
-
+${formatSupportingFiles(supportingFiles)}
 Return STRICT JSON with exactly these keys:
 {"accepted":true|false,"feedback":string|null,"error_line":string|null,"error_reason":string|null}
 
@@ -2669,7 +2708,7 @@ Rules:
 - If accepted=false, error_line and error_reason MUST both be non-null.
 - error_line must identify the exact line or expression in the student's current code that is wrong or missing.
 - error_reason must explain the specific functional or mathematical error.
-- If you cannot identify a specific incorrect or missing line in the current code, accepted MUST be true.
+- If you cannot identify a specific incorrect or missing line in the current code, accepted MUST be true.${hasSupportingFiles(supportingFiles) ? "\n- Supporting files are part of the program. error_line may point to a line in a supporting file." : ""}
 - If no execution output is provided, judge correctness directly from the current code. Do not invent execution values or assume the student used any suggested test inputs.
 ${rules ? "\n" + rules : ""}
 `.trim();
@@ -2761,6 +2800,7 @@ async function evaluateCppCode(req, res) {
     activityLanguage = '',
     timerRemainingMs = null,
     timerDurationMs = null,
+    supportingFiles = [],
   } = req.body || {};
 
   if (!questionText || !studentCode) {
@@ -2799,6 +2839,7 @@ async function evaluateCppCode(req, res) {
     activityLanguage,
     timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
     timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
+    supportingFiles,
   });
 
 
@@ -2827,6 +2868,7 @@ async function evaluateCppCode(req, res) {
 // (omitted in this snippet to keep it readable)
 
 module.exports = {
+  formatSupportingFiles,
   assistInlineActivity,
   assistActivityAi,
   runInlineAiCompletion,

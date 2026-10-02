@@ -57,3 +57,18 @@ export function fileLanguage(filename) {
   const match = /\.([A-Za-z0-9]+)$/.exec(String(filename || ''));
   return match ? LANGUAGE_BY_EXTENSION[match[1].toLowerCase()] || null : null;
 }
+
+// Authored contents of every \file block, by filename, from the run page's
+// preamble and groups (files may sit outside question groups).
+export function collectStarterFiles(preamble = [], groups = []) {
+  const files = {};
+  const lists = [preamble, ...groups.flatMap((g) => [g?.prelude, [g?.intro], g?.content])];
+  for (const list of lists) {
+    for (const block of list || []) {
+      if (block?.type === 'file' && block.filename && !(block.filename in files)) {
+        files[block.filename] = block.content || '';
+      }
+    }
+  }
+  return files;
+}

@@ -44,7 +44,8 @@ function getBaseQid(questionIdRaw) {
   if (/^\d+[a-z]+AF$/i.test(qid)) return qid.replace(/AF$/i, '');
   if (/^\d+[a-z]+FM$/i.test(qid)) return qid.replace(/FM$/i, '');
 
-  if (/^\d+[a-z]+$/i.test(qid)) return qid;
+  // Case-sensitive: "4aCodeAccepted" is also digits+letters but is not a question.
+  if (/^\d+[a-z]+$/.test(qid)) return qid;
 
   return null;
 }
@@ -79,6 +80,7 @@ function isHiddenMetadataKey(questionIdRaw) {
   if (/^\d+[a-z]+FM$/i.test(qid)) return true;
   if (/^\d+[a-z]+S$/i.test(qid)) return true;
   if (/SubmissionString$/i.test(qid)) return true;
+  if (/^\d+[a-z]+Code(?:Accepted|CanContinue|RetryCount|RetriesRequired)$/.test(qid)) return true;
 
   if (/Score$/i.test(qid)) return true;
 
@@ -112,7 +114,7 @@ function classifyRow(row) {
     return { type: 'code_output', label: 'Program Output' };
   }
 
-  if (/^\d+[a-z]+$/i.test(key)) {
+  if (/^\d+[a-z]+$/.test(key)) {
     return { type: 'student_text', label: 'Student' };
   }
 
@@ -340,54 +342,41 @@ const DIFF_LINE_STYLE = {
   same: { background: 'transparent', prefix: ' ' },
 };
 
-function FileVersionCard({ file, userNameById = {} }) {
-  const diff = useMemo(() => diffLines(file.previous, file.content), [file.previous, file.content]);
-  const { added, removed } = countChanges(diff);
-  const [view, setView] = useState(file.comparable ? 'changes' : 'full');
-  const language = fileLanguage(file.name);
+// Edit history for code and files: the lines added and removed since the
+// previous version, with a toggle to see the whole text.
+function ChangeView({ previous, content, language, comparable }) {
+  const diff = useMemo(() => diffLines(previous ?? '', content), [previous, content]);
+  const [view, setView] = useState(comparable ? 'changes' : 'full');
   const highlighted = useMemo(() => {
     const grammar = language && Prism.languages[language];
     if (!grammar || view !== 'full') return null;
     try {
-      return Prism.highlight(file.content, grammar, language);
+      return Prism.highlight(content, grammar, language);
     } catch {
       return null;
     }
-  }, [file.content, language, view]);
+  }, [content, language, view]);
 
   return (
-    <div className="border rounded-3 bg-light p-3 mb-3">
-      <div className="d-flex justify-content-between gap-3 align-items-start flex-wrap">
-        <div>
-          <div className="fw-semibold">
-            File: <code>{file.name}</code>
-            <Badge bg="secondary" className="ms-2">version {file.version}</Badge>
-          </div>
-          <div className="small text-muted">
-            {speakerName(file.row, userNameById)}
-            {file.comparable ? ` \u00b7 +${added} \u2212${removed} lines` : ''}
-          </div>
-        </div>
-        {file.comparable && (
-          <ButtonGroup size="sm">
-            <Button
-              variant={view === 'changes' ? 'secondary' : 'outline-secondary'}
-              onClick={() => setView('changes')}
-            >
-              Changes
-            </Button>
-            <Button
-              variant={view === 'full' ? 'secondary' : 'outline-secondary'}
-              onClick={() => setView('full')}
-            >
-              Full file
-            </Button>
-          </ButtonGroup>
-        )}
-      </div>
-
+    <div>
+      {comparable && (
+        <ButtonGroup size="sm" className="mb-1">
+          <Button
+            variant={view === 'changes' ? 'secondary' : 'outline-secondary'}
+            onClick={() => setView('changes')}
+          >
+            Changes
+          </Button>
+          <Button
+            variant={view === 'full' ? 'secondary' : 'outline-secondary'}
+            onClick={() => setView('full')}
+          >
+            Full text
+          </Button>
+        </ButtonGroup>
+      )}
       {view === 'changes' ? (
-        <pre className="border rounded bg-white mt-2 mb-0 p-0" style={{ fontSize: '0.8rem', maxHeight: '32em', overflow: 'auto' }}>
+        <pre className="border rounded bg-white mb-0 p-0" style={{ fontSize: '0.8rem', maxHeight: '32em', overflow: 'auto' }}>
           {collapseUnchanged(diff, 3).map((line, index) => (
             line.type === 'skip' ? (
               <div key={`skip-${index}`} className="text-muted fst-italic px-2 border-top border-bottom">
@@ -406,14 +395,40 @@ function FileVersionCard({ file, userNameById = {} }) {
         </pre>
       ) : (
         <pre
-          className={`language-${highlighted != null ? language : 'none'} mt-2 mb-0`}
+          className={`language-${highlighted != null ? language : 'none'} mb-0`}
           style={{ fontSize: '0.8rem', maxHeight: '32em', overflow: 'auto' }}
         >
           {highlighted != null
             ? <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-            : <code>{file.content}</code>}
+            : <code>{content}</code>}
         </pre>
       )}
+    </div>
+  );
+}
+
+function changeSummary(previous, content) {
+  const { added, removed } = countChanges(diffLines(previous ?? '', content));
+  return `+${added} \u2212${removed} lines`;
+}
+
+function FileVersionCard({ file, userNameById = {} }) {
+  return (
+    <div className="border rounded-3 bg-light p-3 mb-3">
+      <div className="fw-semibold">
+        File: <code>{file.name}</code>
+        <Badge bg="secondary" className="ms-2">version {file.version}</Badge>
+      </div>
+      <div className="small text-muted mb-2">
+        {speakerName(file.row, userNameById)}
+        {file.comparable ? ` \u00b7 ${changeSummary(file.previous, file.content)}` : ''}
+      </div>
+      <ChangeView
+        previous={file.previous}
+        content={file.content}
+        language={fileLanguage(file.name)}
+        comparable={file.comparable}
+      />
     </div>
   );
 }
@@ -457,9 +472,12 @@ function buildSubmitGroups(historyRows = []) {
   return order.map((submitId) => groups.get(submitId));
 }
 
-function buildQuestionThread(qid, rows, previousSnapshot = null) {
+// starterCode: the question's authored code when it has exactly one code block,
+// so a cell's first version can be shown as changes from the starter.
+function buildQuestionThread(qid, rows, previousSnapshot = null, starterCode = null) {
   const sorted = [...rows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
   const steps = [];
+  const lastCode = new Map(previousSnapshot?.code || []);
   let lastAnswer = previousSnapshot?.answer ?? null;
   let lastFeedback = previousSnapshot?.feedback ?? null;
   let lastOutput = previousSnapshot?.output ?? null;
@@ -467,6 +485,26 @@ function buildQuestionThread(qid, rows, previousSnapshot = null) {
   let currentAnswer = previousSnapshot?.answer ?? null;
 
   for (const row of sorted) {
+    if (isAnswerRow(row) && row.transcriptType === 'student_code') {
+      // Each code cell keeps its own history, shown as changes.
+      const normalized = normalizeTranscriptValue(row);
+      const cellKey = row.question_id;
+      if (!normalized || lastCode.get(cellKey) === normalized) continue;
+
+      const hasPrevious = lastCode.has(cellKey);
+      const previousCode = hasPrevious ? lastCode.get(cellKey) : starterCode;
+      steps.push({
+        ...row,
+        stepType: 'answer',
+        code: normalized,
+        previousCode,
+        comparable: hasPrevious || previousCode != null,
+      });
+      lastCode.set(cellKey, normalized);
+      sawMeaningfulChange = true;
+      continue;
+    }
+
     if (isAnswerRow(row)) {
       const normalized = normalizeTranscriptValue(row);
       if (!normalized || normalized === lastAnswer) continue;
@@ -509,7 +547,18 @@ function buildQuestionThread(qid, rows, previousSnapshot = null) {
     currentAnswer,
     latestFeedback: lastFeedback,
     latestOutput: lastOutput,
+    latestCode: lastCode,
   };
+}
+
+function codeLanguage(code) {
+  return /#include\s*[<"]|\bstd::|\bint\s+main\s*\(/.test(code) ? 'cpp' : 'python';
+}
+
+// The authored code of a question with exactly one code block, else null.
+function singleStarterCode(block) {
+  const originals = uniqueOriginalCode(block);
+  return originals.length === 1 ? normalizeCode(originals[0].content) : null;
 }
 
 function TimelineStep({ row, userNameById = {} }) {
@@ -518,10 +567,20 @@ function TimelineStep({ row, userNameById = {} }) {
   if (row.stepType === 'answer' && row.transcriptType === 'student_code') {
     return (
       <div>
-        <div className="fw-semibold">{who} answer</div>
-        <pre className="border rounded p-2 bg-white mb-0" style={{ whiteSpace: 'pre-wrap' }}>
-          <code>{row.value}</code>
-        </pre>
+        <div className="fw-semibold">
+          {who} code
+          {row.comparable && (
+            <span className="small text-muted fw-normal ms-2">
+              {changeSummary(row.previousCode, row.code)}
+            </span>
+          )}
+        </div>
+        <ChangeView
+          previous={row.previousCode}
+          content={row.code}
+          language={codeLanguage(row.code)}
+          comparable={row.comparable}
+        />
       </div>
     );
   }
@@ -668,13 +727,19 @@ export default function RunActivityHistoryView({
       });
 
       for (const qid of qids) {
-        const thread = buildQuestionThread(qid, rowsByQid.get(qid), snapshots.get(qid));
+        const thread = buildQuestionThread(
+          qid,
+          rowsByQid.get(qid),
+          snapshots.get(qid),
+          singleStarterCode(questionMap.get(qid))
+        );
         if (!thread) continue;
         threads.push(thread);
         snapshots.set(qid, {
           answer: thread.currentAnswer,
           feedback: thread.latestFeedback,
           output: thread.latestOutput,
+          code: thread.latestCode,
         });
       }
 
@@ -692,7 +757,7 @@ export default function RunActivityHistoryView({
         files,
       };
     });
-  }, [submitGroups, filesBySubmit, userNameById]);
+  }, [submitGroups, filesBySubmit, questionMap, userNameById]);
 
   const aiConversations = useMemo(() => buildAiConversations(historyRows), [historyRows]);
 

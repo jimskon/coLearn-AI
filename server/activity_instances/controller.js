@@ -8,6 +8,7 @@ const { gradeTestQuestion } = require('../ai/controller');
 const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
+const { isFileResponseKey } = require('../utils/questionId');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
@@ -412,6 +413,36 @@ async function appendResponse(conn, instanceId, submitId, qid, value, {
      VALUES (?, ?, ?, ?, ?, ?)`,
     [instanceId, qid, submitId, type, v, answeredBy]
   );
+}
+
+// Saves "file:<name>" entries only when they differ from the last saved
+// version, so the history shows real edits rather than one copy per submit.
+async function appendChangedFiles(conn, instanceId, submitId, answers, answeredBy) {
+  const entries = Object.entries(answers || {}).filter(([key]) => isFileResponseKey(key));
+  if (!entries.length) return;
+
+  const [rows] = await conn.query(
+    `SELECT r.question_id, r.response
+       FROM responses r
+       JOIN (
+         SELECT question_id, MAX(id) AS max_id
+           FROM responses
+          WHERE activity_instance_id = ? AND question_id IN (?)
+          GROUP BY question_id
+       ) latest ON r.id = latest.max_id`,
+    [instanceId, entries.map(([key]) => key)]
+  );
+  const latest = new Map(rows.map((row) => [row.question_id, String(row.response ?? '')]));
+
+  for (const [key, value] of entries) {
+    const text = String(value ?? '');
+    if (latest.has(key) ? latest.get(key) === text : !text) continue;
+    await appendResponse(conn, instanceId, submitId, key, text, {
+      type: 'code',
+      answeredBy,
+      allowEmpty: true,
+    });
+  }
 }
 
 function getHistoryBaseQid(qidRaw) {
@@ -1850,6 +1881,9 @@ async function submitGroupResponses(req, res) {
         continue;
       }
 
+      // Shared files are saved below, only when changed.
+      if (isFileResponseKey(qid)) continue;
+
       const baseQid = getHistoryBaseQid(qid);
       if (!baseQid) {
         passthroughEntries.push([qid, valueRaw]);
@@ -1927,6 +1961,8 @@ async function submitGroupResponses(req, res) {
         allowEmpty: true,
       });
     }
+
+    await appendChangedFiles(conn, instanceId, submitId, answers, studentId);
 
     // ---- 1a) append one marker row for this attempt click ----
     await appendResponse(
@@ -3272,6 +3308,11 @@ async function submitTest(req, res) {
     if (isRegrade) lines.push(`(Regraded at ${new Date().toISOString()})`);
 
     const summaryText = lines.join('\n');
+
+    // Every edited file in a test is part of the submission.
+    if (!isRegrade) {
+      await appendChangedFiles(conn, instanceId, submitId, answers, resolvedStudentId);
+    }
 
     // Test summary
     await appendResponse(conn, instanceId, submitId, 'testTotalScore', totalEarnedPoints, {

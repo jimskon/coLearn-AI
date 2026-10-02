@@ -17,7 +17,7 @@ The system supports:
 - Runnable Python Remote blocks (with optional timeout)
 - Runnable C++ blocks (with optional timeout)
 - Runnable Python Turtle blocks (with window size + timeout)
-- Editable and readonly file blocks
+- Editable, readonly, and shared (saved) file blocks
 - Inline AI help blocks for guided student questions
 - Structured AI feedback directives
 - Structured scoring rubrics
@@ -400,6 +400,36 @@ Supports optional timeout: `\cpp{50000}`
 int main() { }
 \endcpp
 ```
+
+### Files
+
+Files are available to C++ and remote Python code when it runs. They are shown with
+syntax highlighting chosen from the extension (`.h`, `.hpp`, `.cpp`, `.cc` as C++,
+`.py` as Python, anything else as plain text). Editable files have an **Edit File** button.
+
+```text
+\file{numbers.txt, readonly}
+4
+-1
+\endfile
+
+\file{notes.txt}
+# Each student can edit this copy; it is not saved.
+\endfile
+
+\file{LinkedList.h, shared}
+// The group's copy: saved with the submission.
+\endfile
+```
+
+| Option | Group activities | Tests |
+|--------|------------------|-------|
+| *(none)* | Each browser has its own copy. Edits are **not saved** and are lost on reload. | Saved with the submission. |
+| `readonly` | Nobody can edit. | Nobody can edit. |
+| `shared` | Only the active student edits. Teammates see edits live and can switch to **Local Sandbox**, like code cells. Saved when the group submits, reloaded on return, and visible to the instructor and the AI code check. | Saved with the submission. |
+
+Use `shared` when editing the file is part of the task, for example updating a header.
+Shared file names may use only letters, digits, `.`, `_`, and `-`.
 
 ---
 

@@ -27,6 +27,7 @@ import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBann
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
 import RunActivityHistoryView from '../components/RunActivityHistoryView';
 import ActivityLoadingOverlay from '../components/ActivityLoadingOverlay';
+import { collectStarterFiles, isFileResponseKey } from '../utils/fileBlocks';
 
 
 function lowerResp(obj, key) {
@@ -1924,6 +1925,22 @@ export default function RunActivityPage({
     return hasAnyCode;
   }
 
+  // Saved \file contents: shared files in group runs, every edited file in tests.
+  // They are not inside the submitted group's DOM, so add them explicitly.
+  function addSavedFileAnswers(answers) {
+    for (const [key, entry] of Object.entries(existingAnswers || {})) {
+      if (isFileResponseKey(key)) answers[key] = String(entry?.response ?? '');
+    }
+    return answers;
+  }
+
+  // Files the program runs with, for the AI code check.
+  function supportingFilesForAi() {
+    return Object.entries(fileContentsRef.current || {})
+      .map(([name, content]) => ({ name, content: String(content ?? '') }))
+      .filter((f) => f.name && f.content.trim());
+  }
+
   function collectAllVisibleAnswers() {
     const answers = {};
 
@@ -2119,6 +2136,7 @@ export default function RunActivityPage({
           container,
           existingAnswers
         );
+        addSavedFileAnswers(answers);
         console.log('[TEST SUBMIT payload]', {
           answersKeys: Object.keys(answers),
           questionsCount: questions.length,
@@ -2423,6 +2441,7 @@ export default function RunActivityPage({
 
             // ✅ new
             outputText,
+            supportingFiles: supportingFilesForAi(),
           };
 
           const t0 = performance.now();
@@ -2854,6 +2873,8 @@ export default function RunActivityPage({
 
     const blocked = computedState === 'inprogress';
     const canAdvance = computedState === 'complete';
+
+    addSavedFileAnswers(answers);
 
     const attempt = {
       submissionString: groupSubmissionString,
@@ -3534,6 +3555,7 @@ export default function RunActivityPage({
           <RunActivityHistoryView
             historyRows={historyRows}
             groups={groups}
+            starterFiles={collectStarterFiles(preamble, groups)}
             userNameById={Object.fromEntries(
               (groupMembers || []).map((m) => [m.student_id, m.name])
             )}

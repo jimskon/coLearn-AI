@@ -1,7 +1,14 @@
-import React, { useMemo } from 'react';
-import { Alert } from 'react-bootstrap';
+import React, { useMemo, useState } from 'react';
+import { Alert, Badge, Button, ButtonGroup } from 'react-bootstrap';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-clike';
+import 'prismjs/components/prism-c';
+import 'prismjs/components/prism-cpp';
+import 'prismjs/components/prism-python';
+import { FILE_KEY_PREFIX, fileLanguage, isFileResponseKey } from '../utils/fileBlocks';
+import { collapseUnchanged, countChanges, diffLines } from '../utils/lineDiff';
 
 function asString(value) {
   return value == null ? '' : String(value);
@@ -293,6 +300,124 @@ function AiConversationCard({ conversation, userNameById = {} }) {
   );
 }
 
+// Saved \file versions ("file:<name>" rows), oldest first. Each is paired with
+// the version before it, or the activity's starter text for version 1.
+function buildFileVersions(historyRows = [], starterFiles = {}) {
+  const sorted = [...historyRows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  const latest = new Map();
+  const versions = [];
+
+  for (const row of sorted) {
+    const key = String(row?.question_id || '').trim();
+    if (!isFileResponseKey(key)) continue;
+
+    const name = key.slice(FILE_KEY_PREFIX.length);
+    const content = asString(row.response);
+    const hasPrevious = latest.has(name);
+    const previous = hasPrevious ? latest.get(name).content : (starterFiles[name] ?? '');
+    if (hasPrevious && previous === content) continue;
+
+    const version = hasPrevious ? latest.get(name).version + 1 : 1;
+    latest.set(name, { content, version });
+    versions.push({
+      id: Number(row.id) || 0,
+      submitId: row?.submit_id || `row-${row.id}`,
+      name,
+      version,
+      content,
+      previous,
+      comparable: hasPrevious || Object.prototype.hasOwnProperty.call(starterFiles, name),
+      row,
+    });
+  }
+
+  return versions;
+}
+
+const DIFF_LINE_STYLE = {
+  add: { background: '#e6ffec', prefix: '+' },
+  del: { background: '#ffebe9', prefix: '-' },
+  same: { background: 'transparent', prefix: ' ' },
+};
+
+function FileVersionCard({ file, userNameById = {} }) {
+  const diff = useMemo(() => diffLines(file.previous, file.content), [file.previous, file.content]);
+  const { added, removed } = countChanges(diff);
+  const [view, setView] = useState(file.comparable ? 'changes' : 'full');
+  const language = fileLanguage(file.name);
+  const highlighted = useMemo(() => {
+    const grammar = language && Prism.languages[language];
+    if (!grammar || view !== 'full') return null;
+    try {
+      return Prism.highlight(file.content, grammar, language);
+    } catch {
+      return null;
+    }
+  }, [file.content, language, view]);
+
+  return (
+    <div className="border rounded-3 bg-light p-3 mb-3">
+      <div className="d-flex justify-content-between gap-3 align-items-start flex-wrap">
+        <div>
+          <div className="fw-semibold">
+            File: <code>{file.name}</code>
+            <Badge bg="secondary" className="ms-2">version {file.version}</Badge>
+          </div>
+          <div className="small text-muted">
+            {speakerName(file.row, userNameById)}
+            {file.comparable ? ` \u00b7 +${added} \u2212${removed} lines` : ''}
+          </div>
+        </div>
+        {file.comparable && (
+          <ButtonGroup size="sm">
+            <Button
+              variant={view === 'changes' ? 'secondary' : 'outline-secondary'}
+              onClick={() => setView('changes')}
+            >
+              Changes
+            </Button>
+            <Button
+              variant={view === 'full' ? 'secondary' : 'outline-secondary'}
+              onClick={() => setView('full')}
+            >
+              Full file
+            </Button>
+          </ButtonGroup>
+        )}
+      </div>
+
+      {view === 'changes' ? (
+        <pre className="border rounded bg-white mt-2 mb-0 p-0" style={{ fontSize: '0.8rem', maxHeight: '32em', overflow: 'auto' }}>
+          {collapseUnchanged(diff, 3).map((line, index) => (
+            line.type === 'skip' ? (
+              <div key={`skip-${index}`} className="text-muted fst-italic px-2 border-top border-bottom">
+                {`\u22ef ${line.count} unchanged line${line.count === 1 ? '' : 's'}`}
+              </div>
+            ) : (
+              <div
+                key={`${line.type}-${index}`}
+                className="px-2"
+                style={{ background: DIFF_LINE_STYLE[line.type].background, whiteSpace: 'pre' }}
+              >
+                {DIFF_LINE_STYLE[line.type].prefix} {line.text}
+              </div>
+            )
+          ))}
+        </pre>
+      ) : (
+        <pre
+          className={`language-${highlighted != null ? language : 'none'} mt-2 mb-0`}
+          style={{ fontSize: '0.8rem', maxHeight: '32em', overflow: 'auto' }}
+        >
+          {highlighted != null
+            ? <code dangerouslySetInnerHTML={{ __html: highlighted }} />
+            : <code>{file.content}</code>}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function buildSubmitGroups(historyRows = []) {
   const sorted = [...historyRows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
   const groups = new Map();
@@ -495,12 +620,36 @@ function QuestionThread({ thread, block, userNameById = {} }) {
 export default function RunActivityHistoryView({
   historyRows = [],
   groups = [],
+  starterFiles = {},
   title = 'Full Submission History',
   userNameById = {},
 }) {
   const questionList = useMemo(() => buildQuestionList(groups), [groups]);
   const questionMap = useMemo(() => new Map(questionList.map((entry) => [entry.qid, entry.block])), [questionList]);
-  const submitGroups = useMemo(() => buildSubmitGroups(historyRows), [historyRows]);
+  const fileVersions = useMemo(
+    () => buildFileVersions(historyRows, starterFiles),
+    [historyRows, starterFiles]
+  );
+  const filesBySubmit = useMemo(() => {
+    const map = new Map();
+    for (const file of fileVersions) {
+      if (!map.has(file.submitId)) map.set(file.submitId, []);
+      map.get(file.submitId).push(file);
+    }
+    return map;
+  }, [fileVersions]);
+  // Submits that changed only a file have no question rows; add them so they
+  // still appear in the timeline.
+  const submitGroups = useMemo(() => {
+    const list = buildSubmitGroups(historyRows);
+    const known = new Set(list.map((submit) => submit.submitId));
+    for (const file of fileVersions) {
+      if (known.has(file.submitId)) continue;
+      known.add(file.submitId);
+      list.push({ submitId: file.submitId, firstRowId: file.id, rows: [] });
+    }
+    return list.sort((a, b) => a.firstRowId - b.firstRowId);
+  }, [historyRows, fileVersions]);
   const timeline = useMemo(() => {
     const snapshots = new Map();
 
@@ -529,17 +678,21 @@ export default function RunActivityHistoryView({
         });
       }
 
+      const files = filesBySubmit.get(submit.submitId) || [];
+      const metaRows = submit.rows.length ? submit.rows : files.map((file) => file.row);
+
       return {
         submitId: submit.submitId,
         firstRowId: submit.firstRowId,
         index,
-        when: formatSubmitWhen(submit.rows),
-        submitter: formatSubmitter(submit.rows, userNameById),
+        when: formatSubmitWhen(metaRows),
+        submitter: formatSubmitter(metaRows, userNameById),
         rows: submit.rows,
         threads,
+        files,
       };
     });
-  }, [submitGroups, userNameById]);
+  }, [submitGroups, filesBySubmit, userNameById]);
 
   const aiConversations = useMemo(() => buildAiConversations(historyRows), [historyRows]);
 
@@ -623,7 +776,11 @@ export default function RunActivityHistoryView({
           : 'No updated question threads';
 
         return (
-          <details key={submit.submitId} className="history-submit-details" open={submit.threads.length > 0}>
+          <details
+            key={submit.submitId}
+            className="history-submit-details"
+            open={submit.threads.length > 0 || submit.files.length > 0}
+          >
             <summary>
               <div className="d-flex justify-content-between align-items-start gap-3 flex-wrap">
                 <div>
@@ -641,6 +798,11 @@ export default function RunActivityHistoryView({
                   <div className="small text-muted">
                     {changedSummary}
                   </div>
+                  {submit.files.length > 0 && (
+                    <div className="small text-muted">
+                      Files: {submit.files.map((file) => file.name).join(', ')}
+                    </div>
+                  )}
                 </div>
               </div>
             </summary>
@@ -655,11 +817,18 @@ export default function RunActivityHistoryView({
                     userNameById={userNameById}
                   />
                 ))
-              ) : (
+              ) : submit.files.length === 0 ? (
                 <Alert variant="light" className="mb-0">
                   No updated question threads were recorded in this submit.
                 </Alert>
-              )}
+              ) : null}
+              {submit.files.map((file) => (
+                <FileVersionCard
+                  key={`${submit.submitId}:file:${file.name}`}
+                  file={file}
+                  userNameById={userNameById}
+                />
+              ))}
             </div>
           </details>
         );

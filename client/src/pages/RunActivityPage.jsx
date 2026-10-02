@@ -27,7 +27,7 @@ import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBann
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
 import RunActivityHistoryView from '../components/RunActivityHistoryView';
 import ActivityLoadingOverlay from '../components/ActivityLoadingOverlay';
-import { isFileResponseKey } from '../utils/fileBlocks';
+import { collectStarterFiles, isFileResponseKey } from '../utils/fileBlocks';
 
 
 function lowerResp(obj, key) {
@@ -3555,6 +3555,7 @@ export default function RunActivityPage({
           <RunActivityHistoryView
             historyRows={historyRows}
             groups={groups}
+            starterFiles={collectStarterFiles(preamble, groups)}
             userNameById={Object.fromEntries(
               (groupMembers || []).map((m) => [m.student_id, m.name])
             )}

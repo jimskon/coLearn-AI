@@ -11,6 +11,7 @@ const TURN_REASONS = Object.freeze({
   ROTATION_AFTER_SUBMIT: 'rotation_after_submit', // system rotation after a group submit
   INSTRUCTOR_ROTATE: 'instructor_rotate',         // instructor pressed "rotate" on View Groups
   ABSENT_REASSIGNED: 'absent_reassigned',         // active student's heartbeat went stale
+  ALL_ABSENT: 'all_absent',                       // active student gone and nobody else present; turn cleared
   CLAIMED: 'claimed',                             // no one was active; a present member took the turn
   GROUP_SETUP: 'group_setup',                     // set when the instance was created
   SOLO_JOIN: 'solo_join',                         // a student started a solo instance
@@ -27,10 +28,14 @@ function recordTurnChange(req, instanceId, fromStudentId, toStudentId, reason) {
   const from = toId(fromStudentId);
   const to = toId(toStudentId);
   if (from === to) return;
+  // Nobody received the turn: it was cleared, not reassigned.
+  const effectiveReason = reason === TURN_REASONS.ABSENT_REASSIGNED && to == null
+    ? TURN_REASONS.ALL_ABSENT
+    : reason;
   void recordAuditEvent('active_student_changed', {
     req,
     activityInstanceId: toId(instanceId),
-    details: { from, to, reason },
+    details: { from, to, reason: effectiveReason },
   });
 }
 

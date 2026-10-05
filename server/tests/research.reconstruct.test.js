@@ -268,3 +268,41 @@ test('pseudonyms are stable, kind-specific, and do not reveal the id', () => {
   assert.equal(a.includes('42'), false);
   assert.notEqual(a, pseudonym('student', 42, 'another-secret-0123456789'));
 });
+
+test('rapid instructor rotations count as one intervention', () => {
+  const t = makeTrace();
+  const rotate = (id, sec, from, to) => ({
+    id, type: 'active_student_changed', at: T0 + 5 * MIN + sec * 1000, userId: 9,
+    details: { from, to, reason: 'instructor_rotate' },
+  });
+  const events = [
+    { id: 1, type: 'active_student_changed', at: T0, userId: 101, details: { from: null, to: 101, reason: 'claimed' } },
+    rotate(2, 0, 101, 102), rotate(3, 8, 102, 101), rotate(4, 9, 101, 102), // one burst
+    rotate(5, 60, 102, 101), // separate intervention
+  ];
+  const r = run(t, events);
+  const rotations = r.interventions.filter((i) => i.type === 'rotate_active');
+  assert.equal(rotations.length, 2);
+  assert.equal(rotations[0].rotations, 3);
+  assert.equal(rotations[1].rotations, 1);
+});
+
+test('a turn cleared because everyone left is logged as all_absent', () => {
+  const calls = [];
+  const auditPath = require.resolve('../utils/auditLogger');
+  const turnPath = require.resolve('../utils/turnEvents');
+  const original = require.cache[auditPath];
+  require.cache[auditPath] = { id: auditPath, filename: auditPath, loaded: true,
+    exports: { recordAuditEvent: async (type, opts) => { calls.push({ type, details: opts.details }); } } };
+  delete require.cache[turnPath];
+  try {
+    const { recordTurnChange, TURN_REASONS } = require('../utils/turnEvents');
+    recordTurnChange(null, 7, 103, null, TURN_REASONS.ABSENT_REASSIGNED);
+    recordTurnChange(null, 7, 103, 119, TURN_REASONS.ABSENT_REASSIGNED);
+    recordTurnChange(null, 7, 119, 119, TURN_REASONS.CLAIMED); // no change: not logged
+  } finally {
+    if (original) require.cache[auditPath] = original; else delete require.cache[auditPath];
+    delete require.cache[turnPath];
+  }
+  assert.deepEqual(calls.map((c) => c.details.reason), ['all_absent', 'absent_reassigned']);
+});

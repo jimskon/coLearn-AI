@@ -27,6 +27,9 @@ const DEFAULT_OPTIONS = Object.freeze({
   // An intervention "after repeated failed attempts" follows at least this
   // many consecutive sent-back submits for the current question group.
   interventionRejectionStreak: 2,
+  // Instructor rotations closer together than this are one intervention
+  // (an instructor clicking rotate repeatedly to reach a particular student).
+  rotationBurstMs: 10 * 1000,
 });
 
 const STATE_KEY = /^(\d+)state$/;
@@ -301,7 +304,7 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
       skipped:
         own.length === 0 &&
         next != null &&
-        ['absent_reassigned', 'instructor_rotate', 'claimed'].includes(next.details?.reason),
+        ['absent_reassigned', 'all_absent', 'instructor_rotate', 'claimed'].includes(next.details?.reason),
       reassignedByInstructor: next?.details?.reason === 'instructor_rotate',
     });
   }
@@ -343,8 +346,17 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
     };
   };
   for (const e of forceAdvances) interventions.push(describe('force_advance', e, Number(e.details?.groupNum) || null));
+  let lastRotationAt = null;
   for (const e of turnEvents) {
-    if (e.details?.reason === 'instructor_rotate') interventions.push(describe('rotate_active', e, currentGroupAt(e.at)));
+    if (e.details?.reason !== 'instructor_rotate') continue;
+    const inBurst = lastRotationAt != null && e.at - lastRotationAt < opts.rotationBurstMs;
+    lastRotationAt = e.at;
+    if (inBurst) {
+      const burst = [...interventions].reverse().find((i) => i.type === 'rotate_active');
+      if (burst) burst.rotations += 1;
+      continue;
+    }
+    interventions.push({ ...describe('rotate_active', e, currentGroupAt(e.at)), rotations: 1 });
   }
   interventions.sort((a, b) => a.at - b.at);
 

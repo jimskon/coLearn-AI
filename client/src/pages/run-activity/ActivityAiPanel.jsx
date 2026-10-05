@@ -1,10 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { InlineAiAssistBlock, aiBaseQidFor, readAiTranscript } from '../../utils/parseSheet';
 
-const SPLIT_STORAGE_KEY = 'colearn.activity.aiSplitPct';
+// pct is the activity's share of the width; the AI panel gets the rest.
+// The key was renamed when the default changed so earlier saved splits
+// (often the AI at 75%) don't override the new default.
+const SPLIT_STORAGE_KEY = 'colearn.activity.aiSplitPct.v2';
 const MIN_PCT = 25;
 const MAX_PCT = 75;
-const DEFAULT_PCT = 50;
+const DEFAULT_PCT = 75; // AI panel takes 25% by default
 
 function clampPct(value) {
   if (!Number.isFinite(value)) return DEFAULT_PCT;
@@ -44,14 +47,16 @@ export function collectAiEntries(groups) {
 
 // Horizontal split with a draggable divider.
 //
-// The pointer is tracked on `window` rather than on the divider so a fast drag
-// that outruns the cursor does not drop the gesture, and the width is stored
-// per browser so the balance a user picks survives a reload.
+// Pointer events cover mouse, touch, and pen, so the divider also drags on
+// tablets. The pointer is tracked on `window` rather than on the divider so a
+// fast drag that outruns the cursor or finger does not drop the gesture, and
+// the width is stored per browser so the balance a user picks survives a reload.
 export function useSplitPane(enabled) {
   const [pct, setPct] = useState(() => {
     if (typeof window === 'undefined') return DEFAULT_PCT;
     try {
-      return clampPct(Number(window.localStorage.getItem(SPLIT_STORAGE_KEY)));
+      const saved = window.localStorage.getItem(SPLIT_STORAGE_KEY);
+      return saved == null ? DEFAULT_PCT : clampPct(Number(saved));
     } catch {
       return DEFAULT_PCT;
     }
@@ -69,11 +74,18 @@ export function useSplitPane(enabled) {
     };
     const handleUp = () => setDragging(false);
 
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleUp);
+    // Stop text selection while dragging.
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleUp);
     return () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleUp);
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleUp);
     };
   }, [enabled, dragging]);
 
@@ -113,15 +125,16 @@ export function SplitDivider({ pct, dragging, onStart, onKeyDown }) {
       aria-valuemin={MIN_PCT}
       aria-valuemax={MAX_PCT}
       tabIndex={0}
-      onMouseDown={(event) => {
+      onPointerDown={(event) => {
         event.preventDefault();
         onStart();
       }}
       onKeyDown={onKeyDown}
       className="d-flex align-items-center justify-content-center flex-shrink-0"
       style={{
-        width: 10,
+        width: 14, // wide enough to grab with a finger
         cursor: 'col-resize',
+        touchAction: 'none', // a touch drag resizes instead of scrolling the page
         background: dragging ? '#adb5bd' : '#dee2e6',
         borderRadius: 2,
         alignSelf: 'stretch',

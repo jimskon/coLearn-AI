@@ -9,6 +9,7 @@ const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { isFileResponseKey } = require('../utils/questionId');
+const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance } = require('../utils/turnEvents');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
@@ -1363,6 +1364,7 @@ async function recordHeartbeat(req, res) {
           `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
           [instanceId]
         );
+        recordTurnChange(req, instanceId, inst.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
       }
       const completedPatch = { ...(timerPatch || {}), activeStudentId: null };
       global.emitInstanceState?.(Number(instanceId), completedPatch);
@@ -1402,6 +1404,13 @@ async function recordHeartbeat(req, res) {
         await db.query(
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [newActiveId, instanceId]
+        );
+        recordTurnChange(
+          req,
+          instanceId,
+          inst.active_student_id,
+          newActiveId,
+          inst.active_student_id ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
         );
         global.emitInstanceState?.(Number(instanceId), {
           ...(timerPatch || {}),
@@ -1456,6 +1465,7 @@ async function getActiveStudent(req, res) {
         `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
         [instanceId]
       );
+      recordTurnChange(req, instanceId, instance.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
     }
 
     if (isCompleted) {
@@ -1489,6 +1499,13 @@ async function getActiveStudent(req, res) {
         await db.query(
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [activeStudentId, instanceId]
+        );
+        recordTurnChange(
+          req,
+          instanceId,
+          currentActiveId,
+          activeStudentId,
+          currentActiveId ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
         );
       }
     }
@@ -1528,6 +1545,7 @@ async function rotateActiveStudent(req, res) {
     const next = others.length ? others[Math.floor(Math.random() * others.length)] : recentMembers[0];
 
     await db.query(`UPDATE activity_instances SET active_student_id = ? WHERE id = ?`, [next.student_id, instanceId]);
+    recordTurnChange(req, instanceId, currentStudentId, next.student_id, TURN_REASONS.INSTRUCTOR_ROTATE);
     global.emitInstanceState?.(Number(instanceId), { activeStudentId: next.student_id });
     res.json({ activeStudentId: next.student_id });
   } catch (err) {
@@ -1565,6 +1583,7 @@ async function setupMultipleGroupInstances(req, res) {
   await ensureRandomizeOrderSchema();
   const lockName = `setupGroups:${courseId}:${activityId}`;
   const conn = await db.getConnection();
+  const setupTurns = []; // [instanceId, studentId] turn assignments, logged after commit
 
   try {
     // ✅ serialize setup for this course+activity
@@ -1728,6 +1747,7 @@ async function setupMultipleGroupInstances(req, res) {
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [student_id, instanceId]
         );
+        setupTurns.push([instanceId, student_id]);
       }
     } else {
       for (let i = 0; i < groups.length; i++) {
@@ -1756,6 +1776,9 @@ async function setupMultipleGroupInstances(req, res) {
     }
 
     await conn.commit();
+    for (const [instanceId, studentId] of setupTurns) {
+      recordTurnChange(req, instanceId, null, studentId, TURN_REASONS.GROUP_SETUP);
+    }
     void recordAuditEvent('groups_formed', {
       req,
       courseId: Number(courseId),
@@ -2089,6 +2112,10 @@ async function submitGroupResponses(req, res) {
       progress_status: progressStatus,
       ...(progressStatus === 'completed' ? { activeStudentId: null } : {}),
     };
+    // Turn changes are logged after commit so a rolled-back submit leaves no event.
+    let turnChange = progressStatus === 'completed'
+      ? [studentId, null, TURN_REASONS.CLEARED_ON_COMPLETION]
+      : null;
 
 
     const shouldRotateActive =
@@ -2115,11 +2142,13 @@ async function submitGroupResponses(req, res) {
         `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
         [next, instanceId]
       );
+      turnChange = [studentId, next, TURN_REASONS.ROTATION_AFTER_SUBMIT];
 
       emitPatch = { ...(emitPatch || {}), activeStudentId: next };
     }
 
     await conn.commit();
+    if (turnChange) recordTurnChange(req, instanceId, ...turnChange);
 
     // 🔥 NEW: clear drafts after successful submit
     await db.query(
@@ -2327,6 +2356,13 @@ async function getInstancesForActivityInCourse(req, res) {
           await db.query(
             `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
             [fallback, inst.instance_id]
+          );
+          recordTurnChange(
+            req,
+            inst.instance_id,
+            activeId,
+            fallback,
+            activeId ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
           );
           activeId = fallback;
           global.emitInstanceState?.(inst.instance_id, { activeStudentId: activeId });
@@ -3631,7 +3667,7 @@ async function forceAdvanceQuestionGroup(req, res) {
     await conn.beginTransaction();
 
     const [[inst]] = await conn.query(
-      `SELECT id, completed_groups, total_groups, progress_status,
+      `SELECT id, completed_groups, total_groups, progress_status, active_student_id,
               COALESCE(active_rotation_mode, '') AS active_rotation_mode
          FROM activity_instances WHERE id = ? FOR UPDATE`,
       [instanceId]
@@ -3674,6 +3710,19 @@ async function forceAdvanceQuestionGroup(req, res) {
     }
 
     await conn.commit();
+
+    // Research instrumentation: an instructor-caused transition, never a
+    // student or AI outcome. Whether the group was blocked by the AI at this
+    // moment is reconstructed from the response trace.
+    recordInstructorForceAdvance(req, instanceId, {
+      groupNum: next,
+      totalGroups: total,
+      completedActivity: nowComplete,
+      activeStudentId: inst.active_student_id == null ? null : Number(inst.active_student_id),
+    });
+    if (nowComplete) {
+      recordTurnChange(req, instanceId, inst.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
+    }
 
     const patch = {
       completed_groups: next,

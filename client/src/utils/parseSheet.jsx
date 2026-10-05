@@ -37,6 +37,7 @@ import activityGrammar from '../../../shared/activityGrammar.cjs';
 
 const { closesBlock, familyOfCloser } = codeBlockFamilies;
 const AI_MODE_FLAGS = new Set(activityGrammar.COMMA_LIST_VALUES.aimode.values);
+const QUESTION_TYPES = new Set(activityGrammar.ENUMS.questiontype);
 
 function unsupportedAiModeFlags(value = '') {
   return String(value || '')
@@ -1985,6 +1986,27 @@ export function parseSheetToBlocks(lines, options = {}) {
       blocks.push(currentQuestion);
       currentQuestion = null;
       openQuestionLine = null;
+      continue;
+    }
+
+    // Optional research category; absent means 'unknown'. Never changes behavior.
+    if (trimmed.startsWith('\\questiontype{')) {
+      if (!currentQuestion) {
+        pushIssue('warn', lineNo, '\\questiontype found outside of a \\question. Ignoring.', line);
+        continue;
+      }
+      const match = trimmed.match(/^\\questiontype\{([\s\S]*?)\}\s*$/);
+      const questionType = String(match?.[1] || '').trim().toLowerCase();
+      if (!QUESTION_TYPES.has(questionType)) {
+        pushIssue(
+          'warn',
+          lineNo,
+          `Unknown \\questiontype{${questionType}}. Use one of: ${[...QUESTION_TYPES].join(', ')}.`,
+          line
+        );
+        continue;
+      }
+      currentQuestion.questionType = questionType;
       continue;
     }
 

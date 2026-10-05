@@ -126,7 +126,21 @@ export default function useRunActivitySync({
     };
     sendHeartbeat();
     const interval = setInterval(sendHeartbeat, 20000);
-    return () => clearInterval(interval);
+
+    // Tell the server the page is going away (tab closed, navigation, reload).
+    // The server marks this student absent shortly after unless the page checks
+    // in again, so a reload keeps the turn but a closed tab hands it on quickly.
+    const sendLeave = () => {
+      try {
+        navigator.sendBeacon?.(`${API_BASE_URL}/api/activity-instances/${instanceId}/leave`);
+      } catch { }
+    };
+    window.addEventListener('pagehide', sendLeave);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('pagehide', sendLeave);
+    };
   }, [
     canSendHeartbeat,
     user?.id,

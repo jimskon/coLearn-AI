@@ -75,6 +75,10 @@ function normalizeScoreBands(scores = {}) {
 }
 
 const PRESENCE_WINDOW_SEC = 120;
+// After a "leaving" signal (tab closed, page reloaded), a student counts as
+// absent this many seconds later unless their page checks in again. A reload
+// checks in at once, so reloading does not cost the student their turn.
+const LEAVE_GRACE_SEC = 15;
 
 async function tableHasColumn(conn, tableName, columnName) {
   const [rows] = await conn.query(
@@ -1435,6 +1439,29 @@ async function recordHeartbeat(req, res) {
 }
 
 
+// The student's page is going away (tab closed, navigation, reload). Mark them
+// as absent LEAVE_GRACE_SEC from now unless they check in again. Sent with
+// navigator.sendBeacon, so it uses the session user, never a body value.
+async function recordLeave(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  const userId = Number(req.user?.id);
+  if (!instanceId || !userId) return res.status(204).end();
+  try {
+    await db.query(
+      `UPDATE group_members
+          SET last_heartbeat = LEAST(
+                COALESCE(last_heartbeat, NOW()),
+                DATE_SUB(NOW(), INTERVAL ? SECOND)
+              )
+        WHERE activity_instance_id = ? AND student_id = ?`,
+      [PRESENCE_WINDOW_SEC - LEAVE_GRACE_SEC, instanceId, userId]
+    );
+  } catch (err) {
+    console.error('❌ recordLeave:', err);
+  }
+  return res.status(204).end();
+}
+
 // In getActiveStudent function in controller.js
 
 async function getActiveStudent(req, res) {
@@ -1525,7 +1552,14 @@ async function rotateActiveStudent(req, res) {
     if (!recentMembers.length) return res.status(404).json({ error: 'No active group members' });
 
     const others = recentMembers.filter((m) => Number(m.student_id) !== Number(currentStudentId));
-    const next = others.length ? others[Math.floor(Math.random() * others.length)] : recentMembers[0];
+    if (!others.length) {
+      // Nobody else is here: rotating would hand the turn to an absent student.
+      return res.status(409).json({
+        error: 'Only one student is present, so the turn was not rotated.',
+        activeStudentId: Number(currentStudentId),
+      });
+    }
+    const next = others[Math.floor(Math.random() * others.length)];
 
     await db.query(`UPDATE activity_instances SET active_student_id = ? WHERE id = ?`, [next.student_id, instanceId]);
     global.emitInstanceState?.(Number(instanceId), { activeStudentId: next.student_id });
@@ -3720,6 +3754,7 @@ async function verifyAccessCode(req, res) {
 }
 
 module.exports = {
+  recordLeave,
   clearResponsesForInstance,
   recordTestFocusLoss,
   deleteActivityInstance,

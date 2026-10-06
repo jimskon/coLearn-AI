@@ -4,6 +4,7 @@ const db = require('../db');
 const { canUseResearch, accessibleCourseIds, filterAccessibleCourses } = require('./access');
 const { computeForCourses, reconstructRun, courseLabel } = require('./service');
 const { liveForActivity } = require('./live');
+const { ObservationError, createObservation, deleteObservation } = require('./observations');
 
 const MAX_COURSES = 200;
 
@@ -88,6 +89,33 @@ router.get('/live/:courseId/:activityId', async (req, res) => {
   } catch (err) {
     console.error('❌ research live:', err);
     res.status(500).json({ error: 'Failed to load live activity' });
+  }
+});
+
+// Instructor observation tags (View Groups, Observation view).
+router.post('/observations', async (req, res) => {
+  if (!requireResearchUser(req, res)) return;
+  try {
+    res.status(201).json(await createObservation(db, req.user, {
+      instanceId: req.body?.instanceId,
+      label: String(req.body?.label || ''),
+    }));
+  } catch (err) {
+    if (err instanceof ObservationError) return res.status(err.status).json({ error: err.message });
+    console.error('❌ research observation:', err);
+    res.status(500).json({ error: 'Failed to save observation' });
+  }
+});
+
+router.delete('/observations/:id', async (req, res) => {
+  if (!requireResearchUser(req, res)) return;
+  try {
+    await deleteObservation(db, req.user, req.params.id);
+    res.status(204).end();
+  } catch (err) {
+    if (err instanceof ObservationError) return res.status(err.status).json({ error: err.message });
+    console.error('❌ research observation undo:', err);
+    res.status(500).json({ error: 'Failed to undo observation' });
   }
 });
 

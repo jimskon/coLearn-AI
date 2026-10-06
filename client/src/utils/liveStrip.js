@@ -27,13 +27,14 @@ function isOverSection(section, t) {
  *   started: boolean,
  *   segments: Array<{left:number, width:number, kind:'active'|'sandbox'|'over'}>,
  *   dots: Array<{left:number, status:string}>,
+ *   tags: Array<{left:number, label:string}>,     // instructor observation tags
  *   plannedEndLeft: number|null,   // shown once the activity runs past its planned time
  *   idleMs: number|null,
  *   section: {title, minutes, elapsedMs, overMs}|null,
  * }}
  */
 export function computeStrip(live, now, sliceSeconds = 10) {
-  const empty = { started: false, segments: [], dots: [], plannedEndLeft: null, idleMs: null, section: null };
+  const empty = { started: false, segments: [], dots: [], tags: [], plannedEndLeft: null, idleMs: null, section: null };
   if (!live || live.startAt == null) return empty;
 
   const start = live.startAt;
@@ -70,6 +71,7 @@ export function computeStrip(live, now, sliceSeconds = 10) {
       width: Math.max(0.4, pct(s.end) - pct(s.startT)),
     })),
     dots: (live.submits || []).map(([t, status]) => ({ left: pct(t), status })),
+    tags: (live.tags || []).map(([t, label]) => ({ left: pct(t), label })),
     plannedEndLeft: plannedMs && elapsed > plannedMs ? pct(start + plannedMs) : null,
     idleMs: live.lastActivityAt != null ? Math.max(0, now - live.lastActivityAt) : null,
     section: current

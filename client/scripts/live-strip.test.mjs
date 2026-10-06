@@ -45,3 +45,10 @@ test('clock format', () => {
   assert.equal(formatClock(3725000), '1h 02m');
   assert.equal(formatClock(null), '—');
 });
+
+test('observation tags are placed on the same scale', () => {
+  const strip = computeStrip({
+    startAt: T0, plannedMinutes: 10, slices: [[T0, FLAG_ACTIVE]], tags: [[T0 + 5 * MIN, 'talk']],
+  }, T0 + 1 * MIN);
+  assert.deepEqual(strip.tags, [{ left: 50, label: 'talk' }]);
+});

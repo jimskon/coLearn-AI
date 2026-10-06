@@ -90,6 +90,7 @@ coLearn-AI reconstructs research measures (participation, AI gating, revision, t
 | Requirement | Needed for | How |
 |---|---|---|
 | Migration `025` (`group_activity_slices` table) | Observation view activity strip, idle timer, time-on-task data | `migrations/run-all.sh`, or `bash migrations/025_2026-10-06_add_group_activity_slices.sh`. **Run it before restarting the server**: without the table, recording turns itself off (one log warning) until the next restart. |
+| Migration `026` (`instructor_observations` table) | Observation tags | `migrations/run-all.sh`, or `bash migrations/026_2026-10-06_add_instructor_observations.sh` |
 | `RESEARCH_ID_SECRET` in `server/.env` (16+ characters, keep private) | The row-level research datasets with pseudonymous student IDs (coming; the aggregate CSV available now does not need it) | Set once and never change it: changing it changes every research ID. |
 | Server restart and client build | Any update to these features | As for any deploy. |
 
@@ -104,6 +105,7 @@ All recording is fire-and-forget and never blocks or fails a classroom request. 
 | Active-student changes, with the reason (`rotation_after_submit`, `instructor_rotate`, `absent_reassigned`, `all_absent`, `claimed`, `group_setup`, `solo_join`, `cleared_on_completion`) | `audit_log` (`active_student_changed`) | Every change |
 | Instructor force-advance | `audit_log` (`instructor_force_advance`) | Every force-advance |
 | Activity per student per 10-second slice: edits, code runs, submits, Local Sandbox work, AI evaluation in progress | `group_activity_slices` | At most one write per student, kind, and slice |
+| Instructor observation tags, with context (question group, whether it has code, active student, seconds since last activity, AI evaluation in progress, last AI decision) | `instructor_observations` | When an instructor taps a tag (undo deletes it) |
 
 These records exist only from the day they were deployed. Runs that began before then are labeled as having **no** or **partial** turn data, and turn-based statistics leave them out; submit-based statistics (AI gating, revision, submit balance) cover all history.
 
@@ -133,7 +135,9 @@ Use the **Classic | Observation** switch at the top of View Groups (remembered p
   - once the activity runs past its planned time, the strip compresses to fit and a dashed line marks the planned end;
   - dots below: submits (blue accepted, red sent back).
 
-The view refreshes every 10 seconds. If it says recording is not set up, migration `025` has not been run on that server.
+**Observation tags.** Each group card has eight buttons for what you see: **Talk** (discussing), **Code** (all coding; only when the current question group has code), **Watch** (one drives, others watch), **Quiet** (silent, on task), **Help** (asking for help), **Frust** (frustrated), **Off** (off topic), **?** (can't tell). A tag is saved at once, shows as a small square above the strip, and can be undone for 10 seconds. The round **i** button next to a group's timer badge opens a key to the strip colors and the tags, with the cues for each tag.
+
+The view refreshes every 10 seconds. If it says recording or observations are not set up, migration `025` or `026` has not been run on that server.
 
 ---
 

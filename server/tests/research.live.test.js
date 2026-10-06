@@ -54,3 +54,12 @@ test('an instructor force-advance also moves the group on', () => {
   });
   assert.equal(live.sections[1].enteredAt, T0 + 5 * MIN);
 });
+
+test('observation tags are returned in time order', () => {
+  const live = buildLiveGroup({
+    meta: META,
+    slices: [{ at: T0, edits: 1 }],
+    observations: [{ at: T0 + 2 * MIN, label: 'quiet' }, { at: T0 + 1 * MIN, label: 'talk' }],
+  });
+  assert.deepEqual(live.tags, [[T0 + 1 * MIN, 'talk'], [T0 + 2 * MIN, 'quiet']]);
+});

@@ -18,7 +18,8 @@ import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
 import { FaUserCheck, FaLaptop, FaRandom } from 'react-icons/fa';
 import { formatUtcToLocal, parseUtcDbDatetime } from '../utils/time';
-import GroupActivityStrip, { StripLegend } from '../components/research/GroupActivityStrip';
+import GroupActivityStrip, { StripKeyButton } from '../components/research/GroupActivityStrip';
+import ObservationButtons from '../components/research/ObservationButtons';
 
 function progressLabelFromInstanceRow(g) {
   // For assignments, use submitted_at / has_responses rather than the
@@ -246,6 +247,7 @@ export default function ViewGroupsPage() {
   // Server clock minus this browser's clock, captured at each fetch, so idle
   // timers use the server's notion of now.
   const [liveClockOffset, setLiveClockOffset] = useState(0);
+  const [liveRefreshKey, setLiveRefreshKey] = useState(0); // bump to reload now (after a tag)
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   // Due date editing state (assignment mode)
@@ -406,7 +408,7 @@ export default function ViewGroupsPage() {
       clearInterval(poll);
       clearInterval(tick);
     };
-  }, [isObservationView, courseId, activityId]);
+  }, [isObservationView, courseId, activityId, liveRefreshKey]);
 
   const liveByInstance = new Map((liveData?.groups || []).map((g) => [Number(g.instanceId), g]));
 
@@ -1117,7 +1119,14 @@ export default function ViewGroupsPage() {
                   Submits are shown; activity blocks will appear once it is.
                 </Alert>
               ) : null}
-              <StripLegend />
+              {liveData && liveData.observationsAvailable === false ? (
+                <Alert variant="info" className="py-2">
+                  Observation tags are not set up on this server yet (database migration 026).
+                </Alert>
+              ) : null}
+              <div className="small text-muted mb-2">
+                Tap a tag to record what a group is doing. The <strong>i</strong> button on each group explains the colors and tags.
+              </div>
             </>
           )}
           {activityType !== 'assignment' && (
@@ -1143,6 +1152,7 @@ export default function ViewGroupsPage() {
                       <Badge bg={timerState.bg} text={timerState.text}>
                         {timerState.label}
                       </Badge>
+                      {isObservationView ? <StripKeyButton /> : null}
                       {canRotateActive ? (
                         <Button
                           variant="outline-secondary"
@@ -1191,12 +1201,20 @@ export default function ViewGroupsPage() {
 
                   <Card.Body>
                     {isObservationView ? (
-                      <div className="mb-3">
-                        <GroupActivityStrip
-                          live={liveByInstance.get(instanceId)}
-                          now={liveNowMs + liveClockOffset}
-                          sliceSeconds={liveData?.sliceSeconds || 10}
-                          finished={isComplete}
+                      <div className="d-flex gap-3 align-items-start mb-3">
+                        <div className="flex-grow-1" style={{ minWidth: 0 }}>
+                          <GroupActivityStrip
+                            live={liveByInstance.get(instanceId)}
+                            now={liveNowMs + liveClockOffset}
+                            sliceSeconds={liveData?.sliceSeconds || 10}
+                            finished={isComplete}
+                          />
+                        </div>
+                        <ObservationButtons
+                          instanceId={instanceId}
+                          hasCode={!!liveByInstance.get(instanceId)?.currentGroupHasCode}
+                          now={liveNowMs}
+                          onTagged={() => setLiveRefreshKey((k) => k + 1)}
                         />
                       </div>
                     ) : null}

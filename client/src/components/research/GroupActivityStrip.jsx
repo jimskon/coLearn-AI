@@ -1,5 +1,7 @@
 import React from 'react';
+import { OverlayTrigger, Popover } from 'react-bootstrap';
 import { computeStrip, formatClock } from '../../utils/liveStrip';
+import { OBSERVATION_BY_KEY, OBSERVATION_LABELS } from '../../utils/observationLabels';
 
 // Colors are fixed (not theme-dependent) so they read the same on a projector
 // and a tablet; every color is also explained in the legend.
@@ -11,23 +13,53 @@ const COLORS = {
 const DOT_COLORS = { advanced: '#0d6efd', sent_back: '#dc3545', other: '#6c757d' };
 const IDLE_WARN_MS = 2 * 60 * 1000;
 
-export function StripLegend() {
-  const swatch = (c) => (
-    <span style={{ display: 'inline-block', width: 14, height: 10, background: c.background, border: `1px solid ${c.border}`, marginRight: 4, verticalAlign: 'middle' }} />
-  );
-  const dot = (color) => (
-    <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', border: `2px solid ${color}`, marginRight: 4, verticalAlign: 'middle' }} />
+const swatch = (c) => (
+  <span style={{ display: 'inline-block', width: 16, height: 10, background: c.background, border: `1px solid ${c.border}`, marginRight: 6, verticalAlign: 'middle' }} />
+);
+const dot = (color) => (
+  <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', border: `2px solid ${color}`, marginRight: 6, verticalAlign: 'middle' }} />
+);
+
+/** Small "i" button that opens the key: strip colors, markers, and tag meanings. */
+export function StripKeyButton() {
+  const popover = (
+    <Popover id="strip-key" style={{ maxWidth: 360 }}>
+      <Popover.Header as="div" className="fw-semibold">Key</Popover.Header>
+      <Popover.Body className="small">
+        <div className="fw-semibold mb-1">Activity strip</div>
+        <div className="text-muted mb-2">Start of the activity (left) to now (right), scaled to its planned time. When the activity runs over, the strip compresses and a dashed line marks the planned end.</div>
+        <div className="mb-1">{swatch(COLORS.active)}Active: typing, running code, submitting, or waiting on the AI</div>
+        <div className="mb-1">{swatch(COLORS.sandbox)}Only teammates working in their Local Sandbox</div>
+        <div className="mb-1">{swatch({ background: '#fff', border: '#ced4da' })}Idle</div>
+        <div className="mb-1">{swatch(COLORS.over)}Active, but past the current section&apos;s planned minutes</div>
+        <div className="mb-1">{dot(DOT_COLORS.advanced)}Submit accepted, group moved on</div>
+        <div className="mb-2">{dot(DOT_COLORS.sent_back)}Submit sent back by the AI</div>
+        <div className="mb-1">Idle timer: time since the group&apos;s last activity; red after 2 minutes.</div>
+        <div className="fw-semibold mt-3 mb-1">Observation tags</div>
+        <div className="text-muted mb-2">Tap what you see. Tags appear as squares above the strip; undo for 10 s.</div>
+        {OBSERVATION_LABELS.map((l) => (
+          <div key={l.key} className="mb-1">
+            <span style={{ display: 'inline-block', minWidth: 46, textAlign: 'center', marginRight: 6, background: l.bg, border: `1px solid ${l.border}`, color: l.text, borderRadius: 4, padding: '0 4px' }}>
+              {l.short}
+            </span>
+            <strong>{l.name}.</strong> {l.cue}
+          </div>
+        ))}
+      </Popover.Body>
+    </Popover>
   );
   return (
-    <div className="d-flex flex-wrap gap-3 small text-muted mb-3">
-      <span>{swatch(COLORS.active)}active</span>
-      <span>{swatch(COLORS.sandbox)}others working in their sandbox</span>
-      <span>{swatch({ background: '#fff', border: '#ced4da' })}idle</span>
-      <span>{swatch(COLORS.over)}past the current section&apos;s time</span>
-      <span>{dot(DOT_COLORS.advanced)}submit accepted</span>
-      <span>{dot(DOT_COLORS.sent_back)}submit sent back</span>
-      <span>Strip: start (left) to now (right), scaled to the planned time; compresses when over.</span>
-    </div>
+    <OverlayTrigger trigger="click" placement="bottom-end" overlay={popover} rootClose>
+      <button
+        type="button"
+        className="btn btn-sm btn-outline-secondary rounded-circle d-inline-flex align-items-center justify-content-center"
+        style={{ width: 26, height: 26, padding: 0, fontWeight: 600 }}
+        aria-label="Key for the activity strip and observation tags"
+        title="Key"
+      >
+        i
+      </button>
+    </OverlayTrigger>
   );
 }
 
@@ -67,6 +99,21 @@ export default function GroupActivityStrip({ live, now, sliceSeconds = 10, finis
         )}
       </div>
 
+      <div style={{ position: 'relative', height: 10, marginBottom: 2 }}>
+        {strip.tags.map((tag, i) => {
+          const label = OBSERVATION_BY_KEY[tag.label];
+          return (
+            <span
+              key={i}
+              title={label ? `Tagged: ${label.name}` : tag.label}
+              style={{
+                position: 'absolute', left: `calc(${tag.left}% - 4px)`, top: 0, width: 9, height: 9, borderRadius: 2,
+                background: label?.bg || '#fff', border: `1px solid ${label?.border || '#6c757d'}`,
+              }}
+            />
+          );
+        })}
+      </div>
       <div
         style={{ position: 'relative', height: 16, border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
         aria-label="Activity over time"

@@ -22,7 +22,7 @@ const toMs = (value) => (value == null ? null : new Date(value).getTime());
  * @param {Array} p.slices     [{at, edits, runs, submits, sandbox, aiWaits}]
  * @param {object} p.meta      activity metadata (groups, sections, plannedMinutes)
  */
-function buildLiveGroup({ rows = [], events = [], slices = [], meta }) {
+function buildLiveGroup({ rows = [], events = [], slices = [], observations = [], meta }) {
   const submits = buildSubmits([...rows].sort((a, b) => a.id - b.id));
   const turnEvents = events.filter((e) => e.type === 'active_student_changed').sort((a, b) => a.at - b.at);
   const forceAdvances = events.filter((e) => e.type === 'instructor_force_advance');
@@ -79,6 +79,7 @@ function buildLiveGroup({ rows = [], events = [], slices = [], meta }) {
     submits: submits.map((s) => [s.at, s.advanced ? 'advanced' : s.sentBack.length ? 'sent_back' : 'other']),
     sections,
     groupsCompleted: exitAt.size,
+    tags: [...observations].sort((a, b) => a.at - b.at).map((o) => [o.at, o.label]),
   };
 }
 
@@ -97,7 +98,7 @@ async function liveForActivity(db, courseId, activityId) {
     [activityId]
   );
   const meta = activity ? await loadMeta(activity) : { groups: [], sections: [], plannedMinutes: null };
-  const result = { now: Date.now(), sliceSeconds: SLICE_SECONDS, slicesAvailable: true, groups: [] };
+  const result = { now: Date.now(), sliceSeconds: SLICE_SECONDS, slicesAvailable: true, observationsAvailable: true, groups: [] };
   if (!instances.length) return result;
   const ids = instances.map((i) => i.id);
 
@@ -130,6 +131,19 @@ async function liveForActivity(db, courseId, activityId) {
     result.slicesAvailable = false; // migration 025 not run yet
   }
 
+  let observationRows = [];
+  try {
+    [observationRows] = await db.query(
+      `SELECT activity_instance_id AS instanceId, label, observed_at AS observedAt
+         FROM instructor_observations
+        WHERE activity_instance_id IN (?)`,
+      [ids]
+    );
+  } catch (err) {
+    if (err?.code !== 'ER_NO_SUCH_TABLE') throw err;
+    result.observationsAvailable = false; // migration 026 not run yet
+  }
+
   const byInstance = (list) => {
     const map = new Map();
     for (const item of list) {
@@ -145,21 +159,28 @@ async function liveForActivity(db, courseId, activityId) {
     return { instanceId: e.instanceId, type: e.type, at: toMs(e.createdAt), details };
   }));
   const slicesBy = byInstance(sliceRows.map((s) => ({ ...s, at: toMs(s.sliceStart) })));
+  const observationsBy = byInstance(observationRows.map((o) => ({ ...o, at: toMs(o.observedAt) })));
+  const groupHasCode = (groupNum) => [...(meta.questions?.values?.() || [])].some((q) => q.groupNum === groupNum && q.hasCode);
 
-  result.groups = instances.map((inst) => ({
-    instanceId: inst.id,
-    groupNumber: inst.groupNumber,
-    activeStudentId: inst.activeStudentId,
-    progressStatus: inst.progressStatus,
-    currentGroupNum: Math.min((inst.completedGroups || 0) + 1, inst.totalGroups || Infinity),
-    totalGroups: inst.totalGroups,
-    ...buildLiveGroup({
-      rows: rowsBy.get(inst.id) || [],
-      events: eventsBy.get(inst.id) || [],
-      slices: slicesBy.get(inst.id) || [],
-      meta,
-    }),
-  }));
+  result.groups = instances.map((inst) => {
+    const currentGroupNum = Math.min((inst.completedGroups || 0) + 1, inst.totalGroups || Infinity);
+    return {
+      instanceId: inst.id,
+      groupNumber: inst.groupNumber,
+      activeStudentId: inst.activeStudentId,
+      progressStatus: inst.progressStatus,
+      currentGroupNum,
+      currentGroupHasCode: groupHasCode(currentGroupNum),
+      totalGroups: inst.totalGroups,
+      ...buildLiveGroup({
+        rows: rowsBy.get(inst.id) || [],
+        events: eventsBy.get(inst.id) || [],
+        slices: slicesBy.get(inst.id) || [],
+        observations: observationsBy.get(inst.id) || [],
+        meta,
+      }),
+    };
+  });
   return result;
 }
 

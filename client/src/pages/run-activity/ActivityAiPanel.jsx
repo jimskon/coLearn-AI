@@ -162,6 +162,7 @@ export function ActivityAiPanel({
   isObserver,
   isInstructor,
   isSubmitted,
+  isEnded = false,
   activityLanguage,
   instanceId,
   userId,
@@ -178,10 +179,12 @@ export function ActivityAiPanel({
   // AI block, and only for the active student. Instructors and other students
   // are observers of the thread, never participants in it.
   const currentGroupHasAi = (entries || []).some((entry) => entry.groupIndex === currentGroupIndex);
-  const canAskAtAll = !!isActive && !isObserver && !isInstructor && !isSubmitted && currentGroupHasAi;
+  const canAskAtAll = !!isActive && !isObserver && !isInstructor && !isSubmitted && !isEnded && currentGroupHasAi;
 
   let lockReason = '';
-  if (isSubmitted) {
+  if (isEnded) {
+    lockReason = 'This activity has ended. The transcript is read only.';
+  } else if (isSubmitted) {
     lockReason = 'This activity has been submitted. The transcript is read only.';
   } else if (isInstructor || isObserver) {
     lockReason = activeStudentName
@@ -201,7 +204,7 @@ export function ActivityAiPanel({
           </span>
         ) : (
           <span className="badge rounded-pill bg-secondary-subtle text-secondary-emphasis border">
-            {isSubmitted ? 'Submitted' : (isInstructor || isObserver) ? 'Read only' : 'Closed here'}
+            {isEnded ? 'Ended' : isSubmitted ? 'Submitted' : (isInstructor || isObserver) ? 'Read only' : 'Closed here'}
           </span>
         )}
       </div>

@@ -19,5 +19,5 @@ export default function useRunModePolicy({
     isPlaygroundMode,
     isTestMode,
     isAssignmentMode,
-  }), [mode, user, activeStudentId, activity?.section_timer_paused, isPlaygroundMode, isTestMode, isAssignmentMode]);
+  }), [mode, user, activeStudentId, activity?.section_timer_paused, activity?.ended_at, isPlaygroundMode, isTestMode, isAssignmentMode]);
 }

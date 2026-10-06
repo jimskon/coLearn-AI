@@ -2,6 +2,7 @@
 const db = require('../db');
 const { evaluateCode } = require('../ai/controller');
 const { isValidQuestionId } = require('../utils/questionId');
+const { rejectIfEnded } = require('../utils/instanceEnded');
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
@@ -9,6 +10,7 @@ function isPositiveInteger(value) {
 
 exports.createResponse = async (req, res) => {
   const { instanceId, questionId, responseText, answeredBy } = req.body;
+  if (await rejectIfEnded(instanceId, res)) return;
 
   if (!questionId) {
     return res.status(400).json({ error: 'Missing question_id' });
@@ -56,6 +58,7 @@ exports.saveDraftResponse = async (req, res) => {
       error: 'Missing/invalid activity_instance_id, user_id, or question_id',
     });
   }
+  if (await rejectIfEnded(instanceId, res)) return;
 
   if (!isValidQuestionId(questionId)) {
     return res.status(400).json({
@@ -89,6 +92,7 @@ exports.saveDraftResponse = async (req, res) => {
 
 exports.createOrUpdateCodeResponse = async (req, res) => {
   const { activity_instance_id, question_id, user_id, response } = req.body;
+  if (await rejectIfEnded(activity_instance_id, res)) return;
 
   if (!question_id) {
     return res.status(400).json({ error: 'Missing question_id' });
@@ -274,6 +278,7 @@ exports.bulkSaveResponses = async (req, res) => {
       error: 'Missing/invalid instanceId, userId, or answers',
     });
   }
+  if (await rejectIfEnded(instanceId, res)) return;
 
   const entries = Object.entries(answers)
     .map(([qid, val]) => [String(qid).trim(), String(val ?? '')])

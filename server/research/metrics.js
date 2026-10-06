@@ -56,6 +56,15 @@ function allQuestions(runs) {
 // ---------------------------------------------------------------------------
 // Sections
 // ---------------------------------------------------------------------------
+function runStatusCounts(runs) {
+  const counts = { completed: 0, ended_incomplete: 0, in_progress: 0 };
+  for (const run of runs) {
+    const key = run.status in counts ? run.status : 'in_progress';
+    counts[key] += 1;
+  }
+  return counts;
+}
+
 function scaleMetrics(runs, questions) {
   const students = new Set();
   for (const run of runs) for (const id of run.studentIds) students.add(id);
@@ -69,6 +78,9 @@ function scaleMetrics(runs, questions) {
     metric('group_submits', 'Group submits', 'Submit clicks recorded as group submits.', count(runs.reduce((n, r) => n + r.rec.submits.length, 0))),
     metric('questions_answered', 'Questions answered', 'Question instances (question x run) with at least one submitted answer, excluding surveys.', count(answeredQuestions(questions).length)),
     metric('runs_by_group_size', 'Runs by group size', 'Student members per run: 2, 3, 4, or other.', { kind: 'distribution', values: bySize }),
+    metric('runs_by_status', 'Runs by status',
+      'Completed; ended incomplete (every student away 15+ minutes before finishing, so the run was closed); or still in progress.',
+      { kind: 'distribution', values: runStatusCounts(runs) }),
   ];
 }
 
@@ -223,7 +235,7 @@ function timeMetrics(runs, questions) {
 
   return [
     metric('activity_duration', 'Activity duration (active time)', 'Per run with turn data, session start (first student taking the turn) to last activity, with idle gaps capped at the idle threshold.', summary(runs.filter((r) => r.rec.timing.startKnown).map((r) => seconds(r.rec.timing.durationMs)), 'seconds')),
-    metric('activity_wall_clock', 'Activity duration (wall clock)', 'Per run with turn data, session start to last activity, uncapped.', summary(runs.filter((r) => r.rec.timing.startKnown).map((r) => seconds(r.rec.timing.wallClockMs)), 'seconds')),
+    metric('activity_wall_clock', 'Activity duration (wall clock)', 'Per run with turn data, session start to last activity, uncapped, without instructor pauses or time when no student was in the activity.', summary(runs.filter((r) => r.rec.timing.startKnown).map((r) => seconds(r.rec.timing.wallClockMs)), 'seconds')),
     metric('activity_submit_span', 'First to last submit (all runs)', 'Per run, first group submit to last group submit, idle-capped. Available for runs before turn logging; misses time before the first submit.', summary(runs.map((r) => seconds(r.rec.timing.submitSpanMs)), 'seconds')),
     metric('question_duration', 'Question duration', 'From the question group becoming current to resolution (acceptance or advance), idle-capped. Resolved evaluated questions.', durationSummary(resolved)),
     metric('time_to_first_response', 'Time to first answer', 'From the question group becoming current to the first evaluated attempt, idle-capped.', summary(evaluated.map((q) => seconds(q.firstResponseMs)), 'seconds')),

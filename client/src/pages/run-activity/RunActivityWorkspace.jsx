@@ -32,6 +32,7 @@ function collectGroupInfos(group, target) {
 
 export default function RunActivityWorkspace({
   activityPaused,
+  activityEnded = false,
   renderBlocks,
   preamble,
   codeFeedbackShown,
@@ -128,7 +129,9 @@ export default function RunActivityWorkspace({
   const split = useSplitPane(useSplitLayout);
 
   // For inline AI in assignment mode: lock reason shown when the student cannot ask.
-  const assignmentAiLockReason = isSubmitted
+  const assignmentAiLockReason = activityEnded
+    ? 'This activity has ended. AI help is no longer available.'
+    : isSubmitted
     ? 'This assignment has been submitted. The transcript is read only.'
     : (isInstructor || isObserver)
     ? 'Only the student can use the AI assistant.'
@@ -164,6 +167,13 @@ export default function RunActivityWorkspace({
         aria-disabled={activityPaused ? 'true' : undefined}
         style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
       >
+        {activityEnded && (
+          <Alert variant="secondary" className="mb-3">
+            <strong>Ended – incomplete.</strong> Everyone left before finishing, so this activity was closed.
+            You can review your work and try code in your Local Sandbox, but answers can no longer be changed.
+            Ask your instructor if you need it reopened.
+          </Alert>
+        )}
         {isSandbox && (
           <Alert variant="secondary" className="mb-3">
             {isCreatorSandbox ? 'Creator sandbox' : 'Sandbox'} mode is using the shared activity workspace with local edits only. Creator tools can grade one question at a time or run the whole set of questions.
@@ -675,6 +685,7 @@ export default function RunActivityWorkspace({
             isObserver={isObserver}
             isInstructor={isInstructor}
             isSubmitted={isSubmitted}
+            isEnded={activityEnded}
             activityLanguage={activity?.language || activity?.meta?.language || ''}
             instanceId={instanceId}
             userId={user?.id}

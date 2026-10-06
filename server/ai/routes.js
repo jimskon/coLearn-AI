@@ -34,6 +34,19 @@ console.log('AI handlers typeof:', {
   evaluateCppCode: typeof evaluateCppCode,
 });
 
+// Ended - incomplete runs (research/autoEnd.js) may be reviewed, but get no
+// more AI evaluation or AI help.
+const { rejectIfEnded } = require('../utils/instanceEnded');
+async function blockEndedRuns(req, res, next) {
+  try {
+    if (await rejectIfEnded(req.body?.instanceId, res)) return;
+  } catch (err) {
+    console.error('❌ ended check:', err);
+  }
+  next();
+}
+router.use(['/evaluate-response', '/evaluate-python-code', '/evaluate-code', '/evaluate-cpp-code', '/activity-assist'], blockEndedRuns);
+
 // Short-answer / text evaluation
 router.post('/evaluate-response', evaluateStudentResponse);
 

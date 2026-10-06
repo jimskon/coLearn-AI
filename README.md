@@ -91,6 +91,7 @@ coLearn-AI reconstructs research measures (participation, AI gating, revision, t
 |---|---|---|
 | Migration `025` (`group_activity_slices` table) | Observation view activity strip, idle timer, time-on-task data | `migrations/run-all.sh`, or `bash migrations/025_2026-10-06_add_group_activity_slices.sh`. **Run it before restarting the server**: without the table, recording turns itself off (one log warning) until the next restart. |
 | Migration `026` (`instructor_observations` table) | Observation tags | `migrations/run-all.sh`, or `bash migrations/026_2026-10-06_add_instructor_observations.sh` |
+| Migration `027` (`activity_instances.ended_at`) | Ended – incomplete | `migrations/run-all.sh`. The server also adds the column on first use. |
 | `RESEARCH_ID_SECRET` in `server/.env` (16+ characters, keep private) | The four row-level research datasets on the Exports tab (the aggregate CSV does not need it) | Set once and never change it: changing it changes every research ID. |
 | Server restart and client build | Any update to these features | As for any deploy. |
 
@@ -105,6 +106,7 @@ All recording is fire-and-forget and never blocks or fails a classroom request. 
 | Active-student changes, with the reason (`rotation_after_submit`, `instructor_rotate`, `absent_reassigned`, `all_absent`, `claimed`, `group_setup`, `solo_join`, `cleared_on_completion`) | `audit_log` (`active_student_changed`) | Every change |
 | Instructor force-advance | `audit_log` (`instructor_force_advance`) | Every force-advance |
 | Instructor pause and resume | `audit_log` (`activity_paused`, `activity_resumed`) | For each run whose pause state changes. Paused time is removed from every duration, idle timer, and section clock: students cannot act while paused, so it never counts as idle or as time spent. |
+| Students arriving in and leaving a run (first heartbeat after 90+ s away, with their previous heartbeat; leave beacon) | `audit_log` (`member_joined`, `member_left`) | Each arrival and departure. Time when no student member is in the activity is removed from every duration, like a pause, so a group that leaves an unfinished activity and returns later is not credited with the time between. |
 | Activity per student per 10-second slice: edits, code runs, submits, Local Sandbox work, AI evaluation in progress | `group_activity_slices` | At most one write per student, kind, and slice |
 | Instructor observation tags, with context (question group, whether it has code, active student, seconds since last activity, AI evaluation in progress, last AI decision) | `instructor_observations` | When an instructor taps a tag (undo deletes it) |
 
@@ -150,6 +152,19 @@ Use the **Classic | Observation** switch at the top of View Groups (remembered p
 **Observation tags.** Each group card has eight buttons for what you see: **Talk** (discussing), **Code** (all coding; only when the current question group has code), **Watch** (one drives, others watch), **Quiet** (silent, on task), **Help** (asking for help), **Frust** (frustrated), **Off** (off topic), **?** (can't tell). A tag is saved at once, shows as a small square above the strip, and can be undone for 10 seconds. The round **i** button next to a group's timer badge opens a key to the strip colors and the tags, with the cues for each tag.
 
 The view refreshes every 10 seconds. If it says recording or observations are not set up, migration `025` or `026` has not been run on that server.
+
+---
+
+## Ended – incomplete
+
+A **group activity** run is ended when every student member has been away for **15 minutes** before finishing. The run must have at least one group submit. "Away" means no heartbeat; closing the page counts at once.
+
+- **Students** see *Ended – incomplete*. They can open the run, review their answers, the AI feedback, and the history, and run or edit code in their Local Sandbox (not saved). They can't change answers, submit, or use the AI assistant; the server rejects these with `409 ACTIVITY_ENDED`.
+- **Instructors** see *Ended – incomplete* on View Groups (and "ended" on the course progress grid). **Reopen** lets the group continue where they stopped.
+- **Not included:** tests, assignments, demos, playgrounds, demo classes, sandbox runs, and runs whose students left more than a day before this feature was deployed.
+- **Research statistics:** each run is *completed*, *ended incomplete*, or *in progress* (Overview → Runs by status; `run_status` in every export). Activity after a run ended is not counted.
+
+The check runs every minute (`server/research/autoEnd.js`). Events: `activity_ended_incomplete`, `activity_reopened` in `audit_log`.
 
 ---
 

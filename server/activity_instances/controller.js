@@ -9,7 +9,9 @@ const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { isFileResponseKey } = require('../utils/questionId');
-const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange } = require('../utils/turnEvents');
+const { filterAccessibleCourses } = require('../research/access');
+const { ensureEndedAtSchema, instanceEndedAt, rejectIfEnded } = require('../utils/instanceEnded');
+const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange, recordPresenceChange } = require('../utils/turnEvents');
 const { recordActivity } = require('../research/activityRecorder');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
@@ -81,6 +83,10 @@ const PRESENCE_WINDOW_SEC = 120;
 // absent this many seconds later unless their page checks in again. A reload
 // checks in at once, so reloading does not cost the student their turn.
 const LEAVE_GRACE_SEC = 15;
+// A heartbeat after a longer silence than this (heartbeats come every 20 s;
+// a leave beacon backdates the last one by PRESENCE_WINDOW_SEC - LEAVE_GRACE_SEC)
+// is logged as the member arriving, for research timing.
+const RETURN_GAP_SEC = 90;
 
 async function tableHasColumn(conn, tableName, columnName) {
   const [rows] = await conn.query(
@@ -1120,6 +1126,7 @@ async function getActivityInstanceById(req, res) {
     await ensureTestFocusSchema();
     await ensureAssignmentDueSchema();
     await ensureRandomizeOrderSchema();
+    await ensureEndedAtSchema();
       const [[instance]] = await db.query(
       `SELECT
          ai.id,
@@ -1151,6 +1158,7 @@ async function getActivityInstanceById(req, res) {
          ai.hidden,
          ai.randomize_order,
          ai.test_access_code,
+         ai.ended_at,
          a.title       AS title,
          a.name        AS activity_name,
          a.sheet_url
@@ -1332,9 +1340,11 @@ async function recordHeartbeat(req, res) {
     }
 
     const [[isMember]] = await db.query(
-      `SELECT student_id FROM group_members
+      `SELECT student_id, last_heartbeat AS lastHeartbeat,
+              (last_heartbeat IS NOT NULL AND last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? SECOND)) AS recent
+       FROM group_members
        WHERE activity_instance_id = ? AND student_id = ?`,
-      [instanceId, userId]
+      [RETURN_GAP_SEC, instanceId, userId]
     );
     if (!isMember) {
       if (timerPatch) {
@@ -1349,6 +1359,11 @@ async function recordHeartbeat(req, res) {
        WHERE activity_instance_id = ? AND student_id = ?`,
       [instanceId, userId]
     );
+    if (!Number(isMember.recent)) {
+      recordPresenceChange(req, instanceId, 'joined', {
+        lastSeenAt: isMember.lastHeartbeat ? new Date(isMember.lastHeartbeat).toISOString() : null,
+      });
+    }
 
     let activePresent = false;
     if (inst.active_student_id) {
@@ -1361,7 +1376,10 @@ async function recordHeartbeat(req, res) {
       activePresent = !!row?.present;
     }
 
-    const isCompleted = String(inst.progress_status || '').toLowerCase() === 'completed';
+    // An ended run (Ended - incomplete) is treated like a completed one: nobody
+    // holds or can claim the turn.
+    const isCompleted = String(inst.progress_status || '').toLowerCase() === 'completed'
+      || !!(await instanceEndedAt(instanceId));
 
     if (isCompleted) {
       if (inst.active_student_id != null) {
@@ -1467,7 +1485,7 @@ async function recordLeave(req, res) {
   const userId = Number(req.user?.id);
   if (!instanceId || !userId) return res.status(204).end();
   try {
-    await db.query(
+    const [result] = await db.query(
       `UPDATE group_members
           SET last_heartbeat = LEAST(
                 COALESCE(last_heartbeat, NOW()),
@@ -1476,6 +1494,7 @@ async function recordLeave(req, res) {
         WHERE activity_instance_id = ? AND student_id = ?`,
       [PRESENCE_WINDOW_SEC - LEAVE_GRACE_SEC, instanceId, userId]
     );
+    if (result?.affectedRows) recordPresenceChange(req, instanceId, 'left');
   } catch (err) {
     console.error('❌ recordLeave:', err);
   }
@@ -1497,7 +1516,8 @@ async function getActiveStudent(req, res) {
       return res.status(404).json({ error: 'Activity instance not found' });
     }
 
-    const isCompleted = String(instance.progress_status || '').toLowerCase() === 'completed';
+    const isCompleted = String(instance.progress_status || '').toLowerCase() === 'completed'
+      || !!(await instanceEndedAt(instanceId));
     if (isCompleted && instance.active_student_id != null) {
       await db.query(
         `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
@@ -1559,6 +1579,7 @@ async function getActiveStudent(req, res) {
 async function rotateActiveStudent(req, res) {
   const { instanceId } = req.params;
   const { currentStudentId } = req.body;
+  if (await rejectIfEnded(instanceId, res)) return;
 
   const [members] = await db.query(
     `SELECT student_id,
@@ -1872,6 +1893,7 @@ async function submitGroupResponses(req, res) {
     ? Math.max(0, requestedRetries)
     : 1;
   const forceOverride = !!req.body?.forceOverride;
+  if (await rejectIfEnded(instanceId, res)) return;
 
   const attempt = req.body?.attempt || {};
   const submissionString = String(attempt?.submissionString || '');
@@ -2276,6 +2298,7 @@ async function getInstancesForActivityInCourse(req, res) {
   try {
     await ensureTestFocusSchema();
     await ensureAssignmentDueSchema();
+    await ensureEndedAtSchema();
       const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
     const [[activity]] = await db.query(
       `SELECT title, is_test, sheet_url, source_type, content_text
@@ -2334,7 +2357,8 @@ async function getInstancesForActivityInCourse(req, res) {
               reviewed_at,
               points_earned,
               points_possible,
-              test_access_code
+              test_access_code,
+              ended_at
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
@@ -2391,10 +2415,12 @@ async function getInstancesForActivityInCourse(req, res) {
       let activeId = inst.active_student_id == null ? null : Number(inst.active_student_id);
       const recentMembers = members.filter((member) => Number(member.present) === 1);
 
+      // An ended run (Ended - incomplete) never gets a new active student.
       if (
-        !activeId ||
+        !inst.ended_at &&
+        (!activeId ||
         !memberIds.has(activeId) ||
-        !recentMembers.some((member) => Number(member.student_id) === activeId)
+        !recentMembers.some((member) => Number(member.student_id) === activeId))
       ) {
         const fallback = recentMembers[0]?.student_id ?? null;
 
@@ -2444,6 +2470,7 @@ async function getInstancesForActivityInCourse(req, res) {
 	        total_groups: inst.total_groups,
 	        completed_groups: inst.completed_groups,
 	        progress_status: inst.progress_status,
+	        ended_at: inst.ended_at,
 	        section_timer_key: inst.section_timer_key,
 	        section_timer_duration_minutes: inst.section_timer_duration_minutes,
 	        section_timer_started_at: inst.section_timer_started_at,
@@ -3646,6 +3673,37 @@ async function recomputeTestTotals(req, res) {
   }
 }
 
+// Reopen a run that was ended because everyone left (Ended - incomplete).
+// The group can then claim the turn and continue where they stopped.
+async function reopenEndedInstance(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  const role = req.user?.role;
+  if (role !== 'instructor' && role !== 'root' && role !== 'creator') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+
+  try {
+    await ensureEndedAtSchema();
+    const [[inst]] = await db.query(
+      'SELECT course_id AS courseId, ended_at FROM activity_instances WHERE id = ?',
+      [instanceId]
+    );
+    if (!inst) return res.status(404).json({ error: 'Activity instance not found' });
+    const allowed = await filterAccessibleCourses(db, req.user, [inst.courseId]);
+    if (!allowed.length) return res.status(403).json({ error: 'No access to this course' });
+    if (!inst.ended_at) return res.json({ ok: true, reopened: false });
+
+    await db.query('UPDATE activity_instances SET ended_at = NULL WHERE id = ?', [instanceId]);
+    void recordAuditEvent('activity_reopened', { req, activityInstanceId: instanceId });
+    global.emitInstanceState?.(instanceId, { ended_at: null });
+    return res.json({ ok: true, reopened: true });
+  } catch (err) {
+    console.error('❌ reopenEndedInstance:', err);
+    return res.status(500).json({ error: 'Failed to reopen the activity' });
+  }
+}
+
 async function markTestReviewed(req, res) {
   const { instanceId } = req.params;
   const role = req.user?.role;
@@ -3711,6 +3769,7 @@ async function getInstanceResponseHistory(req, res) {
 async function forceAdvanceQuestionGroup(req, res) {
   const instanceId = Number(req.params.instanceId);
   if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+  if (await rejectIfEnded(instanceId, res)) return;
 
   const conn = await db.getConnection();
   try {
@@ -3821,6 +3880,7 @@ async function verifyAccessCode(req, res) {
 module.exports = {
   recordClientActivity,
   recordLeave,
+  reopenEndedInstance,
   clearResponsesForInstance,
   recordTestFocusLoss,
   deleteActivityInstance,

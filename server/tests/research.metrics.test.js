@@ -136,6 +136,7 @@ function fakeDb(tables) {
       if (/FROM group_members gm/.test(sql)) return [tables.members];
       if (/FROM responses/.test(sql)) return [tables.responses];
       if (/FROM audit_log/.test(sql)) return [[]];
+      if (/FROM group_activity_slices/.test(sql)) return [[]];
       if (/FROM pogil_activities/.test(sql)) return [tables.activities];
       if (/FROM users WHERE/.test(sql)) return [tables.users];
       throw new Error(`unexpected query: ${sql}`);

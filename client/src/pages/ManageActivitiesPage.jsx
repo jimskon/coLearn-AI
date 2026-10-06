@@ -84,18 +84,6 @@ function slugifyActivityName(value) {
     .slice(0, 180);
 }
 
-// Error responses from the proxy or Express (e.g. 413 Payload Too Large) are
-// HTML pages, not JSON; report the status instead of a JSON parse error.
-async function readJsonResponse(res) {
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    if (res.status === 413) return { error: 'The file is too large for the server to accept.' };
-    return { error: `Server error (${res.status} ${res.statusText || ''}).`.replace(' )', ')') };
-  }
-}
-
 function extractTitleFromMarkup(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
   return match ? match[1].trim() : null;
@@ -1674,8 +1662,10 @@ async function readJsonResponse(res) {
     return JSON.parse(raw);
   } catch (err) {
     const head = raw.trim().slice(0, 120).replace(/\s+/g, ' ');
-    throw new Error(head.startsWith('<html') || head.startsWith('<!doctype')
-      ? 'Server returned HTML instead of JSON.'
+    if (res.status === 413) throw new Error('The file is too large for the server to accept.');
+    const lower = head.toLowerCase();
+    throw new Error(lower.startsWith('<html') || lower.startsWith('<!doctype')
+      ? `Server error (${res.status}${res.statusText ? ` ${res.statusText}` : ''}).`
       : `Unexpected server response: ${head || 'non-JSON body'}`);
   }
 }

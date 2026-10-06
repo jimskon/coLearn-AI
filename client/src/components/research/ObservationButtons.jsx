@@ -57,8 +57,8 @@ export default function ObservationButtons({ instanceId, hasCode, now, onTagged 
   const canUndo = last && sinceLast < UNDO_MS;
 
   return (
-    <div style={{ width: 132 }}>
-      <div className="d-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 4 }}>
+    <div style={{ width: 196, flexShrink: 0 }}>
+      <div className="d-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
         {OBSERVATION_LABELS.map((l) => {
           const disabled = saving || (l.codeOnly && !hasCode);
           return (
@@ -69,12 +69,13 @@ export default function ObservationButtons({ instanceId, hasCode, now, onTagged 
               disabled={disabled}
               title={l.codeOnly && !hasCode ? `${l.name} (this question group has no code)` : `${l.name}: ${l.cue}`}
               style={{
-                minHeight: 36,
+                minHeight: 32,
+                padding: '0 2px',
                 background: l.bg,
                 border: `1px solid ${l.border}`,
                 color: l.text,
                 borderRadius: 6,
-                fontSize: '0.85rem',
+                fontSize: '0.8rem',
                 fontWeight: 600,
                 opacity: disabled ? 0.35 : 1,
               }}

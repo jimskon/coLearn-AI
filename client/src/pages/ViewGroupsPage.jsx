@@ -1138,6 +1138,26 @@ export default function ViewGroupsPage() {
             const connectedMembers = getConnectedMembers(group);
             const activeMember = getActiveMember(group);
             const canRotateActive = !isComplete && connectedMembers.length > 1;
+            const memberList = (
+              <ul className={isObservationView ? 'small ps-3 mb-0' : undefined}>
+                {(group.members || []).map((m, i) => (
+                  <li key={i}>
+                    {m.name}
+                    {!isDemoClass && m.email ? (
+                      <>
+                        {' '}
+                        <span className="text-muted">&lt;{m.email}&gt;</span>
+                      </>
+                    ) : null}
+                    {group.active_student_id === m.student_id && (
+                      <FaUserCheck title="Active student" className="text-success ms-1" />
+                    )}
+                    {m.connected && <FaLaptop title="Connected" className="text-info ms-1" />}
+                    {m.role && <span className="ms-2 text-muted">({m.role})</span>}
+                  </li>
+                ))}
+              </ul>
+            );
 
             return (
               <Col lg={isObservationView ? 6 : 4} md={isObservationView ? 12 : 6} sm={12} key={group.instance_id}>
@@ -1201,7 +1221,7 @@ export default function ViewGroupsPage() {
 
                   <Card.Body>
                     {isObservationView ? (
-                      <div className="d-flex gap-3 align-items-start mb-3">
+                      <div className="d-flex gap-3 align-items-start mb-2">
                         <div className="flex-grow-1" style={{ minWidth: 0 }}>
                           <GroupActivityStrip
                             live={liveByInstance.get(instanceId)}
@@ -1209,6 +1229,7 @@ export default function ViewGroupsPage() {
                             sliceSeconds={liveData?.sliceSeconds || 10}
                             finished={isComplete}
                           />
+                          <div className="mt-2">{memberList}</div>
                         </div>
                         <ObservationButtons
                           instanceId={instanceId}
@@ -1217,25 +1238,7 @@ export default function ViewGroupsPage() {
                           onTagged={() => setLiveRefreshKey((k) => k + 1)}
                         />
                       </div>
-                    ) : null}
-                    <ul>
-                      {(group.members || []).map((m, i) => (
-                        <li key={i}>
-                          {m.name}
-                          {!isDemoClass && m.email ? (
-                            <>
-                              {' '}
-                              <span className="text-muted">&lt;{m.email}&gt;</span>
-                            </>
-                          ) : null}
-                          {group.active_student_id === m.student_id && (
-                            <FaUserCheck title="Active student" className="text-success ms-1" />
-                          )}
-                          {m.connected && <FaLaptop title="Connected" className="text-info ms-1" />}
-                          {m.role && <span className="ms-2 text-muted">({m.role})</span>}
-                        </li>
-                      ))}
-                    </ul>
+                    ) : memberList}
                     {activityType === 'assignment' && (
                       <div className="small mb-2">
                         {dueEdit && dueEdit.instanceId === group.instance_id ? (

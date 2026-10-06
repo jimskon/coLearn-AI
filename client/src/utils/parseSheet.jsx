@@ -34,6 +34,7 @@ import { createDisplayCodeBlock, parseDisplayCodeBlockCommand } from './displayC
 import { fileLanguage, fileResponseKey, isSaveableFilename, parseFileOptions } from './fileBlocks';
 import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
 import activityGrammar from '../../../shared/activityGrammar.cjs';
+import { questionTypeLabel } from './questionTypes';
 
 const { closesBlock, familyOfCloser } = codeBlockFamilies;
 const AI_MODE_FLAGS = new Set(activityGrammar.COMMA_LIST_VALUES.aimode.values);
@@ -3267,6 +3268,14 @@ export function renderBlocks(blocks, options = {}) {
             {scoreBadges.length > 0 && (
               <span className="ms-2">
                 {scoreBadges}
+              </span>
+            )}
+            {runMode === 'preview' && (
+              <span
+                className={`badge border ms-2 ${block.questionType ? 'bg-info-subtle text-info-emphasis' : 'bg-light text-muted'}`}
+                title="Question type, used only by Research Statistics"
+              >
+                {block.questionType ? questionTypeLabel(block.questionType) : 'No type'}
               </span>
             )}
             {lockMainResponse && (

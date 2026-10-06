@@ -110,6 +110,35 @@ Notes:
 - Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
 - Use `\multiplechoice{multiple}` for a multi-select survey. It displays checkboxes, stores all selected choice texts, and has no automatic grading. Do not attach choice points or a `\score` block.
 
+### Question type (research)
+
+`\questiontype{...}` labels what a question mainly asks students to do, for the Research Statistics pages. It is optional, one line inside the question (conventionally just before `\endquestion`), and never changes what students see, how answers are judged, or question numbering. Untagged questions count as `unknown`.
+
+| Value | Use when the student mainly has to |
+|---|---|
+| `code_writing` | Write or substantially change working code |
+| `code_reading` | Trace or explain given code; make small edits or add prints to observe behavior |
+| `output_prediction` | Say what given code will print or return |
+| `debugging` | Find or fix a bug, or design tests that expose one |
+| `conceptual_explanation` | Explain a general idea, rule, or trade-off |
+| `application_problem_solving` | Apply an idea to a specific example or scenario |
+| `reflection` | Think about their own or the team's learning or process |
+| `other` | None of these (for example, setup steps) |
+
+Tie-breakers:
+
+- If writing working code is part of the answer, use `code_writing`.
+- A specific worked example is `application_problem_solving`; the general case is `conceptual_explanation`.
+- Content review in a Reflection section is still `conceptual_explanation`; questions about self, team, or process are `reflection`.
+- Opinion surveys are `reflection` (about their learning) or `other`.
+
+```text
+\question{What does this loop print?}
+\textresponse{2}
+\questiontype{output_prediction}
+\endquestion
+```
+
 ### AI evaluation feedback mode
 
 `\aimode` is a comma-separated list of feedback-display flags. It may appear

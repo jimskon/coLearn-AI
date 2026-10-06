@@ -376,7 +376,7 @@ export default function ManageActivitiesPage() {
       body: JSON.stringify(activity),
       credentials: 'include',
     });
-    const data = await res.json();
+    const data = await readJsonResponse(res);
     if (!res.ok) {
       throw new Error(data.error || `Failed to create activity "${activity.title}".`);
     }
@@ -393,7 +393,7 @@ export default function ManageActivitiesPage() {
       credentials: 'include',
       body: JSON.stringify({ activities: items, force_ids: forceIds }),
     });
-    const data = await res.json();
+    const data = await readJsonResponse(res);
     if (!res.ok) {
       throw new Error(data.error || 'Failed to replace activities.');
     }
@@ -1662,8 +1662,10 @@ async function readJsonResponse(res) {
     return JSON.parse(raw);
   } catch (err) {
     const head = raw.trim().slice(0, 120).replace(/\s+/g, ' ');
-    throw new Error(head.startsWith('<html') || head.startsWith('<!doctype')
-      ? 'Server returned HTML instead of JSON.'
+    if (res.status === 413) throw new Error('The file is too large for the server to accept.');
+    const lower = head.toLowerCase();
+    throw new Error(lower.startsWith('<html') || lower.startsWith('<!doctype')
+      ? `Server error (${res.status}${res.statusText ? ` ${res.statusText}` : ''}).`
       : `Unexpected server response: ${head || 'non-JSON body'}`);
   }
 }

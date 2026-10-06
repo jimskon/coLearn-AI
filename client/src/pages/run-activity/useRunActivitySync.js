@@ -126,7 +126,41 @@ export default function useRunActivitySync({
     };
     sendHeartbeat();
     const interval = setInterval(sendHeartbeat, 20000);
-    return () => clearInterval(interval);
+
+    // Tell the server the page is going away (tab closed, navigation, reload).
+    // The server marks this student absent shortly after unless the page checks
+    // in again, so a reload keeps the turn but a closed tab hands it on quickly.
+    const sendLeave = () => {
+      try {
+        navigator.sendBeacon?.(`${API_BASE_URL}/api/activity-instances/${instanceId}/leave`);
+      } catch { }
+    };
+    window.addEventListener('pagehide', sendLeave);
+
+    // Forward content-free activity signals (code runs, Local Sandbox work)
+    // for the research timeline, throttled per kind.
+    const minGapMs = { run: 2000, sandbox: 10000 };
+    const lastSent = {};
+    const sendActivity = (event) => {
+      const kind = event?.detail?.kind;
+      if (!minGapMs[kind]) return;
+      const now = Date.now();
+      if (now - (lastSent[kind] || 0) < minGapMs[kind]) return;
+      lastSent[kind] = now;
+      fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/activity`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ kind }),
+      }).catch(() => {});
+    };
+    window.addEventListener('colearn:activity', sendActivity);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('pagehide', sendLeave);
+      window.removeEventListener('colearn:activity', sendActivity);
+    };
   }, [
     canSendHeartbeat,
     user?.id,

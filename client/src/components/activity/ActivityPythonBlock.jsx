@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Form, Button } from 'react-bootstrap';
 import Prism from 'prismjs';
+import { signalActivity } from '../../utils/activitySignals';
 import { runSkulptCode } from '../../utils/runSkulptCode';
 import useCodeHistory from '../../hooks/useCodeHistory';
 
@@ -189,6 +190,7 @@ export default function ActivityPythonBlock({
   };
 
   const runPython = () => {
+    signalActivity('run');
     if (editable && code !== savedCode) {
       sendUpstream(code, { broadcastOnly: false });
       setSavedCode(code);
@@ -521,7 +523,10 @@ export default function ActivityPythonBlock({
       {codeFeedbackShown[responseKey] && (
         <div className="mt-2 p-3 border rounded bg-warning-subtle">
           <strong>AI Feedback:</strong>
-          <pre className="mb-0">{codeFeedbackShown[responseKey]}</pre>
+          {/* Prose, not code: wrap long lines but keep the AI's line breaks. */}
+          <div className="mb-0" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            {codeFeedbackShown[responseKey]}
+          </div>
         </div>
       )}
 

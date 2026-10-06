@@ -100,6 +100,7 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 | `\multiplechoice{...}` | Begins a single-answer multiple-choice block; the optional value is its answer key | `\multiplechoice{Ottawa}` |
 | `\multiplechoice{multiple}` | Begins an ungraded “select all that apply” survey block | `\multiplechoice{multiple}` |
 | `\choice{value}` | Adds a choice to a multiple-choice block | `\choice{Writing code}` |
+| `\questiontype{...}` | Optional research category for statistics; never changes behavior. One of `code_writing`, `code_reading`, `output_prediction`, `debugging`, `conceptual_explanation`, `application_problem_solving`, `reflection`, `other`. Untagged questions count as `unknown`. | `\questiontype{debugging}` |
 
 Every `\question` must explicitly end with `\endquestion`.
 

@@ -598,7 +598,25 @@ router.get('/whoami', async (req, res) => {
   }
 });
 
-router.post('/logout', (req, res) => {
+router.post('/logout', async (req, res) => {
+  // A student who logs out has left their groups: stop counting them as
+  // present, so rotation never hands them the turn and a teammate takes it
+  // over at their next check-in.
+  const userId = Number(req.session?.userId || req.user?.id);
+  if (userId) {
+    try {
+      await pool.query(
+        `UPDATE group_members gm
+           JOIN activity_instances ai ON ai.id = gm.activity_instance_id
+            SET gm.last_heartbeat = NULL, gm.connected = FALSE
+          WHERE gm.student_id = ? AND ai.progress_status <> 'completed'`,
+        [userId]
+      );
+    } catch (err) {
+      console.error('Logout presence update failed:', err);
+    }
+  }
+
   req.session.destroy(err => {
     if (err) {
       console.error('Logout error:', err);

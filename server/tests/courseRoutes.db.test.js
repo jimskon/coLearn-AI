@@ -174,6 +174,8 @@ test('course creation rejects duplicate code section semester and year', async (
     body,
   });
   assert.equal(created.status, 201);
+  // Created directly rather than via createCourse(), so record it for cleanup.
+  remember('courses', created.body.courseId);
 
   const duplicate = await requestJson(instructor, '/api/courses', {
     method: 'POST',

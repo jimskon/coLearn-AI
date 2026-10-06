@@ -1,6 +1,19 @@
 // server/ai/routes.js
 const express = require('express');
 const router = express.Router();
+const { recordActivity } = require('../research/activityRecorder');
+
+// Research timeline: mark AI evaluation time as "waiting on the system" (not
+// idle) at the start and end of each evaluation request.
+router.use((req, res, next) => {
+  const instanceId = Number(req.body?.instanceId);
+  if (req.method === 'POST' && /^\/(evaluate|grade)/.test(req.path) && instanceId > 0) {
+    const userId = Number(req.user?.id || req.body?.answeredByUserId);
+    recordActivity(instanceId, userId, 'ai_waits');
+    res.on('finish', () => recordActivity(instanceId, userId, 'ai_waits'));
+  }
+  next();
+});
 const {
   evaluateStudentResponse,
   evaluatePythonCode,

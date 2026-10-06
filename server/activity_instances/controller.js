@@ -9,6 +9,8 @@ const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { isFileResponseKey } = require('../utils/questionId');
+const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange } = require('../utils/turnEvents');
+const { recordActivity } = require('../research/activityRecorder');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
@@ -75,6 +77,10 @@ function normalizeScoreBands(scores = {}) {
 }
 
 const PRESENCE_WINDOW_SEC = 120;
+// After a "leaving" signal (tab closed, page reloaded), a student counts as
+// absent this many seconds later unless their page checks in again. A reload
+// checks in at once, so reloading does not cost the student their turn.
+const LEAVE_GRACE_SEC = 15;
 
 async function tableHasColumn(conn, tableName, columnName) {
   const [rows] = await conn.query(
@@ -1363,6 +1369,7 @@ async function recordHeartbeat(req, res) {
           `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
           [instanceId]
         );
+        recordTurnChange(req, instanceId, inst.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
       }
       const completedPatch = { ...(timerPatch || {}), activeStudentId: null };
       global.emitInstanceState?.(Number(instanceId), completedPatch);
@@ -1403,6 +1410,13 @@ async function recordHeartbeat(req, res) {
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [newActiveId, instanceId]
         );
+        recordTurnChange(
+          req,
+          instanceId,
+          inst.active_student_id,
+          newActiveId,
+          inst.active_student_id ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
+        );
         global.emitInstanceState?.(Number(instanceId), {
           ...(timerPatch || {}),
           activeStudentId: newActiveId,
@@ -1435,6 +1449,39 @@ async function recordHeartbeat(req, res) {
 }
 
 
+// Activity the server cannot see directly: code runs (C++ goes straight to the
+// runner, Python runs in the browser) and Local Sandbox work. Content-free;
+// uses the session user only.
+const CLIENT_ACTIVITY_KINDS = { run: 'runs', sandbox: 'sandbox' };
+async function recordClientActivity(req, res) {
+  const kind = CLIENT_ACTIVITY_KINDS[String(req.body?.kind || '')];
+  if (kind) recordActivity(Number(req.params.instanceId), req.user?.id, kind);
+  return res.status(204).end();
+}
+
+// The student's page is going away (tab closed, navigation, reload). Mark them
+// as absent LEAVE_GRACE_SEC from now unless they check in again. Sent with
+// navigator.sendBeacon, so it uses the session user, never a body value.
+async function recordLeave(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  const userId = Number(req.user?.id);
+  if (!instanceId || !userId) return res.status(204).end();
+  try {
+    await db.query(
+      `UPDATE group_members
+          SET last_heartbeat = LEAST(
+                COALESCE(last_heartbeat, NOW()),
+                DATE_SUB(NOW(), INTERVAL ? SECOND)
+              )
+        WHERE activity_instance_id = ? AND student_id = ?`,
+      [PRESENCE_WINDOW_SEC - LEAVE_GRACE_SEC, instanceId, userId]
+    );
+  } catch (err) {
+    console.error('❌ recordLeave:', err);
+  }
+  return res.status(204).end();
+}
+
 // In getActiveStudent function in controller.js
 
 async function getActiveStudent(req, res) {
@@ -1456,6 +1503,7 @@ async function getActiveStudent(req, res) {
         `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
         [instanceId]
       );
+      recordTurnChange(req, instanceId, instance.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
     }
 
     if (isCompleted) {
@@ -1489,6 +1537,13 @@ async function getActiveStudent(req, res) {
         await db.query(
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [activeStudentId, instanceId]
+        );
+        recordTurnChange(
+          req,
+          instanceId,
+          currentActiveId,
+          activeStudentId,
+          currentActiveId ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
         );
       }
     }
@@ -1525,9 +1580,17 @@ async function rotateActiveStudent(req, res) {
     if (!recentMembers.length) return res.status(404).json({ error: 'No active group members' });
 
     const others = recentMembers.filter((m) => Number(m.student_id) !== Number(currentStudentId));
-    const next = others.length ? others[Math.floor(Math.random() * others.length)] : recentMembers[0];
+    if (!others.length) {
+      // Nobody else is here: rotating would hand the turn to an absent student.
+      return res.status(409).json({
+        error: 'Only one student is present, so the turn was not rotated.',
+        activeStudentId: Number(currentStudentId),
+      });
+    }
+    const next = others[Math.floor(Math.random() * others.length)];
 
     await db.query(`UPDATE activity_instances SET active_student_id = ? WHERE id = ?`, [next.student_id, instanceId]);
+    recordTurnChange(req, instanceId, currentStudentId, next.student_id, TURN_REASONS.INSTRUCTOR_ROTATE);
     global.emitInstanceState?.(Number(instanceId), { activeStudentId: next.student_id });
     res.json({ activeStudentId: next.student_id });
   } catch (err) {
@@ -1565,6 +1628,7 @@ async function setupMultipleGroupInstances(req, res) {
   await ensureRandomizeOrderSchema();
   const lockName = `setupGroups:${courseId}:${activityId}`;
   const conn = await db.getConnection();
+  const setupTurns = []; // [instanceId, studentId] turn assignments, logged after commit
 
   try {
     // ✅ serialize setup for this course+activity
@@ -1728,6 +1792,7 @@ async function setupMultipleGroupInstances(req, res) {
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [student_id, instanceId]
         );
+        setupTurns.push([instanceId, student_id]);
       }
     } else {
       for (let i = 0; i < groups.length; i++) {
@@ -1756,6 +1821,9 @@ async function setupMultipleGroupInstances(req, res) {
     }
 
     await conn.commit();
+    for (const [instanceId, studentId] of setupTurns) {
+      recordTurnChange(req, instanceId, null, studentId, TURN_REASONS.GROUP_SETUP);
+    }
     void recordAuditEvent('groups_formed', {
       req,
       courseId: Number(courseId),
@@ -2089,6 +2157,10 @@ async function submitGroupResponses(req, res) {
       progress_status: progressStatus,
       ...(progressStatus === 'completed' ? { activeStudentId: null } : {}),
     };
+    // Turn changes are logged after commit so a rolled-back submit leaves no event.
+    let turnChange = progressStatus === 'completed'
+      ? [studentId, null, TURN_REASONS.CLEARED_ON_COMPLETION]
+      : null;
 
 
     const shouldRotateActive =
@@ -2115,11 +2187,14 @@ async function submitGroupResponses(req, res) {
         `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
         [next, instanceId]
       );
+      turnChange = [studentId, next, TURN_REASONS.ROTATION_AFTER_SUBMIT];
 
       emitPatch = { ...(emitPatch || {}), activeStudentId: next };
     }
 
     await conn.commit();
+    if (turnChange) recordTurnChange(req, instanceId, ...turnChange);
+    recordActivity(instanceId, studentId, 'submits');
 
     // 🔥 NEW: clear drafts after successful submit
     await db.query(
@@ -2328,6 +2403,13 @@ async function getInstancesForActivityInCourse(req, res) {
             `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
             [fallback, inst.instance_id]
           );
+          recordTurnChange(
+            req,
+            inst.instance_id,
+            activeId,
+            fallback,
+            activeId ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
+          );
           activeId = fallback;
           global.emitInstanceState?.(inst.instance_id, { activeStudentId: activeId });
 
@@ -2478,7 +2560,7 @@ async function setTimerPauseForActivity(req, res) {
 
   try {
     const [instances] = await db.query(
-      `SELECT id
+      `SELECT id, section_timer_paused AS wasPaused
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?`,
       [courseId, activityId]
@@ -2487,6 +2569,8 @@ async function setTimerPauseForActivity(req, res) {
     if (!instances.length) {
       return res.json({ ok: true, paused, updated: 0 });
     }
+    // Runs whose pause state actually changes, logged after the update.
+    const changed = instances.filter((i) => (Number(i.wasPaused) === 1) !== paused).map((i) => i.id);
 
     if (paused) {
       await db.query(
@@ -2515,6 +2599,8 @@ async function setTimerPauseForActivity(req, res) {
         [courseId, activityId]
       );
     }
+
+    for (const id of changed) recordPauseChange(req, id, paused);
 
     const [updatedRows] = await db.query(
       `SELECT id,
@@ -3631,7 +3717,7 @@ async function forceAdvanceQuestionGroup(req, res) {
     await conn.beginTransaction();
 
     const [[inst]] = await conn.query(
-      `SELECT id, completed_groups, total_groups, progress_status,
+      `SELECT id, completed_groups, total_groups, progress_status, active_student_id,
               COALESCE(active_rotation_mode, '') AS active_rotation_mode
          FROM activity_instances WHERE id = ? FOR UPDATE`,
       [instanceId]
@@ -3674,6 +3760,19 @@ async function forceAdvanceQuestionGroup(req, res) {
     }
 
     await conn.commit();
+
+    // Research instrumentation: an instructor-caused transition, never a
+    // student or AI outcome. Whether the group was blocked by the AI at this
+    // moment is reconstructed from the response trace.
+    recordInstructorForceAdvance(req, instanceId, {
+      groupNum: next,
+      totalGroups: total,
+      completedActivity: nowComplete,
+      activeStudentId: inst.active_student_id == null ? null : Number(inst.active_student_id),
+    });
+    if (nowComplete) {
+      recordTurnChange(req, instanceId, inst.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
+    }
 
     const patch = {
       completed_groups: next,
@@ -3720,6 +3819,8 @@ async function verifyAccessCode(req, res) {
 }
 
 module.exports = {
+  recordClientActivity,
+  recordLeave,
   clearResponsesForInstance,
   recordTestFocusLoss,
   deleteActivityInstance,

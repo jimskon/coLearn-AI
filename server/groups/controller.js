@@ -1,5 +1,6 @@
 // server/groups/controller.js
 const db = require('../db');
+const { TURN_REASONS, recordTurnChange } = require('../utils/turnEvents');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 
 // Priority order for roles
@@ -532,6 +533,7 @@ async function addSoloStudent(req, res) {
     );
 
     await conn.commit();
+    recordTurnChange(req, group.id, null, studentId, TURN_REASONS.SOLO_JOIN);
     return res
       .status(201)
       .json({ ok: true, activityInstanceId: group.id, groupNumber: group.groupNumber });

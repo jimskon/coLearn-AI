@@ -6,6 +6,8 @@
 const { loadResearchTrace } = require('./trace');
 const { reconstructInstance, DEFAULT_OPTIONS } = require('./reconstruct');
 const { computeResearchMetrics, sizeBucket } = require('./metrics');
+const { buildDataset, toCsv } = require('./exports');
+const { pseudonym, researchSecret } = require('./pseudonym');
 
 const MIN_IDLE_MINUTES = 1;
 const MAX_IDLE_MINUTES = 120;
@@ -99,6 +101,21 @@ async function computeForCourses(db, courseIds, params = {}) {
   };
 }
 
+// One row-level research dataset as CSV text, for the same selection as
+// computeForCourses. Throws if RESEARCH_ID_SECRET is not set.
+async function exportDataset(db, courseIds, dataset, params = {}) {
+  const secret = researchSecret();
+  const options = parseOptions(params);
+  const trace = await loadResearchTrace(db, { courseIds, from: options.from, to: options.to });
+  const runs = applyFilters(buildRuns(trace, options.reconstruct), options);
+  const rows = buildDataset(dataset, runs, {
+    courseLabels: new Map(trace.courses.map((c) => [c.id, courseLabel(c)])),
+    activityTitles: new Map([...trace.activities.values()].map((a) => [a.id, a.title || a.name])),
+    pseudonym: (kind, id) => pseudonym(kind, id, secret),
+  });
+  return { rows: rows.length, csv: toCsv(rows) };
+}
+
 // One run's reconstruction, for checking the rules against what happened in
 // class. Maps and Sets are converted so the result is plain JSON.
 async function reconstructRun(db, courseId, instanceId, params = {}) {
@@ -149,4 +166,4 @@ async function reconstructRun(db, courseId, instanceId, params = {}) {
   };
 }
 
-module.exports = { computeForCourses, reconstructRun, buildRuns, applyFilters, parseOptions, courseLabel };
+module.exports = { computeForCourses, exportDataset, reconstructRun, buildRuns, applyFilters, parseOptions, courseLabel };

@@ -440,4 +440,4 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
   };
 }
 
-module.exports = { reconstructInstance, buildSubmits, cappedSpan, DEFAULT_OPTIONS };
+module.exports = { reconstructInstance, buildSubmits, cappedSpan, compareVersions, DEFAULT_OPTIONS };

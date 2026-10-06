@@ -276,7 +276,7 @@ export default function ResearchLayout() {
       {busy && !result ? (
         <div className="d-flex align-items-center gap-2 text-muted"><Spinner size="sm" animation="border" /> Computing…</div>
       ) : (
-        <Outlet context={{ result, busy }} />
+        <Outlet context={{ result, busy, selection: readSelection(searchParams) }} />
       )}
     </Container>
   );

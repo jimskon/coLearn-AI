@@ -91,7 +91,7 @@ coLearn-AI reconstructs research measures (participation, AI gating, revision, t
 |---|---|---|
 | Migration `025` (`group_activity_slices` table) | Observation view activity strip, idle timer, time-on-task data | `migrations/run-all.sh`, or `bash migrations/025_2026-10-06_add_group_activity_slices.sh`. **Run it before restarting the server**: without the table, recording turns itself off (one log warning) until the next restart. |
 | Migration `026` (`instructor_observations` table) | Observation tags | `migrations/run-all.sh`, or `bash migrations/026_2026-10-06_add_instructor_observations.sh` |
-| `RESEARCH_ID_SECRET` in `server/.env` (16+ characters, keep private) | The row-level research datasets with pseudonymous student IDs (coming; the aggregate CSV available now does not need it) | Set once and never change it: changing it changes every research ID. |
+| `RESEARCH_ID_SECRET` in `server/.env` (16+ characters, keep private) | The four row-level research datasets on the Exports tab (the aggregate CSV does not need it) | Set once and never change it: changing it changes every research ID. |
 | Server restart and client build | Any update to these features | As for any deploy. |
 
 Everything else uses existing tables. Turn changes and instructor actions are written to the existing `audit_log`.
@@ -121,6 +121,17 @@ Every rate shows its numerator and denominator (for example *23.2% · 527 / 2,26
 **Excluded, and counted on the Overview tab:** tests, instructor sandbox runs, demo classes, groups with no student members, runs outside the date range, duplicate trace rows. Surveys (ungraded multiple choice) are not counted as AI decisions.
 
 **Question types** come from the optional `\questiontype{...}` tag (see [MarkUp.md](MarkUp.md)); untagged questions count as `unknown`.
+
+**Exports tab:** `aggregate_statistics.csv` (every statistic on the pages) and four row-level datasets for the same selection:
+
+| Dataset | One row per |
+|---|---|
+| `question_attempts.csv` | AI-evaluated attempt: submitter, decision, time since the previous attempt, how the question ended |
+| `feedback_revision_pairs.csv` | Answer the AI sent back: answer before, feedback, answer after, change size, next decision (contains answer text) |
+| `group_participation.csv` | Run: submit and turn balance, skipped turns, interventions, question outcomes, time |
+| `student_longitudinal.csv` | Student per run: submits, share of group submits, attempts and decisions, turns |
+
+Students, groups, and instructors appear only as pseudonymous IDs (`S-…`, `G-…`, `I-…`, HMAC with `RESEARCH_ID_SECRET`), the same in every export; names and emails are never exported. Times are UTC. Turn columns are blank for runs without full turn data.
 
 **Checking one run:** `GET /api/research/runs/<instanceId>` returns how a single run was reconstructed (submits, attempts and outcomes, turns, interventions), for comparing against what happened in class.
 

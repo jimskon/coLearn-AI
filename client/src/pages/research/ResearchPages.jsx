@@ -3,6 +3,7 @@ import { Alert, Button, ButtonGroup, Card, Col, Row, Table } from 'react-bootstr
 import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { BreakdownTable, MetricTable } from './ResearchTables';
 import { formatMetric, toAggregateCsv } from '../../utils/researchFormat';
+import { API_BASE_URL } from '../../config';
 
 function useResearch() {
   return useOutletContext() || {};
@@ -252,17 +253,52 @@ function download(filename, text) {
 }
 
 const RESEARCH_DATASETS = [
-  ['question_attempts.csv', 'One row per AI-evaluated attempt'],
-  ['feedback_revision_pairs.csv', 'Answer before feedback, the feedback, answer after, next decision, outcome'],
-  ['group_participation.csv', 'One row per run: size, submits per member, turns, interventions'],
-  ['student_longitudinal.csv', 'One row per student and activity, pseudonymous IDs'],
+  ['question_attempts', 'One row per AI-evaluated attempt: who submitted it, the decision, time since the previous attempt, and how the question ended.'],
+  ['feedback_revision_pairs', 'One row per answer the AI sent back: the answer, the feedback, the next answer, how much it changed, and the next decision. Contains answer text.'],
+  ['group_participation', 'One row per run: group size, submit and turn balance, skipped turns, interventions, question outcomes, and time.'],
+  ['student_longitudinal', 'One row per student per run: submits, share of the group\'s submits, attempts and decisions, and turns.'],
 ];
 
+function DatasetButton({ dataset, selection, stamp }) {
+  const [state, setState] = React.useState({ busy: false, error: '', rows: null });
+  const run = async () => {
+    setState({ busy: true, error: '', rows: null });
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/research/exports/${dataset}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selection),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json?.error || 'Export failed');
+      }
+      const text = await res.text();
+      download(`${dataset}_${stamp}.csv`, text);
+      setState({ busy: false, error: '', rows: Number(res.headers.get('X-Row-Count')) });
+    } catch (err) {
+      setState({ busy: false, error: err?.message || 'Export failed', rows: null });
+    }
+  };
+  return (
+    <>
+      <Button size="sm" onClick={run} disabled={state.busy}>{state.busy ? 'Building…' : 'Download'}</Button>
+      {state.error ? <div className="small text-danger mt-1">{state.error}</div> : null}
+      {state.rows != null && Number.isFinite(state.rows) ? <div className="small text-muted mt-1">{state.rows.toLocaleString()} rows</div> : null}
+    </>
+  );
+}
+
 export function ExportsPage() {
+  const { selection } = useResearch();
   return (
     <NeedsResult>
       {(r) => (
-        <Section title="Exports" note="Exports use the courses and filters selected above.">
+        <Section
+          title="Exports"
+          note="Exports use the courses and filters selected above. In the row-level datasets, students, groups, and instructors appear only as pseudonymous IDs (stable across exports); names and emails are never included. Times are UTC."
+        >
           <Table className="mb-0 align-middle">
             <tbody>
               <tr>
@@ -279,10 +315,12 @@ export function ExportsPage() {
               {RESEARCH_DATASETS.map(([name, description]) => (
                 <tr key={name}>
                   <td>
-                    <div>{name}</div>
+                    <div>{name}.csv</div>
                     <div className="small text-muted">{description}</div>
                   </td>
-                  <td className="text-end"><Button size="sm" variant="outline-secondary" disabled>Coming soon</Button></td>
+                  <td className="text-end">
+                    <DatasetButton dataset={name} selection={selection} stamp={r.generatedAt.slice(0, 10)} />
+                  </td>
                 </tr>
               ))}
             </tbody>

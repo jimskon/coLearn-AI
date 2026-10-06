@@ -2,7 +2,8 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { canUseResearch, accessibleCourseIds, filterAccessibleCourses } = require('./access');
-const { computeForCourses, reconstructRun, courseLabel } = require('./service');
+const { computeForCourses, exportDataset, reconstructRun, courseLabel } = require('./service');
+const { DATASETS } = require('./exports');
 const { liveForActivity } = require('./live');
 const { ObservationError, createObservation, deleteObservation } = require('./observations');
 
@@ -56,6 +57,34 @@ router.post('/metrics', async (req, res) => {
   } catch (err) {
     console.error('❌ research metrics:', err);
     res.status(500).json({ error: 'Failed to compute research metrics' });
+  }
+});
+
+// Row-level research dataset (CSV) for the same selection as /metrics.
+// Students, groups, and instructors appear only as pseudonymous IDs.
+router.post('/exports/:dataset', async (req, res) => {
+  if (!requireResearchUser(req, res)) return;
+  const dataset = String(req.params.dataset || '');
+  if (!DATASETS.includes(dataset)) return res.status(404).json({ error: 'Unknown dataset' });
+  const requested = (Array.isArray(req.body?.courseIds) ? req.body.courseIds : [])
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (!requested.length) return res.status(400).json({ error: 'Select at least one course' });
+  if (requested.length > MAX_COURSES) return res.status(400).json({ error: `Select at most ${MAX_COURSES} courses` });
+  if (String(process.env.RESEARCH_ID_SECRET || '').length < 16) {
+    return res.status(503).json({ error: 'Research exports are not set up: RESEARCH_ID_SECRET (16+ characters) must be set in server/.env.' });
+  }
+
+  try {
+    const courseIds = await filterAccessibleCourses(db, req.user, requested);
+    if (!courseIds.length) return res.status(403).json({ error: 'No access to the selected courses' });
+    const { rows, csv } = await exportDataset(db, courseIds, dataset, req.body);
+    res.set('Content-Type', 'text/csv; charset=utf-8');
+    res.set('X-Row-Count', String(rows));
+    res.send(csv);
+  } catch (err) {
+    console.error('❌ research export:', err);
+    res.status(500).json({ error: 'Failed to build the export' });
   }
 });
 

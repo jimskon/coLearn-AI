@@ -45,6 +45,7 @@ import markupValidator from '../../../shared/activityMarkupValidation.cjs';
 import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
 import activityStructureDiff from '../../../shared/activityStructureDiff.cjs';
 import llmRevisionPrimer from '../../../shared/llmRevisionPrimer.cjs';
+import { QUESTION_TYPE_OPTIONS } from '../utils/questionTypes';
 
 const { closesBlock } = codeBlockFamilies;
 const { diffActivityStructure, describeRemovals } = activityStructureDiff;
@@ -280,6 +281,7 @@ function buildQuestionInspectorDraft(block) {
     sampleResponse: htmlToEditorText(block?.samples?.[0]),
     feedbackPrompt: htmlToEditorText(block?.feedback?.[0]),
     followupPrompt: htmlToEditorText(block?.followups?.[0]),
+    questionType: block?.questionType || '',
     multipleChoiceEnabled: !!multipleChoice,
     multipleChoiceSelectionMode: multipleChoice?.selectionMode || 'single',
     multipleChoiceAnswer: multipleChoice?.correctAnswer ?? '',
@@ -3192,6 +3194,21 @@ export default function CreatorWorkbenchPage() {
                               {!selectedQuestionBlock?.sourceMeta?.followupLines?.[0] ? (
                                 <div className="text-muted small mt-1">Applying will add a new `\\followupprompt` line to this question.</div>
                               ) : null}
+                            </Form.Group>
+
+                            <Form.Group className="mb-3">
+                              <Form.Label>Question Type (research)</Form.Label>
+                              <Form.Select
+                                value={questionInspectorDraft?.questionType || ''}
+                                disabled={!questionInspectorDraft || !!proposal}
+                                onChange={(event) => setQuestionInspectorDraft((prev) => ({ ...(prev || {}), questionType: event.target.value }))}
+                              >
+                                <option value="">Not set</option>
+                                {QUESTION_TYPE_OPTIONS.map(([value, label]) => (
+                                  <option key={value} value={value}>{label}</option>
+                                ))}
+                              </Form.Select>
+                              <div className="text-muted small mt-1">Used only by Research Statistics; students never see it.</div>
                             </Form.Group>
 
                             <div className="border-top mt-3 pt-3 mb-3">

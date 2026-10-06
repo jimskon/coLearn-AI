@@ -22,6 +22,7 @@ const CREATOR_HOUSE_STYLE_SUMMARY = [
   '- Use \\multiplechoice{} only for survey or opinion questions with no correct answer, and still list the choices with \\choice{...}.',
   '- Never invent a fake correct answer just to satisfy the parser when a multiple-choice question is intended to be a survey.',
   '- Use \\sampleresponses{...} and \\feedbackprompt{...} with plain text only.',
+  '- End each question with one \\questiontype{...} line just before \\endquestion: code_writing, code_reading, output_prediction, debugging, conceptual_explanation, application_problem_solving, reflection, or other. It is research metadata only.',
   '- Wrap runnable Python in \\python ... \\endpython or \\pythonremote ... \\endpythonremote.',
   '- Use \\pythondisplay ... \\endpythondisplay or \\cppdisplay ... \\endcppdisplay for read-only code examples that students should see but not run or edit.',
   '- Use \\ai{mode} ... \\endai only when it clearly supports the pedagogy, and keep it between questions rather than inside one.',
@@ -46,7 +47,7 @@ function buildActivityGenerationInstructions(modeOrFlag) {
   return [
     'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
     'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
-    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\language{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aimodel{gpt-5-mini}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
+    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\language{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\questiontype{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aimodel{gpt-5-mini}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
     'Only include \\info blocks if the creator explicitly asks for them.',
     'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
     isTestMode

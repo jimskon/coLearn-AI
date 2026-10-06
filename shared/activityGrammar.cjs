@@ -93,7 +93,9 @@
   // and must therefore survive a visual-editor edit verbatim, but the current
   // inspector has no dedicated control for it. Adding it to this list before
   // that control exists would cause the serializer to remove it.
-  // `questiontype` (research analysis category) follows the same rule.
+  // `questiontype` (research category) is not in this list either: the
+  // serializer handles it separately, keeping the original line verbatim (even
+  // an unknown value) unless the inspector's Question Type control changes it.
   const MANAGED_QUESTION_TAGS = SINGLETONS.question.filter(
     (tag) => tag !== 'aimode' && tag !== 'questiontype'
   );

@@ -100,6 +100,7 @@ function blockEnd(componentLines, startIndex, closeTag) {
 function managedQuestionBodyLines(componentLines) {
   const preserved = [];
   const originalScoreBlocks = {};
+  const originalQuestionTypeLines = [];
   let inCode = false;
 
   // Skip \question{...} itself, however many source lines its braces span.
@@ -144,6 +145,13 @@ function managedQuestionBodyLines(componentLines) {
       continue;
     }
 
+    if (name === 'questiontype') {
+      // Kept verbatim (even an unknown value) unless the inspector changes it.
+      preserved.push(FIELD_TOKEN('questiontype'));
+      originalQuestionTypeLines.push(line);
+      continue;
+    }
+
     if (managedQuestionTags.has(name)) {
       preserved.push(FIELD_TOKEN(name));
       index = braceSpanEnd(componentLines, index);
@@ -153,7 +161,7 @@ function managedQuestionBodyLines(componentLines) {
     preserved.push(line);
   }
 
-  return { preserved, originalScoreBlocks };
+  return { preserved, originalScoreBlocks, originalQuestionTypeLines };
 }
 
 /**
@@ -205,7 +213,9 @@ export function serializeQuestionComponent(sourceText, block, edits, selectedCod
   const followup = String(edits?.followupPrompt || '').trim();
   const mode = String(edits?.responseMode || block?.responseMode || 'answer').trim().toLowerCase() || 'answer';
 
-  const { preserved: body, originalScoreBlocks } = managedQuestionBodyLines(component);
+  const { preserved: body, originalScoreBlocks, originalQuestionTypeLines } = managedQuestionBodyLines(component);
+  const questionType = String(edits?.questionType ?? block?.questionType ?? '').trim().toLowerCase();
+  const questionTypeChanged = edits?.questionType !== undefined && questionType !== String(block?.questionType || '');
 
   const fieldLines = {
     responsemode: (mode !== 'answer' || meta?.responseModeLine) ? [`\\responsemode{${mode}}`] : [],
@@ -222,6 +232,9 @@ export function serializeQuestionComponent(sourceText, block, edits, selectedCod
     sampleresponses: (sample || meta?.sampleLines?.length) ? [`\\sampleresponses{${sample}}`] : [],
     feedbackprompt: (feedback || meta?.feedbackLines?.length) ? [`\\feedbackprompt{${feedback}}`] : [],
     followupprompt: (followup || meta?.followupLines?.length) ? [`\\followupprompt{${followup}}`] : [],
+    questiontype: questionTypeChanged
+      ? (questionType ? [`\\questiontype{${questionType}}`] : [])
+      : originalQuestionTypeLines,
   };
 
   const scoreBlocks = {
@@ -267,10 +280,14 @@ export function serializeQuestionComponent(sourceText, block, edits, selectedCod
     if (!placed.has(`score:${scoreType}`)) introduced.push(...scoreBlocks[scoreType]);
   }
 
+  // A new \questiontype goes last, where it is conventionally written.
+  const trailing = placed.has('questiontype') ? [] : fieldLines.questiontype;
+
   const serialized = [
     `\\question{${prompt}}`,
     ...introduced,
     ...rebuiltBody,
+    ...trailing,
     '\\endquestion',
   ];
 

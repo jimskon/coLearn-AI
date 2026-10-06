@@ -84,6 +84,18 @@ function slugifyActivityName(value) {
     .slice(0, 180);
 }
 
+// Error responses from the proxy or Express (e.g. 413 Payload Too Large) are
+// HTML pages, not JSON; report the status instead of a JSON parse error.
+async function readJsonResponse(res) {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    if (res.status === 413) return { error: 'The file is too large for the server to accept.' };
+    return { error: `Server error (${res.status} ${res.statusText || ''}).`.replace(' )', ')') };
+  }
+}
+
 function extractTitleFromMarkup(text) {
   const match = String(text || '').match(/^\\title\{([^}]*)\}/m);
   return match ? match[1].trim() : null;
@@ -376,7 +388,7 @@ export default function ManageActivitiesPage() {
       body: JSON.stringify(activity),
       credentials: 'include',
     });
-    const data = await res.json();
+    const data = await readJsonResponse(res);
     if (!res.ok) {
       throw new Error(data.error || `Failed to create activity "${activity.title}".`);
     }
@@ -393,7 +405,7 @@ export default function ManageActivitiesPage() {
       credentials: 'include',
       body: JSON.stringify({ activities: items, force_ids: forceIds }),
     });
-    const data = await res.json();
+    const data = await readJsonResponse(res);
     if (!res.ok) {
       throw new Error(data.error || 'Failed to replace activities.');
     }

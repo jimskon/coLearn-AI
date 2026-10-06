@@ -24,7 +24,9 @@ require('./heartbeatCleaner');
 const db = require('./db'); // Make sure db is accessible
 
 const staticDir = path.join(__dirname, '../client/dist');
-app.use(express.json());
+// Activity bundles (a whole class's markup) are well over the 100 KB default.
+// Keep this under nginx's client_max_body_size (25m).
+app.use(express.json({ limit: '20mb' }));
 
 const normalizeOrigin = (origin) => origin.replace(/\/+$/, '');
 

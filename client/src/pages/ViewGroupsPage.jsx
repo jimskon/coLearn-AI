@@ -175,6 +175,11 @@ function getGroupTimerState(group, nowMs) {
     ? parseUtcDbDatetime(group.section_timer_paused_at)
     : null;
 
+  // Ended - incomplete: the section clock no longer matters.
+  if (group.ended_at && String(group.progress_status || '').toLowerCase() !== 'completed') {
+    return { label: 'Ended', bg: 'secondary', text: 'light' };
+  }
+
   if (paused) {
     return { label: 'Paused', bg: 'secondary', text: 'light' };
   }

@@ -13,6 +13,19 @@ import ActivityPreview from '../pages/ActivityPreview';
 import AdminUsersPage from '../pages/AdminUsersPage';
 import AuditLogPage from '../pages/AuditLogPage';
 import StatisticsPage from '../pages/StatisticsPage';
+import ResearchLayout from '../pages/research/ResearchLayout';
+import {
+  OverviewPage as ResearchOverviewPage,
+  ParticipationPage as ResearchParticipationPage,
+  AiGatingPage as ResearchAiGatingPage,
+  RevisionPage as ResearchRevisionPage,
+  TimePage as ResearchTimePage,
+  GroupSizePage as ResearchGroupSizePage,
+  QuestionTypePage as ResearchQuestionTypePage,
+  OverTimePage as ResearchOverTimePage,
+  InterventionsPage as ResearchInterventionsPage,
+  ExportsPage as ResearchExportsPage,
+} from '../pages/research/ResearchPages';
 import ManageCoursesPage from '../pages/ManageCoursesPage';
 import CourseActivitiesPage from '../pages/CourseActivitiesPage';
 import RunActivityPage from '../pages/RunActivityPage';
@@ -91,6 +104,18 @@ function AppRoutes() {
         <Route path="/admin/users" element={<AdminUsersPage />} />
         <Route path="/admin/logs" element={<AuditLogPage />} />
         <Route path="/admin/statistics" element={<StatisticsPage />} />
+        <Route path="/research" element={<ResearchLayout />}>
+          <Route index element={<ResearchOverviewPage />} />
+          <Route path="participation" element={<ResearchParticipationPage />} />
+          <Route path="ai-gating" element={<ResearchAiGatingPage />} />
+          <Route path="revision" element={<ResearchRevisionPage />} />
+          <Route path="time" element={<ResearchTimePage />} />
+          <Route path="group-size" element={<ResearchGroupSizePage />} />
+          <Route path="question-type" element={<ResearchQuestionTypePage />} />
+          <Route path="over-time" element={<ResearchOverTimePage />} />
+          <Route path="interventions" element={<ResearchInterventionsPage />} />
+          <Route path="exports" element={<ResearchExportsPage />} />
+        </Route>
         <Route path="/courses/:courseId/activities" element={<CourseActivitiesPage />} />
         <Route path="/launch/:courseId/:activityId" element={<ActivityLaunchPage />} />
         <Route

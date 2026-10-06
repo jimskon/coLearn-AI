@@ -90,6 +90,11 @@ export default function NavBar({ bgColor = "dark", fixed = false, statusText = "
                       Manage Classes
                     </Nav.Link>
                   )}
+                  {["root", "creator", "instructor"].includes(user.role) && !isDemoSession && (
+                    <Nav.Link as={Link} to="/research" className="px-2">
+                      Research
+                    </Nav.Link>
+                  )}
                   {user.role === "root" && (
                     <NavDropdown title="Management" id="management-nav-dropdown" className="px-2">
                       <NavDropdown.Item as={Link} to="/admin/users">

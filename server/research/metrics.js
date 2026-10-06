@@ -98,7 +98,7 @@ function participationMetrics(runs) {
     if (counts.some((c) => c > 0)) turnBalances.push(balanceIndex(counts));
     for (const t of studentTurns) {
       if (t.endAt != null) closedTurns.push(t);
-      if (t.firstSubmitAt != null) latencies.push(t.firstSubmitAt - t.startAt);
+      if (t.latencyMs != null) latencies.push(t.latencyMs);
     }
   }
 
@@ -125,7 +125,7 @@ function participationMetrics(runs) {
       'Ended turns that ended because the instructor rotated the active student.',
       rate(closedTurns.filter((t) => t.reassignedByInstructor).length, closedTurns.length)),
     metric('turn_to_first_submit', 'Time from receiving the turn to first submit',
-      'Seconds from a turn starting to its holder\'s first group submit, for turns with a submit. Uncapped.',
+      'Seconds from a turn starting to its holder\'s first group submit, for turns with a submit. Instructor pauses excluded; otherwise uncapped.',
       summary(latencies.map(seconds), 'seconds')),
     metric('turn_instrumented_runs', 'Runs with full turn data',
       'Runs whose turn logging covers the whole run (first turn event no later than the first submit); turn, session-start, and intervention-rate metrics use only these runs.',

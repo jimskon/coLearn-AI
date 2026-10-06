@@ -12,7 +12,7 @@ const { linesFromStoredText, loadActivitySourceLines } = require('../utils/activ
 const RESEARCH_KEY_REGEXP =
   '^([0-9]+state|attempt:[0-9]+|[0-9]+[a-z]+(code[0-9]+|output|Output|FM|CodeAccepted|F1|CodeFeedback|S)?)$';
 
-const AUDIT_TYPES = ['active_student_changed', 'instructor_force_advance'];
+const AUDIT_TYPES = ['active_student_changed', 'instructor_force_advance', 'activity_paused', 'activity_resumed'];
 
 // Activity metadata is cached per source revision so repeated statistics
 // requests don't refetch remote documents.

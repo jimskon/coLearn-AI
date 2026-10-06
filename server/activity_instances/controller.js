@@ -9,7 +9,7 @@ const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { isFileResponseKey } = require('../utils/questionId');
-const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance } = require('../utils/turnEvents');
+const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange } = require('../utils/turnEvents');
 const { recordActivity } = require('../research/activityRecorder');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
@@ -2560,7 +2560,7 @@ async function setTimerPauseForActivity(req, res) {
 
   try {
     const [instances] = await db.query(
-      `SELECT id
+      `SELECT id, section_timer_paused AS wasPaused
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?`,
       [courseId, activityId]
@@ -2569,6 +2569,8 @@ async function setTimerPauseForActivity(req, res) {
     if (!instances.length) {
       return res.json({ ok: true, paused, updated: 0 });
     }
+    // Runs whose pause state actually changes, logged after the update.
+    const changed = instances.filter((i) => (Number(i.wasPaused) === 1) !== paused).map((i) => i.id);
 
     if (paused) {
       await db.query(
@@ -2597,6 +2599,8 @@ async function setTimerPauseForActivity(req, res) {
         [courseId, activityId]
       );
     }
+
+    for (const id of changed) recordPauseChange(req, id, paused);
 
     const [updatedRows] = await db.query(
       `SELECT id,

@@ -16,6 +16,7 @@
 //   'instructor_force_advance' {groupNum} (recorded from Phase 2 onward).
 
 const text = require('./text');
+const { pauseIntervals, activeWithin, pausedWithin } = require('./pauses');
 
 const DEFAULT_OPTIONS = Object.freeze({
   // Gaps between activity points longer than this count only up to this much
@@ -49,14 +50,18 @@ function asText(value) {
   return value == null ? '' : String(value);
 }
 
-// Time on task between start and end, counting each gap between consecutive
-// activity points (and the ends) only up to the idle threshold.
-function cappedSpan(startAt, endAt, points, idleThresholdMs) {
+// Time on task between start and end. Instructor pauses are removed first
+// (students cannot act while paused); then each gap between consecutive
+// activity points (and the ends) counts only up to the idle threshold.
+function cappedSpan(startAt, endAt, points, idleThresholdMs, pauses = []) {
   if (startAt == null || endAt == null || endAt < startAt) return null;
   const inside = points.filter((t) => t > startAt && t < endAt).sort((a, b) => a - b);
   const marks = [startAt, ...inside, endAt];
   let total = 0;
-  for (let i = 1; i < marks.length; i += 1) total += Math.min(marks[i] - marks[i - 1], idleThresholdMs);
+  for (let i = 1; i < marks.length; i += 1) {
+    const gap = marks[i] - marks[i - 1] - pausedWithin(pauses, marks[i - 1], marks[i], endAt);
+    total += Math.min(gap, idleThresholdMs);
+  }
   return total;
 }
 
@@ -166,6 +171,7 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
   const submits = buildSubmits(sortedRows);
   const sortedEvents = [...events].sort((a, b) => a.at - b.at || a.id - b.id);
   const turnEvents = sortedEvents.filter((e) => e.type === 'active_student_changed');
+  const pauses = pauseIntervals(sortedEvents);
   const forceAdvances = sortedEvents.filter((e) => e.type === 'instructor_force_advance');
 
   const activityPoints = [
@@ -290,12 +296,12 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
       enteredAt,
       firstAttemptAt: attempts[0]?.at ?? null,
       resolvedAt,
-      durationMs: cappedSpan(enteredAt, resolvedAt, activityPoints, opts.idleThresholdMs),
-      firstResponseMs: cappedSpan(enteredAt, attempts[0]?.at ?? null, activityPoints, opts.idleThresholdMs),
+      durationMs: cappedSpan(enteredAt, resolvedAt, activityPoints, opts.idleThresholdMs, pauses),
+      firstResponseMs: cappedSpan(enteredAt, attempts[0]?.at ?? null, activityPoints, opts.idleThresholdMs, pauses),
       // Gaps between consecutive evaluated attempts, each capped at the idle threshold.
       attemptGaps: attempts.slice(1).map((a, i) => ({
         afterDecision: attempts[i].decision,
-        ms: Math.min(a.at - attempts[i].at, opts.idleThresholdMs),
+        ms: Math.min(activeWithin(pauses, attempts[i].at, a.at, a.at), opts.idleThresholdMs),
       })),
     });
   }
@@ -332,6 +338,8 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
       endReason: next?.details?.reason ?? null,
       submits: own.length,
       firstSubmitAt: own[0]?.at ?? null,
+      // Time from getting the turn to the first submit, excluding pauses.
+      latencyMs: own[0] ? activeWithin(pauses, e.at, own[0].at, own[0].at) : null,
       // A turn taken away (absence, instructor, or another member claiming it)
       // with no submit by its holder. Open and completed-activity turns are not skipped.
       skipped:
@@ -413,6 +421,7 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
     questions,
     turns,
     turnCoverage, // 'none' | 'partial' | 'full'
+    pauses,
     turnsRecorded: fullTurnData,
     interventions,
     participation: { submitsByStudent, longestSubmitStreak: longestStreak },
@@ -421,11 +430,11 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
       startKnown: fullTurnData, // false: session start unknown (approximated by first activity)
       firstActivityAt,
       lastActivityAt,
-      durationMs: cappedSpan(sessionStartAt, lastActivityAt, activityPoints, opts.idleThresholdMs),
+      durationMs: cappedSpan(sessionStartAt, lastActivityAt, activityPoints, opts.idleThresholdMs, pauses),
       wallClockMs: sessionStartAt != null && lastActivityAt != null ? lastActivityAt - sessionStartAt : null,
       // Available for every run, including those before turn logging.
       submitSpanMs: submits.length
-        ? cappedSpan(submits[0].at, submits[submits.length - 1].at, activityPoints, opts.idleThresholdMs)
+        ? cappedSpan(submits[0].at, submits[submits.length - 1].at, activityPoints, opts.idleThresholdMs, pauses)
         : null,
     },
   };

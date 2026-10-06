@@ -10,6 +10,10 @@ const COLORS = {
   sandbox: { background: '#d1e7dd', border: '#75b798' },
   over: { background: '#ffe69c', border: '#cc9a06' },
 };
+const PAUSED_STYLE = {
+  background: 'repeating-linear-gradient(135deg, #e9ecef 0 4px, #f8f9fa 4px 8px)',
+  border: '#adb5bd',
+};
 const DOT_COLORS = { advanced: '#0d6efd', sent_back: '#dc3545', other: '#6c757d' };
 const IDLE_WARN_MS = 2 * 60 * 1000;
 
@@ -31,10 +35,11 @@ export function StripKeyButton() {
         <div className="mb-1">{swatch(COLORS.active)}Active: typing, running code, submitting, or waiting on the AI</div>
         <div className="mb-1">{swatch(COLORS.sandbox)}Only teammates working in their Local Sandbox</div>
         <div className="mb-1">{swatch({ background: '#fff', border: '#ced4da' })}Idle</div>
+        <div className="mb-1">{swatch(PAUSED_STYLE)}Paused by the instructor (never counted as idle or toward any time)</div>
         <div className="mb-1">{swatch(COLORS.over)}Active, but past the current section&apos;s planned minutes</div>
         <div className="mb-1">{dot(DOT_COLORS.advanced)}Submit accepted, group moved on</div>
         <div className="mb-2">{dot(DOT_COLORS.sent_back)}Submit sent back by the AI</div>
-        <div className="mb-1">Idle timer: time since the group&apos;s last activity; red after 2 minutes.</div>
+        <div className="mb-1">Idle timer: time since the group&apos;s last activity, not counting pauses; red after 2 minutes.</div>
         <div className="fw-semibold mt-3 mb-1">Observation tags</div>
         <div className="text-muted mb-2">Tap what you see. Tags appear as squares above the strip; undo for 10 s.</div>
         {OBSERVATION_LABELS.map((l) => (
@@ -92,6 +97,8 @@ export default function GroupActivityStrip({ live, now, sliceSeconds = 10, finis
         </span>
         {finished ? (
           <span className="text-muted">finished</span>
+        ) : strip.paused ? (
+          <span className="text-muted fw-semibold">paused</span>
         ) : (
           <span className={idle != null && idle >= IDLE_WARN_MS ? 'fw-semibold text-danger' : 'text-muted'}>
             idle {formatClock(idle)}
@@ -118,6 +125,13 @@ export default function GroupActivityStrip({ live, now, sliceSeconds = 10, finis
         style={{ position: 'relative', height: 16, border: '1px solid #ced4da', borderRadius: 3, background: '#fff' }}
         aria-label="Activity over time"
       >
+        {strip.pauses.map((p, i) => (
+          <div
+            key={`pause-${i}`}
+            title="Paused by the instructor"
+            style={{ position: 'absolute', top: 1, bottom: 1, left: `${p.left}%`, width: `${p.width}%`, background: PAUSED_STYLE.background }}
+          />
+        ))}
         {strip.segments.map((s, i) => (
           <div
             key={i}

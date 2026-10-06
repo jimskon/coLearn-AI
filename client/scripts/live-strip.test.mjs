@@ -52,3 +52,24 @@ test('observation tags are placed on the same scale', () => {
   }, T0 + 1 * MIN);
   assert.deepEqual(strip.tags, [{ left: 50, label: 'talk' }]);
 });
+
+test('paused time never counts: idle and section clocks stop, the plan shifts', () => {
+  const strip = computeStrip({
+    startAt: T0,
+    plannedMinutes: 10,
+    lastActivityAt: T0 + 1 * MIN,
+    slices: [[T0, FLAG_ACTIVE], [T0 + 11 * MIN, FLAG_ACTIVE]],
+    sections: [{ title: 'One', minutes: 10, enteredAt: T0 }],
+    pauses: [[T0 + 2 * MIN, T0 + 7 * MIN], [T0 + 12 * MIN, null]],
+  }, T0 + 15 * MIN);
+  assert.equal(strip.paused, true);
+  // Since last activity (minute 1) to now (15): 14 min minus 8 min paused = 6 min.
+  assert.equal(strip.idleMs, 6 * MIN);
+  // Unpaused time in the section: 15 - 8 = 7 min, so not over and not past the plan.
+  assert.equal(strip.section.elapsedMs, 7 * MIN);
+  assert.equal(strip.section.overMs, 0);
+  assert.equal(strip.plannedEndLeft, null);
+  // The slice at minute 11 is only 6 unpaused minutes in, so it is not "over".
+  assert.deepEqual(strip.segments.map((s) => s.kind), ['active', 'active']);
+  assert.equal(strip.pauses.length, 2);
+});

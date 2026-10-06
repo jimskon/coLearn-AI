@@ -104,6 +104,7 @@ All recording is fire-and-forget and never blocks or fails a classroom request. 
 |---|---|---|
 | Active-student changes, with the reason (`rotation_after_submit`, `instructor_rotate`, `absent_reassigned`, `all_absent`, `claimed`, `group_setup`, `solo_join`, `cleared_on_completion`) | `audit_log` (`active_student_changed`) | Every change |
 | Instructor force-advance | `audit_log` (`instructor_force_advance`) | Every force-advance |
+| Instructor pause and resume | `audit_log` (`activity_paused`, `activity_resumed`) | For each run whose pause state changes. Paused time is removed from every duration, idle timer, and section clock: students cannot act while paused, so it never counts as idle or as time spent. |
 | Activity per student per 10-second slice: edits, code runs, submits, Local Sandbox work, AI evaluation in progress | `group_activity_slices` | At most one write per student, kind, and slice |
 | Instructor observation tags, with context (question group, whether it has code, active student, seconds since last activity, AI evaluation in progress, last AI decision) | `instructor_observations` | When an instructor taps a tag (undo deletes it) |
 
@@ -128,7 +129,7 @@ Every rate shows its numerator and denominator (for example *23.2% · 527 / 2,26
 Use the **Classic | Observation** switch at the top of View Groups (remembered per browser). Classic is unchanged. Observation adds, for each group:
 
 - **Section status:** the current section and its time (for example *6:30 of 12 min*), or *+4:10 over* in amber.
-- **Idle timer:** time since the group's last activity, red after 2 minutes. AI evaluation counts as activity, not idle.
+- **Idle timer:** time since the group's last activity, red after 2 minutes. AI evaluation counts as activity, not idle. While the activity is paused, the timer reads *paused* and stops; section clocks stop too, and paused time shows on the strip as gray hatching.
 - **Activity strip**, from the start (left) to now (right), scaled to the activity's planned time (the sum of `\section{...}{minutes}`):
   - green: the group was active; light green: only teammates working in their Local Sandbox; white: idle;
   - yellow: activity after the group passed its current section's minutes (the section clock starts when the group enters the section);

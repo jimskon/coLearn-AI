@@ -63,3 +63,16 @@ test('observation tags are returned in time order', () => {
   });
   assert.deepEqual(live.tags, [[T0 + 1 * MIN, 'talk'], [T0 + 2 * MIN, 'quiet']]);
 });
+
+test('pause intervals come from pause/resume events; an open pause has no end', () => {
+  const live = buildLiveGroup({
+    meta: META,
+    slices: [{ at: T0, edits: 1 }],
+    events: [
+      { type: 'activity_paused', at: T0 + 1 * MIN },
+      { type: 'activity_resumed', at: T0 + 4 * MIN },
+      { type: 'activity_paused', at: T0 + 6 * MIN },
+    ],
+  });
+  assert.deepEqual(live.pauses, [[T0 + 1 * MIN, T0 + 4 * MIN], [T0 + 6 * MIN, null]]);
+});

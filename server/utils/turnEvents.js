@@ -48,4 +48,12 @@ function recordInstructorForceAdvance(req, instanceId, details) {
   });
 }
 
-module.exports = { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance };
+/** Log an instructor pausing or resuming a run (paused time is excluded from durations). */
+function recordPauseChange(req, instanceId, paused) {
+  void recordAuditEvent(paused ? 'activity_paused' : 'activity_resumed', {
+    req,
+    activityInstanceId: toId(instanceId),
+  });
+}
+
+module.exports = { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange };

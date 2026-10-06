@@ -803,7 +803,10 @@ export default function ActivityRemotePythonBlock({
       {codeFeedbackShown[responseKey] && (
         <div className="mt-2 p-3 border rounded bg-warning-subtle">
           <strong>AI Feedback:</strong>
-          <pre className="mb-0">{codeFeedbackShown[responseKey]}</pre>
+          {/* Prose, not code: wrap long lines but keep the AI's line breaks. */}
+          <div className="mb-0" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            {codeFeedbackShown[responseKey]}
+          </div>
         </div>
       )}
     </>

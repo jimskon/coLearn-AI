@@ -7,6 +7,7 @@
 const { buildSubmits } = require('./reconstruct');
 const { loadMeta } = require('./trace');
 const { SLICE_SECONDS } = require('./activityRecorder');
+const { pauseIntervals } = require('./pauses');
 
 const FLAG_ACTIVE = 1;  // edits, runs, submits by the group
 const FLAG_SANDBOX = 2; // Local Sandbox work by other members
@@ -80,6 +81,8 @@ function buildLiveGroup({ rows = [], events = [], slices = [], observations = []
     sections,
     groupsCompleted: exitAt.size,
     tags: [...observations].sort((a, b) => a.at - b.at).map((o) => [o.at, o.label]),
+    // Instructor pauses: [start, end|null]. Paused time is never idle.
+    pauses: pauseIntervals(events),
   };
 }
 
@@ -112,7 +115,8 @@ async function liveForActivity(db, courseId, activityId) {
   const [events] = await db.query(
     `SELECT activity_instance_id AS instanceId, event_type AS type, details, created_at AS createdAt
        FROM audit_log
-      WHERE activity_instance_id IN (?) AND event_type IN ('active_student_changed', 'instructor_force_advance')`,
+      WHERE activity_instance_id IN (?)
+        AND event_type IN ('active_student_changed', 'instructor_force_advance', 'activity_paused', 'activity_resumed')`,
     [ids]
   );
   let sliceRows = [];

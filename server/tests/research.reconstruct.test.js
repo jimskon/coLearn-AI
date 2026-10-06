@@ -364,3 +364,16 @@ test('a run whose turn logging began mid-run is partial: no turn or session-star
   assert.equal(question(r, '1a').attemptsToAcceptance, 2);
   assert.deepEqual([...r.participation.submitsByStudent.entries()], [[101, 1], [102, 1]]);
 });
+
+test('instructor pauses are removed from durations before idle capping', () => {
+  const t = makeTrace();
+  t.submit({ group: 1, user: 101, at: 0, advanced: true, answers: { '1a': 'a', '1aFM': 'accepted', '1b': 'b', '1bFM': 'accepted' } });
+  // Group 2 entered at minute 0; a 7-minute pause; accepted at minute 9.
+  t.submit({ group: 2, user: 102, at: 9, advanced: true, answers: { '2acode1': 'x', '2aCodeAccepted': 'true', '2b': 'Easy', '2bFM': 'accepted' } });
+  const events = [
+    { id: 1, type: 'activity_paused', at: T0 + 1 * MIN },
+    { id: 2, type: 'activity_resumed', at: T0 + 8 * MIN },
+  ];
+  const q = question(run(t, events), '2a');
+  assert.equal(q.durationMs, 2 * MIN); // 9 minutes minus the 7-minute pause
+});

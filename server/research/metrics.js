@@ -93,7 +93,7 @@ function participationMetrics(runs) {
   const closedTurns = [];
   const latencies = [];
   for (const run of turnRuns) {
-    const studentTurns = run.rec.turns.filter((t) => t.isStudent);
+    const studentTurns = run.rec.turns.filter((t) => t.isStudent && !t.transient);
     const counts = [...run.studentIds].map((id) => studentTurns.filter((t) => t.studentId === id).length);
     if (counts.some((c) => c > 0)) turnBalances.push(balanceIndex(counts));
     for (const t of studentTurns) {
@@ -127,9 +127,12 @@ function participationMetrics(runs) {
     metric('turn_to_first_submit', 'Time from receiving the turn to first submit',
       'Seconds from a turn starting to its holder\'s first group submit, for turns with a submit. Uncapped.',
       summary(latencies.map(seconds), 'seconds')),
-    metric('turn_instrumented_runs', 'Runs with turn data',
-      'Runs with recorded turn events; turn metrics use only these runs.',
+    metric('turn_instrumented_runs', 'Runs with full turn data',
+      'Runs whose turn logging covers the whole run (first turn event no later than the first submit); turn, session-start, and intervention-rate metrics use only these runs.',
       rate(turnRuns.length, runs.filter((r) => r.studentIds.size >= 2).length)),
+    metric('turn_partial_runs', 'Runs with partial turn data (set aside)',
+      'Runs where turn logging began partway through (submits before the first turn event). Excluded from turn metrics; still included in submit-based metrics.',
+      count(runs.filter((r) => r.rec.turnCoverage === 'partial').length)),
   ];
 }
 
@@ -219,8 +222,9 @@ function timeMetrics(runs, questions) {
   const firstRejectedMedian = durationSummary(firstRejected).median;
 
   return [
-    metric('activity_duration', 'Activity duration (active time)', 'Per run, start to last activity, with idle gaps capped at the idle threshold.', summary(runs.map((r) => seconds(r.rec.timing.durationMs)), 'seconds')),
-    metric('activity_wall_clock', 'Activity duration (wall clock)', 'Per run, start to last activity, uncapped.', summary(runs.map((r) => seconds(r.rec.timing.wallClockMs)), 'seconds')),
+    metric('activity_duration', 'Activity duration (active time)', 'Per run with turn data, session start (first student taking the turn) to last activity, with idle gaps capped at the idle threshold.', summary(runs.filter((r) => r.rec.timing.startKnown).map((r) => seconds(r.rec.timing.durationMs)), 'seconds')),
+    metric('activity_wall_clock', 'Activity duration (wall clock)', 'Per run with turn data, session start to last activity, uncapped.', summary(runs.filter((r) => r.rec.timing.startKnown).map((r) => seconds(r.rec.timing.wallClockMs)), 'seconds')),
+    metric('activity_submit_span', 'First to last submit (all runs)', 'Per run, first group submit to last group submit, idle-capped. Available for runs before turn logging; misses time before the first submit.', summary(runs.map((r) => seconds(r.rec.timing.submitSpanMs)), 'seconds')),
     metric('question_duration', 'Question duration', 'From the question group becoming current to resolution (acceptance or advance), idle-capped. Resolved evaluated questions.', durationSummary(resolved)),
     metric('time_to_first_response', 'Time to first answer', 'From the question group becoming current to the first evaluated attempt, idle-capped.', summary(evaluated.map((q) => seconds(q.firstResponseMs)), 'seconds')),
     metric('time_between_attempts', 'Time between attempts', 'Between consecutive evaluated attempts on a question, each capped at the idle threshold.', summary(gaps.map((g) => seconds(g.ms)), 'seconds')),

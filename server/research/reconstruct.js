@@ -173,7 +173,20 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
     ...turnEvents.map((e) => e.at),
     ...forceAdvances.map((e) => e.at),
   ].sort((a, b) => a - b);
-  const startAt = instance?.startAt ?? activityPoints[0] ?? null;
+  // The run's session starts when a student first takes the turn (opens the
+  // activity), recorded only in runs with turn events; otherwise at its first
+  // submit. activity_instances.start_time is not used: it is when the group was
+  // created, which can be days before the class met.
+  // Turn logging was deployed while runs were in progress. A run is fully
+  // covered only if its first turn event comes no later than its first submit;
+  // if submits precede it, logging started mid-run ('partial') and turn and
+  // session-start measures for that run would be wrong.
+  const firstSubmitAt = submits[0]?.at ?? null;
+  const turnCoverage = !turnEvents.length
+    ? 'none'
+    : (firstSubmitAt == null || turnEvents[0].at <= firstSubmitAt ? 'full' : 'partial');
+  const fullTurnData = turnCoverage === 'full';
+  const sessionStartAt = fullTurnData ? turnEvents[0].at : (activityPoints[0] ?? null);
   const firstActivityAt = activityPoints[0] ?? null;
   const lastActivityAt = activityPoints[activityPoints.length - 1] ?? null;
 
@@ -189,8 +202,11 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
     const g = Number(e.details?.groupNum);
     if (g && !groupExit.has(g)) groupExit.set(g, { at: e.at, how: 'instructor' });
   }
+  // The first question group becomes current when the session starts, which
+  // is known only from turn events; without them its entry time is unknown
+  // (null), not the first submit, which would make its timing look like zero.
   const groupEntry = (g) => {
-    if (g === groupNums[0] || g === 1) return firstActivityAt;
+    if (g === groupNums[0] || g === 1) return fullTurnData ? turnEvents[0].at : null;
     return groupExit.get(g - 1)?.at ?? null;
   };
 
@@ -293,9 +309,20 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
     if (holder == null) continue;
     const next = turnEvents[i + 1] || null;
     const endAt = next?.at ?? null;
+    // Timestamps are whole seconds, and a rotation_after_submit is logged in the
+    // same second as the submit that caused it, so that submit belongs to the
+    // turn it ends.
+    const endsBySubmit = next?.details?.reason === 'rotation_after_submit';
     const own = submits.filter(
-      (s) => s.userId === holder && s.at >= e.at && (endAt == null || s.at < endAt)
+      (s) => s.userId === holder && s.at >= e.at &&
+        (endAt == null || s.at < endAt || (endsBySubmit && s.at === endAt))
     );
+    // A turn the instructor gave and took back within a rotation burst (clicking
+    // rotate repeatedly) was never a real turn; metrics ignore it.
+    const transient =
+      e.details?.reason === 'instructor_rotate' &&
+      next?.details?.reason === 'instructor_rotate' &&
+      endAt - e.at < opts.rotationBurstMs;
     turns.push({
       studentId: holder,
       isStudent: studentIds.has(holder),
@@ -312,6 +339,7 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
         next != null &&
         ['absent_reassigned', 'all_absent', 'instructor_rotate', 'claimed'].includes(next.details?.reason),
       reassignedByInstructor: next?.details?.reason === 'instructor_rotate',
+      transient,
     });
   }
 
@@ -384,15 +412,21 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
     submits: submits.map(({ byKey, ...rest }) => rest),
     questions,
     turns,
-    turnsRecorded: turnEvents.length > 0,
+    turnCoverage, // 'none' | 'partial' | 'full'
+    turnsRecorded: fullTurnData,
     interventions,
     participation: { submitsByStudent, longestSubmitStreak: longestStreak },
     timing: {
-      startAt,
+      startAt: sessionStartAt,
+      startKnown: fullTurnData, // false: session start unknown (approximated by first activity)
       firstActivityAt,
       lastActivityAt,
-      durationMs: cappedSpan(startAt, lastActivityAt, activityPoints, opts.idleThresholdMs),
-      wallClockMs: startAt != null && lastActivityAt != null ? lastActivityAt - startAt : null,
+      durationMs: cappedSpan(sessionStartAt, lastActivityAt, activityPoints, opts.idleThresholdMs),
+      wallClockMs: sessionStartAt != null && lastActivityAt != null ? lastActivityAt - sessionStartAt : null,
+      // Available for every run, including those before turn logging.
+      submitSpanMs: submits.length
+        ? cappedSpan(submits[0].at, submits[submits.length - 1].at, activityPoints, opts.idleThresholdMs)
+        : null,
     },
   };
 }

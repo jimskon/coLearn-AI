@@ -306,3 +306,61 @@ test('a turn cleared because everyone left is logged as all_absent', () => {
   }
   assert.deepEqual(calls.map((c) => c.details.reason), ['all_absent', 'absent_reassigned']);
 });
+
+test('a submit and the rotation it causes share a second: the submit counts in the turn it ends', () => {
+  const t = makeTrace();
+  t.submit({ group: 1, user: 101, at: 2, advanced: false, sentBack: ['1a'], answers: { '1a': 'a', '1aFM': 'needsRevision', '1bFM': 'accepted' } });
+  const events = [
+    { id: 1, type: 'active_student_changed', at: T0 + 1 * MIN, userId: 101, details: { from: null, to: 101, reason: 'claimed' } },
+    { id: 2, type: 'active_student_changed', at: T0 + 2 * MIN, userId: 101, details: { from: 101, to: 102, reason: 'rotation_after_submit' } },
+  ];
+  const r = run(t, events);
+  assert.equal(r.turns[0].submits, 1);
+  assert.equal(r.turns[0].firstSubmitAt - r.turns[0].startAt, 1 * MIN);
+  assert.equal(r.turns[0].skipped, false);
+});
+
+test('turns inside an instructor rotation burst are transient', () => {
+  const t = makeTrace();
+  const ev = (id, sec, from, to, reason) => ({ id, type: 'active_student_changed', at: T0 + sec * 1000, userId: 9, details: { from, to, reason } });
+  const events = [
+    ev(1, 0, null, 101, 'claimed'),
+    ev(2, 60, 101, 102, 'instructor_rotate'),
+    ev(3, 61, 102, 101, 'instructor_rotate'),
+    ev(4, 62, 101, 102, 'instructor_rotate'),
+  ];
+  const r = run(t, events);
+  assert.deepEqual(r.turns.map((x) => x.transient), [false, true, true, false]);
+});
+
+test('without turn events the first group has no known entry time', () => {
+  const t = makeTrace();
+  t.submit({ group: 1, user: 101, at: 5, advanced: true, answers: { '1a': 'a', '1aFM': 'accepted', '1b': 'b', '1bFM': 'accepted' } });
+  const withoutTurns = run(t);
+  assert.equal(question(withoutTurns, '1a').enteredAt, null);
+  assert.equal(question(withoutTurns, '1a').durationMs, null);
+  assert.equal(withoutTurns.timing.startKnown, false);
+  assert.equal(withoutTurns.timing.submitSpanMs, 0);
+
+  const withTurns = run(t, [{ id: 1, type: 'active_student_changed', at: T0 + 1 * MIN, userId: 101, details: { from: null, to: 101, reason: 'claimed' } }]);
+  assert.equal(question(withTurns, '1a').enteredAt, T0 + 1 * MIN);
+  assert.equal(question(withTurns, '1a').durationMs, 4 * MIN);
+  assert.equal(question(withTurns, '1a').firstResponseMs, 4 * MIN);
+  assert.equal(withTurns.timing.startKnown, true);
+});
+
+test('a run whose turn logging began mid-run is partial: no turn or session-start data', () => {
+  const t = makeTrace();
+  t.submit({ group: 1, user: 101, at: 1, advanced: false, sentBack: ['1a'], answers: { '1a': 'a', '1aFM': 'needsRevision', '1bFM': 'accepted' } });
+  t.submit({ group: 1, user: 102, at: 9, advanced: true, answers: { '1a': 'b', '1aFM': 'accepted' } });
+  // Logging deployed between the two submits.
+  const events = [{ id: 1, type: 'active_student_changed', at: T0 + 5 * MIN, userId: 101, details: { from: 101, to: 102, reason: 'instructor_rotate' } }];
+  const r = run(t, events);
+  assert.equal(r.turnCoverage, 'partial');
+  assert.equal(r.turnsRecorded, false);
+  assert.equal(r.timing.startKnown, false);
+  assert.equal(question(r, '1a').enteredAt, null);
+  // Submit-based facts are unaffected.
+  assert.equal(question(r, '1a').attemptsToAcceptance, 2);
+  assert.deepEqual([...r.participation.submitsByStudent.entries()], [[101, 1], [102, 1]]);
+});

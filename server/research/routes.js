@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { canUseResearch, accessibleCourseIds, filterAccessibleCourses } = require('./access');
-const { computeForCourses, courseLabel } = require('./service');
+const { computeForCourses, reconstructRun, courseLabel } = require('./service');
 
 const MAX_COURSES = 200;
 
@@ -54,6 +54,23 @@ router.post('/metrics', async (req, res) => {
   } catch (err) {
     console.error('❌ research metrics:', err);
     res.status(500).json({ error: 'Failed to compute research metrics' });
+  }
+});
+
+// How one run was reconstructed (for checking rules against real class use).
+router.get('/runs/:instanceId', async (req, res) => {
+  if (!requireResearchUser(req, res)) return;
+  const instanceId = Number(req.params.instanceId);
+  if (!Number.isInteger(instanceId) || instanceId <= 0) return res.status(400).json({ error: 'Invalid run id' });
+  try {
+    const [[inst]] = await db.query('SELECT course_id AS courseId FROM activity_instances WHERE id = ?', [instanceId]);
+    if (!inst) return res.status(404).json({ error: 'Run not found' });
+    const allowed = await filterAccessibleCourses(db, req.user, [inst.courseId]);
+    if (!allowed.length) return res.status(403).json({ error: 'No access to this course' });
+    res.json(await reconstructRun(db, inst.courseId, instanceId, req.query));
+  } catch (err) {
+    console.error('❌ research run:', err);
+    res.status(500).json({ error: 'Failed to reconstruct run' });
   }
 });
 

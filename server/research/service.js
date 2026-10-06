@@ -99,4 +99,54 @@ async function computeForCourses(db, courseIds, params = {}) {
   };
 }
 
-module.exports = { computeForCourses, buildRuns, applyFilters, parseOptions, courseLabel };
+// One run's reconstruction, for checking the rules against what happened in
+// class. Maps and Sets are converted so the result is plain JSON.
+async function reconstructRun(db, courseId, instanceId, params = {}) {
+  const options = parseOptions(params);
+  const trace = await loadResearchTrace(db, { courseIds: [courseId] });
+  const run = buildRuns(trace, options.reconstruct).find((r) => r.instanceId === instanceId);
+  if (!run) {
+    return { instanceId, included: false, excluded: trace.excluded };
+  }
+  const iso = (ms) => (ms == null ? null : new Date(ms).toISOString());
+  const { rec } = run;
+  return {
+    instanceId,
+    included: true,
+    groupSize: run.groupSize,
+    studentIds: [...run.studentIds],
+    turnCoverage: rec.turnCoverage,
+    timing: {
+      ...rec.timing,
+      startAt: iso(rec.timing.startAt),
+      firstActivityAt: iso(rec.timing.firstActivityAt),
+      lastActivityAt: iso(rec.timing.lastActivityAt),
+    },
+    submits: rec.submits.map((s) => ({ ...s, at: iso(s.at) })),
+    questions: rec.questions.map((q) => ({
+      qid: q.qid,
+      questionType: q.questionType,
+      hasCode: q.hasCode,
+      isSurvey: q.isSurvey,
+      outcome: q.outcome,
+      firstDecision: q.firstDecision,
+      attemptsToAcceptance: q.attemptsToAcceptance,
+      maxRetriesReached: q.maxRetriesReached,
+      attempts: q.attempts.map((a) => ({ number: a.number, at: iso(a.at), userId: a.userId, decision: a.decision, feedback: a.feedback })),
+      versions: q.versions.length,
+      revisions: q.revisions,
+      enteredAt: iso(q.enteredAt),
+      resolvedAt: iso(q.resolvedAt),
+      durationSeconds: q.durationMs == null ? null : q.durationMs / 1000,
+      firstResponseSeconds: q.firstResponseMs == null ? null : q.firstResponseMs / 1000,
+    })),
+    turns: rec.turns.map((t) => ({ ...t, startAt: iso(t.startAt), endAt: iso(t.endAt), firstSubmitAt: iso(t.firstSubmitAt) })),
+    interventions: rec.interventions.map((i) => ({ ...i, at: iso(i.at) })),
+    participation: {
+      submitsByStudent: Object.fromEntries(rec.participation.submitsByStudent),
+      longestSubmitStreak: rec.participation.longestSubmitStreak,
+    },
+  };
+}
+
+module.exports = { computeForCourses, reconstructRun, buildRuns, applyFilters, parseOptions, courseLabel };

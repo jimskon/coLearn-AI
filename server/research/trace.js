@@ -185,4 +185,4 @@ async function loadResearchTrace(db, { courseIds, from = null, to = null }) {
   };
 }
 
-module.exports = { loadResearchTrace, RESEARCH_KEY_REGEXP };
+module.exports = { loadResearchTrace, loadMeta, RESEARCH_KEY_REGEXP };

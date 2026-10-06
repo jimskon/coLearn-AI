@@ -10,6 +10,7 @@ import 'prismjs/components/prism-clike';
 import 'prismjs/components/prism-c';
 import 'prismjs/components/prism-cpp';
 import useCodeHistory from '../../hooks/useCodeHistory';
+import { signalActivity } from '../../utils/activitySignals';
 
 export default function ActivityCppBlock({
   code: initialCode,
@@ -381,6 +382,7 @@ export default function ActivityCppBlock({
 
   // --- unified run: interactive + sheet files ---
   const runInteractive = async () => {
+    signalActivity('run');
     if (!runnerEnabled) {
       term.current?.writeln('\r\n[Remote C++ runtime is disabled on this server]');
       return;

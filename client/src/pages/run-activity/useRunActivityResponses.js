@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { API_BASE_URL } from '../../config';
+import { signalActivity } from '../../utils/activitySignals';
 
 export default function useRunActivityResponses({
   instanceId,
@@ -75,6 +76,7 @@ export default function useRunActivityResponses({
   }, []);
 
   const updateLocalCode = useCallback((rk, code) => {
+    signalActivity('sandbox');
     setLastEditTs(Date.now());
     dirtyKeysRef.current.add(rk);
     setLocalCode((prev) => ({ ...prev, [rk]: code }));

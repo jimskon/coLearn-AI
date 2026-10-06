@@ -3,6 +3,7 @@ const router = express.Router();
 const db = require('../db');
 const { canUseResearch, accessibleCourseIds, filterAccessibleCourses } = require('./access');
 const { computeForCourses, reconstructRun, courseLabel } = require('./service');
+const { liveForActivity } = require('./live');
 
 const MAX_COURSES = 200;
 
@@ -71,6 +72,22 @@ router.get('/runs/:instanceId', async (req, res) => {
   } catch (err) {
     console.error('❌ research run:', err);
     res.status(500).json({ error: 'Failed to reconstruct run' });
+  }
+});
+
+// Live activity timelines for one activity's groups (View Groups, Observation view).
+router.get('/live/:courseId/:activityId', async (req, res) => {
+  if (!requireResearchUser(req, res)) return;
+  const courseId = Number(req.params.courseId);
+  const activityId = Number(req.params.activityId);
+  if (!(courseId > 0) || !(activityId > 0)) return res.status(400).json({ error: 'Invalid course or activity' });
+  try {
+    const allowed = await filterAccessibleCourses(db, req.user, [courseId]);
+    if (!allowed.length) return res.status(403).json({ error: 'No access to this course' });
+    res.json(await liveForActivity(db, courseId, activityId));
+  } catch (err) {
+    console.error('❌ research live:', err);
+    res.status(500).json({ error: 'Failed to load live activity' });
   }
 });
 

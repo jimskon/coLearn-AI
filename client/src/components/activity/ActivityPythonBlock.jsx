@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Form, Button } from 'react-bootstrap';
 import Prism from 'prismjs';
+import { signalActivity } from '../../utils/activitySignals';
 import { runSkulptCode } from '../../utils/runSkulptCode';
 import useCodeHistory from '../../hooks/useCodeHistory';
 
@@ -189,6 +190,7 @@ export default function ActivityPythonBlock({
   };
 
   const runPython = () => {
+    signalActivity('run');
     if (editable && code !== savedCode) {
       sendUpstream(code, { broadcastOnly: false });
       setSavedCode(code);

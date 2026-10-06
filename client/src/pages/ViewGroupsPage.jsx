@@ -18,6 +18,7 @@ import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
 import { FaUserCheck, FaLaptop, FaRandom } from 'react-icons/fa';
 import { formatUtcToLocal, parseUtcDbDatetime } from '../utils/time';
+import GroupActivityStrip, { StripLegend } from '../components/research/GroupActivityStrip';
 
 function progressLabelFromInstanceRow(g) {
   // For assignments, use submitted_at / has_responses rather than the
@@ -223,6 +224,28 @@ export default function ViewGroupsPage() {
   const [rotationMode, setRotationMode] = useState('submit');
   const [updatingRotationMode, setUpdatingRotationMode] = useState(false);
   const [rotatingGroups, setRotatingGroups] = useState(new Set());
+
+  // Classic view vs Observation view (activity strip and idle timer per group),
+  // remembered per browser.
+  const VIEW_MODE_KEY = 'colearn.viewGroups.viewMode';
+  const [viewMode, setViewMode] = useState(() => {
+    try {
+      return window.localStorage.getItem(VIEW_MODE_KEY) === 'observation' ? 'observation' : 'classic';
+    } catch {
+      return 'classic';
+    }
+  });
+  const isObservationView = viewMode === 'observation';
+  const changeViewMode = (mode) => {
+    setViewMode(mode);
+    try { window.localStorage.setItem(VIEW_MODE_KEY, mode); } catch { /* storage unavailable */ }
+  };
+  const [liveData, setLiveData] = useState(null);
+  const [liveError, setLiveError] = useState('');
+  const [liveNowMs, setLiveNowMs] = useState(() => Date.now());
+  // Server clock minus this browser's clock, captured at each fetch, so idle
+  // timers use the server's notion of now.
+  const [liveClockOffset, setLiveClockOffset] = useState(0);
   const [timerNowMs, setTimerNowMs] = useState(() => Date.now());
   const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   // Due date editing state (assignment mode)
@@ -355,6 +378,37 @@ export default function ViewGroupsPage() {
     }, 5000);
     return () => clearInterval(interval);
   }, [courseId, activityId]);
+
+  // Observation view: live activity every 10 s; clocks tick every second.
+  useEffect(() => {
+    if (!isObservationView || !courseId || !activityId) return undefined;
+    let cancelled = false;
+    const loadLive = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/research/live/${courseId}/${activityId}`, { credentials: 'include' });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(json?.error || 'Could not load activity timelines');
+        if (!cancelled) {
+          setLiveData(json);
+          setLiveError('');
+          if (json?.now) setLiveClockOffset(json.now - Date.now());
+          setLiveNowMs(Date.now());
+        }
+      } catch (err) {
+        if (!cancelled) setLiveError(err?.message || 'Could not load activity timelines');
+      }
+    };
+    loadLive();
+    const poll = setInterval(loadLive, 10000);
+    const tick = setInterval(() => setLiveNowMs(Date.now()), 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+      clearInterval(tick);
+    };
+  }, [isObservationView, courseId, activityId]);
+
+  const liveByInstance = new Map((liveData?.groups || []).map((g) => [Number(g.instanceId), g]));
 
   const refreshStudents = async () => {
     try {
@@ -869,13 +923,30 @@ export default function ViewGroupsPage() {
             </h2>
             {courseName && <div className="text-muted">{courseName}</div>}
           </div>
-          <Button
-            variant={timerButtonVariant}
-            onClick={handleTogglePause}
-            disabled={togglingPause}
-          >
-            {togglingPause ? 'Updating…' : timerButtonLabel}
-          </Button>
+          <div className="d-flex align-items-center gap-2 flex-wrap">
+            <ButtonGroup size="sm" aria-label="View">
+              <Button
+                variant={isObservationView ? 'outline-secondary' : 'secondary'}
+                onClick={() => changeViewMode('classic')}
+              >
+                Classic
+              </Button>
+              <Button
+                variant={isObservationView ? 'secondary' : 'outline-secondary'}
+                onClick={() => changeViewMode('observation')}
+                title="Activity strip and idle timer for each group"
+              >
+                Observation
+              </Button>
+            </ButtonGroup>
+            <Button
+              variant={timerButtonVariant}
+              onClick={handleTogglePause}
+              disabled={togglingPause}
+            >
+              {togglingPause ? 'Updating…' : timerButtonLabel}
+            </Button>
+          </div>
         </div>
 
         {isDemoClass && (
@@ -1037,6 +1108,18 @@ export default function ViewGroupsPage() {
           )}
 
           {/* ── Activity / test mode: card grid ── */}
+          {activityType !== 'assignment' && isObservationView && (
+            <>
+              {liveError ? <Alert variant="warning" className="py-2">{liveError}</Alert> : null}
+              {liveData && liveData.slicesAvailable === false ? (
+                <Alert variant="info" className="py-2">
+                  Activity recording is not set up on this server yet (database migration 025).
+                  Submits are shown; activity blocks will appear once it is.
+                </Alert>
+              ) : null}
+              <StripLegend />
+            </>
+          )}
           {activityType !== 'assignment' && (
           <Row>
           {groups.map((group) => {
@@ -1048,7 +1131,7 @@ export default function ViewGroupsPage() {
             const canRotateActive = !isComplete && connectedMembers.length > 1;
 
             return (
-              <Col lg={4} md={6} sm={12} key={group.instance_id}>
+              <Col lg={isObservationView ? 6 : 4} md={isObservationView ? 12 : 6} sm={12} key={group.instance_id}>
                 <Card className="mb-3">
                   <Card.Header className="d-flex justify-content-between align-items-center flex-wrap">
                     <div>
@@ -1107,6 +1190,16 @@ export default function ViewGroupsPage() {
                   </Card.Header>
 
                   <Card.Body>
+                    {isObservationView ? (
+                      <div className="mb-3">
+                        <GroupActivityStrip
+                          live={liveByInstance.get(instanceId)}
+                          now={liveNowMs + liveClockOffset}
+                          sliceSeconds={liveData?.sliceSeconds || 10}
+                          finished={isComplete}
+                        />
+                      </div>
+                    ) : null}
                     <ul>
                       {(group.members || []).map((m, i) => (
                         <li key={i}>

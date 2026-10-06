@@ -7,6 +7,7 @@ import 'xterm/css/xterm.css';
 
 import 'prismjs/components/prism-python';
 import useCodeHistory from '../../hooks/useCodeHistory';
+import { signalActivity } from '../../utils/activitySignals';
 
 export default function ActivityRemotePythonBlock({
   code: initialCode,
@@ -361,6 +362,7 @@ export default function ActivityRemotePythonBlock({
   }, [responseKey]);
 
   const runInteractive = async () => {
+    signalActivity('run');
     if (!runnerEnabled) {
       term.current?.writeln('\r\n[Remote Python runtime is disabled on this server]');
       return;

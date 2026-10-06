@@ -49,6 +49,9 @@ router.post('/:instanceId/heartbeat', controller.recordHeartbeat);
 // Page is closing or reloading (navigator.sendBeacon)
 router.post('/:instanceId/leave', controller.recordLeave);
 
+// Content-free activity signals for the research timeline (code runs, Local Sandbox)
+router.post('/:instanceId/activity', controller.recordClientActivity);
+
 // ✅ Get active student for an activity instance (auto-assign if none)
 router.get('/:instanceId/active-student', controller.getActiveStudent);
 

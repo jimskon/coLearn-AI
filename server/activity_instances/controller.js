@@ -10,6 +10,7 @@ const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
 const { isFileResponseKey } = require('../utils/questionId');
 const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance } = require('../utils/turnEvents');
+const { recordActivity } = require('../research/activityRecorder');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
@@ -1448,6 +1449,16 @@ async function recordHeartbeat(req, res) {
 }
 
 
+// Activity the server cannot see directly: code runs (C++ goes straight to the
+// runner, Python runs in the browser) and Local Sandbox work. Content-free;
+// uses the session user only.
+const CLIENT_ACTIVITY_KINDS = { run: 'runs', sandbox: 'sandbox' };
+async function recordClientActivity(req, res) {
+  const kind = CLIENT_ACTIVITY_KINDS[String(req.body?.kind || '')];
+  if (kind) recordActivity(Number(req.params.instanceId), req.user?.id, kind);
+  return res.status(204).end();
+}
+
 // The student's page is going away (tab closed, navigation, reload). Mark them
 // as absent LEAVE_GRACE_SEC from now unless they check in again. Sent with
 // navigator.sendBeacon, so it uses the session user, never a body value.
@@ -2183,6 +2194,7 @@ async function submitGroupResponses(req, res) {
 
     await conn.commit();
     if (turnChange) recordTurnChange(req, instanceId, ...turnChange);
+    recordActivity(instanceId, studentId, 'submits');
 
     // 🔥 NEW: clear drafts after successful submit
     await db.query(
@@ -3803,6 +3815,7 @@ async function verifyAccessCode(req, res) {
 }
 
 module.exports = {
+  recordClientActivity,
   recordLeave,
   clearResponsesForInstance,
   recordTestFocusLoss,

@@ -110,6 +110,7 @@ app.use('/api/activity-instances', require('./activity_instances/routes'));
 app.use('/api/demo', require('./demo/routes'));
 app.use('/api/audit', require('./audit/routes'));
 app.use('/api/stats', require('./stats/routes'));
+app.use('/api/research', require('./research/routes'));
 app.use('/api/runtime', require('./runtime/routes'));
 
 

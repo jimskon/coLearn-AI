@@ -275,6 +275,12 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
       firstAttemptAt: attempts[0]?.at ?? null,
       resolvedAt,
       durationMs: cappedSpan(enteredAt, resolvedAt, activityPoints, opts.idleThresholdMs),
+      firstResponseMs: cappedSpan(enteredAt, attempts[0]?.at ?? null, activityPoints, opts.idleThresholdMs),
+      // Gaps between consecutive evaluated attempts, each capped at the idle threshold.
+      attemptGaps: attempts.slice(1).map((a, i) => ({
+        afterDecision: attempts[i].decision,
+        ms: Math.min(a.at - attempts[i].at, opts.idleThresholdMs),
+      })),
     });
   }
 

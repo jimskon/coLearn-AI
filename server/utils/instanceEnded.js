@@ -9,13 +9,31 @@ const db = require('../db');
 let ensured = false;
 let ensurePromise = null;
 
+// Look the column up first: ALTER TABLE ... IF NOT EXISTS still waits for a
+// metadata lock even when the column exists, and an open transaction on
+// activity_instances anywhere would block it (for up to a year by default).
+// When the column really is missing, the ALTER gives up after 5 seconds and
+// is retried on the next call.
+async function addEndedAtIfMissing() {
+  const [[row]] = await db.query(
+    `SELECT COUNT(*) AS n
+       FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'activity_instances'
+        AND COLUMN_NAME = 'ended_at'`
+  );
+  if (Number(row?.n) > 0) return;
+  await db.query(`
+    SET STATEMENT lock_wait_timeout = 5 FOR
+    ALTER TABLE activity_instances
+      ADD COLUMN IF NOT EXISTS ended_at DATETIME NULL DEFAULT NULL
+  `);
+}
+
 async function ensureEndedAtSchema() {
   if (ensured) return;
   if (!ensurePromise) {
-    ensurePromise = db.query(`
-      ALTER TABLE activity_instances
-        ADD COLUMN IF NOT EXISTS ended_at DATETIME NULL DEFAULT NULL
-    `)
+    ensurePromise = addEndedAtIfMissing()
       .then(() => { ensured = true; })
       .catch((err) => {
         ensurePromise = null;

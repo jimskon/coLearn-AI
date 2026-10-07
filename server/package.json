@@ -6,7 +6,7 @@
   "scripts": {
     "lint:syntax": "node scripts/check-syntax.js",
     "test:unit": "node --test $(ls tests/*.test.js | grep -v '[.]db[.]test[.]js$')",
-    "test:db": "NODE_OPTIONS='--require ./tests/support/testDbGuard.js' node --test --test-concurrency=1 tests/*.db.test.js",
+    "test:db": "NODE_OPTIONS='--require ./tests/support/testDbGuard.js' node --test --test-concurrency=1 --test-timeout=120000 tests/*.db.test.js",
     "test": "npm run lint:syntax && npm run test:unit && npm run test:db",
     "test:ci": "npm test",
     "start": "node index.js"

@@ -7,6 +7,9 @@ const router = express.Router();
 const { sendCodeEmail } = require('../utils/mailDelivery');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
 const { recordAuditEvent } = require('../utils/auditLogger');
+const { recordPresenceChange } = require('../utils/turnEvents');
+// Matches PRESENCE_WINDOW_SEC in activity_instances/controller.js.
+const LOGOUT_PRESENCE_WINDOW_SEC = 120;
 
 
 // ===== Config =====
@@ -605,13 +608,30 @@ router.post('/logout', async (req, res) => {
   const userId = Number(req.session?.userId || req.user?.id);
   if (userId) {
     try {
+      // Runs they were in just now: each records a departure.
+      const [present] = await pool.query(
+        `SELECT gm.activity_instance_id AS instanceId
+           FROM group_members gm
+           JOIN activity_instances ai ON ai.id = gm.activity_instance_id
+          WHERE gm.student_id = ? AND ai.progress_status <> 'completed'
+            AND gm.last_heartbeat >= NOW() - INTERVAL ? SECOND`,
+        [userId, LOGOUT_PRESENCE_WINDOW_SEC]
+      );
+      // Mark them away, keeping when they were last here (not NULL): research
+      // timing and Ended - incomplete (research/autoEnd.js) both measure how
+      // long everyone has been gone from it.
       await pool.query(
         `UPDATE group_members gm
            JOIN activity_instances ai ON ai.id = gm.activity_instance_id
-            SET gm.last_heartbeat = NULL, gm.connected = FALSE
+            SET gm.last_heartbeat = LEAST(
+                  COALESCE(gm.last_heartbeat, NOW()),
+                  NOW() - INTERVAL ? SECOND
+                ),
+                gm.connected = FALSE
           WHERE gm.student_id = ? AND ai.progress_status <> 'completed'`,
-        [userId]
+        [LOGOUT_PRESENCE_WINDOW_SEC + 1, userId]
       );
+      for (const { instanceId } of present) recordPresenceChange(req, instanceId, 'left');
     } catch (err) {
       console.error('Logout presence update failed:', err);
     }

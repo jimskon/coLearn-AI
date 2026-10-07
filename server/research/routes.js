@@ -4,6 +4,7 @@ const db = require('../db');
 const { canUseResearch, accessibleCourseIds, filterAccessibleCourses } = require('./access');
 const { computeForCourses, exportDataset, reconstructRun, courseLabel } = require('./service');
 const { DATASETS } = require('./exports');
+const { ensureEndedAtSchema } = require('../utils/instanceEnded');
 const { liveForActivity } = require('./live');
 const { ObservationError, createObservation, deleteObservation } = require('./observations');
 
@@ -53,6 +54,7 @@ router.post('/metrics', async (req, res) => {
   try {
     const courseIds = await filterAccessibleCourses(db, req.user, requested);
     if (!courseIds.length) return res.status(403).json({ error: 'No access to the selected courses' });
+    await ensureEndedAtSchema();
     res.json(await computeForCourses(db, courseIds, req.body));
   } catch (err) {
     console.error('❌ research metrics:', err);
@@ -78,6 +80,7 @@ router.post('/exports/:dataset', async (req, res) => {
   try {
     const courseIds = await filterAccessibleCourses(db, req.user, requested);
     if (!courseIds.length) return res.status(403).json({ error: 'No access to the selected courses' });
+    await ensureEndedAtSchema();
     const { rows, csv } = await exportDataset(db, courseIds, dataset, req.body);
     res.set('Content-Type', 'text/csv; charset=utf-8');
     res.set('X-Row-Count', String(rows));
@@ -98,6 +101,7 @@ router.get('/runs/:instanceId', async (req, res) => {
     if (!inst) return res.status(404).json({ error: 'Run not found' });
     const allowed = await filterAccessibleCourses(db, req.user, [inst.courseId]);
     if (!allowed.length) return res.status(403).json({ error: 'No access to this course' });
+    await ensureEndedAtSchema();
     res.json(await reconstructRun(db, inst.courseId, instanceId, req.query));
   } catch (err) {
     console.error('❌ research run:', err);

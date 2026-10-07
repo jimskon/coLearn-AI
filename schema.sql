@@ -81,6 +81,7 @@ CREATE TABLE `activity_instances` (
   `sandbox_owner_id` int(11) DEFAULT NULL,
   `randomize_order` tinyint(1) NOT NULL DEFAULT 0,
   `test_access_code` varchar(6) DEFAULT NULL COMMENT '6-char code students must enter to start a test; NULL means no code required',
+  `ended_at` datetime DEFAULT NULL COMMENT 'Ended - incomplete: all students away 15+ min before finishing (NULL = open)',
   PRIMARY KEY (`id`),
   KEY `active_student_id` (`active_student_id`),
   KEY `idx_ai_progress_status` (`progress_status`),

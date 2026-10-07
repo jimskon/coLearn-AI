@@ -68,7 +68,7 @@ export function StripKeyButton() {
   );
 }
 
-export default function GroupActivityStrip({ live, now, sliceSeconds = 10, finished = false }) {
+export default function GroupActivityStrip({ live, now, sliceSeconds = 10, finished = false, finishedLabel = 'finished' }) {
   const strip = computeStrip(live, now, sliceSeconds);
 
   if (!strip.started) {
@@ -96,7 +96,7 @@ export default function GroupActivityStrip({ live, now, sliceSeconds = 10, finis
             : null}
         </span>
         {finished ? (
-          <span className="text-muted">finished</span>
+          <span className="text-muted">{finishedLabel}</span>
         ) : strip.paused ? (
           <span className="text-muted fw-semibold">paused</span>
         ) : (

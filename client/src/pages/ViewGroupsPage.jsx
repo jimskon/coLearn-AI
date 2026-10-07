@@ -36,6 +36,7 @@ function progressLabelFromInstanceRow(g) {
   const status = String(g.progress_status || '').toLowerCase();
 
   if (status === 'completed') return 'Activity complete';
+  if (g.ended_at) return 'Ended – incomplete';
   if (status === 'not_started') return 'Not started';
 
   if (tg > 0) return `Question Group ${Math.min(cg + 1, tg)} of ${tg}`;
@@ -173,6 +174,11 @@ function getGroupTimerState(group, nowMs) {
   const pausedAt = group.section_timer_paused_at
     ? parseUtcDbDatetime(group.section_timer_paused_at)
     : null;
+
+  // Ended - incomplete: the section clock no longer matters.
+  if (group.ended_at && String(group.progress_status || '').toLowerCase() !== 'completed') {
+    return { label: 'Ended', bg: 'secondary', text: 'light' };
+  }
 
   if (paused) {
     return { label: 'Paused', bg: 'secondary', text: 'light' };
@@ -706,6 +712,25 @@ export default function ViewGroupsPage() {
     }
   };
 
+  // Reopen a run ended because everyone left (Ended - incomplete).
+  const reopenGroup = async (instanceId) => {
+    setAdvancing((s) => new Set(s).add(instanceId));
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/reopen`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { alert(data.error || 'Failed to reopen'); return; }
+      await fetchGroups();
+    } catch (err) {
+      console.error('reopen failed:', err);
+      alert('Failed to reopen the activity');
+    } finally {
+      setAdvancing((s) => { const n = new Set(s); n.delete(instanceId); return n; });
+    }
+  };
+
   const forceAdvanceGroup = async (instanceId) => {
     setAdvancing((s) => new Set(s).add(instanceId));
     try {
@@ -1137,7 +1162,8 @@ export default function ViewGroupsPage() {
             const instanceId = Number(group.instance_id);
             const connectedMembers = getConnectedMembers(group);
             const activeMember = getActiveMember(group);
-            const canRotateActive = !isComplete && connectedMembers.length > 1;
+            const isEnded = !!group.ended_at && !isComplete;
+            const canRotateActive = !isComplete && !isEnded && connectedMembers.length > 1;
             const memberList = (
               <ul className={isObservationView ? 'small ps-3 mb-0' : undefined}>
                 {(group.members || []).map((m, i) => (
@@ -1173,6 +1199,17 @@ export default function ViewGroupsPage() {
                         {timerState.label}
                       </Badge>
                       {isObservationView ? <StripKeyButton /> : null}
+                      {isEnded ? (
+                        <Button
+                          variant="outline-success"
+                          size="sm"
+                          disabled={advancing.has(instanceId)}
+                          onClick={() => reopenGroup(instanceId)}
+                          title="Everyone left for 15+ minutes before finishing, so this run was ended. Reopen lets the group continue."
+                        >
+                          {advancing.has(instanceId) ? 'Reopening…' : 'Reopen'}
+                        </Button>
+                      ) : null}
                       {canRotateActive ? (
                         <Button
                           variant="outline-secondary"
@@ -1227,7 +1264,8 @@ export default function ViewGroupsPage() {
                             live={liveByInstance.get(instanceId)}
                             now={liveNowMs + liveClockOffset}
                             sliceSeconds={liveData?.sliceSeconds || 10}
-                            finished={isComplete}
+                            finished={isComplete || isEnded}
+                            finishedLabel={isEnded ? 'ended – incomplete' : 'finished'}
                           />
                           <div className="mt-2">{memberList}</div>
                         </div>

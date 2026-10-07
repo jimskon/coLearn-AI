@@ -45,10 +45,11 @@ function buildRuns(trace, reconstructOptions = {}) {
     const members = trace.membersByInstance.get(instance.id) || [];
     const studentIds = new Set(members.filter((m) => m.isStudent).map((m) => m.studentId));
     const rec = reconstructInstance({
-      instance: { id: instance.id, startAt: instance.startAt },
+      instance: { id: instance.id, startAt: instance.startAt, endedAt: instance.endedAt ?? null },
       members,
       rows: trace.rowsByInstance.get(instance.id) || [],
       events: trace.eventsByInstance.get(instance.id) || [],
+      slices: trace.slicesByInstance?.get(instance.id) || [],
       meta: activity?.meta || { questions: new Map() },
       options: reconstructOptions,
     });
@@ -59,6 +60,10 @@ function buildRuns(trace, reconstructOptions = {}) {
       startAt: instance.startAt,
       groupSize: studentIds.size,
       studentIds,
+      // completed | ended_incomplete (everyone left before finishing) | in_progress
+      status: String(instance.progressStatus || '') === 'completed'
+        ? 'completed'
+        : (instance.endedAt != null ? 'ended_incomplete' : 'in_progress'),
       rec,
     });
   }
@@ -130,6 +135,7 @@ async function reconstructRun(db, courseId, instanceId, params = {}) {
   return {
     instanceId,
     included: true,
+    status: run.status,
     groupSize: run.groupSize,
     studentIds: [...run.studentIds],
     turnCoverage: rec.turnCoverage,
@@ -157,6 +163,7 @@ async function reconstructRun(db, courseId, instanceId, params = {}) {
       durationSeconds: q.durationMs == null ? null : q.durationMs / 1000,
       firstResponseSeconds: q.firstResponseMs == null ? null : q.firstResponseMs / 1000,
     })),
+    away: rec.away.map(([a, b]) => [iso(a), iso(b)]),
     turns: rec.turns.map((t) => ({ ...t, startAt: iso(t.startAt), endAt: iso(t.endAt), firstSubmitAt: iso(t.firstSubmitAt) })),
     interventions: rec.interventions.map((i) => ({ ...i, at: iso(i.at) })),
     participation: {

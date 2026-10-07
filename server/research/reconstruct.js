@@ -17,6 +17,7 @@
 
 const text = require('./text');
 const { pauseIntervals, activeWithin, pausedWithin } = require('./pauses');
+const { awayIntervals, mergeIntervals } = require('./presence');
 
 const DEFAULT_OPTIONS = Object.freeze({
   // Gaps between activity points longer than this count only up to this much
@@ -50,8 +51,8 @@ function asText(value) {
   return value == null ? '' : String(value);
 }
 
-// Time on task between start and end. Instructor pauses are removed first
-// (students cannot act while paused); then each gap between consecutive
+// Time on task between start and end. Excluded time (instructor pauses, and
+// periods when no student was in the activity) is removed first; then each gap between consecutive
 // activity points (and the ends) counts only up to the idle threshold.
 function cappedSpan(startAt, endAt, points, idleThresholdMs, pauses = []) {
   if (startAt == null || endAt == null || endAt < startAt) return null;
@@ -163,9 +164,16 @@ function compareVersions(before, after, hasCode) {
  * @param {Array<{studentId:number, isStudent:boolean}>} input.members
  * @param {Array<{id, submitId, questionId, response, userId, at}>} input.rows  (at = epoch ms)
  * @param {Array<{id, type, at, userId, details}>} input.events
+ * @param {number[]} input.slices  start (epoch ms) of each 10-second slice with activity
  * @param {{questions: Map}} input.meta  from shared/activityResearchMeta.cjs
  */
-function reconstructInstance({ instance, members = [], rows = [], events = [], meta, options = {} }) {
+// Turn changes that show a student acting or arriving. The others are logged
+// when the system notices something (a stale heartbeat, a finished activity,
+// groups being formed), possibly long after anyone was there, so they are not
+// activity: counting them credited groups with time after they had left.
+const ACTIVITY_TURN_REASONS = new Set(['claimed', 'solo_join', 'rotation_after_submit', 'instructor_rotate']);
+
+function reconstructInstance({ instance, members = [], rows = [], events = [], slices = [], meta, options = {} }) {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const sortedRows = [...rows].sort((a, b) => a.id - b.id);
   const submits = buildSubmits(sortedRows);
@@ -173,12 +181,23 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
   const turnEvents = sortedEvents.filter((e) => e.type === 'active_student_changed');
   const pauses = pauseIntervals(sortedEvents);
   const forceAdvances = sortedEvents.filter((e) => e.type === 'instructor_force_advance');
+  const studentIds = new Set(members.filter((m) => m.isStudent).map((m) => m.studentId));
 
+  // After a run is ended (Ended - incomplete), students may still open it and
+  // try code in their Local Sandbox; that is not activity time.
+  const endedAt = instance?.endedAt ?? null;
   const activityPoints = [
     ...submits.map((s) => s.at),
-    ...turnEvents.map((e) => e.at),
+    ...slices.filter((t) => endedAt == null || t <= endedAt),
+    ...turnEvents.filter((e) => ACTIVITY_TURN_REASONS.has(e.details?.reason)).map((e) => e.at),
     ...forceAdvances.map((e) => e.at),
   ].sort((a, b) => a - b);
+
+  // Time no student was in the activity (from arrival/leave events), merged
+  // with instructor pauses: neither is ever counted as time spent.
+  const firstStudentActivityAt = Math.min(submits[0]?.at ?? Infinity, slices.length ? Math.min(...slices) : Infinity);
+  const away = awayIntervals(sortedEvents, studentIds, Number.isFinite(firstStudentActivityAt) ? firstStudentActivityAt : null);
+  const excluded = mergeIntervals([...pauses, ...away]);
   // The run's session starts when a student first takes the turn (opens the
   // activity), recorded only in runs with turn events; otherwise at its first
   // submit. activity_instances.start_time is not used: it is when the group was
@@ -296,18 +315,17 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
       enteredAt,
       firstAttemptAt: attempts[0]?.at ?? null,
       resolvedAt,
-      durationMs: cappedSpan(enteredAt, resolvedAt, activityPoints, opts.idleThresholdMs, pauses),
-      firstResponseMs: cappedSpan(enteredAt, attempts[0]?.at ?? null, activityPoints, opts.idleThresholdMs, pauses),
+      durationMs: cappedSpan(enteredAt, resolvedAt, activityPoints, opts.idleThresholdMs, excluded),
+      firstResponseMs: cappedSpan(enteredAt, attempts[0]?.at ?? null, activityPoints, opts.idleThresholdMs, excluded),
       // Gaps between consecutive evaluated attempts, each capped at the idle threshold.
       attemptGaps: attempts.slice(1).map((a, i) => ({
         afterDecision: attempts[i].decision,
-        ms: Math.min(activeWithin(pauses, attempts[i].at, a.at, a.at), opts.idleThresholdMs),
+        ms: Math.min(activeWithin(excluded, attempts[i].at, a.at, a.at), opts.idleThresholdMs),
       })),
     });
   }
 
   // ---- Turns (forward-only: needs active_student_changed events) ----
-  const studentIds = new Set(members.filter((m) => m.isStudent).map((m) => m.studentId));
   const turns = [];
   for (let i = 0; i < turnEvents.length; i += 1) {
     const e = turnEvents[i];
@@ -338,8 +356,8 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
       endReason: next?.details?.reason ?? null,
       submits: own.length,
       firstSubmitAt: own[0]?.at ?? null,
-      // Time from getting the turn to the first submit, excluding pauses.
-      latencyMs: own[0] ? activeWithin(pauses, e.at, own[0].at, own[0].at) : null,
+      // Time from getting the turn to the first submit, excluding pauses and time away.
+      latencyMs: own[0] ? activeWithin(excluded, e.at, own[0].at, own[0].at) : null,
       // A turn taken away (absence, instructor, or another member claiming it)
       // with no submit by its holder. Open and completed-activity turns are not skipped.
       skipped:
@@ -422,6 +440,7 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
     turns,
     turnCoverage, // 'none' | 'partial' | 'full'
     pauses,
+    away, // [] when the run has no arrival/leave data
     turnsRecorded: fullTurnData,
     interventions,
     participation: { submitsByStudent, longestSubmitStreak: longestStreak },
@@ -430,11 +449,14 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], m
       startKnown: fullTurnData, // false: session start unknown (approximated by first activity)
       firstActivityAt,
       lastActivityAt,
-      durationMs: cappedSpan(sessionStartAt, lastActivityAt, activityPoints, opts.idleThresholdMs, pauses),
-      wallClockMs: sessionStartAt != null && lastActivityAt != null ? lastActivityAt - sessionStartAt : null,
+      durationMs: cappedSpan(sessionStartAt, lastActivityAt, activityPoints, opts.idleThresholdMs, excluded),
+      // Uncapped, but without pauses or time when no student was in the activity.
+      wallClockMs: sessionStartAt != null && lastActivityAt != null
+        ? activeWithin(excluded, sessionStartAt, lastActivityAt, lastActivityAt)
+        : null,
       // Available for every run, including those before turn logging.
       submitSpanMs: submits.length
-        ? cappedSpan(submits[0].at, submits[submits.length - 1].at, activityPoints, opts.idleThresholdMs, pauses)
+        ? cappedSpan(submits[0].at, submits[submits.length - 1].at, activityPoints, opts.idleThresholdMs, excluded)
         : null,
     },
   };

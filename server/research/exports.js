@@ -55,6 +55,7 @@ function runColumns(run, ctx) {
     group_id: ctx.pseudonym('group', run.instanceId),
     group_size: run.groupSize,
     run_start: iso(run.rec.timing.startAt ?? run.startAt),
+    run_status: run.status || '',
     turn_coverage: run.rec.turnCoverage,
   };
 }

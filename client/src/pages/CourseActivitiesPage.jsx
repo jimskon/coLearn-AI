@@ -275,15 +275,23 @@ export default function CourseActivitiesPage() {
                         } else if (status === 'complete') {
                           label = 'Review';
                           variant = 'primary';
+                        } else if (status === 'ended') {
+                          label = 'Review';
+                          variant = 'outline-secondary';
                         }
 
                         return (
-                          <Button
-                            variant={variant}
-                            onClick={() => handleDoActivity(activity)}
-                          >
-                            {label}
-                          </Button>
+                          <>
+                            <Button
+                              variant={variant}
+                              onClick={() => handleDoActivity(activity)}
+                            >
+                              {label}
+                            </Button>
+                            {status === 'ended' && !isDemoLike ? (
+                              <div className="small text-muted mt-1">Ended – incomplete</div>
+                            ) : null}
+                          </>
                         );
                       })()
                     ) : isInstructorLike ? (

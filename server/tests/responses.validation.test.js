@@ -11,6 +11,18 @@ const express          = require('express');
 process.env.OPENAI_API_KEY = 'test-key';
 
 const responsesRoutes  = require('../responses/routes');
+const db               = require('../db');
+
+// Like aiRoutes.validation.test.js: a route that reaches the database opens a
+// pooled connection, and on a machine with a reachable database (CI) its idle
+// socket keeps the process alive after the last test. Close the pool.
+test.after(async () => {
+  try {
+    await db.end();
+  } catch {
+    // The pool may never have connected; nothing to close.
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Minimal test server — no real DB needed for validation-only tests

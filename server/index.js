@@ -21,6 +21,7 @@ const PORT = process.env.PORT || 4000;
 const aiRoutes = require('./ai/routes');
 
 require('./heartbeatCleaner');
+require('./research/autoEnd').startAutoEnd();
 const db = require('./db'); // Make sure db is accessible
 
 const staticDir = path.join(__dirname, '../client/dist');

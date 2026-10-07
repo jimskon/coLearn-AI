@@ -589,6 +589,7 @@ export default function RunActivityPage({
     isActive,
     isObserver,
     activityPaused,
+    activityEnded,
     canPollActiveStudent,
     canSendHeartbeat,
     canUseLiveSync,
@@ -3566,6 +3567,7 @@ export default function RunActivityPage({
             onAiTurnSaved={handleAiTurnSaved}
             activeStudentName={activeStudentName}
             activityPaused={activityPaused}
+            activityEnded={activityEnded}
             renderBlocks={renderBlocks}
             preamble={preamble}
             codeFeedbackShown={codeFeedbackShown}

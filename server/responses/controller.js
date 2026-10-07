@@ -2,6 +2,7 @@
 const db = require('../db');
 const { evaluateCode } = require('../ai/controller');
 const { isValidQuestionId } = require('../utils/questionId');
+const { rejectIfEnded } = require('../utils/instanceEnded');
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
@@ -19,6 +20,7 @@ exports.createResponse = async (req, res) => {
       error: `Invalid question_id: ${questionId}`,
     });
   }
+  if (await rejectIfEnded(instanceId, res)) return;
 
   try {
     await db.query(
@@ -56,6 +58,7 @@ exports.saveDraftResponse = async (req, res) => {
       error: 'Missing/invalid activity_instance_id, user_id, or question_id',
     });
   }
+  if (await rejectIfEnded(instanceId, res)) return;
 
   if (!isValidQuestionId(questionId)) {
     return res.status(400).json({
@@ -99,6 +102,7 @@ exports.createOrUpdateCodeResponse = async (req, res) => {
       error: `Invalid question_id: ${question_id}`,
     });
   }
+  if (await rejectIfEnded(activity_instance_id, res)) return;
 
   const conn = await db.getConnection();
   try {
@@ -291,6 +295,7 @@ exports.bulkSaveResponses = async (req, res) => {
   if (entries.length === 0) {
     return res.json({ success: true, saved: 0 });
   }
+  if (await rejectIfEnded(instanceId, res)) return;
 
   const conn = await db.getConnection();
   try {

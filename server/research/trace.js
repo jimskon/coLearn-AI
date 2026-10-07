@@ -12,7 +12,10 @@ const { linesFromStoredText, loadActivitySourceLines } = require('../utils/activ
 const RESEARCH_KEY_REGEXP =
   '^([0-9]+state|attempt:[0-9]+|[0-9]+[a-z]+(code[0-9]+|output|Output|FM|CodeAccepted|F1|CodeFeedback|S)?)$';
 
-const AUDIT_TYPES = ['active_student_changed', 'instructor_force_advance', 'activity_paused', 'activity_resumed'];
+const AUDIT_TYPES = [
+  'active_student_changed', 'instructor_force_advance', 'activity_paused', 'activity_resumed',
+  'member_joined', 'member_left',
+];
 
 // Activity metadata is cached per source revision so repeated statistics
 // requests don't refetch remote documents.
@@ -63,7 +66,8 @@ async function loadResearchTrace(db, { courseIds, from = null, to = null }) {
   const [allInstances] = await db.query(
     `SELECT ai.id, ai.course_id AS courseId, ai.activity_id AS activityId,
             ai.group_number AS groupNumber, ai.start_time AS startTime,
-            ai.sandbox_owner_id AS sandboxOwnerId, COALESCE(a.is_test, 0) AS isTest
+            ai.sandbox_owner_id AS sandboxOwnerId, COALESCE(a.is_test, 0) AS isTest,
+            ai.progress_status AS progressStatus, ai.ended_at AS endedAt
        FROM activity_instances ai
        JOIN pogil_activities a ON a.id = ai.activity_id
       WHERE ai.course_id IN (?)`,
@@ -85,7 +89,7 @@ async function loadResearchTrace(db, { courseIds, from = null, to = null }) {
 
   const empty = {
     courses, instances: [], activities: new Map(), membersByInstance: new Map(),
-    rowsByInstance: new Map(), eventsByInstance: new Map(), users: new Map(), excluded,
+    rowsByInstance: new Map(), eventsByInstance: new Map(), slicesByInstance: new Map(), users: new Map(), excluded,
   };
   if (!instances.length) return empty;
 
@@ -154,6 +158,24 @@ async function loadResearchTrace(db, { courseIds, from = null, to = null }) {
     });
   }
 
+  // 10-second activity slices (migration 025): when students were actually
+  // working, between submits. Absent before migration 025 or deployment.
+  const slicesByInstance = new Map();
+  try {
+    const [sliceRows] = await db.query(
+      `SELECT DISTINCT activity_instance_id AS instanceId, slice_start AS sliceStart
+         FROM group_activity_slices
+        WHERE activity_instance_id IN (?)`,
+      [instanceIds]
+    );
+    for (const s of sliceRows) {
+      if (!slicesByInstance.has(s.instanceId)) slicesByInstance.set(s.instanceId, []);
+      slicesByInstance.get(s.instanceId).push(toMs(s.sliceStart));
+    }
+  } catch (err) {
+    if (err?.code !== 'ER_NO_SUCH_TABLE') throw err;
+  }
+
   const activityIds = [...new Set(instances.map((i) => i.activityId))];
   const [activityRows] = await db.query(
     `SELECT id, name, title, sheet_url, source_type, content_text, source_revision, source_updated_at
@@ -175,11 +197,12 @@ async function loadResearchTrace(db, { courseIds, from = null, to = null }) {
 
   return {
     courses,
-    instances: instances.map((i) => ({ ...i, startAt: toMs(i.startTime) })),
+    instances: instances.map((i) => ({ ...i, startAt: toMs(i.startTime), endedAt: toMs(i.endedAt) })),
     activities,
     membersByInstance,
     rowsByInstance,
     eventsByInstance,
+    slicesByInstance,
     users,
     excluded,
   };

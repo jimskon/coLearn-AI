@@ -27,6 +27,9 @@ jobs:
   server:
     name: Server tests
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    # A normal run takes about a minute; fail a hung run fast instead of
+    # waiting for GitHub's 6-hour limit.
+    timeout-minutes: 20
     services:
       mariadb:
         image: mariadb:11

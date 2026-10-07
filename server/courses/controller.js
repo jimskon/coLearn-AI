@@ -2,6 +2,7 @@
 const db = require("../db");
 const { inferActivityTypeFromActivity, inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
+const { ensureEndedAtSchema } = require('../utils/instanceEnded');
 
 async function tableHasColumn(conn, tableName, columnName) {
   const [rows] = await conn.query(
@@ -224,6 +225,7 @@ async function getCourseActivities(req, res) {
   const userId = req.user?.id;
 
   console.log("🔍 getCourseActivities for course:", courseId, "and user:", userId);
+  try { await ensureEndedAtSchema(); } catch (err) { console.error('ended_at schema:', err); }
 
   if (!userId) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -320,6 +322,18 @@ async function getCourseActivities(req, res) {
       LIMIT 1
     ) AS total_groups,
 
+    -- Ended - incomplete (everyone left before finishing; research/autoEnd.js)
+    (
+      SELECT ai2.ended_at
+      FROM activity_instances ai2
+      JOIN group_members gm ON gm.activity_instance_id = ai2.id
+      WHERE ai2.activity_id = a.id
+        AND ai2.course_id = c.id
+        AND COALESCE(ai2.group_number, 1) <> 0
+        AND gm.student_id = ?
+      LIMIT 1
+    ) AS ended_at,
+
     COUNT(ai.id) AS group_count,
     MAX(ai.status = 'in_progress') AS is_ready,
     MAX(COALESCE(ai.hidden, 0)) AS hidden
@@ -343,6 +357,7 @@ async function getCourseActivities(req, res) {
         userId, // progress_status
         userId, // completed_groups
         userId, // total_groups
+        userId, // ended_at
         courseId
       ]
     );
@@ -360,6 +375,8 @@ async function getCourseActivities(req, res) {
 
       if (status === 'completed' || (tg > 0 && cg >= tg)) {
         student_status = 'complete';
+      } else if (row.ended_at) {
+        student_status = 'ended';
       } else if (status === 'not_started' || (!status && cg === 0)) {
         student_status = 'not_started';
       } else {
@@ -647,6 +664,7 @@ async function getCourseInfo(req, res) {
 }
 
 async function getCourseProgress(req, res) {
+  try { await ensureEndedAtSchema(); } catch (err) { console.error('ended_at schema:', err); }
   const { courseId } = req.params;
 
   try {
@@ -699,6 +717,7 @@ async function getCourseProgress(req, res) {
          ai.total_groups,
          ai.completed_groups,
          ai.progress_status,
+         ai.ended_at,
          gm.student_id
        FROM activity_instances ai
        JOIN group_members gm ON gm.activity_instance_id = ai.id
@@ -736,7 +755,7 @@ async function getCourseProgress(req, res) {
 
     // 5) Fill per-student per-activity (keep best progress across multiple instances)
     for (const row of instanceRows) {
-      const { student_id, activity_id, total_groups, completed_groups, progress_status } = row;
+      const { student_id, activity_id, total_groups, completed_groups, progress_status, ended_at } = row;
       const student = progressByStudent.get(student_id);
       if (!student) continue;
 
@@ -746,7 +765,8 @@ async function getCourseProgress(req, res) {
         progress_status ||
         (tg > 0 && cg >= tg ? 'completed' : cg > 0 ? 'in_progress' : 'not_started');
 
-      const entry = { status, completedGroups: cg, totalGroups: tg };
+      // ended: Ended - incomplete (everyone left before finishing)
+      const entry = { status, completedGroups: cg, totalGroups: tg, ended: !!ended_at && status !== 'completed' };
       student.progress[activity_id] = betterProgress(student.progress[activity_id], entry);
     }
 

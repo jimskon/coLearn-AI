@@ -16,6 +16,7 @@ const TURN_REASONS = Object.freeze({
   GROUP_SETUP: 'group_setup',                     // set when the instance was created
   SOLO_JOIN: 'solo_join',                         // a student started a solo instance
   CLEARED_ON_COMPLETION: 'cleared_on_completion', // activity completed; no active student
+  ENDED_INCOMPLETE: 'ended_incomplete',           // everyone away 15+ min before finishing; run ended
 });
 
 function toId(value) {
@@ -56,4 +57,20 @@ function recordPauseChange(req, instanceId, paused) {
   });
 }
 
-module.exports = { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange };
+/**
+ * Log a group member arriving in or leaving a run, so research timing can
+ * leave out time when no student was in the activity.
+ * - 'member_joined': first heartbeat after being away (or ever). lastSeenAt is
+ *   their previous heartbeat (null on first arrival).
+ * - 'member_left': their page sent a leave beacon (tab closed, navigation, or
+ *   a reload, which is followed at once by another heartbeat).
+ */
+function recordPresenceChange(req, instanceId, kind, details = null) {
+  void recordAuditEvent(kind === 'joined' ? 'member_joined' : 'member_left', {
+    req,
+    activityInstanceId: toId(instanceId),
+    details,
+  });
+}
+
+module.exports = { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange, recordPresenceChange };

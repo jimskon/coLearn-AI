@@ -10,7 +10,6 @@ function isPositiveInteger(value) {
 
 exports.createResponse = async (req, res) => {
   const { instanceId, questionId, responseText, answeredBy } = req.body;
-  if (await rejectIfEnded(instanceId, res)) return;
 
   if (!questionId) {
     return res.status(400).json({ error: 'Missing question_id' });
@@ -21,6 +20,7 @@ exports.createResponse = async (req, res) => {
       error: `Invalid question_id: ${questionId}`,
     });
   }
+  if (await rejectIfEnded(instanceId, res)) return;
 
   try {
     await db.query(
@@ -92,7 +92,6 @@ exports.saveDraftResponse = async (req, res) => {
 
 exports.createOrUpdateCodeResponse = async (req, res) => {
   const { activity_instance_id, question_id, user_id, response } = req.body;
-  if (await rejectIfEnded(activity_instance_id, res)) return;
 
   if (!question_id) {
     return res.status(400).json({ error: 'Missing question_id' });
@@ -103,6 +102,7 @@ exports.createOrUpdateCodeResponse = async (req, res) => {
       error: `Invalid question_id: ${question_id}`,
     });
   }
+  if (await rejectIfEnded(activity_instance_id, res)) return;
 
   const conn = await db.getConnection();
   try {
@@ -278,7 +278,6 @@ exports.bulkSaveResponses = async (req, res) => {
       error: 'Missing/invalid instanceId, userId, or answers',
     });
   }
-  if (await rejectIfEnded(instanceId, res)) return;
 
   const entries = Object.entries(answers)
     .map(([qid, val]) => [String(qid).trim(), String(val ?? '')])
@@ -296,6 +295,7 @@ exports.bulkSaveResponses = async (req, res) => {
   if (entries.length === 0) {
     return res.json({ success: true, saved: 0 });
   }
+  if (await rejectIfEnded(instanceId, res)) return;
 
   const conn = await db.getConnection();
   try {

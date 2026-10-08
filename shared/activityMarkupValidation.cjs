@@ -174,7 +174,9 @@ const { closesBlock, canonicalCloserFor } = grammar;
       const command = /^\\([A-Za-z]+)(?:\{|$)/.exec(value);
       const tag = command?.[1]?.toLowerCase();
       if (!tag) continue;
-      if (ROOT_SINGLETONS.has(tag)) {
+      // \aimode is both an activity and a question singleton: inside a question it
+      // is the per-question override, not a second activity-level value.
+      if (ROOT_SINGLETONS.has(tag) && !(question && QUESTION_SINGLETONS.has(tag))) {
         markOnce(seenRoot, tag, line, 'activity');
       } else if (tag === 'retries') {
         if (question) report(line, '\\retries belongs to an activity or question group, not inside a \\question.', 'invalid-nesting');

@@ -21,9 +21,18 @@ export default function ViewTestsPage() {
   const [clearing, setClearing] = useState(new Set());
   const [deleting, setDeleting] = useState(new Set());
   const [reviewing, setReviewing] = useState(new Set());
+  const [accessCode, setAccessCode] = useState(null);
+  const [codeVisible, setCodeVisible] = useState(false);
 
   const [editing, setEditing] = useState(null); // { instanceId, startAtLocal, durationMinutes }
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // Reopen modal state
+  const [reopenModal, setReopenModal] = useState(null); // { instanceId, isSubmitted, reopenUntil }
+  const [savingReopen, setSavingReopen] = useState(false);
+
+  // Danger zone modal state
+  const [dangerModal, setDangerModal] = useState(null); // { instanceId, studentLabel, action: null|'clear'|'delete' }
 
 
 
@@ -50,6 +59,9 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
       setTests(data.groups);
+      // Access code is the same for all instances in this run; grab from first one that has it.
+      const codeInst = data.groups.find((g) => g.test_access_code);
+      setAccessCode(codeInst?.test_access_code || null);
     } catch (err) {
       console.error('❌ Error loading tests:', err);
       setError('Could not load tests.');
@@ -113,8 +125,6 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
   }, [courseId, activityId]);
 
   const clearAnswers = async (instanceId) => {
-    if (!window.confirm('Clear all saved answers for this test? This cannot be undone.')) return;
-
     const next = new Set(clearing);
     next.add(instanceId);
     setClearing(next);
@@ -140,8 +150,6 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
   };
 
   const deleteInstance = async (instanceId) => {
-    if (!window.confirm('Delete this test attempt permanently? This removes the student membership, saved work, submission, scores, and feedback. This cannot be undone.')) return;
-
     setDeleting((previous) => new Set(previous).add(instanceId));
     try {
       const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
@@ -163,34 +171,50 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
     }
   };
 
-  const handleReopen = async (instanceId) => {
-    const minutesStr = window.prompt('Reopen test for how many minutes?', '30');
-    if (!minutesStr) return;
+  const openReopenModal = (t) => {
+    // Default reopen-until: 1 hour from now
+    const defaultUntil = new Date(Date.now() + 60 * 60000);
+    const pad = (n) => String(n).padStart(2, '0');
+    const yr = defaultUntil.getFullYear();
+    const mo = pad(defaultUntil.getMonth() + 1);
+    const dy = pad(defaultUntil.getDate());
+    const hr = pad(defaultUntil.getHours());
+    const mn = pad(defaultUntil.getMinutes());
+    const localDefault = yr + '-' + mo + '-' + dy + 'T' + hr + ':' + mn;
+    setReopenModal({
+      instanceId: t.instance_id,
+      isSubmitted: !!t.submitted_at,
+      reopenUntil: localDefault,
+    });
+  };
 
-    const minutes = Number(minutesStr);
-    if (!Number.isFinite(minutes) || minutes <= 0) {
-      alert('Please enter a positive number of minutes.');
-      return;
-    }
-
+  const saveReopen = async () => {
+    if (!reopenModal) return;
+    setSavingReopen(true);
     try {
-      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/reopen`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ minutes }),
-      });
+      const reopenUntilUtc = new Date(reopenModal.reopenUntil).toISOString();
+      const res = await fetch(
+        API_BASE_URL + '/api/activity-instances/' + reopenModal.instanceId + '/reopen',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ reopenUntil: reopenUntilUtc }),
+        }
+      );
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to reopen test');
-
+      setReopenModal(null);
       await fetchTests();
     } catch (err) {
-      console.error('❌ Reopen failed:', err);
+      console.error('Reopen failed:', err);
       alert(err.message || 'Failed to reopen test.');
+    } finally {
+      setSavingReopen(false);
     }
   };
 
-  const handleMarkReviewed = async (instanceId) => {
+  const handleMarkReviewedviewed = async (instanceId) => {
     const next = new Set(reviewing);
     next.add(instanceId);
     setReviewing(next);
@@ -224,6 +248,28 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
         </Badge>
       </h2>
       {courseName && <h4 className="text-muted">{courseName}</h4>}
+      {accessCode && (
+        <div className="alert alert-warning d-flex align-items-center gap-4 mt-3" style={{fontSize:'1.1rem'}}>
+          <div>
+            <span className="fw-bold">🔑 Exam access code</span>
+          </div>
+          {codeVisible ? (
+            <>
+              <div style={{fontSize:'2.5rem', letterSpacing:'0.4em', fontFamily:'monospace', fontWeight:'bold'}}>
+                {accessCode}
+              </div>
+              <button className="btn btn-sm btn-outline-secondary" onClick={() => setCodeVisible(false)}>
+                Hide
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-sm btn-warning fw-bold" onClick={() => setCodeVisible(true)}>
+              Reveal Code
+            </button>
+          )}
+          <div className="small text-muted">Students must type this to start the exam.</div>
+        </div>
+      )}
       <Alert variant="info" className="mt-3">
         This page shows the instructor-managed exam attempts. Students only see the exam workspace;
         this roster is for scheduling, reopening, reviewing, and clearing submissions.
@@ -319,15 +365,14 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
                         View
                       </Button>
 
-                      {hasTiming && !isSubmitted && (
+                      {hasTiming && (
                         <Button
-                          variant="outline-secondary"
+                          variant={isSubmitted ? 'warning' : 'outline-secondary'}
                           size="sm"
-                          onClick={() => handleReopen(instanceId)}
+                          onClick={() => openReopenModal(t)}
                         >
-                          Reopen
+                          {isSubmitted ? 'Reopen (submitted)' : 'Reopen'}
                         </Button>
-
                       )}
                       <Button
                         variant="outline-primary"
@@ -340,18 +385,10 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
                       <Button
                         variant="outline-danger"
                         size="sm"
-                        disabled={clearing.has(instanceId)}
-                        onClick={() => clearAnswers(instanceId)}
+                        title="Danger zone (Clear / Delete)"
+                        onClick={() => setDangerModal({ instanceId, studentLabel, action: null })}
                       >
-                        {clearing.has(instanceId) ? 'Clearing…' : 'Clear'}
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        disabled={deleting.has(instanceId)}
-                        onClick={() => deleteInstance(instanceId)}
-                      >
-                        {deleting.has(instanceId) ? 'Deleting…' : 'Delete'}
+                        ⚠️
                       </Button>
                     </div>
                   </td>
@@ -361,6 +398,118 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
           </tbody>
         </Table>
       )}
+      {/* Reopen test modal */}
+      <Modal show={!!reopenModal} onHide={() => setReopenModal(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Reopen test</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {reopenModal && reopenModal.isSubmitted && (
+            <div className="alert alert-warning py-2 small mb-3">
+              This student already submitted. Reopening will clear their submission and grading
+              so they can resubmit. Their answers will be preserved.
+            </div>
+          )}
+          <Form.Group>
+            <Form.Label>Open until (your local time)</Form.Label>
+            <Form.Control
+              type="datetime-local"
+              value={reopenModal ? reopenModal.reopenUntil : ''}
+              onChange={(e) => setReopenModal(function(prev) { return Object.assign({}, prev, { reopenUntil: e.target.value }); })}
+            />
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setReopenModal(null)} disabled={savingReopen}>
+            Cancel
+          </Button>
+          <Button
+            variant={reopenModal && reopenModal.isSubmitted ? 'warning' : 'primary'}
+            onClick={saveReopen}
+            disabled={savingReopen}
+          >
+            {savingReopen ? 'Saving…' : (reopenModal && reopenModal.isSubmitted ? 'Reopen & clear submission' : 'Save')}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
+      {/* Danger zone modal */}
+      <Modal show={!!dangerModal} onHide={() => setDangerModal(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Danger zone</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="mb-3">
+            <strong>{dangerModal && dangerModal.studentLabel}</strong>
+          </p>
+
+          {dangerModal && dangerModal.action === 'clear' ? (
+            <div className="alert alert-danger">
+              <strong>Are you sure?</strong> This will permanently delete all saved answers for{' '}
+              <strong>{dangerModal.studentLabel}</strong>. This cannot be undone.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="danger"
+                  disabled={clearing.has(dangerModal.instanceId)}
+                  onClick={() => {
+                    clearAnswers(dangerModal.instanceId);
+                    setDangerModal(null);
+                  }}
+                >
+                  {clearing.has(dangerModal.instanceId) ? 'Clearing…' : 'Yes, clear all answers'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal((p) => ({ ...p, action: null }))}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : dangerModal && dangerModal.action === 'delete' ? (
+            <div className="alert alert-danger">
+              <strong>Are you sure?</strong> This will permanently delete the test attempt and all
+              data (membership, saved work, submission, scores, feedback) for{' '}
+              <strong>{dangerModal.studentLabel}</strong>. This cannot be undone.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="danger"
+                  disabled={deleting.has(dangerModal.instanceId)}
+                  onClick={() => {
+                    deleteInstance(dangerModal.instanceId);
+                    setDangerModal(null);
+                  }}
+                >
+                  {deleting.has(dangerModal.instanceId) ? 'Deleting…' : 'Yes, delete attempt'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal((p) => ({ ...p, action: null }))}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="d-grid gap-2">
+              <Button
+                variant="outline-danger"
+                onClick={() => setDangerModal((p) => ({ ...p, action: 'clear' }))}
+              >
+                Clear all answers
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => setDangerModal((p) => ({ ...p, action: 'delete' }))}
+              >
+                Delete test attempt
+              </Button>
+            </div>
+          )}
+        </Modal.Body>
+        {(!dangerModal || !dangerModal.action) && (
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setDangerModal(null)}>
+              Cancel
+            </Button>
+          </Modal.Footer>
+        )}
+      </Modal>
+
       <Modal show={!!editing} onHide={() => setEditing(null)} centered>
         <Modal.Header closeButton>
           <Modal.Title>Edit test timing</Modal.Title>

@@ -31,6 +31,9 @@ export default function ViewTestsPage() {
   const [reopenModal, setReopenModal] = useState(null); // { instanceId, isSubmitted, reopenUntil }
   const [savingReopen, setSavingReopen] = useState(false);
 
+  // Danger zone modal state
+  const [dangerModal, setDangerModal] = useState(null); // { instanceId, studentLabel, action: null|'clear'|'delete' }
+
 
 
   const toLocalInputValue = (utcString) => {
@@ -122,8 +125,6 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
   }, [courseId, activityId]);
 
   const clearAnswers = async (instanceId) => {
-    if (!window.confirm('Clear all saved answers for this test? This cannot be undone.')) return;
-
     const next = new Set(clearing);
     next.add(instanceId);
     setClearing(next);
@@ -149,8 +150,6 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
   };
 
   const deleteInstance = async (instanceId) => {
-    if (!window.confirm('Delete this test attempt permanently? This removes the student membership, saved work, submission, scores, and feedback. This cannot be undone.')) return;
-
     setDeleting((previous) => new Set(previous).add(instanceId));
     try {
       const response = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}`, {
@@ -386,18 +385,10 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
                       <Button
                         variant="outline-danger"
                         size="sm"
-                        disabled={clearing.has(instanceId)}
-                        onClick={() => clearAnswers(instanceId)}
+                        title="Danger zone (Clear / Delete)"
+                        onClick={() => setDangerModal({ instanceId, studentLabel, action: null })}
                       >
-                        {clearing.has(instanceId) ? 'Clearing…' : 'Clear'}
-                      </Button>
-                      <Button
-                        variant="danger"
-                        size="sm"
-                        disabled={deleting.has(instanceId)}
-                        onClick={() => deleteInstance(instanceId)}
-                      >
-                        {deleting.has(instanceId) ? 'Deleting…' : 'Delete'}
+                        ⚠️
                       </Button>
                     </div>
                   </td>
@@ -440,6 +431,83 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
             {savingReopen ? 'Saving…' : (reopenModal && reopenModal.isSubmitted ? 'Reopen & clear submission' : 'Save')}
           </Button>
         </Modal.Footer>
+      </Modal>
+
+      {/* Danger zone modal */}
+      <Modal show={!!dangerModal} onHide={() => setDangerModal(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Danger zone</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p className="mb-3">
+            <strong>{dangerModal && dangerModal.studentLabel}</strong>
+          </p>
+
+          {dangerModal && dangerModal.action === 'clear' ? (
+            <div className="alert alert-danger">
+              <strong>Are you sure?</strong> This will permanently delete all saved answers for{' '}
+              <strong>{dangerModal.studentLabel}</strong>. This cannot be undone.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="danger"
+                  disabled={clearing.has(dangerModal.instanceId)}
+                  onClick={() => {
+                    clearAnswers(dangerModal.instanceId);
+                    setDangerModal(null);
+                  }}
+                >
+                  {clearing.has(dangerModal.instanceId) ? 'Clearing…' : 'Yes, clear all answers'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal((p) => ({ ...p, action: null }))}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : dangerModal && dangerModal.action === 'delete' ? (
+            <div className="alert alert-danger">
+              <strong>Are you sure?</strong> This will permanently delete the test attempt and all
+              data (membership, saved work, submission, scores, feedback) for{' '}
+              <strong>{dangerModal.studentLabel}</strong>. This cannot be undone.
+              <div className="d-flex gap-2 mt-3">
+                <Button
+                  variant="danger"
+                  disabled={deleting.has(dangerModal.instanceId)}
+                  onClick={() => {
+                    deleteInstance(dangerModal.instanceId);
+                    setDangerModal(null);
+                  }}
+                >
+                  {deleting.has(dangerModal.instanceId) ? 'Deleting…' : 'Yes, delete attempt'}
+                </Button>
+                <Button variant="secondary" onClick={() => setDangerModal((p) => ({ ...p, action: null }))}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="d-grid gap-2">
+              <Button
+                variant="outline-danger"
+                onClick={() => setDangerModal((p) => ({ ...p, action: 'clear' }))}
+              >
+                Clear all answers
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => setDangerModal((p) => ({ ...p, action: 'delete' }))}
+              >
+                Delete test attempt
+              </Button>
+            </div>
+          )}
+        </Modal.Body>
+        {(!dangerModal || !dangerModal.action) && (
+          <Modal.Footer>
+            <Button variant="secondary" onClick={() => setDangerModal(null)}>
+              Cancel
+            </Button>
+          </Modal.Footer>
+        )}
       </Modal>
 
       <Modal show={!!editing} onHide={() => setEditing(null)} centered>

@@ -68,6 +68,7 @@
       `     ${tag('feedbackprompt')}    how the AI should judge the answer`,
       `     ${tag('followupprompt')}    what to ask next`,
       `     ${tag('score')} ... ${grammar.CONTAINERS.score.closeTag}   the grading rubric`,
+      `     ${tag('questiontype')}{...}   the research category of the question`,
       '3. Do not invent tags. The complete vocabulary is listed below. If you',
       '   need something that is not there, write it as plain prose.',
       '4. Keep code inside code blocks exactly as it is unless I ask about the',
@@ -93,6 +94,35 @@
       '  The longer spellings (\\endpythonremote and friends) still read',
       '  correctly, but write the short one.',
       '',
+      'TABLE SYNTAX',
+      '',
+      '  \\table{Title}         opens a table; the title is rendered above it.',
+      '  \\row cell1 & cell2   one row per \\row line; cells separated by &.',
+      '  \\endtable            closes the table.',
+      '',
+      '  Tables may appear anywhere (standalone or inside \\question).',
+      '  The number of columns is determined by the first \\row; every',
+      '  subsequent row must have the same number of &-separated cells.',
+      '',
+      '  Cell content is ordinary inline markup (plain text, \\textbf{...},',
+      '  \\textit{...}, \\mono{...}, etc.).',
+      '',
+      '  Use \\tresponse as the sole content of a cell to make that cell an',
+      '  editable text field students fill in. A table may have any mix of',
+      '  static cells and \\tresponse cells. \\tresponse is valid only inside',
+      '  a \\table that is itself inside a \\question.',
+      '',
+      '  There is no dedicated header-row tag. To create a header row, put',
+      '  bold text in the first \\row:',
+      '    \\row \\textbf{Column A} & \\textbf{Column B} & \\textbf{Column C}',
+      '',
+      '  Example — a 3-column fill-in table:',
+      '    \\table{Loop trace}',
+      '    \\row \\textbf{i} & \\textbf{x} & \\textbf{result}',
+      '    \\row 0 & \\tresponse & \\tresponse',
+      '    \\row 1 & \\tresponse & \\tresponse',
+      '    \\endtable',
+      '',
       'SINGLE-LINE TAGS, by where they belong',
       '',
       `  top level:    ${list(grammar.SINGLETONS.root)}`,
@@ -104,6 +134,26 @@
       '',
       `  ${tag('mode')}{...}: ${grammar.ENUMS.mode.join(' | ')}`,
       `  ${tag('score')}{points,type}: type is ${grammar.ENUMS.scoreType.join(' | ')}`,
+      `  ${tag('questiontype')}{...}: ${grammar.ENUMS.questiontype.join(' | ')}`,
+      '',
+      'QUESTION TYPES',
+      '',
+      `  ${tag('questiontype')}{...} is optional research metadata: one line inside a`,
+      `  question, conventionally just before ${tag('endquestion')}. It never changes what`,
+      '  students see or how answers are judged. Keep existing ones. Add or change',
+      '  them only if I ask; then give every question exactly one and change nothing',
+      '  else. Choose by what the student mainly has to do:',
+      '    code_writing                 write or substantially change working code',
+      '    code_reading                 trace or explain given code; small edits or print',
+      '                                 statements to observe behavior',
+      '    output_prediction            say what given code will print or return',
+      '    debugging                    find or fix a bug, or design tests that expose one',
+      '    conceptual_explanation       explain a general idea, rule, or trade-off',
+      '    application_problem_solving  apply an idea to a specific example or scenario',
+      '    reflection                   think about their own or the team\'s learning or process',
+      '    other                        none of these (for example, setup steps)',
+      '  If writing working code is part of the answer, prefer code_writing. Opinion',
+      '  surveys are reflection (about their learning) or other.',
       '',
       'WHAT I WANT CHANGED',
       '',
@@ -135,7 +185,11 @@
     const fenced = text.match(/```[a-zA-Z]*\n([\s\S]*?)```/);
     const body = (fenced ? fenced[1] : text).trim();
     const start = body.search(/^\\(title|name|mode|section|questiongroup)\{/m);
-    return (start > 0 ? body.slice(start) : body).trim();
+    // No structural tag at all means this is not an activity -- most often the
+    // instructor's own instructions typed into the paste box. Passing it through
+    // would propose replacing the whole activity with that sentence.
+    if (start < 0) return '';
+    return body.slice(start).trim();
   }
 
   return { LLM_REVISION_PRIMER, buildLlmRevisionPrompt, buildPrimer, extractMarkupFromPaste };

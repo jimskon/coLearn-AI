@@ -44,6 +44,7 @@ test('every code block and its canonical closer are named', () => {
 test('the closed value sets are stated, not left to be guessed', () => {
   for (const mode of grammar.ENUMS.mode) assert.ok(LLM_REVISION_PRIMER.includes(mode));
   for (const type of grammar.ENUMS.scoreType) assert.ok(LLM_REVISION_PRIMER.includes(type));
+  for (const type of grammar.ENUMS.questiontype) assert.ok(LLM_REVISION_PRIMER.includes(type));
 });
 
 test('the instructor-facing tags are called out as the ones not to drop', () => {
@@ -91,6 +92,11 @@ test('an activity that opens mid-document is not truncated further', () => {
   // structural diff is what should object to it, not this function.
   const fragment = '\\questiongroup{G}\n\\question{Q}\n\\endquestion\n\\endquestiongroup';
   assert.equal(extractMarkupFromPaste(fragment), fragment);
+});
+
+test('instructions with no activity markup are not mistaken for a revision', () => {
+  assert.equal(extractMarkupFromPaste('Add timings. And shorten question 2.'), '');
+  assert.equal(extractMarkupFromPaste('```\nAdd timings.\n```'), '');
 });
 
 test('nothing pasted yields nothing, not a crash', () => {

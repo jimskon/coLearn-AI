@@ -10,6 +10,7 @@ import 'prismjs/components/prism-clike';
 import 'prismjs/components/prism-c';
 import 'prismjs/components/prism-cpp';
 import useCodeHistory from '../../hooks/useCodeHistory';
+import { signalActivity } from '../../utils/activitySignals';
 
 export default function ActivityCppBlock({
   code: initialCode,
@@ -381,6 +382,7 @@ export default function ActivityCppBlock({
 
   // --- unified run: interactive + sheet files ---
   const runInteractive = async () => {
+    signalActivity('run');
     if (!runnerEnabled) {
       term.current?.writeln('\r\n[Remote C++ runtime is disabled on this server]');
       return;
@@ -842,7 +844,10 @@ export default function ActivityCppBlock({
       {codeFeedbackShown[responseKey] && (
         <div className="mt-2 p-3 border rounded bg-warning-subtle">
           <strong>AI Feedback:</strong>
-          <pre className="mb-0">{codeFeedbackShown[responseKey]}</pre>
+          {/* Prose, not code: wrap long lines but keep the AI's line breaks. */}
+          <div className="mb-0" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+            {codeFeedbackShown[responseKey]}
+          </div>
         </div>
       )}
     </>

@@ -164,7 +164,7 @@ export default function ManageCoursesPage() {
                     variant="primary"
                     onClick={() => navigate(`/courses/${course.id}/progress`)}
                   >
-                    View Progress
+                    Group Results
                   </Button>
 
                   <Button
@@ -173,6 +173,14 @@ export default function ManageCoursesPage() {
                     onClick={() => navigate(`/courses/${course.id}/tests`)}
                   >
                     Test Results
+                  </Button>
+
+                  <Button
+                    size="sm"
+                    variant="outline-success"
+                    onClick={() => navigate(`/courses/${course.id}/hw`)}
+                  >
+                    HW Results
                   </Button>
 
                   <Button

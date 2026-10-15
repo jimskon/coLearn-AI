@@ -1,6 +1,11 @@
 // parseSheet.jsx
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-clike';
+import 'prismjs/components/prism-c';
+import 'prismjs/components/prism-cpp';
+import 'prismjs/components/prism-python';
 import ActivityQuestionBlock from '../components/activity/ActivityQuestionBlock';
 import ActivityHeader from '../components/activity/ActivityHeader';
 import ActivityEnvironment from '../components/activity/ActivityEnvironment';
@@ -26,11 +31,14 @@ import { Badge, Form, Button, Spinner } from 'react-bootstrap';
 import ActivityCppBlock from '../components/activity/ActivityCppBlock';
 import { Alert } from 'react-bootstrap';
 import { createDisplayCodeBlock, parseDisplayCodeBlockCommand } from './displayCodeBlocks';
+import { fileLanguage, fileResponseKey, isSaveableFilename, parseFileOptions } from './fileBlocks';
 import codeBlockFamilies from '../../../shared/codeBlockFamilies.cjs';
 import activityGrammar from '../../../shared/activityGrammar.cjs';
+import { questionTypeLabel } from './questionTypes';
 
 const { closesBlock, familyOfCloser } = codeBlockFamilies;
 const AI_MODE_FLAGS = new Set(activityGrammar.COMMA_LIST_VALUES.aimode.values);
+const QUESTION_TYPES = new Set(activityGrammar.ENUMS.questiontype);
 
 function unsupportedAiModeFlags(value = '') {
   return String(value || '')
@@ -259,6 +267,7 @@ export function InlineAiAssistBlock({
   canAsk = true,
   lockReason = '',
   onTurnSaved,
+  isInstructor = false,
 }) {
   const [inputValue, setInputValue] = useState('');
   const [localTurns, setLocalTurns] = useState([]);
@@ -420,20 +429,24 @@ export function InlineAiAssistBlock({
         ) : (
           <h5 className="mb-0">AI Coach</h5>
         )}
-        <Badge bg="secondary" pill className="ms-1">{modeMeta.label}</Badge>
+        {(isInstructor || runMode === 'preview') && (
+          <Badge bg="secondary" pill className="ms-1">{modeMeta.label}</Badge>
+        )}
         {persisted && !canAsk ? (
           <Badge bg="light" text="dark" className="border">Read only</Badge>
         ) : null}
-        <span className="ms-auto small text-muted">
-          {turnCount ? `${turnCount} exchange${turnCount === 1 ? '' : 's'}` : 'No questions yet'}
-        </span>
+        {(isInstructor || runMode === 'preview') && (
+          <span className="ms-auto small text-muted">
+            {turnCount ? `${turnCount} exchange${turnCount === 1 ? '' : 's'}` : 'No questions yet'}
+          </span>
+        )}
       </div>
 
-      {aiBlock.prompt ? (
-        <div className="mb-2" dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
+      {aiBlock.prompt && (isInstructor || runMode === 'preview') ? (
+        <div className="mb-2 small text-muted fst-italic border-start ps-2" dangerouslySetInnerHTML={{ __html: aiBlock.prompt }} />
       ) : null}
 
-      {/* The full mode guide is an authoring aid; students only need the mode. */}
+      {/* The full mode guide is an authoring aid; students never see mode metadata. */}
       {runMode === 'preview' ? (
         <div className="d-flex flex-wrap gap-2 mb-3">
           {INLINE_AI_MODE_GUIDE.map((entry) => (
@@ -449,9 +462,9 @@ export function InlineAiAssistBlock({
             </Badge>
           ))}
         </div>
-      ) : (
+      ) : isInstructor ? (
         <div className="small text-muted mb-3">{modeMeta.description}</div>
-      )}
+      ) : null}
 
       <div
         ref={historyScrollRef}
@@ -623,50 +636,60 @@ function parseCommandArgs(line, commandName) {
   return i === line.length ? args : null;
 }
 
+// Editor for \file blocks. Shows the file with syntax highlighting chosen from
+// its extension, and switches to a plain textarea while the user edits.
+//
+// Two modes:
+// - Saved (onTextChange given): the parent owns the text, as with code cells.
+//   `value` is what to show, edits go to onTextChange, and fileContents is kept
+//   in step so Run compiles the version on screen.
+// - Local (no onTextChange): edits live only in this browser's fileContents.
 export default function FileBlock({
   filename,
-  fileKey,
   initialContent = '',
   fileContents,
   editable,
   setFileContents,
-  onFileChange,           // 👈 NEW
+  onFileChange,
+  value,
+  onTextChange,
+  badgeText = null,
+  headerExtra = null,
 }) {
-  // Use live value from fileContents if present, otherwise fall back to initialContent
-  const effective =
-    fileContents && Object.prototype.hasOwnProperty.call(fileContents, filename)
+  const savedMode = typeof onTextChange === 'function';
+  const effective = savedMode
+    ? (value ?? initialContent)
+    : (fileContents && Object.prototype.hasOwnProperty.call(fileContents, filename)
       ? fileContents[filename]
-      : initialContent;
+      : initialContent);
   const lineCount = Math.max(1, String(effective || '').split('\n').length);
   const visibleRows = Math.max(4, Math.min(lineCount, 30));
   const shouldScroll = lineCount > 30;
+  const language = fileLanguage(filename);
 
   const [localValue, setLocalValue] = useState(effective);
+  const [isEditing, setIsEditing] = useState(false);
+  const editing = isEditing && editable;
 
   // NEW: refs to manage caret position
   const textareaRef = useRef(null);
   const pendingSelectionRef = useRef(null);
-  // Marks that the next fileContents change came from THIS textarea
+  // Marks that the next change to `effective` came from THIS textarea
   const localEditRef = useRef(false);
 
   // Keep local in sync when parent state or initial content changes
   useEffect(() => {
-    const next =
-      fileContents && Object.prototype.hasOwnProperty.call(fileContents, filename)
-        ? fileContents[filename]
-        : initialContent;
-
     if (localEditRef.current) {
       localEditRef.current = false;
       return;
     }
+    setLocalValue(effective);
+  }, [effective]);
 
-    setLocalValue(next);
-  }, [fileContents, filename, initialContent]);
-
-  // Seed fileContents once so the runner sees authored files
+  // Local mode: seed fileContents once so the runner sees authored files
   useEffect(() => {
     if (
+      !savedMode &&
       setFileContents &&
       initialContent &&
       (!fileContents || !Object.prototype.hasOwnProperty.call(fileContents, filename))
@@ -676,7 +699,17 @@ export default function FileBlock({
         [filename]: initialContent,
       }));
     }
-  }, [filename, initialContent, fileContents, setFileContents]);
+  }, [savedMode, filename, initialContent, fileContents, setFileContents]);
+
+  // Saved mode: the runner must compile the version on screen (the active
+  // student's, or this observer's sandbox copy).
+  useEffect(() => {
+    if (!savedMode || !setFileContents) return;
+    if (fileContents && fileContents[filename] === effective) return;
+    setFileContents(prev => (
+      prev && prev[filename] === effective ? prev : { ...prev, [filename]: effective }
+    ));
+  }, [savedMode, effective, filename, fileContents, setFileContents]);
 
   // After we update localValue due to custom key handling, restore caret
   useEffect(() => {
@@ -691,15 +724,25 @@ export default function FileBlock({
     }
   }, [localValue]);
 
-  const handleChange = (e) => {
-    if (!editable) return;
+  const highlighted = useMemo(() => {
+    const grammar = language && Prism.languages[language];
+    if (!grammar) return null;
+    try {
+      return Prism.highlight(String(effective || ''), grammar, language);
+    } catch {
+      return null;
+    }
+  }, [effective, language]);
 
-    const newValue = e.target.value;
-
+  const commit = (newValue) => {
     // mark that the next parent sync is caused by THIS local edit
     localEditRef.current = true;
-
     setLocalValue(newValue);
+
+    if (savedMode) {
+      onTextChange(newValue);
+      return;
+    }
 
     if (setFileContents) {
       setFileContents(prev => ({
@@ -713,13 +756,17 @@ export default function FileBlock({
     }
   };
 
+  const handleChange = (e) => {
+    if (!editable) return;
+    commit(e.target.value);
+  };
 
   // TAB inserts tab; ENTER auto-indents
   const handleKeyDown = (e) => {
     if (!editable) return;
 
     const el = e.target;
-    const value = localValue;
+    const current = localValue;
     const start = el.selectionStart ?? 0;
     const end = el.selectionEnd ?? start;
 
@@ -727,18 +774,9 @@ export default function FileBlock({
     if (e.key === 'Tab') {
       e.preventDefault();
       const indent = '\t'; // or '    ' for 4 spaces
-      const newValue = value.slice(0, start) + indent + value.slice(end);
       const newPos = start + indent.length;
-
-      setLocalValue(newValue);
-      if (setFileContents) {
-        setFileContents(prev => ({
-          ...prev,
-          [filename]: newValue,
-        }));
-      }
-
       pendingSelectionRef.current = { start: newPos, end: newPos };
+      commit(current.slice(0, start) + indent + current.slice(end));
       return;
     }
 
@@ -746,44 +784,62 @@ export default function FileBlock({
     if (e.key === 'Enter') {
       e.preventDefault();
 
-      const lineStart = value.lastIndexOf('\n', start - 1) + 1;
-      const line = value.slice(lineStart, start);
+      const lineStart = current.lastIndexOf('\n', start - 1) + 1;
+      const line = current.slice(lineStart, start);
       const indentMatch = line.match(/^[\t ]*/);
       const indent = indentMatch ? indentMatch[0] : '';
 
       const insert = '\n' + indent;
-      const newValue = value.slice(0, start) + insert + value.slice(end);
       const newPos = start + insert.length;
-
-      setLocalValue(newValue);
-      if (setFileContents) {
-        setFileContents(prev => ({
-          ...prev,
-          [filename]: newValue,
-        }));
-      }
-
       pendingSelectionRef.current = { start: newPos, end: newPos };
-      return;
+      commit(current.slice(0, start) + insert + current.slice(end));
     }
   };
 
+  const viewClass = `language-${highlighted != null ? language : 'none'}`;
+
   return (
     <div className="mb-3">
-      <strong>
-        File: <code>{filename}</code>
-      </strong>
-      <Form.Control
-        as="textarea"
-        value={localValue}
-        onChange={handleChange}
-        onKeyDown={handleKeyDown}
-        rows={visibleRows}
-        readOnly={!editable}
-        className="font-monospace bg-light mt-1"
-        style={{ overflowY: shouldScroll ? 'auto' : 'hidden' }}
-        ref={textareaRef}
-      />
+      <div className="d-flex align-items-center gap-2 flex-wrap">
+        <strong>
+          File: <code>{filename}</code>
+        </strong>
+        {badgeText ? <Badge bg="secondary">{badgeText}</Badge> : null}
+        <div className="ms-auto d-flex gap-2">
+          {headerExtra}
+          {editable && (
+            <Button
+              size="sm"
+              variant={editing ? 'primary' : 'outline-secondary'}
+              onClick={() => setIsEditing((prev) => !prev)}
+            >
+              {editing ? 'Done Editing' : 'Edit File'}
+            </Button>
+          )}
+        </div>
+      </div>
+      {editing ? (
+        <Form.Control
+          as="textarea"
+          value={localValue}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          rows={visibleRows}
+          className="font-monospace bg-light mt-1"
+          style={{ overflowY: shouldScroll ? 'auto' : 'hidden' }}
+          ref={textareaRef}
+          autoFocus
+        />
+      ) : (
+        <pre
+          className={`${viewClass} mt-1 mb-0`}
+          style={{ maxHeight: shouldScroll ? '32em' : undefined, overflow: 'auto', fontSize: '0.875rem' }}
+        >
+          {highlighted != null
+            ? <code className={viewClass} dangerouslySetInnerHTML={{ __html: highlighted }} />
+            : <code className={viewClass}>{effective || ' '}</code>}
+        </pre>
+      )}
     </div>
   );
 }
@@ -1934,6 +1990,27 @@ export function parseSheetToBlocks(lines, options = {}) {
       continue;
     }
 
+    // Optional research category; absent means 'unknown'. Never changes behavior.
+    if (trimmed.startsWith('\\questiontype{')) {
+      if (!currentQuestion) {
+        pushIssue('warn', lineNo, '\\questiontype found outside of a \\question. Ignoring.', line);
+        continue;
+      }
+      const match = trimmed.match(/^\\questiontype\{([\s\S]*?)\}\s*$/);
+      const questionType = String(match?.[1] || '').trim().toLowerCase();
+      if (!QUESTION_TYPES.has(questionType)) {
+        pushIssue(
+          'warn',
+          lineNo,
+          `Unknown \\questiontype{${questionType}}. Use one of: ${[...QUESTION_TYPES].join(', ')}.`,
+          line
+        );
+        continue;
+      }
+      currentQuestion.questionType = questionType;
+      continue;
+    }
+
     if (trimmed.startsWith('\\responsemode{')) {
       if (!currentQuestion) {
         pushIssue('error', lineNo, '\\responsemode found outside of a \\question.', line);
@@ -2218,17 +2295,20 @@ export function parseSheetToBlocks(lines, options = {}) {
       openFileLine = lineNo;
 
       const m = trimmed.match(/\\file\{([\s\S]+?)\}/);
-      const inner = m?.[1]?.trim() || '';
-
-      const parts = inner.split(',').map(s => s.trim()).filter(Boolean);
-      const filename = parts[0] || '';
-      const readonly = (parts[1]?.toLowerCase() === 'readonly');
+      const { filename, readonly, shared } = parseFileOptions(m?.[1]);
 
       if (!filename) {
         pushIssue('error', lineNo, '\\file{...} is missing a filename.', line);
+      } else if (shared && !isSaveableFilename(filename)) {
+        pushIssue(
+          'warn',
+          lineNo,
+          'Shared file names may use only letters, digits, ".", "_" and "-". This file will not be saved.',
+          line
+        );
       }
 
-      currentFile = { type: 'file', filename, readonly, lines: [] };
+      currentFile = { type: 'file', filename, readonly, shared, lines: [] };
       continue;
     }
 
@@ -2423,6 +2503,7 @@ export function renderBlocks(blocks, options = {}) {
           canAsk={options.mode === 'run' ? !!isActive && !options.isObserver && !options.isSubmitted : true}
           lockReason={options.aiLockReason}
           onTurnSaved={options.onAiTurnSaved}
+          isInstructor={isInstructor}
         />
       );
     }
@@ -2599,33 +2680,71 @@ export function renderBlocks(blocks, options = {}) {
     if (block.type === 'file') {
       const isReadonly = !!block.readonly;
       const filename = block.filename;
-
-      const canonicalContents = fileContents || {};
       const initialContent = block.content || '';
+      const fileKey = fileResponseKey(filename);
 
-      const effectiveContent =
-        Object.prototype.hasOwnProperty.call(canonicalContents, filename)
-          ? canonicalContents[filename]
-          : initialContent;
+      // Saved files: \file{..., shared} in group runs, and every editable file
+      // in tests. They use the same response-key path as code cells: live sync
+      // to teammates, draft autosave, and saving with the submission.
+      // `savedFiles` comes from the run page, which passes it to every render
+      // area because files often sit outside question groups.
+      const savedFiles = options.savedFiles || null;
+      const isSaved =
+        runMode === 'run' &&
+        !isReadonly &&
+        !!fileKey &&
+        (isTestMode || !!block.shared) &&
+        !!savedFiles;
 
-      // If you want ONLY active student to edit in RUN mode:
-      // const canEdit = !isReadonly && editable && isActive;
+      if (!isSaved) {
+        return (
+          <div key={`file-wrap-${filename}-${index}`} className="mb-3">
+            <FileBlock
+              filename={filename}
+              initialContent={initialContent}
+              fileContents={fileContents || {}}
+              setFileContents={setFileContents}
+              editable={!isReadonly}
+            />
+          </div>
+        );
+      }
 
-      // If you want anyone to edit non-readonly files (your current behavior):
-      const canEdit = !isReadonly;
-
-      const keyForDb = `file:${filename}`;
+      const activeText = prefill?.[fileKey]?.response ?? initialContent;
+      const allowToggle = !isTestMode && (savedFiles.isObserver || savedFiles.isInstructor);
+      const viewMode = savedFiles.codeViewMode?.[fileKey] || 'active'; // 'active' | 'local'
+      const showLocal = allowToggle && viewMode === 'local';
+      const shownText = showLocal ? (savedFiles.localCode?.[fileKey] ?? activeText) : activeText;
+      const canEdit = !!savedFiles.editable || showLocal;
 
       return (
         <div key={`file-wrap-${filename}-${index}`} className="mb-3">
           <FileBlock
             filename={filename}
-            //fileKey={keyForDb}                 
-            initialContent={effectiveContent}
-            fileContents={canonicalContents}
+            initialContent={initialContent}
+            fileContents={fileContents || {}}
             setFileContents={setFileContents}
             editable={canEdit}
-          //onFileChange={onFileChange}       
+            value={shownText}
+            onTextChange={(text) => {
+              // observers in Local mode: keep it client-side only
+              if (showLocal && !savedFiles.editable) {
+                savedFiles.onLocalCodeChange?.(fileKey, text);
+                return;
+              }
+              savedFiles.onChange(fileKey, text);
+            }}
+            badgeText={isTestMode ? null : 'Shared'}
+            headerExtra={allowToggle ? (
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-secondary"
+                onClick={() => savedFiles.onToggleViewMode?.(fileKey, viewMode === 'active' ? 'local' : 'active')}
+                title="Switch between following the active student and a private sandbox"
+              >
+                {viewMode === 'active' ? 'Following Active' : 'Local Sandbox'}
+              </button>
+            ) : null}
           />
         </div>
       );
@@ -3151,6 +3270,14 @@ export function renderBlocks(blocks, options = {}) {
                 {scoreBadges}
               </span>
             )}
+            {runMode === 'preview' && (
+              <span
+                className={`badge border ms-2 ${block.questionType ? 'bg-info-subtle text-info-emphasis' : 'bg-light text-muted'}`}
+                title="Question type, used only by Research Statistics"
+              >
+                {block.questionType ? questionTypeLabel(block.questionType) : 'No type'}
+              </span>
+            )}
             {lockMainResponse && (
               <span
                 className="ms-2"
@@ -3435,6 +3562,7 @@ export function renderBlocks(blocks, options = {}) {
                 canAsk={options.mode === 'run' ? !!isActive && !options.isObserver && !options.isSubmitted : true}
                 lockReason={options.aiLockReason}
                 onTurnSaved={options.onAiTurnSaved}
+                isInstructor={isInstructor}
               />
             );
           })}

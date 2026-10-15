@@ -8,10 +8,25 @@ const { gradeTestQuestion } = require('../ai/controller');
 const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
+const { isFileResponseKey } = require('../utils/questionId');
+const { filterAccessibleCourses } = require('../research/access');
+const { ensureEndedAtSchema, instanceEndedAt, rejectIfEnded } = require('../utils/instanceEnded');
+const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange, recordPresenceChange } = require('../utils/turnEvents');
+const { recordActivity } = require('../research/activityRecorder');
 const { JSDOM } = require('jsdom');
 const { recordAuditEvent } = require('../utils/auditLogger');
 const { ensureTestFocusSchema } = require('../utils/testFocusSchema');
 const { ensureAssignmentDueSchema } = require('../utils/assignmentDueSchema');
+const { ensureRandomizeOrderSchema } = require('../utils/randomizeOrderSchema');
+
+function generateAccessCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
 
 function escapeRegExp(str = '') {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -64,6 +79,14 @@ function normalizeScoreBands(scores = {}) {
 }
 
 const PRESENCE_WINDOW_SEC = 120;
+// After a "leaving" signal (tab closed, page reloaded), a student counts as
+// absent this many seconds later unless their page checks in again. A reload
+// checks in at once, so reloading does not cost the student their turn.
+const LEAVE_GRACE_SEC = 15;
+// A heartbeat after a longer silence than this (heartbeats come every 20 s;
+// a leave beacon backdates the last one by PRESENCE_WINDOW_SEC - LEAVE_GRACE_SEC)
+// is logged as the member arriving, for research timing.
+const RETURN_GAP_SEC = 90;
 
 async function tableHasColumn(conn, tableName, columnName) {
   const [rows] = await conn.query(
@@ -402,6 +425,36 @@ async function appendResponse(conn, instanceId, submitId, qid, value, {
      VALUES (?, ?, ?, ?, ?, ?)`,
     [instanceId, qid, submitId, type, v, answeredBy]
   );
+}
+
+// Saves "file:<name>" entries only when they differ from the last saved
+// version, so the history shows real edits rather than one copy per submit.
+async function appendChangedFiles(conn, instanceId, submitId, answers, answeredBy) {
+  const entries = Object.entries(answers || {}).filter(([key]) => isFileResponseKey(key));
+  if (!entries.length) return;
+
+  const [rows] = await conn.query(
+    `SELECT r.question_id, r.response
+       FROM responses r
+       JOIN (
+         SELECT question_id, MAX(id) AS max_id
+           FROM responses
+          WHERE activity_instance_id = ? AND question_id IN (?)
+          GROUP BY question_id
+       ) latest ON r.id = latest.max_id`,
+    [instanceId, entries.map(([key]) => key)]
+  );
+  const latest = new Map(rows.map((row) => [row.question_id, String(row.response ?? '')]));
+
+  for (const [key, value] of entries) {
+    const text = String(value ?? '');
+    if (latest.has(key) ? latest.get(key) === text : !text) continue;
+    await appendResponse(conn, instanceId, submitId, key, text, {
+      type: 'code',
+      answeredBy,
+      allowEmpty: true,
+    });
+  }
 }
 
 function getHistoryBaseQid(qidRaw) {
@@ -1072,7 +1125,9 @@ async function getActivityInstanceById(req, res) {
   try {
     await ensureTestFocusSchema();
     await ensureAssignmentDueSchema();
-    const [[instance]] = await db.query(
+    await ensureRandomizeOrderSchema();
+    await ensureEndedAtSchema();
+      const [[instance]] = await db.query(
       `SELECT
          ai.id,
          ai.activity_id,
@@ -1101,6 +1156,9 @@ async function getActivityInstanceById(req, res) {
          ai.points_earned,
          ai.points_possible,
          ai.hidden,
+         ai.randomize_order,
+         ai.test_access_code,
+         ai.ended_at,
          a.title       AS title,
          a.name        AS activity_name,
          a.sheet_url
@@ -1116,6 +1174,17 @@ async function getActivityInstanceById(req, res) {
 
     if (instance.hidden && req.user?.role === 'student') {
       return res.status(403).json({ error: 'This activity is currently hidden.' });
+    }
+
+    // Strip the raw code from student responses; expose only a boolean.
+    // Professors (instructor/admin) see the actual code so they can display it.
+    if (req.user?.role === 'student' && instance.test_access_code) {
+      instance.has_access_code = true;
+      delete instance.test_access_code;
+    } else if (instance.test_access_code) {
+      instance.has_access_code = true;
+    } else {
+      instance.has_access_code = false;
     }
 
     const [[activitySource]] = await db.query(
@@ -1271,9 +1340,11 @@ async function recordHeartbeat(req, res) {
     }
 
     const [[isMember]] = await db.query(
-      `SELECT student_id FROM group_members
+      `SELECT student_id, last_heartbeat AS lastHeartbeat,
+              (last_heartbeat IS NOT NULL AND last_heartbeat >= DATE_SUB(NOW(), INTERVAL ? SECOND)) AS recent
+       FROM group_members
        WHERE activity_instance_id = ? AND student_id = ?`,
-      [instanceId, userId]
+      [RETURN_GAP_SEC, instanceId, userId]
     );
     if (!isMember) {
       if (timerPatch) {
@@ -1288,6 +1359,11 @@ async function recordHeartbeat(req, res) {
        WHERE activity_instance_id = ? AND student_id = ?`,
       [instanceId, userId]
     );
+    if (!Number(isMember.recent)) {
+      recordPresenceChange(req, instanceId, 'joined', {
+        lastSeenAt: isMember.lastHeartbeat ? new Date(isMember.lastHeartbeat).toISOString() : null,
+      });
+    }
 
     let activePresent = false;
     if (inst.active_student_id) {
@@ -1300,7 +1376,10 @@ async function recordHeartbeat(req, res) {
       activePresent = !!row?.present;
     }
 
-    const isCompleted = String(inst.progress_status || '').toLowerCase() === 'completed';
+    // An ended run (Ended - incomplete) is treated like a completed one: nobody
+    // holds or can claim the turn.
+    const isCompleted = String(inst.progress_status || '').toLowerCase() === 'completed'
+      || !!(await instanceEndedAt(instanceId));
 
     if (isCompleted) {
       if (inst.active_student_id != null) {
@@ -1308,6 +1387,7 @@ async function recordHeartbeat(req, res) {
           `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
           [instanceId]
         );
+        recordTurnChange(req, instanceId, inst.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
       }
       const completedPatch = { ...(timerPatch || {}), activeStudentId: null };
       global.emitInstanceState?.(Number(instanceId), completedPatch);
@@ -1348,6 +1428,13 @@ async function recordHeartbeat(req, res) {
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [newActiveId, instanceId]
         );
+        recordTurnChange(
+          req,
+          instanceId,
+          inst.active_student_id,
+          newActiveId,
+          inst.active_student_id ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
+        );
         global.emitInstanceState?.(Number(instanceId), {
           ...(timerPatch || {}),
           activeStudentId: newActiveId,
@@ -1380,6 +1467,40 @@ async function recordHeartbeat(req, res) {
 }
 
 
+// Activity the server cannot see directly: code runs (C++ goes straight to the
+// runner, Python runs in the browser) and Local Sandbox work. Content-free;
+// uses the session user only.
+const CLIENT_ACTIVITY_KINDS = { run: 'runs', sandbox: 'sandbox' };
+async function recordClientActivity(req, res) {
+  const kind = CLIENT_ACTIVITY_KINDS[String(req.body?.kind || '')];
+  if (kind) recordActivity(Number(req.params.instanceId), req.user?.id, kind);
+  return res.status(204).end();
+}
+
+// The student's page is going away (tab closed, navigation, reload). Mark them
+// as absent LEAVE_GRACE_SEC from now unless they check in again. Sent with
+// navigator.sendBeacon, so it uses the session user, never a body value.
+async function recordLeave(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  const userId = Number(req.user?.id);
+  if (!instanceId || !userId) return res.status(204).end();
+  try {
+    const [result] = await db.query(
+      `UPDATE group_members
+          SET last_heartbeat = LEAST(
+                COALESCE(last_heartbeat, NOW()),
+                DATE_SUB(NOW(), INTERVAL ? SECOND)
+              )
+        WHERE activity_instance_id = ? AND student_id = ?`,
+      [PRESENCE_WINDOW_SEC - LEAVE_GRACE_SEC, instanceId, userId]
+    );
+    if (result?.affectedRows) recordPresenceChange(req, instanceId, 'left');
+  } catch (err) {
+    console.error('❌ recordLeave:', err);
+  }
+  return res.status(204).end();
+}
+
 // In getActiveStudent function in controller.js
 
 async function getActiveStudent(req, res) {
@@ -1395,12 +1516,14 @@ async function getActiveStudent(req, res) {
       return res.status(404).json({ error: 'Activity instance not found' });
     }
 
-    const isCompleted = String(instance.progress_status || '').toLowerCase() === 'completed';
+    const isCompleted = String(instance.progress_status || '').toLowerCase() === 'completed'
+      || !!(await instanceEndedAt(instanceId));
     if (isCompleted && instance.active_student_id != null) {
       await db.query(
         `UPDATE activity_instances SET active_student_id = NULL WHERE id = ?`,
         [instanceId]
       );
+      recordTurnChange(req, instanceId, instance.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
     }
 
     if (isCompleted) {
@@ -1435,6 +1558,13 @@ async function getActiveStudent(req, res) {
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [activeStudentId, instanceId]
         );
+        recordTurnChange(
+          req,
+          instanceId,
+          currentActiveId,
+          activeStudentId,
+          currentActiveId ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
+        );
       }
     }
 
@@ -1449,6 +1579,7 @@ async function getActiveStudent(req, res) {
 async function rotateActiveStudent(req, res) {
   const { instanceId } = req.params;
   const { currentStudentId } = req.body;
+  if (await rejectIfEnded(instanceId, res)) return;
 
   const [members] = await db.query(
     `SELECT student_id,
@@ -1470,9 +1601,17 @@ async function rotateActiveStudent(req, res) {
     if (!recentMembers.length) return res.status(404).json({ error: 'No active group members' });
 
     const others = recentMembers.filter((m) => Number(m.student_id) !== Number(currentStudentId));
-    const next = others.length ? others[Math.floor(Math.random() * others.length)] : recentMembers[0];
+    if (!others.length) {
+      // Nobody else is here: rotating would hand the turn to an absent student.
+      return res.status(409).json({
+        error: 'Only one student is present, so the turn was not rotated.',
+        activeStudentId: Number(currentStudentId),
+      });
+    }
+    const next = others[Math.floor(Math.random() * others.length)];
 
     await db.query(`UPDATE activity_instances SET active_student_id = ? WHERE id = ?`, [next.student_id, instanceId]);
+    recordTurnChange(req, instanceId, currentStudentId, next.student_id, TURN_REASONS.INSTRUCTOR_ROTATE);
     global.emitInstanceState?.(Number(instanceId), { activeStudentId: next.student_id });
     res.json({ activeStudentId: next.student_id });
   } catch (err) {
@@ -1497,6 +1636,8 @@ async function setupMultipleGroupInstances(req, res) {
     lockedAfterEnd,
     focusEnforcement,
     assignmentDueAt,
+    randomizeOrder,
+    requireAccessCode,
   } = req.body;
 
   if (!activityId || !courseId) {
@@ -1505,8 +1646,10 @@ async function setupMultipleGroupInstances(req, res) {
 
   await ensureTestFocusSchema();
   await ensureAssignmentDueSchema();
+  await ensureRandomizeOrderSchema();
   const lockName = `setupGroups:${courseId}:${activityId}`;
   const conn = await db.getConnection();
+  const setupTurns = []; // [instanceId, studentId] turn assignments, logged after commit
 
   try {
     // ✅ serialize setup for this course+activity
@@ -1624,13 +1767,16 @@ async function setupMultipleGroupInstances(req, res) {
       console.log('[SETUP] pruned abandoned instances', { courseId, activityId, prunedAbandoned });
     }
 
+    // Generate one code for all instances in this test run, if requested.
+    const accessCode = isTest && requireAccessCode ? generateAccessCode() : null;
+
     async function insertInstance({ group_number }) {
       const [instanceResult] = await conn.query(
         `INSERT INTO activity_instances
            (course_id, activity_id, status, group_number, total_groups, completed_groups, progress_status,
             test_start_at, test_duration_minutes, locked_before_start, locked_after_end, assignment_due_at,
-            test_focus_enforcement, active_rotation_mode)
-         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, ?, 'submit')`,
+            test_focus_enforcement, active_rotation_mode, randomize_order, test_access_code)
+         VALUES (?, ?, 'in_progress', ?, ?, 0, 'not_started', ?, ?, ?, ?, ?, ?, 'submit', ?, ?)`,
         [
           courseId,
           activityId,
@@ -1642,6 +1788,8 @@ async function setupMultipleGroupInstances(req, res) {
           isTest ? (lockedAfterEnd ? 1 : 0) : 0,
           isAssignment ? assignmentDueForDb : null,
           isTest && focusEnforcement ? 1 : 0,
+          randomizeOrder ? 1 : 0,
+          accessCode,
         ]
       );
       return instanceResult.insertId;
@@ -1665,6 +1813,7 @@ async function setupMultipleGroupInstances(req, res) {
           `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
           [student_id, instanceId]
         );
+        setupTurns.push([instanceId, student_id]);
       }
     } else {
       for (let i = 0; i < groups.length; i++) {
@@ -1693,6 +1842,9 @@ async function setupMultipleGroupInstances(req, res) {
     }
 
     await conn.commit();
+    for (const [instanceId, studentId] of setupTurns) {
+      recordTurnChange(req, instanceId, null, studentId, TURN_REASONS.GROUP_SETUP);
+    }
     void recordAuditEvent('groups_formed', {
       req,
       courseId: Number(courseId),
@@ -1710,6 +1862,7 @@ async function setupMultipleGroupInstances(req, res) {
       isTest,
       total_groups: computedTotalGroups,
       instance_count: isTest ? selectedStudentIds.length : groups.length,
+      accessCode: accessCode || null,
     });
   } catch (err) {
     try { await conn.rollback(); } catch { }
@@ -1740,6 +1893,7 @@ async function submitGroupResponses(req, res) {
     ? Math.max(0, requestedRetries)
     : 1;
   const forceOverride = !!req.body?.forceOverride;
+  if (await rejectIfEnded(instanceId, res)) return;
 
   const attempt = req.body?.attempt || {};
   const submissionString = String(attempt?.submissionString || '');
@@ -1817,6 +1971,9 @@ async function submitGroupResponses(req, res) {
         continue;
       }
 
+      // Shared files are saved below, only when changed.
+      if (isFileResponseKey(qid)) continue;
+
       const baseQid = getHistoryBaseQid(qid);
       if (!baseQid) {
         passthroughEntries.push([qid, valueRaw]);
@@ -1850,8 +2007,21 @@ async function submitGroupResponses(req, res) {
       const currentBaseValue = String(group.baseValue ?? '');
       const previousBaseValue = String(latestByQid.get(baseQid) ?? '');
       if (currentBaseValue === previousBaseValue) {
-        payloadEntries.push(...finalFeedbackEntries);
-        continue;
+        // For code-only questions, group.baseValue is null because the base
+        // question key (e.g. '1a') is never set in answers — only '1acode1' is.
+        // In that case the '' === '' comparison always matches and code is never
+        // saved. Fall back to checking if any non-feedback entry actually changed.
+        if (group.baseValue != null) {
+          payloadEntries.push(...finalFeedbackEntries);
+          continue;
+        }
+        const anyDataChanged = group.entries
+          .filter(([qid]) => !isFinalAiFeedbackEntry(qid, baseQid))
+          .some(([qid, val]) => String(latestByQid.get(qid) ?? '') !== String(val ?? ''));
+        if (!anyDataChanged) {
+          payloadEntries.push(...finalFeedbackEntries);
+          continue;
+        }
       }
 
       payloadEntries.push(...group.entries);
@@ -1881,6 +2051,8 @@ async function submitGroupResponses(req, res) {
         allowEmpty: true,
       });
     }
+
+    await appendChangedFiles(conn, instanceId, submitId, answers, studentId);
 
     // ---- 1a) append one marker row for this attempt click ----
     await appendResponse(
@@ -2007,6 +2179,10 @@ async function submitGroupResponses(req, res) {
       progress_status: progressStatus,
       ...(progressStatus === 'completed' ? { activeStudentId: null } : {}),
     };
+    // Turn changes are logged after commit so a rolled-back submit leaves no event.
+    let turnChange = progressStatus === 'completed'
+      ? [studentId, null, TURN_REASONS.CLEARED_ON_COMPLETION]
+      : null;
 
 
     const shouldRotateActive =
@@ -2033,11 +2209,14 @@ async function submitGroupResponses(req, res) {
         `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
         [next, instanceId]
       );
+      turnChange = [studentId, next, TURN_REASONS.ROTATION_AFTER_SUBMIT];
 
       emitPatch = { ...(emitPatch || {}), activeStudentId: next };
     }
 
     await conn.commit();
+    if (turnChange) recordTurnChange(req, instanceId, ...turnChange);
+    recordActivity(instanceId, studentId, 'submits');
 
     // 🔥 NEW: clear drafts after successful submit
     await db.query(
@@ -2119,7 +2298,8 @@ async function getInstancesForActivityInCourse(req, res) {
   try {
     await ensureTestFocusSchema();
     await ensureAssignmentDueSchema();
-    const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
+    await ensureEndedAtSchema();
+      const [[course]] = await db.query(`SELECT name FROM courses WHERE id = ?`, [courseId]);
     const [[activity]] = await db.query(
       `SELECT title, is_test, sheet_url, source_type, content_text
          FROM pogil_activities WHERE id = ?`,
@@ -2176,7 +2356,9 @@ async function getInstancesForActivityInCourse(req, res) {
               review_complete,
               reviewed_at,
               points_earned,
-              points_possible
+              points_possible,
+              test_access_code,
+              ended_at
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?
          AND COALESCE(group_number, 1) <> 0
@@ -2186,6 +2368,29 @@ async function getInstancesForActivityInCourse(req, res) {
       [courseId, activityId]
     );
 
+
+    // Batch-fetch which instances have *any* saved work (drafts OR submitted
+    // responses). Used to distinguish "not started" from "in progress" for
+    // assignment instances whose progress_status is never updated by the
+    // group-navigation flow.
+    const instanceIds = instances.map((i) => i.instance_id);
+    const hasResponsesSet = new Set();
+    if (instanceIds.length > 0) {
+      const [draftHits] = await db.query(
+        `SELECT DISTINCT activity_instance_id
+         FROM response_drafts
+         WHERE activity_instance_id IN (?)`,
+        [instanceIds]
+      );
+      const [respHits] = await db.query(
+        `SELECT DISTINCT activity_instance_id
+         FROM responses
+         WHERE activity_instance_id IN (?)`,
+        [instanceIds]
+      );
+      draftHits.forEach((r) => hasResponsesSet.add(Number(r.activity_instance_id)));
+      respHits.forEach((r) => hasResponsesSet.add(Number(r.activity_instance_id)));
+    }
 
     const groups = [];
     for (const inst of instances) {
@@ -2210,10 +2415,12 @@ async function getInstancesForActivityInCourse(req, res) {
       let activeId = inst.active_student_id == null ? null : Number(inst.active_student_id);
       const recentMembers = members.filter((member) => Number(member.present) === 1);
 
+      // An ended run (Ended - incomplete) never gets a new active student.
       if (
-        !activeId ||
+        !inst.ended_at &&
+        (!activeId ||
         !memberIds.has(activeId) ||
-        !recentMembers.some((member) => Number(member.student_id) === activeId)
+        !recentMembers.some((member) => Number(member.student_id) === activeId))
       ) {
         const fallback = recentMembers[0]?.student_id ?? null;
 
@@ -2221,6 +2428,13 @@ async function getInstancesForActivityInCourse(req, res) {
           await db.query(
             `UPDATE activity_instances SET active_student_id = ? WHERE id = ?`,
             [fallback, inst.instance_id]
+          );
+          recordTurnChange(
+            req,
+            inst.instance_id,
+            activeId,
+            fallback,
+            activeId ? TURN_REASONS.ABSENT_REASSIGNED : TURN_REASONS.CLAIMED
           );
           activeId = fallback;
           global.emitInstanceState?.(inst.instance_id, { activeStudentId: activeId });
@@ -2256,6 +2470,7 @@ async function getInstancesForActivityInCourse(req, res) {
 	        total_groups: inst.total_groups,
 	        completed_groups: inst.completed_groups,
 	        progress_status: inst.progress_status,
+	        ended_at: inst.ended_at,
 	        section_timer_key: inst.section_timer_key,
 	        section_timer_duration_minutes: inst.section_timer_duration_minutes,
 	        section_timer_started_at: inst.section_timer_started_at,
@@ -2277,6 +2492,8 @@ async function getInstancesForActivityInCourse(req, res) {
         reviewed_at: inst.reviewed_at,
         points_earned: inst.points_earned,
         points_possible: inst.points_possible,
+        test_access_code: inst.test_access_code || null,
+        has_responses: hasResponsesSet.has(Number(inst.instance_id)),
         group_submit_counts: groupSubmitCounts,
         members: members.map(m => ({
           student_id: m.student_id,
@@ -2370,7 +2587,7 @@ async function setTimerPauseForActivity(req, res) {
 
   try {
     const [instances] = await db.query(
-      `SELECT id
+      `SELECT id, section_timer_paused AS wasPaused
        FROM activity_instances
        WHERE course_id = ? AND activity_id = ?`,
       [courseId, activityId]
@@ -2379,6 +2596,8 @@ async function setTimerPauseForActivity(req, res) {
     if (!instances.length) {
       return res.json({ ok: true, paused, updated: 0 });
     }
+    // Runs whose pause state actually changes, logged after the update.
+    const changed = instances.filter((i) => (Number(i.wasPaused) === 1) !== paused).map((i) => i.id);
 
     if (paused) {
       await db.query(
@@ -2407,6 +2626,8 @@ async function setTimerPauseForActivity(req, res) {
         [courseId, activityId]
       );
     }
+
+    for (const id of changed) recordPauseChange(req, id, paused);
 
     const [updatedRows] = await db.query(
       `SELECT id,
@@ -2590,8 +2811,9 @@ async function updateTestSettings(req, res) {
 
 // NEW: Reopen a timed test for an instance
 async function reopenInstance(req, res) {
-  const { instanceId } = req.params;   // ✅ correct param
-  const { minutes } = req.body || {};  // optional override
+  const { instanceId } = req.params;
+  // Accept either minutes (relative) or reopenUntil (absolute ISO datetime)
+  const { minutes, reopenUntil: reopenUntilIso } = req.body || {};
 
   if (!instanceId) {
     return res.status(400).json({ error: 'Missing instanceId' });
@@ -2599,7 +2821,8 @@ async function reopenInstance(req, res) {
 
   try {
     const [[instance]] = await db.query(
-      `SELECT test_start_at, test_duration_minutes, test_reopen_until, submitted_at
+      `SELECT test_start_at, test_duration_minutes, test_reopen_until, submitted_at,
+              graded_at, points_earned, points_possible
        FROM activity_instances
        WHERE id = ?`,
       [instanceId]
@@ -2613,28 +2836,104 @@ async function reopenInstance(req, res) {
       return res.status(400).json({ error: 'Not a timed test instance' });
     }
 
-    // If you want to block reopen when already submitted, enforce here
-    if (instance.submitted_at) {
-      return res.status(400).json({ error: 'Test already submitted; clear answers to reopen.' });
+    // Determine the new reopen-until value
+    let reopenUntil;
+    if (reopenUntilIso) {
+      reopenUntil = new Date(reopenUntilIso);
+      if (isNaN(reopenUntil.getTime())) {
+        return res.status(400).json({ error: 'Invalid reopenUntil datetime' });
+      }
+    } else {
+      const extendMinutes =
+        minutes && minutes > 0 ? minutes : instance.test_duration_minutes;
+      reopenUntil = new Date(Date.now() + extendMinutes * 60000);
     }
 
-    const extendMinutes =
-      minutes && minutes > 0 ? minutes : instance.test_duration_minutes;
+    const reopenUntilDb = reopenUntil.toISOString().slice(0, 19).replace('T', ' ');
 
-    const now = new Date();
-    const reopenUntil = new Date(now.getTime() + extendMinutes * 60000);
+    // If submitted: clear submission + grading so student can resubmit.
+    // Answers in `responses` table are intentionally kept.
+    const wasSubmitted = !!instance.submitted_at;
+    if (wasSubmitted) {
+      await db.query(
+        `UPDATE activity_instances
+         SET test_reopen_until = ?,
+             submitted_at      = NULL,
+             graded_at         = NULL,
+             points_earned     = NULL,
+             points_possible   = NULL
+         WHERE id = ?`,
+        [reopenUntilDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, {
+        test_reopen_until: reopenUntilDb,
+        submitted_at: null,
+        graded_at: null,
+        points_earned: null,
+        points_possible: null,
+      });
+    } else {
+      await db.query(
+        `UPDATE activity_instances
+         SET test_reopen_until = ?
+         WHERE id = ?`,
+        [reopenUntilDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, { test_reopen_until: reopenUntilDb });
+    }
 
-    await db.query(
-      `UPDATE activity_instances
-       SET test_reopen_until = DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? MINUTE)
-       WHERE id = ?`,
-      [extendMinutes, instanceId]
-    );
-
-    return res.json({ ok: true, test_reopen_until: reopenUntil });
+    return res.json({ ok: true, test_reopen_until: reopenUntil, wasSubmitted });
   } catch (err) {
     console.error('❌ reopenInstance error:', err);
     return res.status(500).json({ error: 'Failed to reopen test.' });
+  }
+}
+
+// Update assignment due date for one instance; optionally reopen a submitted assignment.
+async function updateAssignmentDueAt(req, res) {
+  const { instanceId } = req.params;
+  const { assignmentDueAt, reopen } = req.body || {};
+
+  if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+  if (!assignmentDueAt) return res.status(400).json({ error: 'Missing assignmentDueAt' });
+
+  const due = new Date(assignmentDueAt);
+  if (isNaN(due.getTime())) return res.status(400).json({ error: 'Invalid assignmentDueAt' });
+
+  try {
+    await ensureAssignmentDueSchema();
+    const dueDb = due.toISOString().slice(0, 19).replace('T', ' ');
+
+    if (reopen) {
+      await db.query(
+        `UPDATE activity_instances
+         SET assignment_due_at = ?,
+             submitted_at      = NULL,
+             graded_at         = NULL,
+             points_earned     = NULL,
+             points_possible   = NULL
+         WHERE id = ?`,
+        [dueDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, {
+        assignment_due_at: dueDb,
+        submitted_at: null,
+        graded_at: null,
+        points_earned: null,
+        points_possible: null,
+      });
+    } else {
+      await db.query(
+        `UPDATE activity_instances SET assignment_due_at = ? WHERE id = ?`,
+        [dueDb, instanceId]
+      );
+      global.emitInstanceState?.(instanceId, { assignment_due_at: dueDb });
+    }
+
+    return res.json({ ok: true, assignment_due_at: dueDb });
+  } catch (err) {
+    console.error('❌ updateAssignmentDueAt error:', err);
+    return res.status(500).json({ error: 'Failed to update due date.' });
   }
 }
 
@@ -2905,6 +3204,21 @@ async function submitTest(req, res) {
         });
       }
 
+      // Persist individual table cell values so they survive the draft-clear on submit
+      const tableRx = new RegExp(`^${escapeRegExp(baseId)}table\\d+cell\\d+_\\d+$`);
+      const allAnsKeys = Object.keys(answers);
+      const tableAnsKeys = allAnsKeys.filter(k => tableRx.test(String(k)));
+      console.log('[TABLE_DEBUG] qid=%s allKeys=%j tableMatches=%j', baseId, allAnsKeys, tableAnsKeys);
+      for (const [key, value] of Object.entries(answers)) {
+        if (tableRx.test(String(key)) && String(value).trim()) {
+          console.log('[TABLE_DEBUG] saving cell key=%s val=%j', key, String(value));
+          await appendResponse(conn, instanceId, submitId, key, String(value), {
+            type: 'text',
+            answeredBy: resolvedStudentId,
+          });
+        }
+      }
+
       console.log('[SUBMIT_TEST] artifacts', {
         baseId,
         writtenPresent: !!written,
@@ -3108,6 +3422,11 @@ async function submitTest(req, res) {
 
     const summaryText = lines.join('\n');
 
+    // Every edited file in a test is part of the submission.
+    if (!isRegrade) {
+      await appendChangedFiles(conn, instanceId, submitId, answers, resolvedStudentId);
+    }
+
     // Test summary
     await appendResponse(conn, instanceId, submitId, 'testTotalScore', totalEarnedPoints, {
       type: 'text',
@@ -3278,8 +3597,23 @@ async function recomputeTestTotals(req, res) {
       [instanceId, instanceId]
     );
 
+    // Also load response_drafts — instructor score overrides land here via bulk-save.
+    // Drafts take precedence over the responses table (same merge logic as getInstanceResponses).
+    const [draftRows] = await conn.query(
+      `SELECT question_id, response
+       FROM response_drafts
+       WHERE activity_instance_id = ?`,
+      [instanceId]
+    );
+
     const map = Object.create(null);
     for (const r of rows) map[r.question_id] = r.response;
+    // Overlay drafts (instructor overrides win)
+    for (const d of draftRows) {
+      if (d.response !== null && d.response !== undefined) {
+        map[d.question_id] = d.response;
+      }
+    }
 
     // 3) Sum scores
     const baseQids = new Set();
@@ -3336,6 +3670,37 @@ async function recomputeTestTotals(req, res) {
   } finally {
     try { await conn.query(`SELECT RELEASE_LOCK(?)`, [lockName]); } catch { }
     conn.release();
+  }
+}
+
+// Reopen a run that was ended because everyone left (Ended - incomplete).
+// The group can then claim the turn and continue where they stopped.
+async function reopenEndedInstance(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  const role = req.user?.role;
+  if (role !== 'instructor' && role !== 'root' && role !== 'creator') {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+
+  try {
+    await ensureEndedAtSchema();
+    const [[inst]] = await db.query(
+      'SELECT course_id AS courseId, ended_at FROM activity_instances WHERE id = ?',
+      [instanceId]
+    );
+    if (!inst) return res.status(404).json({ error: 'Activity instance not found' });
+    const allowed = await filterAccessibleCourses(db, req.user, [inst.courseId]);
+    if (!allowed.length) return res.status(403).json({ error: 'No access to this course' });
+    if (!inst.ended_at) return res.json({ ok: true, reopened: false });
+
+    await db.query('UPDATE activity_instances SET ended_at = NULL WHERE id = ?', [instanceId]);
+    void recordAuditEvent('activity_reopened', { req, activityInstanceId: instanceId });
+    global.emitInstanceState?.(instanceId, { ended_at: null });
+    return res.json({ ok: true, reopened: true });
+  } catch (err) {
+    console.error('❌ reopenEndedInstance:', err);
+    return res.status(500).json({ error: 'Failed to reopen the activity' });
   }
 }
 
@@ -3401,7 +3766,121 @@ async function getInstanceResponseHistory(req, res) {
 }
 
 // Export it as part of the module
+async function forceAdvanceQuestionGroup(req, res) {
+  const instanceId = Number(req.params.instanceId);
+  if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+  if (await rejectIfEnded(instanceId, res)) return;
+
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [[inst]] = await conn.query(
+      `SELECT id, completed_groups, total_groups, progress_status, active_student_id,
+              COALESCE(active_rotation_mode, '') AS active_rotation_mode
+         FROM activity_instances WHERE id = ? FOR UPDATE`,
+      [instanceId]
+    );
+    if (!inst) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Instance not found' });
+    }
+    if (inst.active_rotation_mode === 'sandbox') {
+      await conn.rollback();
+      return res.status(400).json({ error: 'Cannot force-advance a sandbox instance' });
+    }
+
+    const current = Math.max(0, Number(inst.completed_groups) || 0);
+    const total   = Number(inst.total_groups) || 0;
+
+    if (total > 0 && current >= total) {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Group is already on the last question group' });
+    }
+
+    const next           = current + 1;
+    const nowComplete    = total > 0 && next >= total;
+    const progressStatus = nowComplete ? 'completed' : 'in_progress';
+
+    if (nowComplete) {
+      await conn.query(
+        `UPDATE activity_instances
+            SET completed_groups = ?, progress_status = ?, active_student_id = NULL
+          WHERE id = ?`,
+        [next, progressStatus, instanceId]
+      );
+    } else {
+      await conn.query(
+        `UPDATE activity_instances
+            SET completed_groups = ?, progress_status = ?
+          WHERE id = ?`,
+        [next, progressStatus, instanceId]
+      );
+    }
+
+    await conn.commit();
+
+    // Research instrumentation: an instructor-caused transition, never a
+    // student or AI outcome. Whether the group was blocked by the AI at this
+    // moment is reconstructed from the response trace.
+    recordInstructorForceAdvance(req, instanceId, {
+      groupNum: next,
+      totalGroups: total,
+      completedActivity: nowComplete,
+      activeStudentId: inst.active_student_id == null ? null : Number(inst.active_student_id),
+    });
+    if (nowComplete) {
+      recordTurnChange(req, instanceId, inst.active_student_id, null, TURN_REASONS.CLEARED_ON_COMPLETION);
+    }
+
+    const patch = {
+      completed_groups: next,
+      progress_status:  progressStatus,
+      ...(nowComplete ? { activeStudentId: null } : {}),
+    };
+    global.emitInstanceState?.(instanceId, patch);
+
+    return res.json({ ok: true, completed_groups: next, progress_status: progressStatus });
+  } catch (err) {
+    try { await conn.rollback(); } catch { /* ignore */ }
+    console.error('❌ forceAdvanceQuestionGroup:', err);
+    return res.status(500).json({ error: 'Failed to advance question group', details: err?.message });
+  } finally {
+    conn.release();
+  }
+}
+
+
+async function verifyAccessCode(req, res) {
+  const { instanceId } = req.params;
+  const { code } = req.body || {};
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({ error: 'code is required' });
+  }
+  try {
+      const [[instance]] = await db.query(
+      `SELECT test_access_code FROM activity_instances WHERE id = ?`,
+      [instanceId]
+    );
+    if (!instance) return res.status(404).json({ error: 'Instance not found' });
+    if (!instance.test_access_code) {
+      // No code required for this instance — treat as verified.
+      return res.json({ ok: true });
+    }
+    if (code.trim().toUpperCase() !== instance.test_access_code.toUpperCase()) {
+      return res.status(403).json({ error: 'Incorrect access code.' });
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('verifyAccessCode error:', err);
+    return res.status(500).json({ error: 'Server error' });
+  }
+}
+
 module.exports = {
+  recordClientActivity,
+  recordLeave,
+  reopenEndedInstance,
   clearResponsesForInstance,
   recordTestFocusLoss,
   deleteActivityInstance,
@@ -3410,10 +3889,12 @@ module.exports = {
   ensureDemoInstance,
   ensureActivitySandboxInstance,
   getActivityInstanceById,
+  verifyAccessCode,
   getEnrolledStudents,
   recordHeartbeat,
   getActiveStudent,
   rotateActiveStudent,
+  forceAdvanceQuestionGroup,
   setupMultipleGroupInstances,
   submitGroupResponses,
   getInstanceGroups,
@@ -3424,6 +3905,7 @@ module.exports = {
   getInstanceResponses,
   refreshTotalGroups,
   reopenInstance,
+  updateAssignmentDueAt,
   submitTest,
   updateTestSettings,
   recomputeTestTotals,

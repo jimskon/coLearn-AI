@@ -32,6 +32,9 @@ router.get("/:courseId/activities", controller.getCourseActivities);
 // 🔹 NEW: Get test results for a course
 router.get("/:courseId/test-results", controller.getCourseTestResults);
 
+// 🔹 NEW: Get HW/assignment results for a course
+router.get("/:courseId/hw-results", controller.getCourseHWResults);
+
 // Get students for a course
 router.get("/:courseId/students", controller.getStudentsForCourse);
 

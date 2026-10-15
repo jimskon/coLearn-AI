@@ -40,7 +40,8 @@
  * it.
  */
 const ABANDONED_INSTANCE_SQL = `
-      ai.submitted_at IS NULL
+      COALESCE(ai.active_rotation_mode, '') <> 'sandbox'
+  AND ai.submitted_at IS NULL
   AND ai.graded_at IS NULL
   AND COALESCE(ai.completed_groups, 0) = 0
   AND COALESCE(ai.points_earned, 0) = 0
@@ -113,7 +114,8 @@ async function findAbandonedInstances(conn, { courseId = null, activityId = null
  * Returns the number of rows removed.
  */
 async function deleteAbandonedInstances(conn, { courseId = null, activityId = null } = {}) {
-  const where = [ABANDONED_INSTANCE_SQL];
+  // Sandbox instances are managed by deleteAbandonedSandboxes; never touch them here.
+  const where = [ABANDONED_INSTANCE_SQL, "COALESCE(ai.active_rotation_mode, '') <> 'sandbox'"];
   const params = [];
 
   if (courseId != null) {

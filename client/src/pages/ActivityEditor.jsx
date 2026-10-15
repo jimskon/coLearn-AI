@@ -5,6 +5,7 @@ import { parseSheetToBlocks, renderBlocks } from '../utils/parseSheet';
 import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
+import { VisualEditorPanel } from './visual-editor';
 
 export default function ActivityEditor() {
   const { activityId } = useParams();
@@ -12,6 +13,7 @@ export default function ActivityEditor() {
 
   const [activity, setActivity] = useState(null);
   const [rawText, setRawText] = useState('');
+  const [editorMode, setEditorMode] = useState('source'); // 'source' | 'visual'
   const [elements, setElements] = useState([]);
   const [skulptLoaded, setSkulptLoaded] = useState(false);
   const [copySuccess, setCopySuccess] = useState('');
@@ -781,29 +783,57 @@ export default function ActivityEditor() {
       )}
 
       <Row className="editor-body">
-        {/* LEFT: editor + gutter */}
-        <Col md={6} className="scrollable-pane">
-          <div className="editor-wrap">
-            <div className="line-gutter" ref={gutterRef} aria-hidden="true">
-              {Array.from({ length: lineCount }, (_, i) => (
-                <div key={i}>{i + 1}</div>
-              ))}
-            </div>
-
-            <Form.Control
-              as="textarea"
-              className="code-editor"
-              value={rawText}
-              ref={textareaRef}
-              onScroll={() => {
-                if (gutterRef.current && textareaRef.current) {
-                  gutterRef.current.scrollTop = textareaRef.current.scrollTop;
-                }
-              }}
-              onChange={(e) => setRawText(e.target.value)}
-              spellCheck={false}
-            />
+        {/* LEFT: Source editor / Visual editor */}
+        <Col md={editorMode === 'visual' ? 12 : 6} className="scrollable-pane">
+          {/* Source | Visual tab strip */}
+          <div className="d-flex gap-0 mb-1" style={{ borderBottom: '1px solid #dee2e6' }}>
+            <button
+              type="button"
+              className={`btn btn-sm px-3 py-1 border-0 rounded-0 ${editorMode === 'source' ? 'fw-semibold border-bottom border-2 border-primary' : 'text-muted'}`}
+              style={{ background: 'none' }}
+              onClick={() => setEditorMode('source')}
+            >
+              Source
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm px-3 py-1 border-0 rounded-0 ${editorMode === 'visual' ? 'fw-semibold border-bottom border-2 border-primary' : 'text-muted'}`}
+              style={{ background: 'none' }}
+              onClick={() => setEditorMode('visual')}
+            >
+              Visual
+            </button>
           </div>
+
+          {editorMode === 'source' ? (
+            <div className="editor-wrap">
+              <div className="line-gutter" ref={gutterRef} aria-hidden="true">
+                {Array.from({ length: lineCount }, (_, i) => (
+                  <div key={i}>{i + 1}</div>
+                ))}
+              </div>
+
+              <Form.Control
+                as="textarea"
+                className="code-editor"
+                value={rawText}
+                ref={textareaRef}
+                onScroll={() => {
+                  if (gutterRef.current && textareaRef.current) {
+                    gutterRef.current.scrollTop = textareaRef.current.scrollTop;
+                  }
+                }}
+                onChange={(e) => setRawText(e.target.value)}
+                spellCheck={false}
+              />
+            </div>
+          ) : (
+            <VisualEditorPanel
+              rawText={rawText}
+              setRawText={setRawText}
+              activityId={activityId}
+            />
+          )}
         </Col>
 
         {/* RIGHT: preview/errors */}

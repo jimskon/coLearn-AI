@@ -12,6 +12,20 @@ import ManageClassesPage from '../pages/ManageClassesPage';
 import ActivityPreview from '../pages/ActivityPreview';
 import AdminUsersPage from '../pages/AdminUsersPage';
 import AuditLogPage from '../pages/AuditLogPage';
+import StatisticsPage from '../pages/StatisticsPage';
+import ResearchLayout from '../pages/research/ResearchLayout';
+import {
+  OverviewPage as ResearchOverviewPage,
+  ParticipationPage as ResearchParticipationPage,
+  AiGatingPage as ResearchAiGatingPage,
+  RevisionPage as ResearchRevisionPage,
+  TimePage as ResearchTimePage,
+  GroupSizePage as ResearchGroupSizePage,
+  QuestionTypePage as ResearchQuestionTypePage,
+  OverTimePage as ResearchOverTimePage,
+  InterventionsPage as ResearchInterventionsPage,
+  ExportsPage as ResearchExportsPage,
+} from '../pages/research/ResearchPages';
 import ManageCoursesPage from '../pages/ManageCoursesPage';
 import CourseActivitiesPage from '../pages/CourseActivitiesPage';
 import RunActivityPage from '../pages/RunActivityPage';
@@ -23,7 +37,8 @@ import ForgotPasswordPage from '../pages/ForgotPasswordPage';
 import ResetPasswordPage from '../pages/ResetPasswordPage';
 import ManageCourseStudentsPage from '../pages/ManageCourseStudentsPage';
 import ManageCourseProgressPage from '../pages/ManageCourseProgressPage';
-import ManageCourseTestsPage from '../pages/ManageCourseTestsPage'; // 👈 NEW
+import ManageCourseTestsPage from '../pages/ManageCourseTestsPage';
+import ManageCourseHWPage from '../pages/ManageCourseHWPage'; // 👈 NEW
 import DemoLandingPage from '../pages/DemoLandingPage';
 import DemoPathPage from '../pages/DemoPathPage';
 import DemoInfoRequestsAdminPage from '../pages/DemoInfoRequestsAdminPage';
@@ -88,6 +103,19 @@ function AppRoutes() {
         <Route path="/preview/:activityId" element={<ActivityPreview />} />
         <Route path="/admin/users" element={<AdminUsersPage />} />
         <Route path="/admin/logs" element={<AuditLogPage />} />
+        <Route path="/admin/statistics" element={<StatisticsPage />} />
+        <Route path="/research" element={<ResearchLayout />}>
+          <Route index element={<ResearchOverviewPage />} />
+          <Route path="participation" element={<ResearchParticipationPage />} />
+          <Route path="ai-gating" element={<ResearchAiGatingPage />} />
+          <Route path="revision" element={<ResearchRevisionPage />} />
+          <Route path="time" element={<ResearchTimePage />} />
+          <Route path="group-size" element={<ResearchGroupSizePage />} />
+          <Route path="question-type" element={<ResearchQuestionTypePage />} />
+          <Route path="over-time" element={<ResearchOverTimePage />} />
+          <Route path="interventions" element={<ResearchInterventionsPage />} />
+          <Route path="exports" element={<ResearchExportsPage />} />
+        </Route>
         <Route path="/courses/:courseId/activities" element={<CourseActivitiesPage />} />
         <Route path="/launch/:courseId/:activityId" element={<ActivityLaunchPage />} />
         <Route
@@ -116,7 +144,8 @@ function AppRoutes() {
         <Route path="/reset-password" element={<ResetPasswordPage />} />
         <Route path="/courses/:courseId/students" element={<ManageCourseStudentsPage />} />
         <Route path="/courses/:courseId/progress" element={<ManageCourseProgressPage />} />
-        <Route path="/courses/:courseId/tests" element={<ManageCourseTestsPage />} /> {/* 👈 NEW */}
+        <Route path="/courses/:courseId/tests" element={<ManageCourseTestsPage />} />
+        <Route path="/courses/:courseId/hw" element={<ManageCourseHWPage />} />
       </Routes>
 
       <AppFooter />

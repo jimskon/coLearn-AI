@@ -79,7 +79,7 @@
     ],
     question: [
       'responsemode', 'textresponse', 'sampleresponses',
-      'feedbackprompt', 'followupprompt', 'aimode',
+      'feedbackprompt', 'followupprompt', 'aimode', 'questiontype',
     ],
     ai: [
       'aimodel', 'aititle', 'aiprompt', 'aiguardrail', 'aicontext', 'aiinput',
@@ -93,7 +93,12 @@
   // and must therefore survive a visual-editor edit verbatim, but the current
   // inspector has no dedicated control for it. Adding it to this list before
   // that control exists would cause the serializer to remove it.
-  const MANAGED_QUESTION_TAGS = SINGLETONS.question.filter((tag) => tag !== 'aimode');
+  // `questiontype` (research category) is not in this list either: the
+  // serializer handles it separately, keeping the original line verbatim (even
+  // an unknown value) unless the inspector's Question Type control changes it.
+  const MANAGED_QUESTION_TAGS = SINGLETONS.question.filter(
+    (tag) => tag !== 'aimode' && tag !== 'questiontype'
+  );
 
   // ---------------------------------------------------------------------------
   // Tags that may appear inline in prose, or repeat freely within their parent.
@@ -121,6 +126,11 @@
     mode: ['group', 'test', 'assignment', 'demo', 'playground'],
     scoreType: ['response', 'code', 'output'],
     responsemode: ['questions'],
+    // Optional research category for a question. Absent = 'unknown'.
+    questiontype: [
+      'code_writing', 'code_reading', 'output_prediction', 'debugging',
+      'conceptual_explanation', 'application_problem_solving', 'reflection', 'other',
+    ],
   };
 
   // Comma-separated AI-evaluation flags. `aimode` may occur once in the

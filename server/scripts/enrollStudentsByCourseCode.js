@@ -1,13 +1,14 @@
 // server/scripts/enrollStudentsByCourseCode.js
 // Given a course code, generate (or reuse) N demo students and enroll them.
 // - If student exists, reuse.
-// - Else register.
+// - Else insert directly into the DB (no email verification step).
 // - Ensure role is "student".
 // - Enroll is idempotent (ignore already-enrolled).
 //
 // Run with: node server/scripts/enrollStudentsByCourseCode.js
 
 const axios = require('axios');
+const bcrypt = require('bcrypt');
 const readline = require('readline');
 const db = require('../db');
 
@@ -16,12 +17,10 @@ const rl = readline.createInterface({ input: process.stdin, output: process.stdo
 const BASE_URL = process.env.BASE_URL || 'http://localhost:4000/api';
 const PASSWORD = process.env.DEMO_PASSWORD || 'KenyonAI';   // Shared demo password
 
+let PASSWORD_HASH = null;
+
 function prompt(q) {
   return new Promise(resolve => rl.question(q, resolve));
-}
-
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
 }
 
 function getRandomName() {
@@ -50,55 +49,37 @@ async function getUserByEmail(email) {
   return user || null;
 }
 
-async function pollForUser(email, { attempts = 12, delayMs = 250 } = {}) {
-  for (let i = 0; i < attempts; i++) {
-    const u = await getUserByEmail(email);
-    if (u) return u;
-    await sleep(delayMs);
-  }
-  return null;
-}
-
 async function ensureRole(user, desiredRole) {
   if (!user?.id) return user;
   if (user.role !== desiredRole) {
     console.log(`→ Updating role for ${user.email} from ${user.role} to ${desiredRole}`);
     await db.query('UPDATE users SET role = ? WHERE id = ?', [desiredRole, user.id]);
-    const updatedUser = await getUserByEmail(user.email);
-    return updatedUser || { ...user, role: desiredRole };
+    return { ...user, role: desiredRole };
   }
   return user;
 }
 
+// Insert directly into the DB. /auth/register only creates the user when the
+// server runs with AUTH_DEV_AUTO_VERIFY=true; otherwise it emails a confirmation
+// code and leaves the user in pending_users.
 async function registerOrReuseUser(email, name, desiredRole) {
-  try {
-    console.log(`\n=== Registering ${desiredRole} ${email} (or reusing) ===`);
-    const res = await axios.post(`${BASE_URL}/auth/register`, {
-      name, email, password: PASSWORD
-    });
+  console.log(`\n=== Creating ${desiredRole} ${email} (or reusing) ===`);
 
-    const payload = res.data || {};
-    if (payload?.id) {
-      console.log(`✔ Registered user ${email} with id ${payload.id}`);
-      return ensureRole(payload, desiredRole);
-    }
-
-    console.warn(`ℹ️ Register returned no user for ${email}. Polling database...`);
-    const user = await pollForUser(email);
-    if (!user) throw new Error(`User with email ${email} not found after registration.`);
-    console.log(`✔ Reused existing user ${email} (id ${user.id})`);
-    return ensureRole(user, desiredRole);
-
-  } catch (error) {
-    if (error.response?.status === 409) {
-      console.warn(`⚠️ Email already exists for ${email}. Reusing existing user.`);
-      const existingUser = await pollForUser(email);
-      if (!existingUser) throw new Error(`Existing user ${email} not retrievable from database.`);
-      console.log(`✔ Reused existing user ${email} (id ${existingUser.id})`);
-      return ensureRole(existingUser, desiredRole);
-    }
-    throw error;
+  const existing = await getUserByEmail(email);
+  if (existing) {
+    console.log(`✔ Reused existing user ${email} (id ${existing.id})`);
+    return ensureRole(existing, desiredRole);
   }
+
+  const [result] = await db.query(
+    'INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)',
+    [name, email, PASSWORD_HASH, desiredRole]
+  );
+  // Clear any stale signup left by an earlier run through /auth/register.
+  await db.query('DELETE FROM pending_users WHERE email = ?', [email]);
+
+  console.log(`✔ Created user ${email} with id ${result.insertId}`);
+  return { id: result.insertId, name, email, role: desiredRole };
 }
 
 // ---------------- enrollment helper ----------------
@@ -151,6 +132,8 @@ async function main() {
     const numStudentsStr = await prompt('Number of demo students to create/enroll (e.g., 6): ');
     const numStudents = Math.max(1, parseInt(numStudentsStr, 10) || 4);
 
+    PASSWORD_HASH = await bcrypt.hash(PASSWORD, 10);
+
     // 1) Create/reuse students
     const students = [];
     for (let i = 1; i <= numStudents; i++) {
@@ -187,6 +170,7 @@ async function main() {
     }
   } finally {
     rl.close();
+    await db.end();
   }
 }
 

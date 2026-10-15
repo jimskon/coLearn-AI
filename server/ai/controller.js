@@ -33,12 +33,16 @@ function createStubOpenAI() {
         // returns the normal revise shape so the retry gate can offer the
         // explicit Continue option instead of treating an outage as success.
         create: async () => ({
-          choices: [{ message: { content: JSON.stringify({
-            decision: 'revise',
-            feedback: 'AI feedback is temporarily unavailable. Please review your response and try again, or continue when that option is available.',
-            revision_requirement: 'Provide a response that addresses the question.',
-            revision_severity: 'normal',
-          }) } }],
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                decision: 'revise',
+                feedback: 'AI feedback is temporarily unavailable. Please review your response and try again, or continue when that option is available.',
+                revision_requirement: 'Provide a response that addresses the question.',
+                revision_severity: 'normal',
+              })
+            }
+          }],
         }),
       },
     },
@@ -51,12 +55,37 @@ function createStubOpenAI() {
 const openai = isAiConfigured()
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : createStubOpenAI();
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
+const GRADING_MODEL = process.env.OPENAI_GRADING_MODEL || "gpt-5.6-luna";
 const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
 const INLINE_AI_ALLOWED_MODELS = new Set([
   'gpt-5-mini',
   'gpt-4o-mini',
 ]);
+
+function isGpt5FamilyModel(model) {
+  return /^gpt-5(?:[.\-]|$)/i.test(String(model || '').trim());
+}
+
+function buildChatCompletionOptions({
+  model,
+  messages,
+  temperature = 0.2,
+  maxTokens = 700,
+  responseFormat = null,
+}) {
+  const request = { model, messages };
+
+  if (isGpt5FamilyModel(model)) {
+    request.max_completion_tokens = maxTokens;
+  } else {
+    request.max_tokens = maxTokens;
+    if (temperature != null) request.temperature = temperature;
+  }
+
+  if (responseFormat) request.response_format = responseFormat;
+  return request;
+}
 
 function getInlineAiModel(value) {
   const model = String(value || '').trim();
@@ -959,12 +988,12 @@ async function buildStudentResponsePrompt({
     "Classify the group's current submission as accepted or revise.",
     "Return ONLY JSON matching the schema exactly.",
     "The instructor feedbackprompt identifies concepts to coach toward; it is not an exact-answer checklist. Do not invent additional criteria.",
-    "Use decision=accepted when the answer is sufficient to proceed.",
+    "Use decision=accepted when the answer is sufficient to proceed. Relevance alone is not sufficient: a response that only repeats a surface detail from the code, while failing the central task the question asks students to do, must be revise.",
     "Use decision=revise only when the answer needs a meaningful correction or addition. A blank, incoherent, off-topic, or fundamentally wrong answer is also revise; there is no third student-facing state.",
     "For revise, revision_requirement MUST name the one specific unmet requirement. feedback MUST be a short coaching nudge (1–2 sentences) tied to that requirement. Never frame it as a list of failures.",
     "For accepted, feedback must be null when positive feedback is disabled.",
     positiveEnabled
-      ? "When positive feedback is enabled and decision=accepted, feedback MAY be one short, specific affirmative sentence only for a notably strong answer. For ordinary sufficient answers, use feedback=null. If you do give accepted feedback, name what the group did well; never use generic praise and never ask for more work or suggest a revision."
+      ? "When positive feedback is enabled and decision=accepted, use feedback only for a notably strong answer that shows clear, complete reasoning. For an ordinary sufficient or mostly-correct answer, feedback MUST be null so the group can move on quietly. When you do give positive feedback, make it one short, specific affirmative sentence that names a concrete idea the group got right; never use generic praise and never ask for more work or suggest a revision."
       : "",
     "DECISION CONSISTENCY RULE: Decide accepted/revise before writing feedback. Use revise only when you can identify one specific, substantive requirement from the question or instructor feedbackprompt that the current answer does not yet meet. Put that requirement in revision_requirement. If the answer is sufficient and you cannot name such a requirement, return decision=accepted. Never say or imply that an answer is correct, complete, sufficient, or on the right track with no needed change while returning decision=revise.",
     effectiveLenientAcceptance
@@ -972,7 +1001,8 @@ async function buildStudentResponsePrompt({
       : "",
     "Do not require more examples, items, evidence, or precision than the question actually asks for.",
     "If a question asks for a range, the minimum of that range is enough for quantity; judge whether those items are plausible and explained.",
-    "If the group has the core answer plus reasonable reasoning, accept it rather than asking for more detail.",
+    "If the group has the core answer plus reasonable reasoning, accept it rather than asking for more detail. But do not accept an answer that merely names one broad effect when the question asks for several predictions, quantities, or relationships.",
+    "ACCURACY RULE: Leniency permits omitted secondary details and informal wording, never an explicit claim that contradicts the shown code, context, or question. If the group states a wrong count, output, loop role, relationship, or causal claim, set decision=revise and coach that one error, even if another part of the answer is relevant or correct.",
     "As attempts increase, weaken the requirements: prefer a good-enough answer that shows understanding over a perfectly complete one.",
     "For repeated attempts, avoid generic advice like 'be more specific' unless you name the exact missing idea.",
     "On later attempts, prefer accepting a mostly sufficient answer over keeping the group stuck on minor improvements.",
@@ -1011,10 +1041,10 @@ async function buildStudentResponsePrompt({
     timerPressure === 'expired'
       ? "TIMER EXPIRED: The section time has run out. Set accepted=true for any answer that is on-topic. Do not ask for more work."
       : timerPressure === 'critical'
-      ? "TIME CRITICAL: Less than 2 minutes remain. If the answer shows any reasonable understanding of the question, set accepted=true. Do not request elaboration."
-      : timerPressure === 'low'
-      ? "TIME PRESSURE: About 5 minutes remain. Prefer accepting answers that show understanding even if incomplete. Keep any feedback very brief."
-      : "",
+        ? "TIME CRITICAL: Less than 2 minutes remain. If the answer shows any reasonable understanding of the question, set accepted=true. Do not request elaboration."
+        : timerPressure === 'low'
+          ? "TIME PRESSURE: About 5 minutes remain. Prefer accepting answers that show understanding even if incomplete. Keep any feedback very brief."
+          : "",
   ].filter(Boolean).join("\n");
 
   const schema = `Return JSON only:
@@ -1040,7 +1070,7 @@ async function buildStudentResponsePrompt({
     `Feedback language rule: write only in ${feedbackLanguage}, not the student's answer language if it differs.`,
     "Scaffolding rule: compare the current group submission to the prior group attempts if provided; acknowledge progress only briefly, then focus on the next missing idea.",
     "Acceptance rule: do not ask for the maximum number of examples/items when the question gives a range; the lower bound is enough if the answer quality is reasonable.",
-    "Acceptance rule: if the group has the core answer plus reasonable reasoning, accept it instead of asking for more detail.",
+    "Acceptance rule: if the group has the core answer plus reasonable reasoning, accept it instead of asking for more detail. Relevance alone is not enough: do not accept a response that merely repeats a surface detail from the code while failing the central task.",
     "Acceptance rule: use the instructor feedbackprompt as guidance for the core idea, not as an exact-answer checklist. Do not add criteria from the sample or your own expectations.",
     "Acceptance rule: as attempts increase, weaken the requirements and let a good-enough answer move on.",
     "Acceptance rule: when the answer is mostly correct and shows reasoning, loosen requirements and let the group move on instead of demanding extra detail.",
@@ -1061,8 +1091,8 @@ async function buildStudentResponsePrompt({
     timerPressure === 'expired' || timerPressure === 'critical'
       ? "Timer rule: time has run out or is critically low — override other criteria and set accepted=true if the answer is at all on-topic."
       : timerPressure === 'low'
-      ? "Timer rule: time is running low — be generous and accept answers that show reasonable engagement with the question."
-      : "",
+        ? "Timer rule: time is running low — be generous and accept answers that show reasonable engagement with the question."
+        : "",
     "",
     schema,
     "Default to decision=accepted unless the answer is clearly off-track or incoherent. A partial but engaged answer should move forward.",
@@ -1767,6 +1797,30 @@ function looksGibberish(ans) {
   return a.length < 2;
 }
 
+function looksClearlyIncompleteStructuredPrediction({
+  questionText = '',
+  feedbackPrompt = '',
+  studentAnswer = '',
+}) {
+  const question = stripHtml(questionText);
+  const requiredBullets = question.match(/^\s*[-*]\s+/gm) || [];
+  if (requiredBullets.length < 3) return false;
+
+  // This deliberately handles only a narrow, high-confidence case: a prompt
+  // with several listed predictions and a feedbackprompt that supplies two or
+  // more numerical targets. A response containing none of those quantities
+  // cannot yet be a sufficient trace, even when it mentions a surface effect
+  // such as "it prints the name." Other short or differently worded answers
+  // still go to the normal AI evaluator.
+  const expectedNumbers = [...new Set(
+    (stripHtml(feedbackPrompt).match(/\b\d+(?:\.\d+)?\b/g) || [])
+  )];
+  if (expectedNumbers.length < 2) return false;
+
+  const answerNumbers = String(studentAnswer).match(/\b\d+(?:\.\d+)?\b/g) || [];
+  return answerNumbers.length === 0;
+}
+
 function detectLangFromCode(src = "") {
   const s = String(src).trim();
   if (!s) return null;
@@ -1952,13 +2006,13 @@ async function evaluateStudentResponse(req, res) {
     const gate = isDryRunAIRequest(req)
       ? dryRunRetryGate({ accepted: acceptedForGate, retriesRequired: Number(retriesRequired) })
       : await applyGroupRetryGate({
-          instanceId: Number(instanceId),
-          groupNum: Number(groupNum),
-          answeredByUserId: Number(answeredByUserId),
-          retriesRequired: Number(retriesRequired),
-          accepted: acceptedForGate,
-          submissionString: String(submissionString ?? ""),
-        });
+        instanceId: Number(instanceId),
+        groupNum: Number(groupNum),
+        answeredByUserId: Number(answeredByUserId),
+        retriesRequired: Number(retriesRequired),
+        accepted: acceptedForGate,
+        submissionString: String(submissionString ?? ""),
+      });
 
     return sendAI(res, {
       accepted: acceptedForGate,
@@ -1992,6 +2046,17 @@ async function evaluateStudentResponse(req, res) {
     // judgment. Do not synthesize praise here: any final feedback that belongs
     // with the accepted answer should already be persisted as F1/FA rows.
     feedback = null;
+    return await applyGateAndSend();
+  }
+
+  if (looksClearlyIncompleteStructuredPrediction({
+    questionText,
+    feedbackPrompt,
+    studentAnswer: answerRaw,
+  })) {
+    accepted = false;
+    decision = 'revise';
+    feedback = 'Start with one concrete prediction from the code, such as a requested quantity or loop role; a general statement alone does not yet answer the trace.';
     return await applyGateAndSend();
   }
 
@@ -2039,15 +2104,15 @@ async function evaluateStudentResponse(req, res) {
         activityLanguage,
       });
 
-      const chat = await openai.chat.completions.create({
-        model: MODEL,
+      const chat = await openai.chat.completions.create(buildChatCompletionOptions({
+        model: GRADING_MODEL,
         messages: [
           { role: "system", content: promptParts.sys },
           { role: "user", content: promptParts.user },
         ],
-        temperature: 0.2,
-        max_tokens: 180,
-      });
+        temperature: 0.1,
+        maxTokens: 350,
+      }));
 
       const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
       feedback = raw || buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
@@ -2120,16 +2185,16 @@ async function evaluateStudentResponse(req, res) {
   const obviouslyBad = !answerRaw || looksGibberish(answerRaw);
 
   try {
-    const chat = await openai.chat.completions.create({
+    const chat = await openai.chat.completions.create(buildChatCompletionOptions({
       model: MODEL,
       messages: [
         { role: "system", content: sys },
         { role: "user", content: user },
       ],
       temperature: 0.2,
-      max_tokens: 220,
-      response_format: { type: "json_object" },
-    });
+      maxTokens: 700,
+      responseFormat: { type: "json_object" },
+    }));
 
     const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -2252,6 +2317,7 @@ async function evaluatePythonCode(req, res) {
     activityLanguage = '',
     timerRemainingMs = null,
     timerDurationMs = null,
+    supportingFiles = [],
   } = req.body || {};
 
   if (!questionText || !studentCode) {
@@ -2286,6 +2352,7 @@ async function evaluatePythonCode(req, res) {
     activityLanguage,
     timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
     timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
+    supportingFiles,
   });
 
   // ✅ ADD THIS (Step 2 already, but keep it)
@@ -2308,17 +2375,17 @@ async function evaluatePythonCode(req, res) {
   // ---- EXISTING CALL ----
   const gate = isDryRunAIRequest(req)
     ? dryRunRetryGate({
-        accepted: result.accepted === true,
-        retriesRequired: Number(retriesRequired),
-      })
+      accepted: result.accepted === true,
+      retriesRequired: Number(retriesRequired),
+    })
     : await applyGroupRetryGate({
-        instanceId: Number(instanceId),
-        groupNum: Number(groupNum),
-        answeredByUserId: Number(answeredByUserId),
-        retriesRequired: Number(retriesRequired),
-        accepted: result.accepted === true,
-        submissionString: req.body?.submissionString ?? "",
-      });
+      instanceId: Number(instanceId),
+      groupNum: Number(groupNum),
+      answeredByUserId: Number(answeredByUserId),
+      retriesRequired: Number(retriesRequired),
+      accepted: result.accepted === true,
+      submissionString: req.body?.submissionString ?? "",
+    });
 
   // ✅ ADD THIS → Step 3 OUTPUT LOG (RIGHT AFTER CALL)
   console.log("[RETRY_GATE RESULT]", gate);
@@ -2411,13 +2478,13 @@ async function callLLMJsonStrict({
   async function doCall(extraMsg) {
     const msgs = extraMsg ? [...messages, extraMsg] : messages;
 
-    return await openai.chat.completions.create({
+    return await openai.chat.completions.create(buildChatCompletionOptions({
       model: MODEL,
       messages: msgs,
       temperature,
-      max_tokens,
-      response_format: { type: "json_object" }, // ✅ force JSON output
-    });
+      maxTokens: max_tokens,
+      responseFormat: { type: "json_object" }, // ✅ force JSON output
+    }));
   }
 
   // Try #1
@@ -2451,6 +2518,42 @@ async function callLLMJsonStrict({
   return obj;
 }
 
+// Files the program runs with (\file blocks), capped so a large data file
+// cannot crowd out the student's code.
+const SUPPORTING_FILE_MAX_CHARS = 6000;
+const SUPPORTING_FILES_MAX_TOTAL = 20000;
+
+function normalizeSupportingFiles(files) {
+  if (!Array.isArray(files)) return [];
+  const out = [];
+  let total = 0;
+  for (const f of files.slice(0, 12)) {
+    const name = String(f?.name || '').trim();
+    let content = String(f?.content ?? '');
+    if (!name || !content.trim()) continue;
+    if (content.length > SUPPORTING_FILE_MAX_CHARS) {
+      content = `${content.slice(0, SUPPORTING_FILE_MAX_CHARS)}\n... (truncated)`;
+    }
+    if (total + content.length > SUPPORTING_FILES_MAX_TOTAL) break;
+    total += content.length;
+    out.push({ name, content });
+  }
+  return out;
+}
+
+function hasSupportingFiles(files) {
+  return normalizeSupportingFiles(files).length > 0;
+}
+
+function formatSupportingFiles(files) {
+  const list = normalizeSupportingFiles(files);
+  if (!list.length) return '';
+  const body = list
+    .map((f) => `File: ${f.name}\n\`\`\`\n${f.content}\n\`\`\``)
+    .join('\n\n');
+  return `\nSupporting files used by the program (the group may have edited these):\n${body}\n`;
+}
+
 async function evaluateCode({
   questionText,
   studentCode,
@@ -2470,6 +2573,7 @@ async function evaluateCode({
   activityLanguage = '',
   timerRemainingMs = null,
   timerDurationMs = null,
+  supportingFiles = [],
 }) {
   // Default: fail-open (don’t block if AI fails)
   const base = { accepted: true, feedback: null };
@@ -2545,10 +2649,10 @@ async function evaluateCode({
     codeTimerPressure === 'expired'
       ? "- TIMER EXPIRED: Section time is up. If the code is on-task and makes a reasonable attempt, set accepted=true."
       : codeTimerPressure === 'critical'
-      ? "- TIME CRITICAL: Under 2 minutes left. Accept any code that makes a reasonable attempt at the task."
-      : codeTimerPressure === 'low'
-      ? "- TIME PRESSURE: About 5 minutes left. Be generous — accept code that is mostly correct or shows clear intent."
-      : "",
+        ? "- TIME CRITICAL: Under 2 minutes left. Accept any code that makes a reasonable attempt at the task."
+        : codeTimerPressure === 'low'
+          ? "- TIME PRESSURE: About 5 minutes left. Be generous — accept code that is mostly correct or shows clear intent."
+          : "",
   ].filter(Boolean).join("\n");
 
   const fence =
@@ -2587,9 +2691,9 @@ Current group code (v${codeVersion}):
 \`\`\`${fence}
 ${studentCode}
 \`\`\`
-
+${formatSupportingFiles(supportingFiles)}
 Return STRICT JSON with exactly these keys:
-{"accepted":true|false,"feedback":string|null}
+{"accepted":true|false,"feedback":string|null,"error_line":string|null,"error_reason":string|null}
 
 Rules:
 - accepted=true if the code correctly satisfies the task, even if it uses a different approach than the sample.
@@ -2601,6 +2705,11 @@ Rules:
 - if rejected, feedback must be ONE short actionable hint.
 - No style/naming/formatting nits. No extra features beyond the prompt.
 - Use prior group attempts to avoid repeating feedback and to choose the right scaffolding level, but decide accepted=true/false from the current code and output.
+- If accepted=false, error_line and error_reason MUST both be non-null.
+- error_line must identify the exact line or expression in the student's current code that is wrong or missing.
+- error_reason must explain the specific functional or mathematical error.
+- If you cannot identify a specific incorrect or missing line in the current code, accepted MUST be true.${hasSupportingFiles(supportingFiles) ? "\n- Supporting files are part of the program. error_line may point to a line in a supporting file." : ""}
+- If no execution output is provided, judge correctness directly from the current code. Do not invent execution values or assume the student used any suggested test inputs.
 ${rules ? "\n" + rules : ""}
 `.trim();
 
@@ -2611,7 +2720,7 @@ ${rules ? "\n" + rules : ""}
 
   let chat;
   try {
-    chat = await openai.chat.completions.create({
+    chat = await openai.chat.completions.create(buildChatCompletionOptions({
       model: MODEL,
       messages: [
         {
@@ -2627,8 +2736,8 @@ ${rules ? "\n" + rules : ""}
         { role: "user", content: prompt },
       ],
       temperature: 0.2,
-      max_tokens: 220,
-    });
+      maxTokens: 700,
+    }));
   } catch (err) {
     console.error("❌ OpenAI evaluateCode failed:", err);
     return base;
@@ -2641,22 +2750,27 @@ ${rules ? "\n" + rules : ""}
     console.log("[AI_DEBUG] OpenAI raw (first 400):", raw.slice(0, 400));
   }
 
-  const obj = safeJsonObject(raw);
-  if (!obj) return base;
+const obj = safeJsonObject(raw);
+if (!obj) return base;
 
+const norm = normalizeAIResult(obj);
+let { accepted } = norm;
+let feedback = norm.feedback;
 
-  // modelAccepted is the model’s real gate
-  const norm = normalizeAIResult(obj);
-  let { accepted } = norm;
-  let feedback = norm.feedback;
+const errorLine = String(obj.error_line || "").trim();
+const errorReason = String(obj.error_reason || "").trim();
 
-  // strip soft nitpicks, etc (keep your existing filters)
-  if (isSoftNitpick(feedback) && !isFatal(feedback)) feedback = null;
+if (!accepted && (!errorLine || !errorReason)) {
+  accepted = true;
+  feedback = null;
+}
 
-  // If NOT accepted, we require a feedback (a real actionable hint)
-  if (!accepted && !feedback) {
-    feedback = "Make one small change that directly moves the code toward the stated task.";
-  }
+// strip soft nitpicks, etc
+if (isSoftNitpick(feedback) && !isFatal(feedback)) feedback = null;
+
+if (!accepted && !feedback) {
+  feedback = "Make one small change that directly moves the code toward the stated task.";
+}
 
   // If accepted and positive feedback disabled, feedback must be null
   if (accepted && !positiveEnabled) feedback = null;
@@ -2686,6 +2800,7 @@ async function evaluateCppCode(req, res) {
     activityLanguage = '',
     timerRemainingMs = null,
     timerDurationMs = null,
+    supportingFiles = [],
   } = req.body || {};
 
   if (!questionText || !studentCode) {
@@ -2724,6 +2839,7 @@ async function evaluateCppCode(req, res) {
     activityLanguage,
     timerRemainingMs: timerRemainingMs != null ? Number(timerRemainingMs) : null,
     timerDurationMs: timerDurationMs != null ? Number(timerDurationMs) : null,
+    supportingFiles,
   });
 
 
@@ -2732,17 +2848,17 @@ async function evaluateCppCode(req, res) {
     req.body?.groupSubmissionString ?? req.body?.submissionString ?? null;
   const gate = isDryRunAIRequest(req)
     ? dryRunRetryGate({
-        accepted: result.accepted === true,
-        retriesRequired: Number(retriesRequired),
-      })
+      accepted: result.accepted === true,
+      retriesRequired: Number(retriesRequired),
+    })
     : await applyGroupRetryGate({
-        instanceId: Number(instanceId),
-        groupNum: Number(groupNum),
-        answeredByUserId: Number(answeredByUserId),
-        retriesRequired: Number(retriesRequired),
-        accepted: result.accepted === true,
-        submissionString: groupSubmissionString ?? studentCode,
-      });
+      instanceId: Number(instanceId),
+      groupNum: Number(groupNum),
+      answeredByUserId: Number(answeredByUserId),
+      retriesRequired: Number(retriesRequired),
+      accepted: result.accepted === true,
+      submissionString: groupSubmissionString ?? studentCode,
+    });
 
   return sendAI(res, { ...result, ...gate });
 }
@@ -2752,6 +2868,7 @@ async function evaluateCppCode(req, res) {
 // (omitted in this snippet to keep it readable)
 
 module.exports = {
+  formatSupportingFiles,
   assistInlineActivity,
   assistActivityAi,
   runInlineAiCompletion,

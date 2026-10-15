@@ -2,6 +2,7 @@
 const db = require("../db");
 const { inferActivityTypeFromActivity, inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
+const { ensureEndedAtSchema } = require('../utils/instanceEnded');
 
 async function tableHasColumn(conn, tableName, columnName) {
   const [rows] = await conn.query(
@@ -224,6 +225,7 @@ async function getCourseActivities(req, res) {
   const userId = req.user?.id;
 
   console.log("🔍 getCourseActivities for course:", courseId, "and user:", userId);
+  try { await ensureEndedAtSchema(); } catch (err) { console.error('ended_at schema:', err); }
 
   if (!userId) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -320,6 +322,18 @@ async function getCourseActivities(req, res) {
       LIMIT 1
     ) AS total_groups,
 
+    -- Ended - incomplete (everyone left before finishing; research/autoEnd.js)
+    (
+      SELECT ai2.ended_at
+      FROM activity_instances ai2
+      JOIN group_members gm ON gm.activity_instance_id = ai2.id
+      WHERE ai2.activity_id = a.id
+        AND ai2.course_id = c.id
+        AND COALESCE(ai2.group_number, 1) <> 0
+        AND gm.student_id = ?
+      LIMIT 1
+    ) AS ended_at,
+
     COUNT(ai.id) AS group_count,
     MAX(ai.status = 'in_progress') AS is_ready,
     MAX(COALESCE(ai.hidden, 0)) AS hidden
@@ -343,6 +357,7 @@ async function getCourseActivities(req, res) {
         userId, // progress_status
         userId, // completed_groups
         userId, // total_groups
+        userId, // ended_at
         courseId
       ]
     );
@@ -360,6 +375,8 @@ async function getCourseActivities(req, res) {
 
       if (status === 'completed' || (tg > 0 && cg >= tg)) {
         student_status = 'complete';
+      } else if (row.ended_at) {
+        student_status = 'ended';
       } else if (status === 'not_started' || (!status && cg === 0)) {
         student_status = 'not_started';
       } else {
@@ -429,7 +446,7 @@ async function resolveStudentActivityLaunch(req, res) {
 
   try {
     const [[courseActivity]] = await db.query(
-      `SELECT a.id, a.title
+      `SELECT a.id, a.title, a.is_test
          FROM courses c
          JOIN pogil_activities a ON a.class_id = c.class_id
         WHERE c.id = ? AND a.id = ?`,
@@ -440,10 +457,15 @@ async function resolveStudentActivityLaunch(req, res) {
     }
 
     if (user.role !== 'student') {
+      // Mirror the same routing logic CourseActivitiesPage uses for instructors:
+      // tests → test-setup, groups → view-groups
+      const isTest = Number(courseActivity.is_test) === 1;
+      const destination = isTest
+        ? `/test-setup/${courseId}/${activityId}`
+        : `/view-groups/${courseId}/${activityId}`;
       return res.json({
-        destination: `/courses/${courseId}/activities`,
+        destination,
         activity_title: courseActivity.title,
-        message: 'Instructors manage this activity from the course activity list.',
       });
     }
 
@@ -642,6 +664,7 @@ async function getCourseInfo(req, res) {
 }
 
 async function getCourseProgress(req, res) {
+  try { await ensureEndedAtSchema(); } catch (err) { console.error('ended_at schema:', err); }
   const { courseId } = req.params;
 
   try {
@@ -654,55 +677,55 @@ async function getCourseProgress(req, res) {
       [courseId]
     );
 
-    // 2) Get NON-TEST activities for this course's class_id
-    const [activitiesRows] = await db.query(
-      `SELECT id, name, is_test
+    // 2) Non-test activities for this course's class (only real DB columns used)
+    //    is_test IS NULL = never set, treat as non-test (same as 0)
+    const [allNonTestRows] = await db.query(
+      `SELECT id, name, is_test, content_text, source_type, sheet_url
        FROM pogil_activities
        WHERE class_id = (
          SELECT class_id FROM courses WHERE id = ?
        )
-         AND is_test = 0
+         AND (is_test = 0 OR is_test IS NULL)
        ORDER BY order_index`,
       [courseId]
     );
 
-    // 3) Pull cached instance progress for these activities in this course
-    const [instanceRows] = await db.query(
-      `
-  SELECT
-    ai.activity_id,
-    ai.points_earned,
-    ai.points_possible,
-    ai.progress_status,
-    gm.student_id,
-    ai.id AS instance_id,
-    COALESCE(ai.graded_at, ai.submitted_at) AS last_ts
-  FROM activity_instances ai
-  JOIN pogil_activities a ON a.id = ai.activity_id
-  JOIN group_members gm   ON gm.activity_instance_id = ai.id
-  JOIN (
-    SELECT
-      gm2.student_id,
-      ai2.activity_id,
-      MAX(COALESCE(ai2.graded_at, ai2.submitted_at)) AS last_ts,
-      MAX(ai2.id) AS last_id
-    FROM activity_instances ai2
-    JOIN pogil_activities a2 ON a2.id = ai2.activity_id
-    JOIN group_members gm2   ON gm2.activity_instance_id = ai2.id
-    WHERE ai2.course_id = ?
-      AND a2.is_test = 1
-    GROUP BY gm2.student_id, ai2.activity_id
-  ) latest
-    ON latest.student_id = gm.student_id
-   AND latest.activity_id = ai.activity_id
-   AND COALESCE(ai.graded_at, ai.submitted_at) = latest.last_ts
-   AND ai.id = latest.last_id
-  WHERE ai.course_id = ?
-    AND a.is_test = 1
-  `,
-      [courseId, courseId]
-    );
+    // Filter to group-mode activities using the same utility the API uses
+    const activitiesRows = [];
+    for (const row of allNonTestRows) {
+      const aType = await inferActivityTypeFromActivity(row);
+      if (aType === 'group' || aType === 'playground') {
+        activitiesRows.push(row);
+      }
+    }
 
+    if (activitiesRows.length === 0) {
+      return res.json({ activities: [], students: studentsRows.map(s => ({
+        id: s.id, name: s.name, email: s.email,
+        completeCount: 0, partialCount: 0, progress: {}
+      })) });
+    }
+
+    const activityIds = activitiesRows.map(a => a.id);
+
+    // 3) Pull all non-test instances for this course and these activities.
+    //    No timestamp-matching subquery — handle dedup in JS.
+    const placeholders = activityIds.map(() => '?').join(',');
+    const [instanceRows] = await db.query(
+      `SELECT
+         ai.activity_id,
+         ai.total_groups,
+         ai.completed_groups,
+         ai.progress_status,
+         ai.ended_at,
+         gm.student_id
+       FROM activity_instances ai
+       JOIN group_members gm ON gm.activity_instance_id = ai.id
+       WHERE ai.course_id = ?
+         AND ai.activity_id IN (${placeholders})
+      `,
+      [courseId, ...activityIds]
+    );
 
     // 4) Build per-student structure
     const progressByStudent = new Map();
@@ -713,17 +736,11 @@ async function getCourseProgress(req, res) {
         email: s.email,
         completeCount: 0,
         partialCount: 0,
-        // activityId -> { status, completedGroups, totalGroups }
         progress: {}
       });
     }
 
-    // Helper to choose the "better" progress if we ever see multiple instances
-    const statusRank = {
-      not_started: 0,
-      in_progress: 1,
-      completed: 2,
-    };
+    const statusRank = { not_started: 0, in_progress: 1, completed: 2 };
 
     function betterProgress(a, b) {
       if (!a) return b;
@@ -732,73 +749,42 @@ async function getCourseProgress(req, res) {
       const rb = statusRank[b.status] ?? 0;
       if (rb > ra) return b;
       if (rb < ra) return a;
-      // same status: prefer the one with more completedGroups
       if ((b.completedGroups || 0) > (a.completedGroups || 0)) return b;
       return a;
     }
 
-    // 5) Fill per-student per-activity from cached instance rows
+    // 5) Fill per-student per-activity (keep best progress across multiple instances)
     for (const row of instanceRows) {
-      const {
-        student_id,
-        activity_id,
-        total_groups,
-        completed_groups,
-        progress_status,
-      } = row;
-
+      const { student_id, activity_id, total_groups, completed_groups, progress_status, ended_at } = row;
       const student = progressByStudent.get(student_id);
       if (!student) continue;
 
+      const cg = Number(completed_groups || 0);
+      const tg = Number(total_groups || 0);
       const status =
         progress_status ||
-        (completed_groups && total_groups && completed_groups >= total_groups
-          ? 'completed'
-          : completed_groups > 0
-            ? 'in_progress'
-            : 'not_started');
+        (tg > 0 && cg >= tg ? 'completed' : cg > 0 ? 'in_progress' : 'not_started');
 
-      const entry = {
-        status,
-        completedGroups: completed_groups || 0,
-        totalGroups: total_groups || 0,
-      };
-
-      const existing = student.progress[activity_id];
-      student.progress[activity_id] = betterProgress(existing, entry);
+      // ended: Ended - incomplete (everyone left before finishing)
+      const entry = { status, completedGroups: cg, totalGroups: tg, ended: !!ended_at && status !== 'completed' };
+      student.progress[activity_id] = betterProgress(student.progress[activity_id], entry);
     }
 
-    // 6) Ensure every activity has an entry for every student,
-    //    and compute complete/partial counts.
+    // 6) Ensure every activity has an entry and compute complete/partial counts
     for (const student of progressByStudent.values()) {
       for (const a of activitiesRows) {
-        const actId = a.id;
-        let prog = student.progress[actId];
-
+        let prog = student.progress[a.id];
         if (!prog) {
-          prog = {
-            status: 'not_started',
-            completedGroups: 0,
-            totalGroups: 0,
-          };
-          student.progress[actId] = prog;
+          prog = { status: 'not_started', completedGroups: 0, totalGroups: 0 };
+          student.progress[a.id] = prog;
         }
-
-        if (prog.status === 'completed') {
-          student.completeCount += 1;
-        } else if (prog.status === 'in_progress') {
-          student.partialCount += 1;
-        }
+        if (prog.status === 'completed') student.completeCount += 1;
+        else if (prog.status === 'in_progress') student.partialCount += 1;
       }
     }
 
-    // 7) Shape response
     res.json({
-      activities: activitiesRows.map(a => ({
-        id: a.id,
-        name: a.name,
-        isTest: false, // we filtered them out
-      })),
+      activities: activitiesRows.map(a => ({ id: a.id, name: a.name, isTest: false })),
       students: Array.from(progressByStudent.values()),
     });
   } catch (err) {
@@ -806,6 +792,7 @@ async function getCourseProgress(req, res) {
     res.status(500).json({ error: "Failed to get student progress" });
   }
 }
+
 // GET test results for a course (only test activities)
 // Shape:
 // {
@@ -1028,13 +1015,16 @@ async function getGroupsConfigForActivity(req, res) {
       `
       SELECT
         ai.id AS instance_id,
+        ai.group_number,
         gm.student_id,
         gm.role
       FROM activity_instances ai
       JOIN group_members gm ON gm.activity_instance_id = ai.id
       WHERE ai.course_id = ?
         AND ai.activity_id = ?
-      ORDER BY ai.id ASC, gm.id ASC
+        AND COALESCE(ai.active_rotation_mode, '') <> 'sandbox'
+        AND ai.group_number IS NOT NULL
+      ORDER BY ai.group_number ASC, gm.id ASC
       `,
       [courseId, sourceActivityId]
     );
@@ -1065,6 +1055,119 @@ async function getGroupsConfigForActivity(req, res) {
 }
 
 
+
+// GET hw results for a course (assignment activities — is_test = 0, assignment_due_at set)
+// Shape mirrors getCourseTestResults
+async function getCourseHWResults(req, res) {
+  const { courseId } = req.params;
+
+  try {
+    // 1) Enrolled students
+    const [studentsRows] = await db.query(
+      `SELECT u.id, u.name, u.email
+       FROM course_enrollments ce
+       JOIN users u ON ce.student_id = u.id
+       WHERE ce.course_id = ?`,
+      [courseId]
+    );
+
+    // 2) Assignment-mode activities — only real DB columns, filter by type in JS
+    //    is_test IS NULL = never set, treat as non-test
+    const [allNonTestHwRows] = await db.query(
+      `SELECT id, name, is_test, content_text, source_type, sheet_url
+       FROM pogil_activities
+       WHERE class_id = (
+         SELECT class_id FROM courses WHERE id = ?
+       )
+         AND (is_test = 0 OR is_test IS NULL)
+       ORDER BY order_index`,
+      [courseId]
+    );
+
+    // Filter to assignment-mode activities using the same utility the API uses
+    const hwRows = [];
+    for (const row of allNonTestHwRows) {
+      const aType = await inferActivityTypeFromActivity(row);
+      if (aType === 'assignment') {
+        hwRows.push(row);
+      }
+    }
+
+    if (hwRows.length === 0) {
+      return res.json({ activities: [], students: [] });
+    }
+
+    const activityIds = hwRows.map(a => a.id);
+    const placeholders = activityIds.map(() => '?').join(',');
+
+
+    // 3) Pull instances for these assignment activities via group_members.
+    //    Assignment instances are created via group_members (same as group activities).
+    const [instanceRows] = await db.query(
+      `SELECT
+         ai.activity_id,
+         ai.points_earned,
+         ai.points_possible,
+         ai.progress_status,
+         gm.student_id,
+         ai.id AS instance_id
+       FROM activity_instances ai
+       JOIN group_members gm ON gm.activity_instance_id = ai.id
+       WHERE ai.course_id = ?
+         AND ai.activity_id IN (${placeholders})
+       ORDER BY ai.id DESC
+      `,
+      [courseId, ...activityIds]
+    );
+
+    // 4) Build per-student structure (keep first/latest seen per student+activity)
+    const resultsByStudent = new Map();
+    for (const s of studentsRows) {
+      resultsByStudent.set(s.id, { id: s.id, name: s.name, email: s.email, scores: {} });
+    }
+
+    for (const row of instanceRows) {
+      const { student_id, activity_id, points_earned, points_possible, progress_status } = row;
+      const student = resultsByStudent.get(student_id);
+      if (!student) continue;
+      // First seen = highest id = latest instance (ORDER BY id DESC)
+      if (student.scores[activity_id]) continue;
+
+      let status = progress_status || 'not_started';
+      if (status === 'in_progress' || !status) {
+        if (points_possible && Number(points_possible) > 0) status = 'completed';
+        else if (points_earned && Number(points_earned) > 0) status = 'in_progress';
+        else status = 'not_started';
+      }
+
+      student.scores[activity_id] = {
+        status,
+        pointsEarned: points_earned != null ? Number(points_earned) : null,
+        pointsPossible: points_possible != null ? Number(points_possible) : null,
+      };
+    }
+
+    // 5) Ensure every activity has a slot for every student
+    for (const student of resultsByStudent.values()) {
+      for (const hw of hwRows) {
+        if (!student.scores[hw.id]) {
+          student.scores[hw.id] = { status: 'not_started', pointsEarned: null, pointsPossible: null };
+        }
+      }
+    }
+
+    res.json({
+      activities: hwRows.map(a => ({ id: a.id, name: a.name })),
+      students: Array.from(resultsByStudent.values()),
+    });
+  } catch (err) {
+    console.error("❌ Failed to load HW results:", err);
+    res.status(500).json({ error: "Failed to get HW results" });
+  }
+}
+
+
+
 module.exports = {
   getAllCourses,
   createCourse,
@@ -1079,6 +1182,7 @@ module.exports = {
   getCourseInfo,
   getCourseProgress,
   getCourseTestResults,
+  getCourseHWResults,
   setCourseActivityHidden,
   getGroupsConfigForActivity,
 };

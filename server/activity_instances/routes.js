@@ -13,11 +13,13 @@ router.post('/', controller.createActivityInstance);
 
 // ✅ Create multiple group-based instances
 router.post('/setup-groups', controller.setupMultipleGroupInstances);
+router.post('/:instanceId/verify-access-code', controller.verifyAccessCode);
 router.post('/by-activity/:courseId/:activityId/demo-instance', controller.ensureDemoInstance);
 router.post('/by-activity/:activityId/sandbox-instance', controller.ensureActivitySandboxInstance);
 
 // ✅ Reopen a timed test window for this instance
 router.post('/:instanceId/reopen', controller.reopenInstance);
+router.patch('/:instanceId/assignment-due-at', controller.updateAssignmentDueAt);
 
 // ✅ Regrade this test instance using stored answers
 //router.post('/:instanceId/regrade', controller.regradeTestInstance);
@@ -44,11 +46,19 @@ router.get('/:id/enrolled-students', controller.getEnrolledStudents);
 // ✅ Record student heartbeat for presence
 router.post('/:instanceId/heartbeat', controller.recordHeartbeat);
 
+// Page is closing or reloading (navigator.sendBeacon)
+router.post('/:instanceId/leave', controller.recordLeave);
+
+// Content-free activity signals for the research timeline (code runs, Local Sandbox)
+router.post('/:instanceId/activity', controller.recordClientActivity);
+
 // ✅ Get active student for an activity instance (auto-assign if none)
 router.get('/:instanceId/active-student', controller.getActiveStudent);
 
 // ✅ Rotate to next active student
 router.post('/:instanceId/rotate-active-student', controller.rotateActiveStudent);
+router.post('/:instanceId/force-advance', controller.forceAdvanceQuestionGroup);
+router.post('/:instanceId/reopen', controller.reopenEndedInstance);
 
 // ✅ Submit group answers for a question group
 router.post('/:instanceId/submit-group', controller.submitGroupResponses);

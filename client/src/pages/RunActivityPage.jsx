@@ -27,6 +27,7 @@ import RunActivityTestStatusBanner from '../components/RunActivityTestStatusBann
 import RunActivityFloatingTimer from '../components/RunActivityFloatingTimer';
 import RunActivityHistoryView from '../components/RunActivityHistoryView';
 import ActivityLoadingOverlay from '../components/ActivityLoadingOverlay';
+import { collectStarterFiles, isFileResponseKey } from '../utils/fileBlocks';
 
 
 function lowerResp(obj, key) {
@@ -372,6 +373,14 @@ export default function RunActivityPage({
   const [canBypassGroups, setCanBypassGroups] = useState({});
   // { [groupIndex]: true }
 
+  // Access-code gate: students must enter the professor's code before the exam unlocks.
+  const [codeVerified, setCodeVerified] = useState(() => {
+    try { return !!sessionStorage.getItem(`accessCode:${instanceId}`); } catch { return false; }
+  });
+  const [codeInput, setCodeInput] = useState('');
+  const [codeError, setCodeError] = useState('');
+  const [codeChecking, setCodeChecking] = useState(false);
+
   const [testLockState, setTestLockState] = useState({
     lockedBefore: false,
     lockedAfter: false,
@@ -580,6 +589,7 @@ export default function RunActivityPage({
     isActive,
     isObserver,
     activityPaused,
+    activityEnded,
     canPollActiveStudent,
     canSendHeartbeat,
     canUseLiveSync,
@@ -1023,46 +1033,59 @@ export default function RunActivityPage({
   }, []);
 
 
+  // Keep a stable ref to the latest draft answers so the periodic save reads
+  // current values without resetting the timer on every keystroke.
+  const draftAnswersRef = useRef({ existingAnswers, followupAnswers });
+  useEffect(() => {
+    draftAnswersRef.current = { existingAnswers, followupAnswers };
+  }, [existingAnswers, followupAnswers]);
+
+  const flushDrafts = useCallback(() => {
+    if (!canPersistDrafts || !isActive || !user?.id || !instanceId) return;
+    const { existingAnswers: ea, followupAnswers: fa } = draftAnswersRef.current;
+    const textToSave = {};
+    for (const [key, val] of Object.entries(ea)) {
+      if (/^\d+[A-Za-z]+AI\d+$/i.test(key)) continue;
+      if (val?.type === 'text' && val.response?.trim()) {
+        textToSave[key] = val.response.trim();
+      }
+    }
+    for (const [key, val] of Object.entries(fa)) {
+      if (val?.trim()) {
+        textToSave[key] = val.trim();
+      }
+    }
+    if (Object.keys(textToSave).length === 0) return;
+    fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ instanceId, userId: user.id, answers: textToSave }),
+    }).catch(() => {});
+  }, [canPersistDrafts, isActive, user?.id, instanceId]);
+
+  // Flush drafts whenever the student leaves or hides the tab.
+  useEffect(() => {
+    if (!canPersistDrafts || !isActive) return;
+    const handleLeave = () => flushDrafts();
+    document.addEventListener('visibilitychange', handleLeave);
+    window.addEventListener('beforeunload', handleLeave);
+    return () => {
+      document.removeEventListener('visibilitychange', handleLeave);
+      window.removeEventListener('beforeunload', handleLeave);
+    };
+  }, [canPersistDrafts, isActive, flushDrafts]);
+
   useEffect(() => {
     if (!canPersistDrafts) return;
     if (!isActive || !user?.id || !instanceId) return;
 
     const interval = setInterval(() => {
-      const textToSave = {};
-
-      for (const [key, val] of Object.entries(existingAnswers)) {
-        // AI turn rows (1aAI1, 1aAI2, ...) are written authoritatively by the
-        // AI endpoint at the moment the exchange happens. They ride along in
-        // the answers map so the transcript renders, but they must never be
-        // re-saved as drafts or we end up with a second, divergent copy.
-        if (/^\d+[A-Za-z]+AI\d+$/i.test(key)) continue;
-        if (val?.type === 'text' && val.response?.trim()) {
-          textToSave[key] = val.response.trim();
-        }
-      }
-
-      for (const [key, val] of Object.entries(followupAnswers)) {
-        if (val?.trim()) {
-          textToSave[key] = val.trim();
-        }
-      }
-
-      if (Object.keys(textToSave).length > 0) {
-        fetch(`${API_BASE_URL}/api/responses/bulk-save`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            instanceId,
-            userId: user.id,
-            answers: textToSave,
-          }),
-        }).catch(() => { });
-      }
+      flushDrafts();
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [canPersistDrafts, isActive, user?.id, instanceId, existingAnswers, followupAnswers]);
+  }, [canPersistDrafts, isActive, user?.id, instanceId, flushDrafts]);
 
   useEffect(() => {
     if (!activeStudentId) return;
@@ -1196,7 +1219,8 @@ export default function RunActivityPage({
       Number(activity?.test_focus_enforcement) === 1 &&
       !!instanceId &&
       !activity?.submitted_at &&
-      !testLockState.lockedBefore;
+      !testLockState.lockedBefore &&
+      (!activity?.has_access_code || codeVerified);
 
     if (!canMonitor) return undefined;
 
@@ -1251,7 +1275,9 @@ export default function RunActivityPage({
     instanceId,
     activity?.submitted_at,
     activity?.test_focus_enforcement,
+    activity?.has_access_code,
     testLockState.lockedBefore,
+    codeVerified,
   ]);
 
 
@@ -1445,12 +1471,20 @@ export default function RunActivityPage({
       const t0 = performance.now();
       const url = `${API_BASE_URL}/api/ai/evaluate-response`;
 
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(body),
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      let res;
+      try {
+        res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
 
       const raw = await res.text();
@@ -1565,9 +1599,8 @@ export default function RunActivityPage({
           if (cell.type === 'static') return cell.content || '';
           if (cell.type === 'input') {
             const key = `${block.groupId}${block.id}table${t}cell${row}_${col}`;
-            const val =
-              container.querySelector(`[data-response-key="${key}"]`)
-                ?.value?.trim() || '';
+            const domVal = container.querySelector(`[data-response-key="${key}"]`)?.value?.trim() || '';
+            const val = domVal || existingAnswers?.[key]?.response?.trim() || '';
             return val;
           }
           return '';
@@ -1700,9 +1733,10 @@ export default function RunActivityPage({
               const cell = table.rows[row][col];
               if (cell.type === 'input') {
                 const key = `${qid}table${t}cell${row}_${col}`;
-                const val =
-                  container.querySelector(`[data-response-key="${key}"]`)
-                    ?.value?.trim() || '';
+                const domVal = container.querySelector(`[data-response-key="${key}"]`)?.value?.trim() || '';
+                // Fall back to existingAnswers so table cells are captured even if the DOM
+                // element is momentarily absent (e.g. React hasn't flushed yet).
+                const val = domVal || existingAnswers?.[key]?.response?.trim() || '';
                 if (val !== '') {
                   answers[key] = val;
                   tableHasInput = true;
@@ -1765,9 +1799,10 @@ export default function RunActivityPage({
         })
         .filter((c) => c.code.trim() !== '');
 
-      // 5) Decide what becomes the "responseText" for grading
-      //    Priority: written -> table -> output
-      const finalResponse = baseAnswer || tableMarkdown || outputText || (codeCells.length ? '[code submitted]' : '');
+      // 5) Decide what becomes the written "responseText" for grading.
+      //    Keep artifact types separate: program output and code submissions
+      //    must not be stored under the main written-response key.
+      const finalResponse = baseAnswer || tableMarkdown || '';
 
       if (finalResponse) {
         // Store main response for this question under its qid
@@ -1889,6 +1924,22 @@ export default function RunActivityPage({
       (block?.codeBlocks?.length || 0) > 0;
 
     return hasAnyCode;
+  }
+
+  // Saved \file contents: shared files in group runs, every edited file in tests.
+  // They are not inside the submitted group's DOM, so add them explicitly.
+  function addSavedFileAnswers(answers) {
+    for (const [key, entry] of Object.entries(existingAnswers || {})) {
+      if (isFileResponseKey(key)) answers[key] = String(entry?.response ?? '');
+    }
+    return answers;
+  }
+
+  // Files the program runs with, for the AI code check.
+  function supportingFilesForAi() {
+    return Object.entries(fileContentsRef.current || {})
+      .map(([name, content]) => ({ name, content: String(content ?? '') }))
+      .filter((f) => f.name && f.content.trim());
   }
 
   function collectAllVisibleAnswers() {
@@ -2086,9 +2137,11 @@ export default function RunActivityPage({
           container,
           existingAnswers
         );
+        addSavedFileAnswers(answers);
         console.log('[TEST SUBMIT payload]', {
-          answersCount: Object.keys(answers).length,
+          answersKeys: Object.keys(answers),
           questionsCount: questions.length,
+          tableKeys: Object.keys(answers).filter(k => /table\d+cell/.test(k)),
         });
 
         const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';
@@ -2389,6 +2442,7 @@ export default function RunActivityPage({
 
             // ✅ new
             outputText,
+            supportingFiles: supportingFilesForAi(),
           };
 
           const t0 = performance.now();
@@ -2821,6 +2875,8 @@ export default function RunActivityPage({
     const blocked = computedState === 'inprogress';
     const canAdvance = computedState === 'complete';
 
+    addSavedFileAnswers(answers);
+
     const attempt = {
       submissionString: groupSubmissionString,
       blocked,
@@ -2848,21 +2904,29 @@ export default function RunActivityPage({
     }
 
     try {
-      const response = await fetch(
-        `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            studentId: user.id,
-            groupNum,
-            retriesRequired,
-            forceOverride: !!forceOverride,
-            attempt,
-          }),
-        }
-      );
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000);
+      let response;
+      try {
+        response = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-group`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              studentId: user.id,
+              groupNum,
+              retriesRequired,
+              forceOverride: !!forceOverride,
+              attempt,
+            }),
+            signal: controller.signal,
+          }
+        );
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -3229,9 +3293,29 @@ export default function RunActivityPage({
         return next;
       });
 
-      // Optionally you could recompute overall totals or reload activity,
-      // but typically this is enough:
-      // await loadActivity();   // <- if you want to be extra sure
+      // Recompute overall score on the server so ViewTestsPage and the
+      // score banner on this page both reflect the manual override.
+      try {
+        console.log('[ScoreSave] calling recompute-test-totals for instance', instanceId);
+        const recomputeRes = await fetch(
+          `${API_BASE_URL}/api/activity-instances/${instanceId}/recompute-test-totals`,
+          { method: 'POST', credentials: 'include' }
+        );
+        console.log('[ScoreSave] recompute status:', recomputeRes.status);
+        if (recomputeRes.ok) {
+          const totals = await recomputeRes.json();
+          console.log('[ScoreSave] recompute totals:', totals);
+          if (totals?.ok) {
+            setActivity((prev) =>
+              prev
+                ? { ...prev, points_earned: totals.earned, points_possible: totals.possible }
+                : prev
+            );
+          }
+        }
+      } catch (recomputeErr) {
+        console.warn('[ScoreSave] Score recompute failed (non-fatal):', recomputeErr);
+      }
 
       alert(`Saved updated scores/feedback for ${qid}.`);
     } catch (err) {
@@ -3324,11 +3408,67 @@ export default function RunActivityPage({
   const isSubmitted = !!activity?.submitted_at;
 
 
+  const handleVerifyCode = async () => {
+    if (!codeInput.trim()) { setCodeError('Please enter the access code.'); return; }
+    setCodeChecking(true);
+    setCodeError('');
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/verify-access-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ code: codeInput.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        try { sessionStorage.setItem(`accessCode:${instanceId}`, '1'); } catch {}
+        setCodeVerified(true);
+      } else {
+        setCodeError(data.error || 'Incorrect code. Try again.');
+      }
+    } catch {
+      setCodeError('Could not verify code. Check your connection.');
+    } finally {
+      setCodeChecking(false);
+    }
+  };
+
   return (
     <>
       <ActivityLoadingOverlay
         show={isSubmitting}
       />
+      {isStudent && activity?.has_access_code && !codeVerified ? (
+        <Container className="pt-3 mt-2">
+          <div className="d-flex justify-content-center align-items-center" style={{minHeight:'50vh'}}>
+            <div className="card shadow" style={{maxWidth:420,width:'100%'}}>
+              <div className="card-body text-center p-4">
+                <h4 className="mb-1">🔑 Exam Access Code</h4>
+                <p className="text-muted mb-3">Enter the 6-character code your professor has displayed to begin.</p>
+                <input
+                  className="form-control form-control-lg text-center mb-2"
+                  style={{letterSpacing:'0.35em',fontFamily:'monospace',fontSize:'1.6rem',textTransform:'uppercase'}}
+                  maxLength={6}
+                  value={codeInput}
+                  onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleVerifyCode(); }}
+                  placeholder="XXXXXX"
+                  autoFocus
+                />
+                {codeError && <div className="alert alert-danger py-2 small mb-2">{codeError}</div>}
+                <button
+                  className="btn btn-primary btn-lg w-100"
+                  onClick={handleVerifyCode}
+                  disabled={codeChecking}
+                >
+                  {codeChecking ? 'Checking…' : 'Enter Exam'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Container>
+      ) : (
+        <>
       <Container className="pt-3 mt-2">
         <h2>
           {activity?.title
@@ -3416,6 +3556,7 @@ export default function RunActivityPage({
           <RunActivityHistoryView
             historyRows={historyRows}
             groups={groups}
+            starterFiles={collectStarterFiles(preamble, groups)}
             userNameById={Object.fromEntries(
               (groupMembers || []).map((m) => [m.student_id, m.name])
             )}
@@ -3426,6 +3567,7 @@ export default function RunActivityPage({
             onAiTurnSaved={handleAiTurnSaved}
             activeStudentName={activeStudentName}
             activityPaused={activityPaused}
+            activityEnded={activityEnded}
             renderBlocks={renderBlocks}
             preamble={preamble}
             codeFeedbackShown={codeFeedbackShown}
@@ -3531,6 +3673,9 @@ export default function RunActivityPage({
         formatRemainingSeconds={formatRemainingSeconds}
         sectionTimer={sectionTimer}
       />
+
+        </>
+      )}
 
     </>
   );

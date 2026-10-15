@@ -1,5 +1,6 @@
 // server/groups/controller.js
 const db = require('../db');
+const { TURN_REASONS, recordTurnChange } = require('../utils/turnEvents');
 const { inferActivityTypeFromActivity } = require('../utils/activityType');
 
 // Priority order for roles
@@ -277,7 +278,7 @@ async function getAvailableStudents(req, res) {
   try {
     const [rows] = await db.query(
       `
-      SELECT u.id, u.name, u.email
+      SELECT u.id, u.name, u.email, u.role
         FROM course_enrollments ce
         JOIN users u ON u.id = ce.student_id
        WHERE ce.course_id = ?
@@ -422,6 +423,20 @@ async function removeStudentFromGroup(req, res) {
   try {
     await conn.beginTransaction();
 
+    // Block removal if the group has already started
+    const [[inst]] = await conn.query(
+      `SELECT progress_status FROM activity_instances WHERE id = ?`,
+      [activityInstanceId]
+    );
+    if (!inst) {
+      await conn.rollback();
+      return res.status(404).json({ error: 'Activity instance not found' });
+    }
+    if (inst.progress_status !== 'not_started') {
+      await conn.rollback();
+      return res.status(409).json({ error: 'Cannot remove a student from a group that has already started' });
+    }
+
     const [delRes] = await conn.query(
       `DELETE FROM group_members WHERE activity_instance_id = ? AND student_id = ?`,
       [activityInstanceId, studentId]
@@ -518,6 +533,7 @@ async function addSoloStudent(req, res) {
     );
 
     await conn.commit();
+    recordTurnChange(req, group.id, null, studentId, TURN_REASONS.SOLO_JOIN);
     return res
       .status(201)
       .json({ ok: true, activityInstanceId: group.id, groupNumber: group.groupNumber });
@@ -530,7 +546,85 @@ async function addSoloStudent(req, res) {
   }
 }
 
+
+// POST /api/groups/:instanceId/add-member  { studentId }
+// Adds a student directly to a specific existing group instance.
+async function addMemberToInstance(req, res) {
+  const { instanceId } = req.params;
+  const { studentId } = req.body;
+
+  if (!instanceId || !studentId) {
+    return res.status(400).json({ error: 'instanceId and studentId required' });
+  }
+
+  const conn = await db.getConnection();
+  try {
+    // Verify the instance exists and get its activity/course for permission check
+    const [[inst]] = await conn.query(
+      `SELECT id, activity_id, course_id, progress_status FROM activity_instances WHERE id = ?`,
+      [instanceId]
+    );
+    if (!inst) {
+      return res.status(404).json({ error: 'Activity instance not found' });
+    }
+
+    // Check student is enrolled in this course
+    const [[enroll]] = await conn.query(
+      `SELECT student_id FROM course_enrollments WHERE student_id = ? AND course_id = ? LIMIT 1`,
+      [studentId, inst.course_id]
+    );
+    if (!enroll) {
+      return res.status(400).json({ error: 'Student is not enrolled in this course' });
+    }
+
+    // Block move if either the target group or the student's current group has started
+    if (inst.progress_status !== 'not_started') {
+      return res.status(409).json({ error: 'Cannot move a student into a group that has already started' });
+    }
+
+    const [[currentInst]] = await conn.query(
+      `SELECT ai.progress_status
+         FROM group_members gm
+         JOIN activity_instances ai ON ai.id = gm.activity_instance_id
+        WHERE gm.student_id = ?
+          AND ai.activity_id = ?
+          AND ai.course_id = ?
+          AND COALESCE(ai.active_rotation_mode, '') <> 'sandbox'
+        LIMIT 1`,
+      [studentId, inst.activity_id, inst.course_id]
+    );
+    if (currentInst && currentInst.progress_status !== 'not_started') {
+      return res.status(409).json({ error: 'Cannot move a student who is already in a started group' });
+    }
+
+    // Remove from any other group in this activity first
+    await conn.query(
+      `DELETE gm FROM group_members gm
+       JOIN activity_instances ai ON ai.id = gm.activity_instance_id
+       WHERE gm.student_id = ?
+         AND ai.activity_id = ?
+         AND ai.course_id = ?
+         AND COALESCE(ai.active_rotation_mode, '') <> 'sandbox'`,
+      [studentId, inst.activity_id, inst.course_id]
+    );
+
+    // Insert into the target instance
+    await conn.query(
+      `INSERT IGNORE INTO group_members (activity_instance_id, student_id, role) VALUES (?, ?, NULL)`,
+      [instanceId, studentId]
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('addMemberToInstance error:', err);
+    return res.status(500).json({ error: 'Failed to add member to group' });
+  } finally {
+    conn.release();
+  }
+}
+
 module.exports = {
+  addMemberToInstance,
   getGroupsByInstance,
   getAvailableStudents,
   getActiveStudentsInActivity,

@@ -16,6 +16,7 @@ const RELOAD_BURST_COOLDOWN_MS = 5000;
 import { API_BASE_URL } from '../../config';
 import { parseSheetToBlocks } from '../../utils/parseSheet';
 import { parseUtcDbDatetime } from '../../utils/time';
+import { fileResponseKey } from '../../utils/fileBlocks';
 
 export default function useRunActivityData({
   instanceId,
@@ -191,11 +192,13 @@ export default function useRunActivityData({
         }
       }
 
+      let loadedAnswers = null;
       if (loadResponses) {
         const answersRes = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/responses`, {
           credentials: 'include',
         });
         const answersData = await answersRes.json();
+        loadedAnswers = answersData;
 
         setExistingAnswers((prev) => {
           const next = { ...prev };
@@ -345,7 +348,11 @@ export default function useRunActivityData({
         const files = {};
         for (const block of blocks) {
           if (block.type === 'file' && block.filename) {
-            files[block.filename] = block.content || '';
+            // Saved files (shared, or edited in a test) run with the saved
+            // version even before their block is on screen.
+            const key = block.readonly ? null : fileResponseKey(block.filename);
+            const savedText = key ? loadedAnswers?.[key]?.response : undefined;
+            files[block.filename] = savedText ?? (block.content || '');
           }
         }
         setFileContents(() => {
@@ -404,6 +411,38 @@ export default function useRunActivityData({
           if (grouped.length)
             grouped[grouped.length - 1].content.push(...betweenGroups);
           else preamble.push(...betweenGroups);
+        }
+
+        // If randomize_order is set on this instance, shuffle the choices
+        // within every multiple-choice block using a per-student deterministic
+        // seed so the same student always sees the same order, but different
+        // students see different orders.
+        // Responses are saved as choice.value (the text), not a position index,
+        // so this has no effect on grading or the database.
+        if (instanceData?.randomize_order) {
+          const base = (Number(user?.id ?? 0) * 1000003) ^ (Number(instanceId ?? 0) * 999983);
+          function seededShuffle(arr, salt) {
+            const out = arr.slice();
+            for (let i = out.length - 1; i > 0; i--) {
+              let h = ((base ^ salt ^ (i * 2654435761)) >>> 0);
+              h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+              h = Math.imul(h ^ (h >>> 16), 0x45d9f3b);
+              const j = ((h ^ (h >>> 16)) >>> 0) % (i + 1);
+              [out[i], out[j]] = [out[j], out[i]];
+            }
+            return out;
+          }
+          let qIdx = 0;
+          for (const grp of grouped) {
+            for (const b of [grp.intro, ...(grp.content || [])]) {
+              if (b?.type === 'question') {
+                if (b.multipleChoice?.choices?.length > 1) {
+                  b.multipleChoice = { ...b.multipleChoice, choices: seededShuffle(b.multipleChoice.choices, qIdx) };
+                }
+                qIdx++;
+              }
+            }
+          }
         }
 
         setGroups(grouped);

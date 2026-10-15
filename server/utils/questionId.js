@@ -1,3 +1,10 @@
+// Saved \file contents: "file:<name>". Must match client/src/utils/fileBlocks.js.
+const FILE_RESPONSE_KEY = /^file:[A-Za-z0-9._-]{1,128}$/;
+
+function isFileResponseKey(value) {
+  return FILE_RESPONSE_KEY.test(String(value || '').trim());
+}
+
 function isValidQuestionId(value) {
   const qid = String(value || '').trim();
   if (!qid) return false;
@@ -18,8 +25,9 @@ function isValidQuestionId(value) {
   if (/^\d+state$/i.test(qid)) return true;
   if (/^attempt:\d+$/i.test(qid)) return true;
   if (/^R(?:cnt|max|hash):\d+$/i.test(qid)) return true;
+  if (isFileResponseKey(qid)) return true;
 
   return false;
 }
 
-module.exports = { isValidQuestionId };
+module.exports = { isValidQuestionId, isFileResponseKey };

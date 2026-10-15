@@ -32,6 +32,7 @@ function collectGroupInfos(group, target) {
 
 export default function RunActivityWorkspace({
   activityPaused,
+  activityEnded = false,
   renderBlocks,
   preamble,
   codeFeedbackShown,
@@ -101,6 +102,24 @@ export default function RunActivityWorkspace({
   const isAssessmentMode = isTestMode || isAssignmentMode;
   let globalQuestionCounter = 0;
 
+  // Saved \file blocks (shared files, or every editable file in a test). Files
+  // often sit outside question groups, so every renderBlocks call gets this.
+  const savedFiles = {
+    editable: isSandbox
+      ? canEditAnswers
+      : isAssessmentMode
+        ? (canEditAnswers && isTestRunner && !isSubmitted && !timeExpired && !testLockState?.lockedBefore)
+        : (canEditAnswers && isActive),
+    onChange: (responseKey, text) =>
+      handleCodeChange(responseKey, text, { socket, baseQidFromResponseKey }),
+    isObserver,
+    isInstructor,
+    codeViewMode,
+    localCode,
+    onToggleViewMode: toggleCodeViewMode,
+    onLocalCodeChange: updateLocalCode,
+  };
+
   // An activity that uses AI anywhere is laid out as a split pane for its whole
   // duration, so the panel does not appear and vanish as the student advances.
   // An activity with no \ai block keeps the single-column layout unchanged.
@@ -110,7 +129,9 @@ export default function RunActivityWorkspace({
   const split = useSplitPane(useSplitLayout);
 
   // For inline AI in assignment mode: lock reason shown when the student cannot ask.
-  const assignmentAiLockReason = isSubmitted
+  const assignmentAiLockReason = activityEnded
+    ? 'This activity has ended. AI help is no longer available.'
+    : isSubmitted
     ? 'This assignment has been submitted. The transcript is read only.'
     : (isInstructor || isObserver)
     ? 'Only the student can use the AI assistant.'
@@ -146,6 +167,13 @@ export default function RunActivityWorkspace({
         aria-disabled={activityPaused ? 'true' : undefined}
         style={activityPaused ? { pointerEvents: 'none', userSelect: 'none' } : undefined}
       >
+        {activityEnded && (
+          <Alert variant="secondary" className="mb-3">
+            <strong>Ended – incomplete.</strong> Everyone left before finishing, so this activity was closed.
+            You can review your work and try code in your Local Sandbox, but answers can no longer be changed.
+            Ask your instructor if you need it reopened.
+          </Alert>
+        )}
         {isSandbox && (
           <Alert variant="secondary" className="mb-3">
             {isCreatorSandbox ? 'Creator sandbox' : 'Sandbox'} mode is using the shared activity workspace with local edits only. Creator tools can grade one question at a time or run the whole set of questions.
@@ -185,6 +213,7 @@ export default function RunActivityWorkspace({
           fileContents,
           setFileContents: handleUpdateFileContents,
           onFileChange: handleFileChange,
+          savedFiles,
           infoBubbleSession,
           runtimeFeatures,
           activityLanguage: activity?.language || activity?.meta?.language || '',
@@ -243,6 +272,10 @@ export default function RunActivityWorkspace({
                   mode: 'run',
                   isTestMode,
                   prefill: existingAnswers,
+                  fileContents,
+                  setFileContents: handleUpdateFileContents,
+                  onFileChange: handleFileChange,
+                  savedFiles,
                   currentGroupIndex: index,
                   codeFeedbackShown,
                   unansweredShown,
@@ -287,6 +320,7 @@ export default function RunActivityWorkspace({
                   fileContents,
                   setFileContents: handleUpdateFileContents,
                   onFileChange: handleFileChange,
+                  savedFiles,
                   onCodeChange: (responseKey, code, extra) =>
                     handleCodeChange(responseKey, code, {
                       ...extra,
@@ -536,7 +570,7 @@ export default function RunActivityWorkspace({
         )}
 
         {canRegradeTests && isAssessmentMode && isInstructor && !isSandbox && isSubmitted && (
-          <div className="mt-3 d-flex gap-2">
+          <div className="mt-3 d-flex align-items-center gap-2 flex-wrap">
             <Button
               variant="warning"
               onClick={() => handleRegradeTest()}
@@ -550,9 +584,14 @@ export default function RunActivityWorkspace({
                 onClick={handleMarkTestReviewed}
                 disabled={isSubmitting}
               >
-                Mark Reviewed
+                Mark as Reviewed
               </Button>
             )}
+            {Number(activity?.review_complete) ? (
+              <Badge bg="primary" className="fs-6">Reviewed</Badge>
+            ) : activity?.graded_at ? (
+              <Badge bg="info" className="fs-6">Graded</Badge>
+            ) : null}
           </div>
         )}
 
@@ -646,6 +685,7 @@ export default function RunActivityWorkspace({
             isObserver={isObserver}
             isInstructor={isInstructor}
             isSubmitted={isSubmitted}
+            isEnded={activityEnded}
             activityLanguage={activity?.language || activity?.meta?.language || ''}
             instanceId={instanceId}
             userId={user?.id}

@@ -76,13 +76,20 @@ export default function ManageCourseProgressPage() {
       );
     }
 
-    // In progress: show x/y groups if we know them
+    // In progress: show x/y groups if we know them. Ended - incomplete runs
+    // (everyone left before finishing) are marked so they are not mistaken
+    // for groups still working.
     if (status === 'in_progress' && totalGroups) {
       const x = completedGroups || 0;
       const y = totalGroups;
       return (
-        <td key={activity.id} style={{ textAlign: 'center' }}>
+        <td
+          key={activity.id}
+          style={{ textAlign: 'center' }}
+          title={progress.ended ? 'Ended – incomplete: everyone left before finishing' : undefined}
+        >
           {x}/{y}
+          {progress.ended ? <div className="small text-muted">ended</div> : null}
         </td>
       );
     }
@@ -97,7 +104,7 @@ export default function ManageCourseProgressPage() {
 
   return (
     <Container className="mt-4">
-      <h3>Student Progress</h3>
+      <h3>Group Activity Results</h3>
       <Table bordered>
         <thead>
           <tr>

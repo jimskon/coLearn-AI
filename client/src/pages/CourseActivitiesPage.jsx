@@ -151,9 +151,7 @@ export default function CourseActivitiesPage() {
         ? `/test-setup/${courseId}/${activityId}`   // ✅ tests go here
         : isDemoLike
           ? `/run/${instanceId}`
-          : isDemoClassGroup
-            ? `/view-groups/${courseId}/${activityId}`
-            : `/setup-groups/${courseId}/${activityId}` // ✅ non-tests go here
+          : `/view-groups/${courseId}/${activityId}` // groups + setup unified
       )
       : `/run/${instanceId}`;
 
@@ -277,15 +275,23 @@ export default function CourseActivitiesPage() {
                         } else if (status === 'complete') {
                           label = 'Review';
                           variant = 'primary';
+                        } else if (status === 'ended') {
+                          label = 'Review';
+                          variant = 'outline-secondary';
                         }
 
                         return (
-                          <Button
-                            variant={variant}
-                            onClick={() => handleDoActivity(activity)}
-                          >
-                            {label}
-                          </Button>
+                          <>
+                            <Button
+                              variant={variant}
+                              onClick={() => handleDoActivity(activity)}
+                            >
+                              {label}
+                            </Button>
+                            {status === 'ended' && !isDemoLike ? (
+                              <div className="small text-muted mt-1">Ended – incomplete</div>
+                            ) : null}
+                          </>
                         );
                       })()
                     ) : isInstructorLike ? (

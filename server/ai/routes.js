@@ -1,6 +1,19 @@
 // server/ai/routes.js
 const express = require('express');
 const router = express.Router();
+const { recordActivity } = require('../research/activityRecorder');
+
+// Research timeline: mark AI evaluation time as "waiting on the system" (not
+// idle) at the start and end of each evaluation request.
+router.use((req, res, next) => {
+  const instanceId = Number(req.body?.instanceId);
+  if (req.method === 'POST' && /^\/(evaluate|grade)/.test(req.path) && instanceId > 0) {
+    const userId = Number(req.user?.id || req.body?.answeredByUserId);
+    recordActivity(instanceId, userId, 'ai_waits');
+    res.on('finish', () => recordActivity(instanceId, userId, 'ai_waits'));
+  }
+  next();
+});
 const {
   evaluateStudentResponse,
   evaluatePythonCode,
@@ -20,6 +33,19 @@ console.log('AI handlers typeof:', {
   gradeTestQuestionHttp: typeof gradeTestQuestionHttp,
   evaluateCppCode: typeof evaluateCppCode,
 });
+
+// Ended - incomplete runs (research/autoEnd.js) may be reviewed, but get no
+// more AI evaluation or AI help.
+const { rejectIfEnded } = require('../utils/instanceEnded');
+async function blockEndedRuns(req, res, next) {
+  try {
+    if (await rejectIfEnded(req.body?.instanceId, res)) return;
+  } catch (err) {
+    console.error('❌ ended check:', err);
+  }
+  next();
+}
+router.use(['/evaluate-response', '/evaluate-python-code', '/evaluate-code', '/evaluate-cpp-code', '/activity-assist'], blockEndedRuns);
 
 // Short-answer / text evaluation
 router.post('/evaluate-response', evaluateStudentResponse);

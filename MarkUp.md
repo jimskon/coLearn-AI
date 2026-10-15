@@ -17,7 +17,7 @@ The system supports:
 - Runnable Python Remote blocks (with optional timeout)
 - Runnable C++ blocks (with optional timeout)
 - Runnable Python Turtle blocks (with window size + timeout)
-- Editable and readonly file blocks
+- Editable, readonly, and shared (saved) file blocks
 - Inline AI help blocks for guided student questions
 - Structured AI feedback directives
 - Structured scoring rubrics
@@ -100,6 +100,7 @@ All answerable items (`\question`, `\textresponse`, code blocks, file blocks) mu
 | `\multiplechoice{...}` | Begins a single-answer multiple-choice block; the optional value is its answer key | `\multiplechoice{Ottawa}` |
 | `\multiplechoice{multiple}` | Begins an ungraded “select all that apply” survey block | `\multiplechoice{multiple}` |
 | `\choice{value}` | Adds a choice to a multiple-choice block | `\choice{Writing code}` |
+| `\questiontype{...}` | Optional research category for statistics; never changes behavior. One of `code_writing`, `code_reading`, `output_prediction`, `debugging`, `conceptual_explanation`, `application_problem_solving`, `reflection`, `other`. Untagged questions count as `unknown`. | `\questiontype{debugging}` |
 
 Every `\question` must explicitly end with `\endquestion`.
 
@@ -108,6 +109,35 @@ Notes:
 - If `\responsemode{...}` is omitted, the default is `answer`.
 - Use `\responsemode{questions}` for prompts that ask students to list or write questions (for example, patient interview questions or follow-up questions).
 - Use `\multiplechoice{multiple}` for a multi-select survey. It displays checkboxes, stores all selected choice texts, and has no automatic grading. Do not attach choice points or a `\score` block.
+
+### Question type (research)
+
+`\questiontype{...}` labels what a question mainly asks students to do, for the Research Statistics pages. It is optional, one line inside the question (conventionally just before `\endquestion`), and never changes what students see, how answers are judged, or question numbering. Untagged questions count as `unknown`.
+
+| Value | Use when the student mainly has to |
+|---|---|
+| `code_writing` | Write or substantially change working code |
+| `code_reading` | Trace or explain given code; make small edits or add prints to observe behavior |
+| `output_prediction` | Say what given code will print or return |
+| `debugging` | Find or fix a bug, or design tests that expose one |
+| `conceptual_explanation` | Explain a general idea, rule, or trade-off |
+| `application_problem_solving` | Apply an idea to a specific example or scenario |
+| `reflection` | Think about their own or the team's learning or process |
+| `other` | None of these (for example, setup steps) |
+
+Tie-breakers:
+
+- If writing working code is part of the answer, use `code_writing`.
+- A specific worked example is `application_problem_solving`; the general case is `conceptual_explanation`.
+- Content review in a Reflection section is still `conceptual_explanation`; questions about self, team, or process are `reflection`.
+- Opinion surveys are `reflection` (about their learning) or `other`.
+
+```text
+\question{What does this loop print?}
+\textresponse{2}
+\questiontype{output_prediction}
+\endquestion
+```
 
 ### AI evaluation feedback mode
 
@@ -400,6 +430,36 @@ Supports optional timeout: `\cpp{50000}`
 int main() { }
 \endcpp
 ```
+
+### Files
+
+Files are available to C++ and remote Python code when it runs. They are shown with
+syntax highlighting chosen from the extension (`.h`, `.hpp`, `.cpp`, `.cc` as C++,
+`.py` as Python, anything else as plain text). Editable files have an **Edit File** button.
+
+```text
+\file{numbers.txt, readonly}
+4
+-1
+\endfile
+
+\file{notes.txt}
+# Each student can edit this copy; it is not saved.
+\endfile
+
+\file{LinkedList.h, shared}
+// The group's copy: saved with the submission.
+\endfile
+```
+
+| Option | Group activities | Tests |
+|--------|------------------|-------|
+| *(none)* | Each browser has its own copy. Edits are **not saved** and are lost on reload. | Saved with the submission. |
+| `readonly` | Nobody can edit. | Nobody can edit. |
+| `shared` | Only the active student edits. Teammates see edits live and can switch to **Local Sandbox**, like code cells. Saved when the group submits, reloaded on return, and visible to the instructor and the AI code check. | Saved with the submission. |
+
+Use `shared` when editing the file is part of the task, for example updating a header.
+Shared file names may use only letters, digits, `.`, `_`, and `-`.
 
 ---
 

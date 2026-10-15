@@ -26,8 +26,14 @@ export default function computeRunModePolicy({
   const isSandbox = isCreatorSandbox;
   const isInstructorPreview = isInstructorView;
 
+  // Ended - incomplete: every student left before finishing, so the run was
+  // closed. Students can review it and try code locally, nothing else.
+  const activityEnded =
+    isStudentRun && !isTestMode && !isAssignmentMode && !!activity?.ended_at;
+
   const isActive =
     !!user &&
+    !activityEnded &&
     (
       isCreatorSandbox ||
       isCreatorTestRun ||
@@ -80,6 +86,7 @@ export default function computeRunModePolicy({
     isActive,
     isObserver,
     activityPaused,
+    activityEnded,
     canEditAnswers,
     canSubmitGroup,
     canSubmitTest,

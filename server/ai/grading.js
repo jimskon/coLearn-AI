@@ -3,7 +3,10 @@ const OpenAI = require("openai");
 require("dotenv").config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
+const MODEL =
+  process.env.OPENAI_GRADING_MODEL ||
+  process.env.OPENAI_MODEL ||
+  "gpt-5.6-luna";
 
 function stripHtml(s = "") {
   return String(s)
@@ -21,6 +24,220 @@ function normalizeScoreBands(scores = {}, rubric = {}) {
   };
 }
 
+function bucketPoints(bucket) {
+  if (bucket == null) return 0;
+  if (typeof bucket === "number") return bucket;
+  if (typeof bucket === "object" && typeof bucket.points === "number") {
+    return bucket.points;
+  }
+  return 0;
+}
+
+function bucketRubricText(bucket) {
+  return stripHtml(bucket?.instructionsRaw || bucket?.instructionsHtml || "") || "(none)";
+}
+
+function clampScore(value, maxPoints) {
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return 0;
+  return Math.floor(Math.max(0, Math.min(maxPoints, n)));
+}
+
+function formatCodeBundle(codeCells = []) {
+  return Array.isArray(codeCells)
+    ? codeCells
+      .map((cell, idx) => {
+        const lang = (cell.lang || "").toLowerCase();
+        const label = cell.label ? ` (${cell.label})` : "";
+        const fence =
+          lang === "cpp" || lang === "c++"
+            ? "cpp"
+            : lang === "python"
+              ? "python"
+              : "";
+        return [
+          `Code cell ${idx + 1}${label}:`,
+          "```" + fence,
+          cell.code || "",
+          "```",
+        ].join("\n");
+      })
+      .join("\n\n")
+    : "";
+}
+
+async function requestJsonGrade(messages, maxCompletionTokens = 700) {
+  const chat = await openai.chat.completions.create({
+    model: MODEL,
+    messages,
+    max_completion_tokens: maxCompletionTokens,
+    response_format: { type: "json_object" },
+  });
+
+  const choice = chat.choices?.[0];
+  const raw = (choice?.message?.content ?? "").trim();
+
+  if (!raw) {
+    console.error("❌ gradeTestQuestion empty OpenAI response:", {
+      model: MODEL,
+      finishReason: choice?.finish_reason,
+      usage: chat.usage,
+    });
+    throw new Error("OpenAI returned an empty grading response");
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (parseErr) {
+    console.error("❌ gradeTestQuestion invalid JSON response:", {
+      model: MODEL,
+      finishReason: choice?.finish_reason,
+      raw,
+      usage: chat.usage,
+    });
+    throw parseErr;
+  }
+}
+
+async function gradeResponseBand({
+  questionText,
+  responseText,
+  responseRubricText,
+  maxRespPts,
+}) {
+  if (maxRespPts <= 0) {
+    return { responseScore: 0, responseFeedback: "" };
+  }
+
+  const literalResponse = stripHtml(responseText || "").trim();
+  if (!literalResponse) {
+    return {
+      responseScore: 0,
+      responseFeedback: "No written response was provided.",
+    };
+  }
+
+  const sys = [
+    "You grade only the written-response part of one assignment question.",
+    "The question text describes what the student was asked to do.",
+    "The rubric is the grading authority and may be more lenient than the question text.",
+    "Award the score the rubric allows, even when the answer omits something the question asked for, if the rubric permits that leniency.",
+    "However, feedback must be evidence-honest.",
+    "Never claim the student included something unless it is literally present in the written response.",
+    "Do not infer actual results, pass/fail conclusions, tests run, calculations, or explanations that are not written in the response.",
+    "Do not use code, program output, or other questions as evidence; they are not provided to you.",
+    "If the rubric allows full credit for a partial but good-faith response, you may give full credit, but your feedback should honestly say what is present and what is missing or not explicit.",
+    "Return only JSON.",
+  ].join("\n");
+
+  const user = [
+    "Question:",
+    stripHtml(questionText || "(missing)"),
+    "",
+    `Max response points: ${maxRespPts}`,
+    "",
+    "Rubric for RESPONSE band:",
+    responseRubricText || "(none)",
+    "",
+    "Literal student written response:",
+    literalResponse,
+    "",
+    "Return strict JSON only in this form:",
+    "{",
+    '  "responseScore": number,',
+    '  "responseFeedback": string',
+    "}",
+    `responseScore must be between 0 and ${maxRespPts}.`,
+    "Do not mention points, scores, grading, or rubrics in the feedback.",
+  ].join("\n");
+
+  const obj = await requestJsonGrade([
+    { name: "response_grader", role: "system", content: sys },
+    { role: "user", content: user },
+  ]);
+
+  return {
+    responseScore: clampScore(obj.responseScore, maxRespPts),
+    responseFeedback: obj.responseFeedback ? String(obj.responseFeedback).trim() : "",
+  };
+}
+
+async function gradeCodeRunBands({
+  questionText,
+  codeCells,
+  outputText,
+  codeRubricText,
+  runRubricText,
+  maxCodePts,
+  maxRunPts,
+}) {
+  if (maxCodePts <= 0 && maxRunPts <= 0) {
+    return {
+      codeScore: 0,
+      codeFeedback: "",
+      runScore: 0,
+      runFeedback: "",
+    };
+  }
+
+  const codeBundle = formatCodeBundle(codeCells);
+  const cleanOutput = stripHtml(outputText || "").trim();
+
+  const sys = [
+    "You grade the code and/or run-output part of one introductory programming assignment question.",
+    "Grade only the submitted code and output supplied for this question.",
+    "Functional correctness matters more than presentation, prompt wording, formatting, variable names, comments, or style.",
+    "Suggested test values in the question are examples only unless the question explicitly says they must be submitted.",
+    "If actual runtime inputs are not available, inspect the submitted code formulas directly instead of comparing output to a suggested example.",
+    "Before deducting for a computational error, identify a specific incorrect or missing expression in the submitted code, or identify exact runtime inputs and the mismatching output.",
+    "Do not grade any written-response requirements here.",
+    "Return only JSON.",
+  ].join("\n");
+
+  const user = [
+    "Question:",
+    stripHtml(questionText || "(missing)"),
+    "",
+    `Max code points: ${maxCodePts}`,
+    `Max run/output points: ${maxRunPts}`,
+    "",
+    "Rubric for CODE band:",
+    codeRubricText || "(none)",
+    "",
+    "Rubric for RUN/OUTPUT band:",
+    runRubricText || "(none)",
+    "",
+    "Student code submission(s):",
+    codeBundle || "(none)",
+    "",
+    "Program/run output:",
+    cleanOutput || "(none provided)",
+    "",
+    "Return strict JSON only in this form:",
+    "{",
+    '  "codeScore": number,',
+    '  "codeFeedback": string,',
+    '  "runScore": number,',
+    '  "runFeedback": string',
+    "}",
+    `codeScore must be between 0 and ${maxCodePts}.`,
+    `runScore must be between 0 and ${maxRunPts}.`,
+    "Do not mention points, scores, grading, or rubrics in the feedback.",
+  ].join("\n");
+
+  const obj = await requestJsonGrade([
+    { name: "code_run_grader", role: "system", content: sys },
+    { role: "user", content: user },
+  ]);
+
+  return {
+    codeScore: clampScore(obj.codeScore, maxCodePts),
+    codeFeedback: obj.codeFeedback ? String(obj.codeFeedback).trim() : "",
+    runScore: clampScore(obj.runScore, maxRunPts),
+    runFeedback: obj.runFeedback ? String(obj.runFeedback).trim() : "",
+  };
+}
+
 // ---------------------- TEST-MODE: gradeTestQuestion ----------------------
 async function gradeTestQuestion({
   questionText,
@@ -31,15 +248,6 @@ async function gradeTestQuestion({
   rubric = {},
   detailedFeedback = true,
 }) {
-  const bucketPoints = (bucket) => {
-    if (bucket == null) return 0;
-    if (typeof bucket === "number") return bucket;
-    if (typeof bucket === "object" && typeof bucket.points === "number") {
-      return bucket.points;
-    }
-    return 0;
-  };
-
   const normalizedScores = normalizeScoreBands(scores, rubric);
   const codeBucket = normalizedScores.code || {};
   const runBucket = normalizedScores.output || {};
@@ -58,125 +266,29 @@ async function gradeTestQuestion({
     };
   }
 
-  const codeRubricText =
-    stripHtml(codeBucket.instructionsRaw || codeBucket.instructionsHtml || "") || "(none)";
-  const runRubricText =
-    stripHtml(runBucket.instructionsRaw || runBucket.instructionsHtml || "") || "(none)";
-  const responseRubricText =
-    stripHtml(respBucket.instructionsRaw || respBucket.instructionsHtml || "") || "(none)";
-
-  const codeBundle = Array.isArray(codeCells)
-    ? codeCells
-        .map((cell, idx) => {
-          const lang = (cell.lang || "").toLowerCase();
-          const label = cell.label ? ` (${cell.label})` : "";
-          const fence =
-            lang === "cpp" || lang === "c++"
-              ? "cpp"
-              : lang === "python"
-                ? "python"
-                : "";
-          return [
-            `Code cell ${idx + 1}${label}:`,
-            "```" + fence,
-            cell.code || "",
-            "```",
-          ].join("\n");
-        })
-        .join("\n\n")
-    : "";
-
-  const sys = [
-    "You are grading a short quiz/exam question for an intro programming course.",
-    "You will assign numeric points separately for:",
-    "- CODE (implementation quality / correctness)",
-    "- RUN (program output, tests, harness behavior)",
-    "- RESPONSE (written explanation or short answer).",
-    "Use the rubric text exactly; partial credit is allowed.",
-    "Always provide concise, concrete feedback for every band you score, even when the work earns full credit.",
-    "Return ONLY JSON, no commentary.",
-  ].join("\n");
-
-  const userLines = [];
-  userLines.push("Question:");
-  userLines.push(stripHtml(questionText || "(missing)"));
-  userLines.push("");
-
-  userLines.push(`Max code points: ${maxCodePts}`);
-  userLines.push(`Max run/output points: ${maxRunPts}`);
-  userLines.push(`Max response points: ${maxRespPts}`);
-  userLines.push("");
-
-  userLines.push("Rubric for CODE band:");
-  userLines.push(codeRubricText);
-  userLines.push("");
-
-  userLines.push("Rubric for RUN/OUTPUT band:");
-  userLines.push(runRubricText);
-  userLines.push("");
-
-  userLines.push("Rubric for RESPONSE band:");
-  userLines.push(responseRubricText);
-  userLines.push("");
-
-  userLines.push("Student written RESPONSE (if any):");
-  userLines.push(stripHtml(responseText || "(none)"));
-  userLines.push("");
-
-  userLines.push("Student CODE submission(s):");
-  userLines.push(codeBundle || "(none)");
-  userLines.push("");
-
-  userLines.push("PROGRAM OUTPUT / TEST OUTPUT:");
-  userLines.push(outputText ? stripHtml(outputText) : "(none provided)");
-  userLines.push("");
-
-  userLines.push(
-    `Return strict JSON only in this form:\n` +
-      `{"codeScore": number, "codeFeedback": string, ` +
-      `"runScore": number, "runFeedback": string, ` +
-      `"responseScore": number, "responseFeedback": string}\n` +
-      `- codeScore must be between 0 and ${maxCodePts}.\n` +
-      `- runScore must be between 0 and ${maxRunPts}.\n` +
-      `- responseScore must be between 0 and ${maxRespPts}.\n` +
-      `- Feedback should always be present, even for full-credit work.\n` +
-      `- DO NOT mention grading, points, rubrics, or scores.\n`
-  );
-
-  const user = userLines.join("\n");
+  const codeRubricText = bucketRubricText(codeBucket);
+  const runRubricText = bucketRubricText(runBucket);
+  const responseRubricText = bucketRubricText(respBucket);
 
   try {
-    const chat = await openai.chat.completions.create({
-      model: MODEL,
-      messages: [
-        { name: "grader", role: "system", content: sys },
-        { role: "user", content: user },
-      ],
-      temperature: 0.1,
-      max_tokens: 260,
-      response_format: { type: "json_object" },
+    const codeRun = await gradeCodeRunBands({
+      questionText,
+      codeCells,
+      outputText,
+      codeRubricText,
+      runRubricText,
+      maxCodePts,
+      maxRunPts,
     });
 
-    const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
-    const obj = JSON.parse(raw);
+    const response = await gradeResponseBand({
+      questionText,
+      responseText,
+      responseRubricText,
+      maxRespPts,
+    });
 
-    let codeScore = Number(obj.codeScore ?? 0);
-    let runScore = Number(obj.runScore ?? 0);
-    let responseScore = Number(obj.responseScore ?? 0);
-
-    if (!Number.isFinite(codeScore)) codeScore = 0;
-    if (!Number.isFinite(runScore)) runScore = 0;
-    if (!Number.isFinite(responseScore)) responseScore = 0;
-
-    codeScore = Math.max(0, Math.min(maxCodePts, codeScore));
-    runScore = Math.max(0, Math.min(maxRunPts, runScore));
-    responseScore = Math.max(0, Math.min(maxRespPts, responseScore));
-
-    const codeFeedback = obj.codeFeedback ? String(obj.codeFeedback).trim() : "";
-    const runFeedback = obj.runFeedback ? String(obj.runFeedback).trim() : "";
-    const responseFeedback = obj.responseFeedback ? String(obj.responseFeedback).trim() : "";
-
-    return { codeScore, codeFeedback, runScore, runFeedback, responseScore, responseFeedback };
+    return { ...codeRun, ...response };
   } catch (err) {
     console.error("❌ gradeTestQuestion OpenAI error:", err);
     return {

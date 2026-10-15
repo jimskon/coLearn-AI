@@ -28,6 +28,35 @@ test('activity markup validation rejects duplicate singular question tags', () =
   assert.equal(result.issues[0].line, 8);
 });
 
+test('activity markup validation allows a question-level aimode alongside the activity one', () => {
+  const twoQuestions = String.raw`\title{Example}
+\aimode{positive, brief}
+\questiongroup{Warm-up}
+\question{One}
+\aimode{lenient}
+\textresponse{2}
+\endquestion
+\question{Two}
+\aimode{no-positive}
+\textresponse{2}
+\endquestion
+\endquestiongroup`;
+  assert.deepEqual(validateActivityMarkup(twoQuestions).issues, []);
+
+  const duplicated = validateActivityMarkup(twoQuestions.replace(
+    '\\aimode{lenient}',
+    '\\aimode{lenient}\n\\aimode{positive}',
+  ));
+  assert.equal(duplicated.valid, false);
+  assert.match(duplicated.issues[0].message, /Duplicate \\aimode in this question/);
+
+  const rootTwice = validateActivityMarkup(twoQuestions.replace(
+    '\\aimode{positive, brief}',
+    '\\aimode{positive, brief}\n\\aimode{lenient}',
+  ));
+  assert.match(rootTwice.issues[0].message, /Duplicate \\aimode in this activity/);
+});
+
 test('activity markup validation rejects invalid nesting and leaves markup in code alone', () => {
   const nested = validateActivityMarkup(String.raw`\questiongroup{One}
 \question{Question}

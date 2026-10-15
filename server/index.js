@@ -5,6 +5,13 @@ require('dotenv').config({
 });
 
 const express = require('express');
+const { recordActivity } = require('./research/activityRecorder');
+
+// Keys a student types into (answers, code cells, table cells, shared files),
+// not AI feedback/status echoes such as 1aF1 or 1aFM.
+function isStudentAnswerKey(key) {
+  return /^(\d+[a-z]+(code\d+|table\d+cell\d+_\d+)?|file:[A-Za-z0-9._-]+)$/.test(String(key || ''));
+}
 const cors = require('cors');
 const fs = require('fs');
 const session = require('express-session');
@@ -14,10 +21,13 @@ const PORT = process.env.PORT || 4000;
 const aiRoutes = require('./ai/routes');
 
 require('./heartbeatCleaner');
+require('./research/autoEnd').startAutoEnd();
 const db = require('./db'); // Make sure db is accessible
 
 const staticDir = path.join(__dirname, '../client/dist');
-app.use(express.json());
+// Activity bundles (a whole class's markup) are well over the 100 KB default.
+// Keep this under nginx's client_max_body_size (25m).
+app.use(express.json({ limit: '20mb' }));
 
 const normalizeOrigin = (origin) => origin.replace(/\/+$/, '');
 
@@ -109,6 +119,8 @@ app.use('/api/classes', require('./classes/routes'));
 app.use('/api/activity-instances', require('./activity_instances/routes'));
 app.use('/api/demo', require('./demo/routes'));
 app.use('/api/audit', require('./audit/routes'));
+app.use('/api/stats', require('./stats/routes'));
+app.use('/api/research', require('./research/routes'));
 app.use('/api/runtime', require('./runtime/routes'));
 
 
@@ -197,6 +209,7 @@ io.on('connection', (socket) => {
 
   // Typing / observer sync (not authoritative)
   socket.on('response:update', ({ instanceId, responseKey, value, answeredBy }) => {
+    if (isStudentAnswerKey(responseKey)) recordActivity(instanceId, answeredBy, 'edits');
     socket.to(`instance-${instanceId}`).emit('response:update', {
       instanceId,
       responseKey,
@@ -208,6 +221,7 @@ io.on('connection', (socket) => {
 
   // New name (preferred)
   socket.on('response:upsert', ({ instanceId, key, value, answeredBy }) => {
+    if (isStudentAnswerKey(key)) recordActivity(instanceId, answeredBy, 'edits');
     socket.to(`instance-${instanceId}`).emit('response:patch', {
       instanceId,
       key,

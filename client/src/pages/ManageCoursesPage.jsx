@@ -1,7 +1,7 @@
 // src/pages/ManageCoursesPage.jsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Table, Button, Form, Container, Row, Col } from 'react-bootstrap';
+import { Table, Button, Form, Container, Row, Col, Dropdown } from 'react-bootstrap';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 
@@ -159,36 +159,29 @@ export default function ManageCoursesPage() {
               <td>{course.class_name || '—'}</td>
               <td>
                 <div className="d-flex flex-wrap gap-1">
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={() => navigate(`/courses/${course.id}/progress`)}
-                  >
-                    Group Results
-                  </Button>
-
-                  <Button
-                    size="sm"
-                    variant="outline-primary"
-                    onClick={() => navigate(`/courses/${course.id}/tests`)}
-                  >
-                    Test Results
-                  </Button>
-
-                  <Button
-                    size="sm"
-                    variant="outline-success"
-                    onClick={() => navigate(`/courses/${course.id}/hw`)}
-                  >
-                    HW Results
-                  </Button>
+                  <Dropdown>
+                    <Dropdown.Toggle size="sm" variant="primary" id={`results-${course.id}`}>
+                      Results
+                    </Dropdown.Toggle>
+                    <Dropdown.Menu>
+                      <Dropdown.Item onClick={() => navigate(`/courses/${course.id}/progress`)}>
+                        Group
+                      </Dropdown.Item>
+                      <Dropdown.Item onClick={() => navigate(`/courses/${course.id}/tests`)}>
+                        Test
+                      </Dropdown.Item>
+                      <Dropdown.Item onClick={() => navigate(`/courses/${course.id}/hw`)}>
+                        HW
+                      </Dropdown.Item>
+                    </Dropdown.Menu>
+                  </Dropdown>
 
                   <Button
                     size="sm"
                     variant="info"
                     onClick={() => navigate(`/courses/${course.id}/students`)}
                   >
-                    View Students
+                    Students
                   </Button>
 
                   {(user.role === 'root' || user.id === course.instructor_id) && (

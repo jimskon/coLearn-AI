@@ -38,6 +38,9 @@ router.get("/:courseId/hw-results", controller.getCourseHWResults);
 // Get students for a course
 router.get("/:courseId/students", controller.getStudentsForCourse);
 
+// Add students (single or bulk) by name/email
+router.post("/:courseId/students", controller.addStudentsToCourse);
+
 // Get course info (used in ManageCourseStudentsPage)
 router.get("/:courseId/info", controller.getCourseInfo);
 

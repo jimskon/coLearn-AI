@@ -1,4 +1,6 @@
 // /courses/controller.js
+const crypto = require("crypto");
+const bcrypt = require("bcrypt");
 const db = require("../db");
 const { inferActivityTypeFromActivity, inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
@@ -606,6 +608,79 @@ async function getStudentsForCourse(req, res) {
   }
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// POST add students to a course by name/email. Body: { students: [{ name, email }] }.
+// Existing accounts are reused; new accounts get a random password (students set
+// their own via "forgot password"). Already-enrolled students are skipped.
+async function addStudentsToCourse(req, res) {
+  const { courseId } = req.params;
+  const user = req.user;
+  if (!user) return res.status(401).json({ error: "Not signed in" });
+
+  const [courseRows] = await db.query(`SELECT instructor_id FROM courses WHERE id = ?`, [courseId]);
+  if (!courseRows.length) return res.status(404).json({ error: "Instance not found" });
+
+  const isOwner = user.id === courseRows[0].instructor_id;
+  const isAdmin = user.role === 'root' || user.role === 'creator';
+  if (!isOwner && !isAdmin) return res.status(403).json({ error: "Unauthorized" });
+
+  const input = Array.isArray(req.body?.students) ? req.body.students : [];
+  if (input.length === 0) return res.status(400).json({ error: "No students provided" });
+  if (input.length > 1000) return res.status(400).json({ error: "Too many students (max 1000)" });
+
+  const results = [];
+  const seen = new Set();
+  try {
+    for (const row of input) {
+      const name = String(row?.name || '').replace(/\s+/g, ' ').trim();
+      const email = String(row?.email || '').trim().toLowerCase();
+
+      if (!name || !EMAIL_RE.test(email)) {
+        results.push({ name, email, status: 'invalid', error: 'Name and a valid email are required' });
+        continue;
+      }
+      if (seen.has(email)) {
+        results.push({ name, email, status: 'duplicate', error: 'Listed more than once' });
+        continue;
+      }
+      seen.add(email);
+
+      let studentId;
+      let created = false;
+      const [existing] = await db.query(`SELECT id FROM users WHERE email = ?`, [email]);
+      if (existing.length) {
+        studentId = existing[0].id;
+      } else {
+        const hash = await bcrypt.hash(crypto.randomUUID(), 10);
+        const [ins] = await db.query(
+          `INSERT INTO users (name, email, password_hash, role, created_by) VALUES (?, ?, ?, 'student', ?)`,
+          [name, email, hash, user.id]
+        );
+        studentId = ins.insertId;
+        created = true;
+      }
+
+      const [enr] = await db.query(
+        `INSERT IGNORE INTO course_enrollments (student_id, course_id) VALUES (?, ?)`,
+        [studentId, courseId]
+      );
+      results.push({
+        name,
+        email,
+        id: studentId,
+        status: enr.affectedRows ? 'added' : 'already_enrolled',
+        created,
+      });
+    }
+  } catch (err) {
+    console.error("❌ Failed to add students to course:", err);
+    return res.status(500).json({ error: "Failed to add students", results });
+  }
+
+  res.json({ results });
+}
+
 async function unenrollStudentFromCourse(req, res) {
   const { courseId, studentId } = req.params;
   const user = req.user;
@@ -1178,6 +1253,7 @@ module.exports = {
   enrollByCode,
   getCourseEnrollments,
   getStudentsForCourse,
+  addStudentsToCourse,
   unenrollStudentFromCourse,
   getCourseInfo,
   getCourseProgress,

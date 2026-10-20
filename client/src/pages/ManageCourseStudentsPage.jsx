@@ -5,9 +5,9 @@ import { Alert, Table, Button, Container, Form, Row, Col, Card } from 'react-boo
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
 
-const CSV_EXAMPLE = `name,email
-Jane Smith,jsmith@example.edu
-Raj Patel,rpatel@example.edu`;
+const CSV_EXAMPLE = `name,email,password
+Jane Smith,jsmith@example.edu,Blue-Kite-42
+Raj Patel,rpatel@example.edu,Quiet!River7`;
 
 // Split one CSV line, honoring double-quoted fields ("Smith, Jane").
 function splitCsvLine(line) {
@@ -30,11 +30,42 @@ function splitCsvLine(line) {
 
 function parseStudentCsv(text) {
     const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim());
-    if (lines.length && /^name\s*,\s*email$/i.test(lines[0].trim())) lines.shift();
+    if (lines.length && /^name\s*,\s*email\s*,\s*password$/i.test(lines[0].trim())) lines.shift();
     return lines.map(line => {
-        const [name = '', email = ''] = splitCsvLine(line);
-        return { name, email };
+        const [name = '', email = '', password = ''] = splitCsvLine(line);
+        return { name, email, password };
     });
+}
+
+// Two visible (plain-text) password fields; flags a mismatch as you type.
+function PasswordPair({ value, confirm, onChange, onConfirmChange, disabled }) {
+    const mismatch = confirm.length > 0 && value !== confirm;
+    return (
+        <Row className="g-2 mt-1">
+            <Col md={6}>
+                <Form.Label>Password</Form.Label>
+                <Form.Control
+                    type="text"
+                    autoComplete="off"
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    disabled={disabled}
+                />
+            </Col>
+            <Col md={6}>
+                <Form.Label>Confirm password</Form.Label>
+                <Form.Control
+                    type="text"
+                    autoComplete="off"
+                    value={confirm}
+                    onChange={(e) => onConfirmChange(e.target.value)}
+                    isInvalid={mismatch}
+                    disabled={disabled}
+                />
+                <Form.Control.Feedback type="invalid">Passwords do not match.</Form.Control.Feedback>
+            </Col>
+        </Row>
+    );
 }
 
 const STATUS_LABELS = {
@@ -54,6 +85,8 @@ export default function ManageCourseStudentsPage() {
 
     const [newName, setNewName] = useState('');
     const [newEmail, setNewEmail] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [newPassword2, setNewPassword2] = useState('');
     const [csvFile, setCsvFile] = useState(null);
     const [fileInputKey, setFileInputKey] = useState(0);
     const [busy, setBusy] = useState(false);
@@ -109,17 +142,23 @@ export default function ManageCourseStudentsPage() {
 
     const handleAddOne = async (e) => {
         e.preventDefault();
-        if (!newName.trim() || !newEmail.trim()) {
-            setMessage({ variant: 'warning', text: 'Enter both a name and an email.' });
+        if (!newName.trim() || !newEmail.trim() || !newPassword) {
+            setMessage({ variant: 'warning', text: 'Enter a name, an email and a password.' });
             return;
         }
-        const results = await submitStudents([{ name: newName, email: newEmail }]);
+        if (newPassword !== newPassword2) {
+            setMessage({ variant: 'warning', text: 'The two passwords do not match.' });
+            return;
+        }
+        const results = await submitStudents([{ name: newName, email: newEmail, password: newPassword }]);
         const r = results?.[0];
         if (!r) return;
         if (r.status === 'added') {
             setMessage({ variant: 'success', text: `Added ${r.name} (${r.email}).` });
             setNewName('');
             setNewEmail('');
+            setNewPassword('');
+            setNewPassword2('');
         } else {
             setMessage({ variant: 'warning', text: `${r.email}: ${r.error || STATUS_LABELS[r.status]}` });
         }
@@ -207,8 +246,8 @@ export default function ManageCourseStudentsPage() {
                         <Card.Body>
                             <Card.Title as="h5">Add a student</Card.Title>
                             <Form onSubmit={handleAddOne}>
-                                <Row className="g-2 align-items-end">
-                                    <Col md={4}>
+                                <Row className="g-2">
+                                    <Col md={6}>
                                         <Form.Label>Name</Form.Label>
                                         <Form.Control
                                             value={newName}
@@ -216,7 +255,7 @@ export default function ManageCourseStudentsPage() {
                                             disabled={editDisabled}
                                         />
                                     </Col>
-                                    <Col md={5}>
+                                    <Col md={6}>
                                         <Form.Label>Email</Form.Label>
                                         <Form.Control
                                             type="email"
@@ -225,10 +264,19 @@ export default function ManageCourseStudentsPage() {
                                             disabled={editDisabled}
                                         />
                                     </Col>
-                                    <Col md={3}>
-                                        <Button type="submit" disabled={editDisabled}>Add Student</Button>
-                                    </Col>
                                 </Row>
+                                <PasswordPair
+                                    value={newPassword}
+                                    confirm={newPassword2}
+                                    onChange={setNewPassword}
+                                    onConfirmChange={setNewPassword2}
+                                    disabled={editDisabled}
+                                />
+                                <Form.Text className="text-muted d-block">
+                                    The password is only used if this creates a new account; an existing
+                                    account keeps its current password.
+                                </Form.Text>
+                                <Button type="submit" className="mt-2" disabled={editDisabled}>Add Student</Button>
                             </Form>
                         </Card.Body>
                     </Card>
@@ -237,33 +285,28 @@ export default function ManageCourseStudentsPage() {
                         <Card.Body>
                             <Card.Title as="h5">Bulk add from CSV</Card.Title>
                             <p className="mb-2">
-                                Upload a <code>.csv</code> file with one student per line: name, then email.
-                                The <code>name,email</code> header line is optional. Put names that contain
-                                commas in double quotes.
+                                Upload a <code>.csv</code> file with one student per line: name, email, password.
+                                The <code>name,email,password</code> header line is optional. Put any value
+                                that contains a comma in double quotes.
                             </p>
                             <pre className="bg-light border rounded p-2">{CSV_EXAMPLE}</pre>
                             <Form onSubmit={handleBulkUpload}>
-                                <Row className="g-2 align-items-end">
-                                    <Col md={9}>
-                                        <Form.Control
-                                            key={fileInputKey}
-                                            type="file"
-                                            accept=".csv,text/csv"
-                                            onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
-                                            disabled={editDisabled}
-                                        />
-                                    </Col>
-                                    <Col md={3}>
-                                        <Button type="submit" variant="success" disabled={editDisabled}>
-                                            Upload &amp; Add
-                                        </Button>
-                                    </Col>
-                                </Row>
+                                <Form.Label>CSV file</Form.Label>
+                                <Form.Control
+                                    key={fileInputKey}
+                                    type="file"
+                                    accept=".csv,text/csv"
+                                    onChange={(e) => setCsvFile(e.target.files?.[0] || null)}
+                                    disabled={editDisabled}
+                                />
+                                <Form.Text className="text-muted d-block">
+                                    Students who already have an account are enrolled and keep their current
+                                    password; the password column is only used for new accounts.
+                                </Form.Text>
+                                <Button type="submit" variant="success" className="mt-2" disabled={editDisabled}>
+                                    Upload &amp; Add
+                                </Button>
                             </Form>
-                            <Form.Text className="text-muted">
-                                Students who don't have an account yet are created; they set a password with
-                                "Forgot password" on the login page.
-                            </Form.Text>
 
                             {bulkResults && (
                                 <Table size="sm" bordered className="mt-3">

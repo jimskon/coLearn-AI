@@ -1,5 +1,4 @@
 // /courses/controller.js
-const crypto = require("crypto");
 const bcrypt = require("bcrypt");
 const db = require("../db");
 const { inferActivityTypeFromActivity, inferAuthoredModeFromActivity } = require('../utils/activityType');
@@ -610,9 +609,9 @@ async function getStudentsForCourse(req, res) {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// POST add students to a course by name/email. Body: { students: [{ name, email }] }.
-// Existing accounts are reused; new accounts get a random password (students set
-// their own via "forgot password"). Already-enrolled students are skipped.
+// POST add students to a course. Body: { students: [{ name, email, password }] }.
+// New accounts are created with the given password; existing accounts are reused
+// as-is (their password is not changed). Already-enrolled students are skipped.
 async function addStudentsToCourse(req, res) {
   const { courseId } = req.params;
   const user = req.user;
@@ -635,6 +634,7 @@ async function addStudentsToCourse(req, res) {
     for (const row of input) {
       const name = String(row?.name || '').replace(/\s+/g, ' ').trim();
       const email = String(row?.email || '').trim().toLowerCase();
+      const password = typeof row?.password === 'string' ? row.password : '';
 
       if (!name || !EMAIL_RE.test(email)) {
         results.push({ name, email, status: 'invalid', error: 'Name and a valid email are required' });
@@ -652,7 +652,11 @@ async function addStudentsToCourse(req, res) {
       if (existing.length) {
         studentId = existing[0].id;
       } else {
-        const hash = await bcrypt.hash(crypto.randomUUID(), 10);
+        if (!password) {
+          results.push({ name, email, status: 'invalid', error: 'A password is required for a new account' });
+          continue;
+        }
+        const hash = await bcrypt.hash(password, 10);
         const [ins] = await db.query(
           `INSERT INTO users (name, email, password_hash, role, created_by) VALUES (?, ?, ?, 'student', ?)`,
           [name, email, hash, user.id]

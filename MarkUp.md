@@ -420,6 +420,27 @@ import pandas as pd
 \endpythonremote
 ```
 
+Supports an optional include list with `imports=`. It fills the block's
+**Included files for run** box, so only the listed `.py` files are sent with the
+run. Non-`.py` files (such as `.json` or `.txt` data) are always sent.
+
+```text
+\pythonremote{50000, imports=pet.py}
+from pet import Pet
+print(Pet("Fluffy").status())
+\endpythonremote
+```
+
+- Separate multiple files with semicolons: `imports=pet.py;utils.py`. A comma
+  ends the list, so `imports=pet.py, utils.py` includes only `pet.py`.
+- Put the timeout first if you give one: `\pythonremote{50000, imports=pet.py}`.
+- If the include list is empty, **every** file is sent. The block's code runs as
+  `main.py`, so an activity file named `main.py` replaces the block's code and
+  runs instead. In activities with a `main.py`, give every `\pythonremote` block
+  an include list that leaves `main.py` out.
+- To run the student's `main.py` itself, include it:
+  `\pythonremote{50000, imports=pet.py;main.py}`.
+
 ### C++
 
 Supports optional timeout: `\cpp{50000}`

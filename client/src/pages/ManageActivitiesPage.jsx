@@ -990,7 +990,6 @@ export default function ManageActivitiesPage() {
       <Table striped bordered hover responsive className="mb-4">
         <thead>
           <tr>
-            <th>Name</th>
             <th>Title</th>
             <th>Source</th>
             <th>Mode</th>
@@ -1002,9 +1001,6 @@ export default function ManageActivitiesPage() {
         <tbody>
           {activities.map((activity) => (
             <tr key={activity.name}>
-              <td>
-                <Form.Control value={activity.name} readOnly />
-              </td>
               <td>
                 <Form.Control
                   value={activity.title}

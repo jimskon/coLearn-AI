@@ -132,6 +132,46 @@ async function getCourseEnrollments(req, res) {
   }
 }
 
+// PUT update a course's own fields. Instructor and class are not editable here.
+async function updateCourse(req, res) {
+  const user = req.user;
+  const courseId = req.params.id;
+  if (!user) return res.status(401).json({ error: "Not signed in" });
+
+  const name = String(req.body?.name ?? '').trim();
+  const code = String(req.body?.code ?? '').trim();
+  const section = String(req.body?.section ?? '').trim();
+  const semester = String(req.body?.semester ?? '').trim().toLowerCase();
+  const year = Number.parseInt(req.body?.year, 10);
+
+  if (!name || !code || !section || !['fall', 'spring', 'summer'].includes(semester) || !Number.isFinite(year)) {
+    return res.status(400).json({ error: "Please fill in all instance details." });
+  }
+
+  try {
+    const [rows] = await db.query("SELECT instructor_id FROM courses WHERE id = ?", [courseId]);
+    if (!rows.length) return res.status(404).json({ error: "Instance not found" });
+
+    const isOwner = user.id === rows[0].instructor_id;
+    const isAdmin = user.role === "root" || user.role === "creator";
+    if (!isOwner && !isAdmin) return res.status(403).json({ error: "Unauthorized" });
+
+    await db.query(
+      `UPDATE courses SET name = ?, code = ?, section = ?, semester = ?, year = ? WHERE id = ?`,
+      [name, code, section, semester, year, courseId]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    if (err?.code === 'ER_DUP_ENTRY' && String(err?.message || '').includes('unique_course')) {
+      return res.status(409).json({
+        error: "An instance with that join code, section, semester, and year already exists",
+      });
+    }
+    console.error("❌ Error updating course:", err);
+    res.status(500).json({ error: "Failed to update instance" });
+  }
+}
+
 // DELETE a course
 async function deleteCourse(req, res) {
   const user = req.user;
@@ -759,7 +799,7 @@ async function getCourseProgress(req, res) {
     // 2) Non-test activities for this course's class (only real DB columns used)
     //    is_test IS NULL = never set, treat as non-test (same as 0)
     const [allNonTestRows] = await db.query(
-      `SELECT id, name, is_test, content_text, source_type, sheet_url
+      `SELECT id, name, title, is_test, content_text, source_type, sheet_url
        FROM pogil_activities
        WHERE class_id = (
          SELECT class_id FROM courses WHERE id = ?
@@ -863,7 +903,7 @@ async function getCourseProgress(req, res) {
     }
 
     res.json({
-      activities: activitiesRows.map(a => ({ id: a.id, name: a.name, isTest: false })),
+      activities: activitiesRows.map(a => ({ id: a.id, name: a.name, title: a.title, isTest: false })),
       students: Array.from(progressByStudent.values()),
     });
   } catch (err) {
@@ -900,7 +940,7 @@ async function getCourseTestResults(req, res) {
 
     // 2) Test activities for this course's class_id
     const [testsRows] = await db.query(
-      `SELECT id, name, is_test
+      `SELECT id, name, title, is_test
        FROM pogil_activities
        WHERE class_id = (
          SELECT class_id FROM courses WHERE id = ?
@@ -1044,6 +1084,7 @@ async function getCourseTestResults(req, res) {
       tests: testsRows.map(t => ({
         id: t.id,
         name: t.name,
+        title: t.title,
       })),
       students: Array.from(resultsByStudent.values()),
     });
@@ -1153,7 +1194,7 @@ async function getCourseHWResults(req, res) {
     // 2) Assignment-mode activities — only real DB columns, filter by type in JS
     //    is_test IS NULL = never set, treat as non-test
     const [allNonTestHwRows] = await db.query(
-      `SELECT id, name, is_test, content_text, source_type, sheet_url
+      `SELECT id, name, title, is_test, content_text, source_type, sheet_url
        FROM pogil_activities
        WHERE class_id = (
          SELECT class_id FROM courses WHERE id = ?
@@ -1237,7 +1278,7 @@ async function getCourseHWResults(req, res) {
     }
 
     res.json({
-      activities: hwRows.map(a => ({ id: a.id, name: a.name })),
+      activities: hwRows.map(a => ({ id: a.id, name: a.name, title: a.title })),
       students: Array.from(resultsByStudent.values()),
     });
   } catch (err) {
@@ -1257,6 +1298,7 @@ module.exports = {
   getUserEnrollments,
   enrollByCode,
   getCourseEnrollments,
+  updateCourse,
   getStudentsForCourse,
   addStudentsToCourse,
   unenrollStudentFromCourse,

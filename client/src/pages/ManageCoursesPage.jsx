@@ -1,7 +1,7 @@
 // src/pages/ManageCoursesPage.jsx
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Table, Button, Form, Container, Row, Col, Dropdown } from 'react-bootstrap';
+import { Table, Button, Form, Container, Row, Col, Dropdown, Modal, Alert } from 'react-bootstrap';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
 
@@ -117,6 +117,51 @@ export default function ManageCoursesPage() {
     fetchCourses();
   };
 
+  // Edit modal: every field except instructor and class.
+  const [editCourse, setEditCourse] = useState(null);
+  const [editError, setEditError] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+
+  const openEdit = (course) => {
+    setEditError('');
+    setEditCourse({
+      id: course.id,
+      name: course.name || '',
+      code: course.code || '',
+      section: course.section || '',
+      semester: course.semester || 'fall',
+      year: course.year || new Date().getFullYear(),
+      instructor_name: course.instructor_name,
+      class_name: course.class_name,
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editCourse) return;
+    setEditSaving(true);
+    setEditError('');
+    try {
+      const { id, name, code, section, semester, year } = editCourse;
+      const res = await fetch(`${API_BASE_URL}/api/courses/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ name, code, section, semester, year }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setEditError(data.error || "Failed to save instance.");
+        return;
+      }
+      setEditCourse(null);
+      fetchCourses();
+    } catch (err) {
+      setEditError("Failed to save instance.");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
   const handleDelete = async (id) => {
     await fetch(`${API_BASE_URL}/api/courses/${id}`, { method: "DELETE" });
     fetchCourses();
@@ -131,7 +176,6 @@ export default function ManageCoursesPage() {
           <tr>
             <th>Name</th>
             <th>Join Code</th>
-            <th>Mode</th>
             <th>Section</th>
             <th>Semester</th>
             <th>Year</th>
@@ -145,13 +189,6 @@ export default function ManageCoursesPage() {
             <tr key={course.id}>
               <td>{course.name}</td>
               <td>{course.code}</td>
-              <td>
-                {course.class_demo_mode ? (
-                  <span className="badge bg-warning text-dark">Demo</span>
-                ) : (
-                  <span className="text-muted">Standard</span>
-                )}
-              </td>
               <td>{course.section}</td>
               <td>{course.semester}</td>
               <td>{course.year}</td>
@@ -183,6 +220,16 @@ export default function ManageCoursesPage() {
                   >
                     Students
                   </Button>
+
+                  {(user.role === 'root' || user.role === 'creator' || user.id === course.instructor_id) && (
+                    <Button
+                      size="sm"
+                      variant="warning"
+                      onClick={() => openEdit(course)}
+                    >
+                      Edit
+                    </Button>
+                  )}
 
                   {(user.role === 'root' || user.id === course.instructor_id) && (
                     <Button
@@ -288,6 +335,84 @@ export default function ManageCoursesPage() {
           Add Instance
         </Button>
       </Form>
+
+      <Modal show={!!editCourse} onHide={() => setEditCourse(null)}>
+        <Modal.Header closeButton>
+          <Modal.Title>Edit Instance</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          {editError && <Alert variant="danger">{editError}</Alert>}
+          {editCourse && (
+            <Form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSaveEdit();
+              }}
+            >
+              <Form.Group className="mb-2">
+                <Form.Label>Instance Name</Form.Label>
+                <Form.Control
+                  value={editCourse.name}
+                  onChange={(e) => setEditCourse({ ...editCourse, name: e.target.value })}
+                />
+              </Form.Group>
+              <Form.Group className="mb-2">
+                <Form.Label>Join Code</Form.Label>
+                <Form.Control
+                  value={editCourse.code}
+                  onChange={(e) => setEditCourse({ ...editCourse, code: e.target.value })}
+                />
+              </Form.Group>
+              <Row>
+                <Col>
+                  <Form.Group className="mb-2">
+                    <Form.Label>Section</Form.Label>
+                    <Form.Control
+                      value={editCourse.section}
+                      onChange={(e) => setEditCourse({ ...editCourse, section: e.target.value })}
+                    />
+                  </Form.Group>
+                </Col>
+                <Col>
+                  <Form.Group className="mb-2">
+                    <Form.Label>Semester</Form.Label>
+                    <Form.Select
+                      value={editCourse.semester}
+                      onChange={(e) => setEditCourse({ ...editCourse, semester: e.target.value })}
+                    >
+                      <option value="fall">Fall</option>
+                      <option value="spring">Spring</option>
+                      <option value="summer">Summer</option>
+                    </Form.Select>
+                  </Form.Group>
+                </Col>
+                <Col>
+                  <Form.Group className="mb-2">
+                    <Form.Label>Year</Form.Label>
+                    <Form.Control
+                      type="number"
+                      value={editCourse.year}
+                      onChange={(e) => setEditCourse({ ...editCourse, year: e.target.value })}
+                    />
+                  </Form.Group>
+                </Col>
+              </Row>
+              <div className="text-muted small mt-2">
+                Instructor: {editCourse.instructor_name || 'N/A'} · Class: {editCourse.class_name || '—'} (not editable)
+              </div>
+              <button type="submit" hidden />
+            </Form>
+          )}
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setEditCourse(null)} disabled={editSaving}>
+            Cancel
+          </Button>
+          <Button onClick={handleSaveEdit} disabled={editSaving}>
+            {editSaving ? 'Saving…' : 'Save'}
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </Container>
   );
 }

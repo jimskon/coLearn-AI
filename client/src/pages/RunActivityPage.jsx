@@ -1939,6 +1939,20 @@ export default function RunActivityPage({
     return answers;
   }
 
+  // Code boxes placed in a question group but outside any \question (keys
+  // like "1code1") belong to no question, so the per-question loop never
+  // collects them. Without this the group submit drops them, and since the
+  // submit clears drafts, the edits are lost.
+  function addGroupCodeAnswers(answers, container) {
+    const els = container?.querySelectorAll?.('textarea[data-response-key]') || [];
+    for (const el of els) {
+      const key = el.getAttribute('data-response-key') || '';
+      if (!/^\d+code\d+$/.test(key) || key in answers) continue;
+      answers[key] = String(el.value ?? codeByKeyRef.current?.[key] ?? '');
+    }
+    return answers;
+  }
+
   // Files the program runs with, for the AI code check.
   function supportingFilesForAi() {
     return Object.entries(fileContentsRef.current || {})
@@ -2880,6 +2894,7 @@ export default function RunActivityPage({
     const canAdvance = computedState === 'complete';
 
     addSavedFileAnswers(answers);
+    addGroupCodeAnswers(answers, container);
 
     const attempt = {
       submissionString: groupSubmissionString,

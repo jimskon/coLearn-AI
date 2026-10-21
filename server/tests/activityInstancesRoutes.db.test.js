@@ -860,6 +860,53 @@ test('submit-group saves a code edit when the written answer is unchanged', asyn
   assert.deepEqual(rows.map((row) => row.response), ['print(1)', 'print(2)']);
 });
 
+test('submit-group saves group-level code boxes only when they change', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    groupNumber: 1,
+    totalGroups: 3,
+    completedGroups: 0,
+    progressStatus: 'not_started',
+    activeStudentId: studentA.id,
+    activeRotationMode: 'group',
+  });
+  await addGroupMember({ instanceId, studentId: studentA.id, role: 'facilitator', connected: true, lastHeartbeat: '2026-05-01 12:00:00' });
+
+  const submit = (code) => requestJson(studentA, `/api/activity-instances/${instanceId}/submit-group`, {
+    method: 'POST',
+    body: {
+      studentId: studentA.id,
+      groupNum: 1,
+      retriesRequired: 1,
+      attempt: {
+        submissionString: '1a=x',
+        blocked: true,
+        canAdvance: false,
+        unanswered: [],
+        answers: { '1a': 'x', '1aS': 'inprogress', '1code1': code },
+      },
+    },
+  });
+
+  assert.equal((await submit('print(1)')).status, 200);
+  assert.equal((await submit('print(1)')).status, 200);
+  assert.equal((await submit('print(2)')).status, 200);
+
+  const [rows] = await db.query(
+    `SELECT response FROM responses
+      WHERE activity_instance_id = ? AND question_id = '1code1'
+      ORDER BY id`,
+    [instanceId]
+  );
+  assert.deepEqual(rows.map((row) => row.response), ['print(1)', 'print(2)']);
+});
+
 test('submit-group in group rotation mode does not rotate when the group does not advance', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');

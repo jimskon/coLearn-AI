@@ -2038,6 +2038,9 @@ async function submitGroupResponses(req, res) {
     for (const [qidRaw, valueRaw] of passthroughEntries) {
       const qid = String(qidRaw || '').trim();
       if (!qid) continue;
+      // Group-level code boxes ("1code1") are sent on every submit; record
+      // them only when they changed so history shows real edits.
+      if (/^\d+code\d+$/.test(qid) && latestByQid.get(qid) === String(valueRaw ?? '')) continue;
 
       await appendResponse(conn, instanceId, submitId, qid, valueRaw, {
         type: 'text',

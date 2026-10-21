@@ -866,6 +866,7 @@ export function parseSheetToBlocks(lines, options = {}) {
     if (mode === 'demo') return 'demo';
     if (mode === 'playground') return 'playground';
     if (mode === 'assignment') return 'assignment';
+    if (mode === 'practice') return 'practice';
     if (mode === 'group' || mode === 'normal') return 'group';
 
     return 'group';

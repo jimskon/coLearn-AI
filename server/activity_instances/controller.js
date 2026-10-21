@@ -2,9 +2,10 @@
 const db = require('../db');
 const { google } = require('googleapis');
 const { authorize } = require('../utils/googleAuth');
-const { inferActivityTypeFromActivity, inferActivityTypeFromLines } = require('../utils/activityType');
+const { inferActivityTypeFromActivity, inferActivityTypeFromLines, inferAuthoredModeFromLines } = require('../utils/activityType');
 const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
+const { practiceMultipleChoiceHint } = require('../ai/grading');
 const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
@@ -178,6 +179,7 @@ function parseTestQuestionsFromLines(lines) {
         scores: {},
         multipleChoice: null,
         sampleResponses: [],
+        feedbackPrompt: '',
       };
       continue;
     }
@@ -223,6 +225,12 @@ function parseTestQuestionsFromLines(lines) {
     const sampleMatch = trimmed.match(/^\\sampleresponses\{([\s\S]*?)\}\s*$/i);
     if (sampleMatch) {
       currentQuestion.sampleResponses.push(String(sampleMatch[1] || '').trim());
+      continue;
+    }
+
+    const feedbackPromptMatch = trimmed.match(/^\\feedbackprompt\{([\s\S]*?)\}\s*$/i);
+    if (feedbackPromptMatch) {
+      currentQuestion.feedbackPrompt = String(feedbackPromptMatch[1] || '').trim();
       continue;
     }
 
@@ -1981,17 +1989,10 @@ async function submitGroupResponses(req, res) {
       }
 
       if (!groupEntriesByBase.has(baseQid)) {
-        groupEntriesByBase.set(baseQid, {
-          baseValue: null,
-          entries: [],
-        });
+        groupEntriesByBase.set(baseQid, { entries: [] });
       }
 
-      const group = groupEntriesByBase.get(baseQid);
-      group.entries.push([qid, valueRaw]);
-      if (qid === baseQid) {
-        group.baseValue = valueRaw;
-      }
+      groupEntriesByBase.get(baseQid).entries.push([qid, valueRaw]);
     }
 
     for (const [baseQid, group] of groupEntriesByBase.entries()) {
@@ -2004,24 +2005,18 @@ async function submitGroupResponses(req, res) {
         continue;
       }
 
-      const currentBaseValue = String(group.baseValue ?? '');
-      const previousBaseValue = String(latestByQid.get(baseQid) ?? '');
-      if (currentBaseValue === previousBaseValue) {
-        // For code-only questions, group.baseValue is null because the base
-        // question key (e.g. '1a') is never set in answers — only '1acode1' is.
-        // In that case the '' === '' comparison always matches and code is never
-        // saved. Fall back to checking if any non-feedback entry actually changed.
-        if (group.baseValue != null) {
-          payloadEntries.push(...finalFeedbackEntries);
-          continue;
-        }
-        const anyDataChanged = group.entries
-          .filter(([qid]) => !isFinalAiFeedbackEntry(qid, baseQid))
-          .some(([qid, val]) => String(latestByQid.get(qid) ?? '') !== String(val ?? ''));
-        if (!anyDataChanged) {
-          payloadEntries.push(...finalFeedbackEntries);
-          continue;
-        }
+      // A question has changed if ANY of its data entries differs from the
+      // latest saved row -- the written answer, a code cell, output or a
+      // table cell. Comparing only the written answer dropped code edits on
+      // questions with both text and code, and drafts are cleared below, so
+      // the edit was lost for everyone but the student's open browser.
+      const anyDataChanged = group.entries
+        .filter(([qid]) => !isFinalAiFeedbackEntry(qid, baseQid))
+        .some(([qid, val]) => String(latestByQid.get(qid) ?? '') !== String(val ?? ''));
+
+      if (!anyDataChanged) {
+        payloadEntries.push(...finalFeedbackEntries);
+        continue;
       }
 
       payloadEntries.push(...group.entries);
@@ -2044,6 +2039,9 @@ async function submitGroupResponses(req, res) {
     for (const [qidRaw, valueRaw] of passthroughEntries) {
       const qid = String(qidRaw || '').trim();
       if (!qid) continue;
+      // Group-level code boxes ("1code1") are sent on every submit; record
+      // them only when they changed so history shows real edits.
+      if (/^\d+code\d+$/.test(qid) && latestByQid.get(qid) === String(valueRaw ?? '')) continue;
 
       await appendResponse(conn, instanceId, submitId, qid, valueRaw, {
         type: 'text',
@@ -3047,9 +3045,55 @@ async function getBaseQidsFirstSeen(conn, instanceId) {
 
 
 
+// Practice checks for one question: how many there have been, their feedback,
+// and the answer snapshot + result of the latest one (to skip re-grading an
+// unchanged answer).
+const PRACTICE_RESULT_SUFFIXES = ['CodeScore', 'CodeFeedback', 'RunScore', 'RunFeedback', 'ResponseScore', 'ResponseFeedback'];
+
+async function loadPracticeHistory(conn, instanceId, baseId, isAnswerKey) {
+  const [scoreRows] = await conn.query(
+    `SELECT question_id, response, submit_id
+       FROM responses
+      WHERE activity_instance_id = ? AND question_id IN (?)
+      ORDER BY id`,
+    [instanceId, PRACTICE_RESULT_SUFFIXES.map((suffix) => `${baseId}${suffix}`)]
+  );
+  if (!scoreRows.length) return { attemptNumber: 1, priorFeedback: [], last: null };
+
+  const submitIds = [...new Set(scoreRows.map((row) => row.submit_id))];
+  const lastSubmitId = submitIds[submitIds.length - 1];
+  const priorFeedback = scoreRows
+    .filter((row) => /Feedback$/.test(row.question_id) && String(row.response || '').trim())
+    .map((row) => row.response);
+
+  const result = {};
+  for (const row of scoreRows) {
+    if (row.submit_id === lastSubmitId) result[row.question_id.slice(baseId.length)] = row.response;
+  }
+
+  const [answerRows] = await conn.query(
+    `SELECT question_id, response FROM responses
+      WHERE activity_instance_id = ? AND submit_id = ?`,
+    [instanceId, lastSubmitId]
+  );
+  const snapshot = {};
+  for (const row of answerRows) {
+    if (isAnswerKey(row.question_id) && String(row.response || '').trim()) {
+      snapshot[row.question_id] = String(row.response);
+    }
+  }
+
+  return { attemptNumber: submitIds.length + 1, priorFeedback, last: { result, snapshot } };
+}
+
+function sameAnswerSnapshot(a, b) {
+  const aKeys = Object.keys(a);
+  return aKeys.length === Object.keys(b).length && aKeys.every((key) => a[key] === b[key]);
+}
+
 async function submitTest(req, res) {
   const { instanceId } = req.params;
-  const { studentId, answers, questions = [], regrade = false } = req.body || {};
+  const { studentId, answers, questions = [], regrade = false, practice = false, qid: checkQid = null } = req.body || {};
   const isRegrade = regrade === true;
   const submitId = randomUUID();
 
@@ -3117,6 +3161,14 @@ async function submitTest(req, res) {
     const sourceLines = sourceRow ? await loadActivitySourceLines(sourceRow) : [];
     const parsedQuestions = parseTestQuestionsFromLines(sourceLines);
 
+    // Practice checks grade without submitting. Only honored for activities
+    // authored as \mode{practice}, so a test cannot be checked early.
+    const isPractice = practice === true && !isRegrade;
+    if (isPractice && inferAuthoredModeFromLines(sourceLines) !== 'practice') {
+      await conn.rollback();
+      return res.status(400).json({ error: 'This activity is not in practice mode.' });
+    }
+
     let totalEarnedPoints = 0;
     let totalMaxPoints = 0;
     const questionResults = [];
@@ -3129,6 +3181,10 @@ async function submitTest(req, res) {
         console.error('❌ submitTest: question missing qid/id:', q);
         continue;
       }
+
+      // A single-question check still receives every question, so the
+      // index-based match against the source stays aligned.
+      if (isPractice && checkQid && baseId !== checkQid) continue;
 
       const text = q.questionText || q.text || '';
       const scores = normalizeScoreBands(q.scores || {});
@@ -3184,6 +3240,57 @@ async function submitTest(req, res) {
         }
       }
 
+      const tableRx = new RegExp(`^${escapeRegExp(baseId)}table\\d+cell\\d+_\\d+$`);
+
+      let practiceContext = null;
+      if (isPractice) {
+        const outputKey = `${baseId}Output`;
+        const isAnswerKey = (key) =>
+          key === baseId || key === outputKey || rxOld.test(key) || rxNew.test(key) || tableRx.test(key);
+        const history = await loadPracticeHistory(conn, instanceId, baseId, isAnswerKey);
+
+        const snapshot = {};
+        if (written) snapshot[baseId] = written;
+        for (const cell of codeCells) snapshot[cell.qid] = cell.code;
+        if (outputText) snapshot[outputKey] = outputText;
+        for (const [key, value] of Object.entries(answers)) {
+          if (tableRx.test(String(key)) && String(value).trim()) snapshot[key] = String(value);
+        }
+
+        // Unchanged since the last check: return that result, no AI call.
+        // A blank zero (e.g. the grader failed) is not reused.
+        const r = history.last?.result || {};
+        const lastWasGraded =
+          ['CodeFeedback', 'RunFeedback', 'ResponseFeedback'].some((k) => String(r[k] || '').trim()) ||
+          (Number(r.CodeScore) || 0) + (Number(r.RunScore) || 0) + (Number(r.ResponseScore) || 0) >=
+            maxCodePts + maxRunPts + maxRespPts;
+        if (history.last && lastWasGraded && sameAnswerSnapshot(snapshot, history.last.snapshot)) {
+          const cached = {
+            qid: baseId,
+            maxCodePts,
+            maxRunPts,
+            maxRespPts,
+            codeScore: Number(r.CodeScore) || 0,
+            runScore: Number(r.RunScore) || 0,
+            responseScore: Number(r.ResponseScore) || 0,
+            codeFeedback: r.CodeFeedback || '',
+            runFeedback: r.RunFeedback || '',
+            responseFeedback: r.ResponseFeedback || '',
+            unchanged: true,
+          };
+          totalEarnedPoints += cached.codeScore + cached.runScore + cached.responseScore;
+          totalMaxPoints += maxCodePts + maxRunPts + maxRespPts;
+          questionResults.push(cached);
+          continue;
+        }
+
+        practiceContext = {
+          attemptNumber: history.attemptNumber,
+          priorFeedback: history.priorFeedback,
+          feedbackPrompt: sourceQuestion.feedbackPrompt || '',
+        };
+      }
+
       // Persist raw artifacts
       await appendResponse(conn, instanceId, submitId, baseId, written, {
         type: 'text',
@@ -3205,7 +3312,6 @@ async function submitTest(req, res) {
       }
 
       // Persist individual table cell values so they survive the draft-clear on submit
-      const tableRx = new RegExp(`^${escapeRegExp(baseId)}table\\d+cell\\d+_\\d+$`);
       const allAnsKeys = Object.keys(answers);
       const tableAnsKeys = allAnsKeys.filter(k => tableRx.test(String(k)));
       console.log('[TABLE_DEBUG] qid=%s allKeys=%j tableMatches=%j', baseId, allAnsKeys, tableAnsKeys);
@@ -3261,6 +3367,7 @@ async function submitTest(req, res) {
           codeCells,
           outputText,
           rubric: gradingScores,
+          practice: practiceContext,
         });
 
         codeScore = graded.codeScore || 0;
@@ -3276,9 +3383,11 @@ async function submitTest(req, res) {
           if (multipleChoice?.hasChoiceScores) {
             const selected = multipleChoice.choices.find((choice) => choice.value === selectedChoice);
             responseScore = Number(selected?.points || 0);
-            responseFeedback = selected
-              ? `Selected answer earned ${responseScore}/${maxRespPts} points.`
-              : 'No answer was selected.';
+            responseFeedback = !selected
+              ? 'No answer was selected.'
+              : isPractice
+                ? (responseScore >= maxRespPts ? '' : 'Not quite — look at the choices again and try once more.')
+                : `Selected answer earned ${responseScore}/${maxRespPts} points.`;
           } else {
             const correctAnswer = String(multipleChoice?.correctAnswer || '').trim();
             if (!correctAnswer) {
@@ -3287,12 +3396,35 @@ async function submitTest(req, res) {
             } else {
               const isCorrect = selectedChoice === correctAnswer;
               responseScore = isCorrect ? maxRespPts : 0;
-              responseFeedback = isCorrect ? '' : 'Selected answer does not match the correct choice.';
+              responseFeedback = isCorrect
+                ? ''
+                : isPractice
+                  ? 'Not quite — look at the choices again and try once more.'
+                  : 'Selected answer does not match the correct choice.';
             }
           }
         } else {
           responseScore = 0;
           responseFeedback = '';
+        }
+
+        // Practice: the score above is exact; a wrong pick gets an AI-written
+        // directed question instead of just "not quite" (fixed text if it fails).
+        if (isPractice && selectedChoice && maxRespPts > 0 && responseScore < maxRespPts) {
+          const fullCredit = multipleChoice?.hasChoiceScores
+            ? (multipleChoice.choices || [])
+                .filter((choice) => Number(choice?.points) === Number(maxRespPts))
+                .map((choice) => choice.value)
+                .join(' or ')
+            : String(multipleChoice?.correctAnswer || '').trim();
+          const hint = await practiceMultipleChoiceHint({
+            questionText: text,
+            choices: (multipleChoice.choices || []).map((choice) => choice.value),
+            selected: selectedChoice,
+            correctAnswer: fullCredit,
+            practice: practiceContext,
+          });
+          if (hint) responseFeedback = hint;
         }
       }
 
@@ -3303,7 +3435,8 @@ async function submitTest(req, res) {
       // After a test is submitted, incorrect or partially-correct work should
       // teach from the result. Use the activity's own answer key or sample;
       // do not ask the grader to invent a "correct" solution.
-      if (maxPts > 0 && earned < maxPts) {
+      // Practice never reveals the answer; it scaffolds instead.
+      if (!isPractice && maxPts > 0 && earned < maxPts) {
         const reference = getTestReferenceAnswer(sourceQuestion, maxRespPts);
         if (reference) {
           if (maxRespPts > 0) {
@@ -3382,6 +3515,18 @@ async function submitTest(req, res) {
 
     }
 
+
+    if (isPractice) {
+      await appendChangedFiles(conn, instanceId, submitId, answers, resolvedStudentId);
+      await conn.commit();
+      return res.json({
+        ok: true,
+        practice: true,
+        earned: totalEarnedPoints,
+        max: totalMaxPoints,
+        questions: questionResults,
+      });
+    }
 
     // -------- summary --------
     const lines = [];

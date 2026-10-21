@@ -304,6 +304,10 @@ function AiConversationCard({ conversation, userNameById = {} }) {
 
 // Saved \file versions ("file:<name>" rows), oldest first. Each is paired with
 // the version before it, or the activity's starter text for version 1.
+// Code boxes that sit in a question group outside any question ("1code1")
+// belong to no question thread, so they are listed here the same way.
+const GROUP_CODE_KEY = /^(\d+)code(\d+)$/;
+
 function buildFileVersions(historyRows = [], starterFiles = {}) {
   const sorted = [...historyRows].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
   const latest = new Map();
@@ -311,12 +315,17 @@ function buildFileVersions(historyRows = [], starterFiles = {}) {
 
   for (const row of sorted) {
     const key = String(row?.question_id || '').trim();
-    if (!isFileResponseKey(key)) continue;
+    const groupCode = key.match(GROUP_CODE_KEY);
+    if (!groupCode && !isFileResponseKey(key)) continue;
 
-    const name = key.slice(FILE_KEY_PREFIX.length);
+    const kind = groupCode ? 'code' : 'file';
+    const name = groupCode
+      ? `group ${groupCode[1]}, code box ${groupCode[2]}`
+      : key.slice(FILE_KEY_PREFIX.length);
     const content = asString(row.response);
     const hasPrevious = latest.has(name);
-    const previous = hasPrevious ? latest.get(name).content : (starterFiles[name] ?? '');
+    const starter = kind === 'file' ? starterFiles[name] : undefined;
+    const previous = hasPrevious ? latest.get(name).content : (starter ?? '');
     if (hasPrevious && previous === content) continue;
 
     const version = hasPrevious ? latest.get(name).version + 1 : 1;
@@ -324,11 +333,12 @@ function buildFileVersions(historyRows = [], starterFiles = {}) {
     versions.push({
       id: Number(row.id) || 0,
       submitId: row?.submit_id || `row-${row.id}`,
+      kind,
       name,
       version,
       content,
       previous,
-      comparable: hasPrevious || Object.prototype.hasOwnProperty.call(starterFiles, name),
+      comparable: hasPrevious || (kind === 'file' && Object.prototype.hasOwnProperty.call(starterFiles, name)),
       row,
     });
   }
@@ -416,7 +426,7 @@ function FileVersionCard({ file, userNameById = {} }) {
   return (
     <div className="border rounded-3 bg-light p-3 mb-3">
       <div className="fw-semibold">
-        File: <code>{file.name}</code>
+        {file.kind === 'code' ? 'Code' : 'File'}: <code>{file.name}</code>
         <Badge bg="secondary" className="ms-2">version {file.version}</Badge>
       </div>
       <div className="small text-muted mb-2">
@@ -426,7 +436,7 @@ function FileVersionCard({ file, userNameById = {} }) {
       <ChangeView
         previous={file.previous}
         content={file.content}
-        language={fileLanguage(file.name)}
+        language={file.kind === 'code' ? codeLanguage(file.content) : fileLanguage(file.name)}
         comparable={file.comparable}
       />
     </div>

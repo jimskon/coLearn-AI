@@ -7,6 +7,8 @@ function normalizeActivityType(rawMode) {
   if (mode === 'demo') return 'demo';
   if (mode === 'playground') return 'playground';
   if (mode === 'assignment') return 'assignment';
+  // Practice runs per student like an assignment; only the runner tells them apart.
+  if (mode === 'practice') return 'assignment';
   if (mode === 'group' || mode === 'normal') return 'group';
 
   return null;
@@ -19,6 +21,7 @@ function normalizeAuthoredMode(rawMode) {
   if (mode === 'demo') return 'demo';
   if (mode === 'playground') return 'playground';
   if (mode === 'assignment') return 'assignment';
+  if (mode === 'practice') return 'practice';
   if (mode === 'group' || mode === 'normal') return 'group';
 
   return null;

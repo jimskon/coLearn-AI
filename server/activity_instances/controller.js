@@ -5,6 +5,7 @@ const { authorize } = require('../utils/googleAuth');
 const { inferActivityTypeFromActivity, inferActivityTypeFromLines, inferAuthoredModeFromLines } = require('../utils/activityType');
 const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
+const { practiceMultipleChoiceHint } = require('../ai/grading');
 const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
@@ -3405,6 +3406,25 @@ async function submitTest(req, res) {
         } else {
           responseScore = 0;
           responseFeedback = '';
+        }
+
+        // Practice: the score above is exact; a wrong pick gets an AI-written
+        // directed question instead of just "not quite" (fixed text if it fails).
+        if (isPractice && selectedChoice && maxRespPts > 0 && responseScore < maxRespPts) {
+          const fullCredit = multipleChoice?.hasChoiceScores
+            ? (multipleChoice.choices || [])
+                .filter((choice) => Number(choice?.points) === Number(maxRespPts))
+                .map((choice) => choice.value)
+                .join(' or ')
+            : String(multipleChoice?.correctAnswer || '').trim();
+          const hint = await practiceMultipleChoiceHint({
+            questionText: text,
+            choices: (multipleChoice.choices || []).map((choice) => choice.value),
+            selected: selectedChoice,
+            correctAnswer: fullCredit,
+            practice: practiceContext,
+          });
+          if (hint) responseFeedback = hint;
         }
       }
 

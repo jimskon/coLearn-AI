@@ -358,4 +358,62 @@ async function gradeTestQuestionHttp(req, res) {
   }
 }
 
-module.exports = { gradeTestQuestion, gradeTestQuestionHttp };
+// ---------------- PRACTICE: multiple-choice hint ----------------
+// The score for a multiple-choice question is exact and never uses AI. This
+// only writes the scaffolding hint for a wrong pick, so the student gets a
+// directed question instead of "wrong". Returns '' if the AI call fails.
+async function practiceMultipleChoiceHint({
+  questionText,
+  choices = [],
+  selected,
+  correctAnswer,
+  practice = null,
+}) {
+  const attempt = Math.max(1, Number(practice?.attemptNumber) || 1);
+  const prior = (Array.isArray(practice?.priorFeedback) ? practice.priorFeedback : [])
+    .map((f) => String(f || "").trim())
+    .filter(Boolean)
+    .slice(-3);
+
+  const sys = [
+    "You coach a first-year programming student who picked the wrong answer on a practice multiple-choice question.",
+    "Write ONE short directed question (or a one-sentence hint followed by a question) that helps them reason toward the right answer themselves.",
+    "Never state, quote, paraphrase, or point to the correct choice. Never say which choice is right, and never rule choices in or out by letter or by text.",
+    "Focus on the idea behind the question: what the code does step by step, what a term means, or why the choice they picked does not fit.",
+    "Match the level of help to the attempt number:",
+    "- Attempt 1: a gentle question about the key idea.",
+    "- Attempt 2: point to the specific detail they are probably overlooking.",
+    "- Attempt 3 or later: a very directed question, such as asking them to trace a specific value or line, still without giving the answer.",
+    "Do not repeat earlier hints. Do not mention points, scores, or grading. One or two sentences.",
+    "Return only JSON.",
+  ].join("\n");
+
+  const user = [
+    "Question:",
+    stripHtml(questionText || "(missing)"),
+    "",
+    "Choices:",
+    ...choices.map((c) => `- ${String(c)}`),
+    "",
+    `Student picked: ${String(selected || "")}`,
+    `Correct answer (for your reasoning only -- NEVER reveal it): ${String(correctAnswer || "")}`,
+    `Check attempt: ${attempt}`,
+    prior.length ? `Earlier hints (do not repeat): ${prior.join(" / ")}` : "",
+    practice?.feedbackPrompt ? `Instructor guidance: ${practice.feedbackPrompt}` : "",
+    "",
+    'Return strict JSON only: { "hint": string }',
+  ].filter((line) => line !== "").join("\n");
+
+  try {
+    const obj = await requestJsonGrade([
+      { name: "practice_mc_hint", role: "system", content: sys },
+      { role: "user", content: user },
+    ], 300);
+    return obj?.hint ? String(obj.hint).trim() : "";
+  } catch (err) {
+    console.error("❌ practiceMultipleChoiceHint failed:", err?.message || err);
+    return "";
+  }
+}
+
+module.exports = { gradeTestQuestion, gradeTestQuestionHttp, practiceMultipleChoiceHint };

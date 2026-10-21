@@ -133,7 +133,9 @@ function ModeBadge({ activity }) {
         ? 'Demo'
         : normalizedMode === 'assignment'
           ? 'Assignment'
-          : 'Group';
+          : normalizedMode === 'practice'
+            ? 'Practice'
+            : 'Group';
   const variant = normalizedMode === 'test'
     ? 'danger'
     : normalizedMode === 'playground'
@@ -142,7 +144,9 @@ function ModeBadge({ activity }) {
         ? 'info'
         : normalizedMode === 'assignment'
           ? 'success'
-          : 'secondary';
+          : normalizedMode === 'practice'
+            ? 'primary'
+            : 'secondary';
 
   return <Badge bg={variant}>{label}</Badge>;
 }

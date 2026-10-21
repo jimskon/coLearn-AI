@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef } from 'react';
-import { Alert, Badge, Button, Spinner } from 'react-bootstrap';
+import { Alert, Badge, Button, ProgressBar, Spinner } from 'react-bootstrap';
 import QuestionScorePanel from '../../components/QuestionScorePanel';
 import InfoBubble from '../../components/activity/InfoBubble';
 import { collectInfosForTarget } from '../../utils/parseSheet';
@@ -49,6 +49,9 @@ export default function RunActivityWorkspace({
   activity,
   isTestMode,
   isAssignmentMode,
+  isPracticeMode = false,
+  practiceCheckingQid = null,
+  handlePracticeCheck,
   isCreatorTestRun,
   isStudent,
   isSubmitted,
@@ -370,8 +373,10 @@ export default function RunActivityWorkspace({
                   isSubmitted;
                 const showScorePanel =
                   isAssessmentMode &&
-                  isSubmitted &&
+                  (isSubmitted || (isPracticeMode && scores.hasAnyScore)) &&
                   (isInstructor || isStudent);
+                const showPracticeCheck =
+                  isPracticeMode && isStudent && canEditAnswers && scores.maxTotal > 0;
                 const canGradeQuestionPreviewForBlock = shouldShowQuestionGradePreview({
                   blockType: block.type,
                   canGradeQuestionPreview,
@@ -384,6 +389,19 @@ export default function RunActivityWorkspace({
                 return (
                   <div key={`group-${index}-block-${bIndex}`} className="mb-2">
                     {renderedBlock}
+
+                    {showPracticeCheck && (
+                      <div className="mt-2">
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          onClick={() => handlePracticeCheck(qid)}
+                          disabled={!!practiceCheckingQid}
+                        >
+                          {practiceCheckingQid === qid ? 'Checking…' : 'Check'}
+                        </Button>
+                      </div>
+                    )}
 
                     {canGradeQuestionPreviewForBlock && (
                       <div className="mt-2 d-flex flex-wrap gap-2 align-items-center">
@@ -560,7 +578,33 @@ export default function RunActivityWorkspace({
           </div>
         )}
 
-        {canSubmitAssignment && isAssignmentMode && !isSandbox && isStudent && !isSubmitted && (
+        {isPracticeMode && !isSandbox && overallTestTotals.max > 0 && (
+          <div className="mt-3">
+            <div className="d-flex justify-content-between small mb-1">
+              <strong>Your progress</strong>
+              <span>
+                {overallTestTotals.earned} / {overallTestTotals.max} points (
+                {Math.round((overallTestTotals.earned / overallTestTotals.max) * 100)}%)
+              </span>
+            </div>
+            <ProgressBar
+              now={(overallTestTotals.earned / overallTestTotals.max) * 100}
+              variant={overallTestTotals.earned >= overallTestTotals.max ? 'success' : 'primary'}
+            />
+            {canSubmitAssignment && isStudent && (
+              <div className="mt-2">
+                <Button onClick={() => handlePracticeCheck(null)} disabled={!!practiceCheckingQid}>
+                  {practiceCheckingQid === 'all'
+                    ? <><Spinner animation="border" size="sm" className="me-2" />Checking…</>
+                    : 'Check All'}
+                </Button>
+                <span className="text-muted small ms-2">Check your answers as often as you like.</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        {canSubmitAssignment && isAssignmentMode && !isPracticeMode && !isSandbox && isStudent && !isSubmitted && (
           <div className="mt-3">
             <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
               {isSubmitting ? <><Spinner animation="border" size="sm" className="me-2" />Submitting…</> : 'Submit Lab'}
@@ -601,7 +645,7 @@ export default function RunActivityWorkspace({
           </Alert>
         )}
 
-        {isAssessmentMode && !isSandbox && overallTestTotals.max > 0 && isInstructor && (
+        {isAssessmentMode && !isPracticeMode && !isSandbox && overallTestTotals.max > 0 && isInstructor && (
           <Alert variant="info" className="mt-3">
             <strong>{Number(activity?.review_complete) ? 'Reviewed by instructor' : 'Preliminary score — pending instructor review'}</strong>
             <br />

@@ -11,6 +11,7 @@ const TYPE_LABELS = {
   demo: 'Demo',
   playground: 'Playground',
   assignment: 'Assignment',
+  practice: 'Practice',
 };
 
 const TYPE_BADGE_VARIANTS = {
@@ -19,6 +20,7 @@ const TYPE_BADGE_VARIANTS = {
   demo: 'info',
   playground: 'info',
   assignment: 'success',
+  practice: 'primary',
 };
 
 

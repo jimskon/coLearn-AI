@@ -342,7 +342,10 @@ export default function RunActivityPage({
   const [activity, setActivity] = useState(null);
   const activityMode = activity?.meta?.mode || activity?.mode || 'group';
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
-  const isAssignmentMode = activityMode === 'assignment';
+  // Practice runs like an assignment, plus repeatable per-question checks.
+  const isPracticeMode = activityMode === 'practice';
+  const isAssignmentMode = activityMode === 'assignment' || isPracticeMode;
+  const [practiceCheckingQid, setPracticeCheckingQid] = useState(null);
   const [gradingQuestionQid, setGradingQuestionQid] = useState(null);
   const [gradingAllQuestions, setGradingAllQuestions] = useState(false);
   const [questionGradePreviews, setQuestionGradePreviews] = useState({});
@@ -835,13 +838,14 @@ export default function RunActivityPage({
         if (b?.type !== 'question') continue;
         const qid = `${b.groupId}${b.id}`;
         const { hasAnyScore, earnedTotal, maxTotal } = getQuestionScores(qid, b);
-        if (!hasAnyScore) continue;
+        // Practice counts unchecked questions toward the max, so the bar grows.
+        if (!hasAnyScore && !isPracticeMode) continue;
         if (Number.isFinite(earnedTotal)) earned += earnedTotal;
         if (Number.isFinite(maxTotal)) max += maxTotal;
       }
     }
     return { earned, max };
-  }, [isTestMode, isAssignmentMode, groups, existingAnswers, activity?.submitted_at, activity?.points_earned, activity?.points_possible]);
+  }, [isTestMode, isAssignmentMode, isPracticeMode, groups, existingAnswers, activity?.submitted_at, activity?.points_earned, activity?.points_possible]);
 
   useEffect(() => {
     if (!DEBUG_FILES) return;
@@ -3157,6 +3161,57 @@ export default function RunActivityPage({
     }
   }
 
+  // Practice: grade one question (qid) or all of them (null) and save the
+  // result to history. Does not submit or lock the activity.
+  async function handlePracticeCheck(qid = null) {
+    if (practiceCheckingQid) return;
+    setPracticeCheckingQid(qid || 'all');
+    try {
+      const blocks = groups.flatMap((g) => [g.intro, ...(g.content || [])]);
+      const { answers, questions } = buildTestSubmissionPayload(blocks, document, existingAnswers);
+      addSavedFileAnswers(answers);
+
+      const res = await fetch(
+        `${API_BASE_URL}/api/activity-instances/${instanceId}/submit-assignment`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ studentId: user.id, answers, questions, practice: true, qid }),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(`Check failed: ${data.error || 'Please try again.'}`);
+        return;
+      }
+
+      setExistingAnswers((prev) => {
+        const next = { ...prev };
+        for (const q of data.questions || []) {
+          const values = {
+            CodeScore: q.codeScore,
+            CodeFeedback: q.codeFeedback,
+            RunScore: q.runScore,
+            RunFeedback: q.runFeedback,
+            ResponseScore: q.responseScore,
+            ResponseFeedback: q.responseFeedback,
+          };
+          for (const [suffix, value] of Object.entries(values)) {
+            const key = `${q.qid}${suffix}`;
+            next[key] = { ...(next[key] || {}), response: String(value ?? ''), type: 'text' };
+          }
+        }
+        return next;
+      });
+    } catch (err) {
+      console.error('Practice check failed:', err);
+      alert('Check failed. Please try again.');
+    } finally {
+      setPracticeCheckingQid(null);
+    }
+  }
+
   async function handleGradeSingleQuestion(qid) {
     if (gradingQuestionQid || gradingAllQuestions) return;
     if (!isTestMode && !isAssignmentMode) return;
@@ -3584,6 +3639,9 @@ export default function RunActivityPage({
             activity={activity}
             isTestMode={isTestMode}
             isAssignmentMode={isAssignmentMode}
+            isPracticeMode={isPracticeMode}
+            practiceCheckingQid={practiceCheckingQid}
+            handlePracticeCheck={handlePracticeCheck}
             isStudent={isStudent}
             isSubmitted={isSubmitted}
             timeExpired={timeExpired}

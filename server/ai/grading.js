@@ -99,11 +99,39 @@ async function requestJsonGrade(messages, maxCompletionTokens = 700) {
   }
 }
 
+// Practice mode: the score is still graded, but the feedback scaffolds like
+// group mode -- a hint or directed question, never the answer.
+function buildPracticeFeedbackRules(practice) {
+  if (!practice) return [];
+  const attempt = Math.max(1, Number(practice.attemptNumber) || 1);
+  const prior = (Array.isArray(practice.priorFeedback) ? practice.priorFeedback : [])
+    .map((f) => String(f || '').trim())
+    .filter(Boolean)
+    .slice(-3);
+  const guidance = String(practice.feedbackPrompt || '').trim();
+
+  return [
+    "",
+    "PRACTICE MODE: this is a practice check, not a test. The student will revise and check again.",
+    "The feedback must scaffold learning. Never state the correct answer, never quote a model or sample answer, and never write or fix code for the student.",
+    "If the work earns full credit, confirm in one short sentence what is right.",
+    "Otherwise, briefly say what is right, then ask ONE directed question or give ONE simple hint that points toward what is missing or wrong.",
+    `This is check attempt ${attempt} for this question.`,
+    "- Attempt 1: a gentle nudge or focused question.",
+    "- Attempt 2: point to the missing idea or the part of the question to revisit.",
+    "- Attempt 3 or later: a more directed hint that names exactly what to look at, still without giving the answer.",
+    prior.length ? `Earlier feedback for this question (do not repeat its wording): ${prior.join(' / ')}` : "",
+    guidance ? `Instructor guidance for this question: ${guidance}` : "",
+    "Keep the feedback to 1-3 sentences.",
+  ].filter((line) => line !== "");
+}
+
 async function gradeResponseBand({
   questionText,
   responseText,
   responseRubricText,
   maxRespPts,
+  practice = null,
 }) {
   if (maxRespPts <= 0) {
     return { responseScore: 0, responseFeedback: "" };
@@ -149,6 +177,7 @@ async function gradeResponseBand({
     "}",
     `responseScore must be between 0 and ${maxRespPts}.`,
     "Do not mention points, scores, grading, or rubrics in the feedback.",
+    ...buildPracticeFeedbackRules(practice),
   ].join("\n");
 
   const obj = await requestJsonGrade([
@@ -170,6 +199,7 @@ async function gradeCodeRunBands({
   runRubricText,
   maxCodePts,
   maxRunPts,
+  practice = null,
 }) {
   if (maxCodePts <= 0 && maxRunPts <= 0) {
     return {
@@ -223,6 +253,7 @@ async function gradeCodeRunBands({
     `codeScore must be between 0 and ${maxCodePts}.`,
     `runScore must be between 0 and ${maxRunPts}.`,
     "Do not mention points, scores, grading, or rubrics in the feedback.",
+    ...buildPracticeFeedbackRules(practice),
   ].join("\n");
 
   const obj = await requestJsonGrade([
@@ -247,6 +278,7 @@ async function gradeTestQuestion({
   outputText = "",
   rubric = {},
   detailedFeedback = true,
+  practice = null,
 }) {
   const normalizedScores = normalizeScoreBands(scores, rubric);
   const codeBucket = normalizedScores.code || {};
@@ -279,6 +311,7 @@ async function gradeTestQuestion({
       runRubricText,
       maxCodePts,
       maxRunPts,
+      practice,
     });
 
     const response = await gradeResponseBand({
@@ -286,6 +319,7 @@ async function gradeTestQuestion({
       responseText,
       responseRubricText,
       maxRespPts,
+      practice,
     });
 
     return { ...codeRun, ...response };

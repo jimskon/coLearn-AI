@@ -123,7 +123,7 @@
   // the AI's instructions cannot drift apart on what is allowed.
   // ---------------------------------------------------------------------------
   const ENUMS = {
-    mode: ['group', 'test', 'assignment', 'demo', 'playground'],
+    mode: ['group', 'test', 'assignment', 'practice', 'demo', 'playground'],
     scoreType: ['response', 'code', 'output'],
     responsemode: ['questions'],
     // Optional research category for a question. Absent = 'unknown'.

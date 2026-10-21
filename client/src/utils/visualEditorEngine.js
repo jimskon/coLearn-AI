@@ -362,7 +362,8 @@ export function parseRawPreamble(sourceLines) {
     title: get('title'),
     name: get('name'),
     mode: hasMode('test') ? 'test' : hasMode('demo') ? 'demo'
-        : hasMode('assignment') ? 'assignment' : 'group',
+        : hasMode('assignment') ? 'assignment'
+        : hasMode('practice') ? 'practice' : 'group',
     retries: get('retries'),
     studentLevel: get('studentlevel'),
     activityContext: get('activitycontext'),

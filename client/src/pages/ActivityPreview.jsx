@@ -16,6 +16,7 @@ function normalizeAuthoredMode(rawMode) {
   if (mode === 'test') return 'test';
   if (mode === 'demo' || mode === 'playground') return mode;
   if (mode === 'assignment') return 'assignment';
+  if (mode === 'practice') return 'practice';
   if (mode === 'group' || mode === 'normal') return 'group';
   return null;
 }

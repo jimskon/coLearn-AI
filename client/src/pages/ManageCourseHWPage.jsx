@@ -130,7 +130,7 @@ export default function ManageCourseHWPage() {
               <th>Completed</th>
               <th>Partial</th>
               {activities.map((a) => (
-                <th key={a.id}>{a.name}</th>
+                <th key={a.id}>{a.title || a.name}</th>
               ))}
             </tr>
           </thead>

@@ -50,6 +50,9 @@ router.get("/:courseId/progress", controller.getCourseProgress);
 // Unenroll a student from a course
 router.delete("/:courseId/unenroll/:studentId", controller.unenrollStudentFromCourse);
 
+// Edit a course (not its instructor or class)
+router.put("/:id", controller.updateCourse);
+
 // Delete a course
 router.delete("/:id", controller.deleteCourse);
 

@@ -142,7 +142,7 @@ export default function ManageCourseTestsPage() {
               <th>Completed</th>
               <th>Partial</th>
               {tests.map((t) => (
-                <th key={t.id}>{t.name}</th>
+                <th key={t.id}>{t.title || t.name}</th>
               ))}
             </tr>
           </thead>

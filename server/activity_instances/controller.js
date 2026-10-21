@@ -1988,17 +1988,10 @@ async function submitGroupResponses(req, res) {
       }
 
       if (!groupEntriesByBase.has(baseQid)) {
-        groupEntriesByBase.set(baseQid, {
-          baseValue: null,
-          entries: [],
-        });
+        groupEntriesByBase.set(baseQid, { entries: [] });
       }
 
-      const group = groupEntriesByBase.get(baseQid);
-      group.entries.push([qid, valueRaw]);
-      if (qid === baseQid) {
-        group.baseValue = valueRaw;
-      }
+      groupEntriesByBase.get(baseQid).entries.push([qid, valueRaw]);
     }
 
     for (const [baseQid, group] of groupEntriesByBase.entries()) {
@@ -2011,24 +2004,18 @@ async function submitGroupResponses(req, res) {
         continue;
       }
 
-      const currentBaseValue = String(group.baseValue ?? '');
-      const previousBaseValue = String(latestByQid.get(baseQid) ?? '');
-      if (currentBaseValue === previousBaseValue) {
-        // For code-only questions, group.baseValue is null because the base
-        // question key (e.g. '1a') is never set in answers — only '1acode1' is.
-        // In that case the '' === '' comparison always matches and code is never
-        // saved. Fall back to checking if any non-feedback entry actually changed.
-        if (group.baseValue != null) {
-          payloadEntries.push(...finalFeedbackEntries);
-          continue;
-        }
-        const anyDataChanged = group.entries
-          .filter(([qid]) => !isFinalAiFeedbackEntry(qid, baseQid))
-          .some(([qid, val]) => String(latestByQid.get(qid) ?? '') !== String(val ?? ''));
-        if (!anyDataChanged) {
-          payloadEntries.push(...finalFeedbackEntries);
-          continue;
-        }
+      // A question has changed if ANY of its data entries differs from the
+      // latest saved row -- the written answer, a code cell, output or a
+      // table cell. Comparing only the written answer dropped code edits on
+      // questions with both text and code, and drafts are cleared below, so
+      // the edit was lost for everyone but the student's open browser.
+      const anyDataChanged = group.entries
+        .filter(([qid]) => !isFinalAiFeedbackEntry(qid, baseQid))
+        .some(([qid, val]) => String(latestByQid.get(qid) ?? '') !== String(val ?? ''));
+
+      if (!anyDataChanged) {
+        payloadEntries.push(...finalFeedbackEntries);
+        continue;
       }
 
       payloadEntries.push(...group.entries);

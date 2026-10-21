@@ -802,6 +802,64 @@ test('submit-group freezes accepted answers but persists final AI feedback', asy
   assert.equal(latest('1bF1'), 'fresh feedback');
 });
 
+test('submit-group saves a code edit when the written answer is unchanged', async () => {
+  const instructor = await createUser('instructor');
+  const studentA = await createUser('student');
+  const classId = await createClassRecord();
+  const courseId = await createCourse({ instructorId: instructor.id, classId });
+  const activityId = await createActivity({ classId, createdBy: instructor.id });
+  const instanceId = await createInstance({
+    activityId,
+    courseId,
+    groupNumber: 1,
+    totalGroups: 3,
+    completedGroups: 0,
+    progressStatus: 'not_started',
+    activeStudentId: studentA.id,
+    activeRotationMode: 'group',
+  });
+  await addGroupMember({ instanceId, studentId: studentA.id, role: 'facilitator', connected: true, lastHeartbeat: '2026-05-01 12:00:00' });
+
+  await db.query(
+    `INSERT INTO responses
+       (activity_instance_id, question_id, submit_id, response_type, response, answered_by_user_id)
+     VALUES
+       (?, '1a', 'seed-1', 'text', 'same explanation', ?),
+       (?, '1acode1', 'seed-1', 'text', 'print(1)', ?)`,
+    [instanceId, studentA.id, instanceId, studentA.id]
+  );
+
+  const response = await requestJson(studentA, `/api/activity-instances/${instanceId}/submit-group`, {
+    method: 'POST',
+    body: {
+      studentId: studentA.id,
+      groupNum: 1,
+      retriesRequired: 1,
+      attempt: {
+        submissionString: '1a=same',
+        blocked: false,
+        canAdvance: true,
+        unanswered: [],
+        answers: {
+          '1a': 'same explanation',
+          '1acode1': 'print(2)',
+          '1aS': 'complete',
+        },
+      },
+    },
+  });
+
+  assert.equal(response.status, 200);
+
+  const [rows] = await db.query(
+    `SELECT response FROM responses
+      WHERE activity_instance_id = ? AND question_id = '1acode1'
+      ORDER BY id`,
+    [instanceId]
+  );
+  assert.deepEqual(rows.map((row) => row.response), ['print(1)', 'print(2)']);
+});
+
 test('submit-group in group rotation mode does not rotate when the group does not advance', async () => {
   const instructor = await createUser('instructor');
   const studentA = await createUser('student');

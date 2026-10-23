@@ -3490,6 +3490,7 @@ export function renderBlocks(blocks, options = {}) {
                       });
                   }}
                   timeLimit={cpp.timeLimit ?? 5000}
+                  includeFiles={includeFiles}
                   codeFeedbackShown={codeFeedbackShown}
                   feedback={codeFeedbackShown?.[responseKey] || null}
                   fileContents={fileContents}

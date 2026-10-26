@@ -58,7 +58,21 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
 
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
-      setTests(data.groups);
+      // Include only student attempts and list them alphabetically by name.
+      const studentTests = data.groups
+        .filter((t) =>
+          t.members?.some((member) =>
+            String(member.role || '').toLowerCase() === 'student'
+          )
+        )
+        .sort((a, b) => {
+          const studentName = (t) =>
+            t.members?.find((m) => String(m.role || '').toLowerCase() === 'student')?.name || '';
+          return studentName(a).localeCompare(studentName(b), undefined, {
+            sensitivity: 'base',
+          });
+        });
+      setTests(studentTests);
       // Access code is the same for all instances in this run; grab from first one that has it.
       const codeInst = data.groups.find((g) => g.test_access_code);
       setAccessCode(codeInst?.test_access_code || null);
@@ -299,7 +313,7 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
             {tests.map((t) => {
               const instanceId = t.instance_id;
 
-              const member = (t.members && t.members[0]) || {};
+              const member = t.members?.find((m) => String(m.role || '').toLowerCase() === 'student') || {};
               const studentLabel = member.email
                 ? `${member.name} <${member.email}>`
                 : (member.name || '(unknown)');

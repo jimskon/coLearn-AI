@@ -4,6 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Table, Button, Container, Spinner, Alert } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
+import { studentsOnlySorted } from '../utils/resultsRoster';
 
 export default function ManageCourseHWPage() {
   const { courseId } = useParams();
@@ -55,8 +56,10 @@ export default function ManageCourseHWPage() {
           return { ...s, completedHW: completed, partialHW: partial };
         });
 
+        const visibleStudents = await studentsOnlySorted(courseId, enrichedStudents);
+        if (!isMounted) return;
         setActivities(rawActivities);
-        setStudents(enrichedStudents);
+        setStudents(visibleStudents);
       } catch (err) {
         console.error('❌ Failed to load HW results:', err);
         if (isMounted) setError(err.message || 'Failed to load HW results');

@@ -4,6 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Table, Button, Container, Spinner, Alert } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
+import { studentsOnlySorted } from '../utils/resultsRoster';
 
 export default function ManageCourseTestsPage() {
   const { courseId } = useParams();
@@ -60,8 +61,10 @@ export default function ManageCourseTestsPage() {
           };
         });
 
+        const visibleStudents = await studentsOnlySorted(courseId, enrichedStudents);
+        if (!isMounted) return;
         setTests(rawTests);
-        setStudents(enrichedStudents);
+        setStudents(visibleStudents);
       } catch (err) {
         console.error('❌ Failed to load course test results:', err);
         if (isMounted) setError(err.message || 'Failed to load test results');
@@ -135,7 +138,7 @@ export default function ManageCourseTestsPage() {
       {tests.length === 0 ? (
         <p className="mt-3">No tests found for this instance.</p>
       ) : (
-        <Table bordered className="mt-3">
+        <Table bordered responsive className="mt-3 results-table">
           <thead>
             <tr>
               <th>Name</th>

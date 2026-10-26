@@ -4,6 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Table, Button, Container } from 'react-bootstrap';
 import { API_BASE_URL } from '../config';
 import { useUser } from '../context/UserContext';
+import { studentsOnlySorted } from '../utils/resultsRoster';
 import { CheckCircleFill } from 'react-bootstrap-icons';
 
 const statusColor = {
@@ -22,8 +23,8 @@ export default function ManageCourseProgressPage() {
   useEffect(() => {
     fetch(`${API_BASE_URL}/api/courses/${courseId}/progress`)
       .then(res => res.json())
-      .then(data => {
-        setStudents(data.students || []);
+      .then(async data => {
+        setStudents(await studentsOnlySorted(courseId, data.students || []));
         setActivities(data.activities || []);
       })
       .catch(err => console.error('Failed to load progress:', err));
@@ -105,7 +106,7 @@ export default function ManageCourseProgressPage() {
   return (
     <Container className="mt-4">
       <h3>Group Activity Results</h3>
-      <Table bordered>
+      <Table bordered responsive className="results-table">
         <thead>
           <tr>
             <th>Name</th>

@@ -69,3 +69,5 @@ playwright-report/
 client/dist-*/
 .commit-msg.txt
 client/vite.config.mjs.timestamp-*.mjs
+
+Claude\ outputs

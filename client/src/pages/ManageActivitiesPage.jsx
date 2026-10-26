@@ -613,6 +613,9 @@ export default function ManageActivitiesPage() {
     }
   };
 
+  // Delete confirmation: { id, label } of the item to delete, or null.
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
   const handleDelete = async (activityId) => {
     const res = await fetch(`${API_BASE_URL}/api/classes/${classId}/activities/${activityId}`, {
       method: 'DELETE',
@@ -1061,7 +1064,7 @@ export default function ManageActivitiesPage() {
                   <Button
                     variant="danger"
                     size="sm"
-                    onClick={() => handleDelete(activity.id)}
+                    onClick={() => setConfirmDelete({ id: activity.id, label: activity.title || activity.name })}
                   >
                     Delete
                   </Button>
@@ -1103,6 +1106,28 @@ export default function ManageActivitiesPage() {
       <div className="text-muted small mb-4">
         Create Draft opens the new local draft generator with model, structure, and description controls.
       </div>
+
+      <Modal show={!!confirmDelete} onHide={() => setConfirmDelete(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Delete activity?</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          Are you sure you want to delete <strong>{confirmDelete?.label}</strong>? This also removes every run of it and the student work in those runs. This cannot be undone.
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              const id = confirmDelete.id;
+              setConfirmDelete(null);
+              handleDelete(id);
+            }}
+          >
+            Delete
+          </Button>
+        </Modal.Footer>
+      </Modal>
 
       <Modal show={showCreateModal} onHide={() => !createBusy && setShowCreateModal(false)} size="lg">
         <Modal.Header closeButton={!createBusy}>

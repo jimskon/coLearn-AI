@@ -162,6 +162,9 @@ export default function ManageCoursesPage() {
     }
   };
 
+  // Delete confirmation: { id, label } of the item to delete, or null.
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
   const handleDelete = async (id) => {
     await fetch(`${API_BASE_URL}/api/courses/${id}`, { method: "DELETE" });
     fetchCourses();
@@ -235,7 +238,7 @@ export default function ManageCoursesPage() {
                     <Button
                       size="sm"
                       variant="danger"
-                      onClick={() => handleDelete(course.id)}
+                      onClick={() => setConfirmDelete({ id: course.id, label: course.name })}
                     >
                       Delete
                     </Button>
@@ -335,6 +338,28 @@ export default function ManageCoursesPage() {
           Add Instance
         </Button>
       </Form>
+
+      <Modal show={!!confirmDelete} onHide={() => setConfirmDelete(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Delete instance?</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          Are you sure you want to delete <strong>{confirmDelete?.label}</strong>? This removes the instance and the student work in it. This cannot be undone.
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              const id = confirmDelete.id;
+              setConfirmDelete(null);
+              handleDelete(id);
+            }}
+          >
+            Delete
+          </Button>
+        </Modal.Footer>
+      </Modal>
 
       <Modal show={!!editCourse} onHide={() => setEditCourse(null)}>
         <Modal.Header closeButton>

@@ -106,7 +106,7 @@ export default function ManageCourseProgressPage() {
   return (
     <Container className="mt-4">
       <h3>Group Activity Results</h3>
-      <Table bordered>
+      <Table bordered responsive className="results-table">
         <thead>
           <tr>
             <th>Name</th>

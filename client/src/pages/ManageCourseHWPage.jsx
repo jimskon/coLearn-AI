@@ -126,7 +126,7 @@ export default function ManageCourseHWPage() {
       {activities.length === 0 ? (
         <p className="mt-3">No graded assignments found for this instance.</p>
       ) : (
-        <Table bordered className="mt-3">
+        <Table bordered responsive className="mt-3 results-table">
           <thead>
             <tr>
               <th>Name</th>

@@ -15,3 +15,13 @@ body {
   font-family: var(--bs-font-monospace); /* Bootstrap monospace stack */
   white-space: pre;                      /* preserve multiple spaces exactly */
 }
+
+/* Results tables (Group / Test / HW): keep the student name column
+   visible while scrolling sideways through activities. */
+.table.results-table > :not(caption) > * > *:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: var(--bs-body-bg);
+  white-space: nowrap;
+}

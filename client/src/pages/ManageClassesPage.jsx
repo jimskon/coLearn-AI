@@ -77,6 +77,9 @@ export default function ManageClassesPage() {
     setShowClassModal(true);
   };
 
+  // Delete confirmation: { id, label } of the item to delete, or null.
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
   const handleDelete = async (id) => {
     await fetch(`${API_BASE_URL}/api/classes/${id}`, { method: 'DELETE' });
     setClasses(classes.filter(c => c.id !== id));
@@ -178,7 +181,7 @@ export default function ManageClassesPage() {
               <td>
                 <Button type="button" variant="success" size="sm" onClick={() => openEditModal(c)} className="me-2">Update</Button>
                 <Button type="button" variant="info" size="sm" onClick={() => navigate(`/class/${c.id}`)} className="me-2">Manage</Button>
-                <Button type="button" variant="danger" size="sm" onClick={() => handleDelete(c.id)}>Delete</Button>
+                <Button type="button" variant="danger" size="sm" onClick={() => setConfirmDelete({ id: c.id, label: c.name })}>Delete</Button>
               </td>
             </tr>
           ))}
@@ -310,6 +313,27 @@ export default function ManageClassesPage() {
             </Button>
           </Modal.Footer>
         </Form>
+      </Modal>
+      <Modal show={!!confirmDelete} onHide={() => setConfirmDelete(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Delete class?</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          Are you sure you want to delete <strong>{confirmDelete?.label}</strong>? This cannot be undone.
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setConfirmDelete(null)}>Cancel</Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              const id = confirmDelete.id;
+              setConfirmDelete(null);
+              handleDelete(id);
+            }}
+          >
+            Delete
+          </Button>
+        </Modal.Footer>
       </Modal>
     </Container>
   );

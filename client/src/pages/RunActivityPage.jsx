@@ -2954,6 +2954,10 @@ export default function RunActivityPage({
         return;
       }
 
+      // The submitted answers are now saved, so a later reload may restore
+      // their AI feedback again.
+      dirtyTextQidsRef.current.clear();
+
       const result = await response.json().catch(() => ({}));
       const priorCompletedGroups = Number(activity?.completed_groups ?? 0);
       const resultCompletedGroups =

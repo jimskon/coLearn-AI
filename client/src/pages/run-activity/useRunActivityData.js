@@ -212,18 +212,29 @@ export default function useRunActivityData({
         });
 
         if (!isTestMode) {
-          setCodeFeedbackShown((prev) => {
-            const merged = { ...prev };
-            for (const [key, entry] of Object.entries(answersData)) {
-              if (
-                entry &&
-                Object.prototype.hasOwnProperty.call(entry, 'python_feedback')
-              ) {
-                merged[key] = entry.python_feedback;
-              }
-            }
-            return merged;
-          });
+          // Restore code feedback from the saved <qid>CodeFeedback rows. The
+          // server's python_feedback field is always null, and copying it here
+          // wiped feedback the moment a group member reloaded (which happens
+          // on every turn change), so only the submitter kept seeing it.
+          const restoredCodeFeedback = {};
+          for (const [key, entry] of Object.entries(answersData || {})) {
+            const m = key.match(/^(\d+[A-Za-z]+)CodeFeedback$/);
+            if (!m) continue;
+            const qid = m[1];
+            const text = String(entry?.response || '').trim();
+            const accepted = String(answersData?.[`${qid}CodeAccepted`]?.response || '').trim().toLowerCase() === 'true';
+            if (!text || accepted) continue;
+            // Show it on the first non-empty code cell, as the submitter does.
+            const codeKeys = Object.keys(answersData)
+              .filter((k) => new RegExp(`^${qid}code\\d+$`).test(k))
+              .sort((a, b) => Number(a.match(/\d+$/)[0]) - Number(b.match(/\d+$/)[0]));
+            const targetKey =
+              codeKeys.find((k) => String(answersData[k]?.response || '').trim()) ||
+              codeKeys[0] ||
+              `${qid}code1`;
+            restoredCodeFeedback[targetKey] = text;
+          }
+          setCodeFeedbackShown((prev) => ({ ...prev, ...restoredCodeFeedback }));
 
           const restoredTextFeedback = {};
 

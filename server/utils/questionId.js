@@ -30,4 +30,12 @@ function isValidQuestionId(value) {
   return false;
 }
 
-module.exports = { isValidQuestionId, isFileResponseKey };
+// Keys holding a student's own answer (written answer, code cell, table cell,
+// group code box, saved file), as opposed to derived keys such as 1aCodeScore.
+const STUDENT_ANSWER_KEY = /^(?!\d+state$)(\d+[a-z]*(?:code\d+|table\d+cell\d+_\d+)?|file:[A-Za-z0-9._-]+)$/;
+
+function isStudentAnswerKey(value) {
+  return STUDENT_ANSWER_KEY.test(String(value || '').trim());
+}
+
+module.exports = { isValidQuestionId, isFileResponseKey, isStudentAnswerKey };

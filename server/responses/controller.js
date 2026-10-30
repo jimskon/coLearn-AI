@@ -1,8 +1,26 @@
 // /server/responses/controller.js
 const db = require('../db');
 const { evaluateCode } = require('../ai/controller');
-const { isValidQuestionId } = require('../utils/questionId');
+const { isValidQuestionId, isStudentAnswerKey } = require('../utils/questionId');
 const { rejectIfEnded } = require('../utils/instanceEnded');
+
+// Once an assignment or test is submitted the student's answers are final.
+// A page left open kept saving drafts after the submit, and drafts override
+// submitted rows on readback, so the page showed (and graders scored) stale
+// code. Instructor score overrides are not answer keys and still save.
+async function isSubmitted(instanceId) {
+  const [[row]] = await db.query(
+    `SELECT submitted_at FROM activity_instances WHERE id = ? LIMIT 1`,
+    [instanceId]
+  );
+  return !!row?.submitted_at;
+}
+
+async function rejectIfAnswerLocked(instanceId, questionId, res) {
+  if (!isStudentAnswerKey(questionId) || !(await isSubmitted(instanceId))) return false;
+  res.status(409).json({ error: 'This activity has already been submitted.', code: 'ALREADY_SUBMITTED' });
+  return true;
+}
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
@@ -21,6 +39,7 @@ exports.createResponse = async (req, res) => {
     });
   }
   if (await rejectIfEnded(instanceId, res)) return;
+  if (await rejectIfAnswerLocked(instanceId, questionId, res)) return;
 
   try {
     await db.query(
@@ -59,6 +78,7 @@ exports.saveDraftResponse = async (req, res) => {
     });
   }
   if (await rejectIfEnded(instanceId, res)) return;
+  if (await rejectIfAnswerLocked(instanceId, questionId, res)) return;
 
   if (!isValidQuestionId(questionId)) {
     return res.status(400).json({
@@ -103,6 +123,7 @@ exports.createOrUpdateCodeResponse = async (req, res) => {
     });
   }
   if (await rejectIfEnded(activity_instance_id, res)) return;
+  if (await rejectIfAnswerLocked(activity_instance_id, question_id, res)) return;
 
   const conn = await db.getConnection();
   try {
@@ -173,6 +194,7 @@ exports.getResponsesByInstanceId = async (req, res) => {
        WHERE activity_instance_id = ?`,
       [instanceId]
     );
+    const submitted = await isSubmitted(instanceId);
 
     const result = {};
 
@@ -185,6 +207,7 @@ exports.getResponsesByInstanceId = async (req, res) => {
     }
 
     for (const row of draftRows) {
+      if (submitted && isStudentAnswerKey(row.question_id)) continue;
       result[row.question_id] = {
         response: row.response,
         type: row.response_type,
@@ -240,6 +263,7 @@ exports.getGroupResponses = async (req, res) => {
        WHERE activity_instance_id = ?`,
       [instanceId]
     );
+    const submitted = await isSubmitted(instanceId);
 
     const result = {};
     for (const row of submittedRows) {
@@ -249,6 +273,7 @@ exports.getGroupResponses = async (req, res) => {
       };
     }
     for (const row of draftRows) {
+      if (submitted && isStudentAnswerKey(row.question_id)) continue;
       result[row.question_id] = {
         response: row.response,
         type: row.response_type,
@@ -279,7 +304,7 @@ exports.bulkSaveResponses = async (req, res) => {
     });
   }
 
-  const entries = Object.entries(answers)
+  let entries = Object.entries(answers)
     .map(([qid, val]) => [String(qid).trim(), String(val ?? '')])
     .filter(([qid]) => qid.length > 0)
     .sort((a, b) => a[0].localeCompare(b[0]));
@@ -292,6 +317,9 @@ exports.bulkSaveResponses = async (req, res) => {
     }
   }
 
+  if (await isSubmitted(instanceId)) {
+    entries = entries.filter(([qid]) => !isStudentAnswerKey(qid));
+  }
   if (entries.length === 0) {
     return res.json({ success: true, saved: 0 });
   }

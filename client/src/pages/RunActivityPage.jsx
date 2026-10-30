@@ -1050,6 +1050,9 @@ export default function RunActivityPage({
     const textToSave = {};
     for (const [key, val] of Object.entries(ea)) {
       if (/^\d+[A-Za-z]+AI\d+$/i.test(key)) continue;
+      // Code cells save their own up-to-date drafts as the student types;
+      // this copy can be stale and would overwrite them.
+      if (/^\d+[A-Za-z]*code\d+$/.test(key)) continue;
       if (val?.type === 'text' && val.response?.trim()) {
         textToSave[key] = val.response.trim();
       }

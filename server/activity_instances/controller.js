@@ -9,7 +9,7 @@ const { practiceMultipleChoiceHint } = require('../ai/grading');
 const { deleteAbandonedInstances } = require('../utils/emptyInstances');
 const { parseScoreSpec } = require('./scoreSpec');
 const { randomUUID } = require('crypto');
-const { isFileResponseKey } = require('../utils/questionId');
+const { isFileResponseKey, isStudentAnswerKey } = require('../utils/questionId');
 const { filterAccessibleCourses } = require('../research/access');
 const { ensureEndedAtSchema, instanceEndedAt, rejectIfEnded } = require('../utils/instanceEnded');
 const { TURN_REASONS, recordTurnChange, recordInstructorForceAdvance, recordPauseChange, recordPresenceChange } = require('../utils/turnEvents');
@@ -2706,7 +2706,17 @@ async function getInstanceResponses(req, res) {
       };
     }
 
+    // After a submit, a student's answer drafts are stale leftovers from a
+    // page left open; the submitted rows are the real answers. Instructor
+    // score overrides are not answer keys and still apply.
+    const [[inst]] = await db.query(
+      `SELECT submitted_at FROM activity_instances WHERE id = ? LIMIT 1`,
+      [instanceId]
+    );
+    const submitted = !!inst?.submitted_at;
+
     for (const row of draftRows) {
+      if (submitted && isStudentAnswerKey(row.question_id)) continue;
       responses[row.question_id] = {
         response: row.response,
         type: row.response_type

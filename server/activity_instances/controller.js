@@ -465,6 +465,50 @@ async function appendChangedFiles(conn, instanceId, submitId, answers, answeredB
   }
 }
 
+// Code files (\file blocks) go to the grader with code questions; text and
+// data files do not.
+const GRADING_FILE_EXT = /\.(py|c|cc|cpp|cxx|h|hh|hpp|hxx)$/i;
+
+// Starter contents of each \file block in the activity source, by filename.
+function parseStarterFiles(lines = []) {
+  const files = new Map();
+  let current = null;
+  for (const raw of lines) {
+    const line = String(raw ?? '');
+    if (current) {
+      if (line.trim() === '\\endfile') {
+        if (!files.has(current.name)) files.set(current.name, current.body.join('\n'));
+        current = null;
+      } else {
+        current.body.push(line);
+      }
+      continue;
+    }
+    const m = line.trim().match(/^\\file\{([^}]*)\}$/);
+    if (m) current = { name: m[1].split(',')[0].trim(), body: [] };
+  }
+  return files;
+}
+
+// The program's code files as the grader should see them: the student's saved
+// copy when there is one, otherwise the provided starter.
+function buildGradingFiles(starterFiles, answers) {
+  const names = new Set(starterFiles.keys());
+  for (const key of Object.keys(answers || {})) {
+    if (isFileResponseKey(key)) names.add(key.slice('file:'.length));
+  }
+  const files = [];
+  for (const name of names) {
+    if (!GRADING_FILE_EXT.test(name)) continue;
+    const starter = starterFiles.get(name);
+    const saved = answers?.[`file:${name}`];
+    const content = saved != null ? String(saved) : String(starter ?? '');
+    const edited = saved != null && String(saved).trimEnd() !== String(starter ?? '').trimEnd();
+    files.push({ name, content, edited });
+  }
+  return files;
+}
+
 function getHistoryBaseQid(qidRaw) {
   const qid = String(qidRaw || '').trim();
   if (!qid) return null;
@@ -3160,6 +3204,7 @@ async function submitTest(req, res) {
     );
     const sourceLines = sourceRow ? await loadActivitySourceLines(sourceRow) : [];
     const parsedQuestions = parseTestQuestionsFromLines(sourceLines);
+    const gradingFiles = buildGradingFiles(parseStarterFiles(sourceLines), answers);
 
     // Practice checks grade without submitting. Only honored for activities
     // authored as \mode{practice}, so a test cannot be checked early.
@@ -3264,7 +3309,10 @@ async function submitTest(req, res) {
           ['CodeFeedback', 'RunFeedback', 'ResponseFeedback'].some((k) => String(r[k] || '').trim()) ||
           (Number(r.CodeScore) || 0) + (Number(r.RunScore) || 0) + (Number(r.ResponseScore) || 0) >=
             maxCodePts + maxRunPts + maxRespPts;
-        if (history.last && lastWasGraded && sameAnswerSnapshot(snapshot, history.last.snapshot)) {
+        // Edited code files are not part of the snapshot, so a check after
+        // changing only a file must not reuse the old result.
+        const filesInPlay = maxCodePts + maxRunPts > 0 && gradingFiles.some((f) => f.edited);
+        if (history.last && lastWasGraded && !filesInPlay && sameAnswerSnapshot(snapshot, history.last.snapshot)) {
           const cached = {
             qid: baseId,
             maxCodePts,
@@ -3368,6 +3416,7 @@ async function submitTest(req, res) {
           outputText,
           rubric: gradingScores,
           practice: practiceContext,
+          supportingFiles: maxCodePts + maxRunPts > 0 ? gradingFiles : [],
         });
 
         codeScore = graded.codeScore || 0;

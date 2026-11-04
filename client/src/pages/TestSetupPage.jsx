@@ -9,6 +9,8 @@ export default function TestSetupPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const courseName = location.state?.courseName;
+  const [activityTitle, setActivityTitle] = useState('');
+  const [instanceName, setInstanceName] = useState(courseName || '');
 
   const [students, setStudents] = useState([]);
   const [selected, setSelected] = useState({});
@@ -27,6 +29,21 @@ export default function TestSetupPage() {
 
   // preview of "attempts" to be created (groups of 1)
   const [attempts, setAttempts] = useState([]); // [{student_id}...]
+
+  // Which activity and instance this setup is for (the page may be opened
+  // without router state, e.g. after a reload).
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/api/activities/${activityId}`, { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((a) => setActivityTitle(a?.title || a?.name || ''))
+      .catch(() => {});
+    if (!courseName) {
+      fetch(`${API_BASE_URL}/api/courses/${courseId}/info`, { credentials: 'include' })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((c) => setInstanceName(c?.name || ''))
+        .catch(() => {});
+    }
+  }, [activityId, courseId, courseName]);
 
   useEffect(() => {
     async function load() {
@@ -140,8 +157,8 @@ export default function TestSetupPage() {
 
   return (
     <Container className="mt-4">
-      <h2>Test Setup</h2>
-      {courseName && <div className="text-muted mb-2">Instance: {courseName}</div>}
+      <h2>Test Setup{activityTitle ? `: ${activityTitle}` : ''}</h2>
+      {instanceName && <div className="text-muted mb-2">Instance: {instanceName}</div>}
       <Alert variant="info" className="mt-3">
         <strong>Professor setup only.</strong> This page makes the test available to selected students.
         Students will see the exam view with one final submit, no live feedback, and automatic grading on submit.

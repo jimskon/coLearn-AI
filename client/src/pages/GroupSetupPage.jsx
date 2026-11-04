@@ -9,6 +9,8 @@ import { normalizeDbDatetime, utcToLocalInputValue, formatLocalDateTime } from '
 
 export default function GroupSetupPage() {
   const { courseId, activityId } = useParams();
+  const [activityTitle, setActivityTitle] = useState('');
+  const [instanceName, setInstanceName] = useState('');
   const navigate = useNavigate();
 
   const [students, setStudents] = useState([]);
@@ -83,6 +85,14 @@ export default function GroupSetupPage() {
       .catch(err => console.error('❌ Failed to load students:', err));
   }, [courseId, activityId]);
 
+  // Instance name, shown under the heading.
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/api/courses/${courseId}/info`, { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((c) => setInstanceName(c?.name || ''))
+      .catch(() => {});
+  }, [courseId]);
+
   // NEW: load activity meta and inspect sheet for \test
   useEffect(() => {
     async function fetchActivity() {
@@ -94,6 +104,7 @@ export default function GroupSetupPage() {
         if (!res.ok) return;
 
         const data = await res.json();
+        setActivityTitle(data.title || data.name || '');
 
         const nextType = data.activity_type || (data.is_test === 1 ? 'test' : 'group');
         setIsTest(nextType === 'test');
@@ -341,7 +352,11 @@ export default function GroupSetupPage() {
 
   return (
     <Container className="mt-4">
-      <h2>{isTest ? 'Test Setup' : isAssignment ? 'Lab Setup' : 'Group Setup'}</h2>
+      <h2>
+        {isTest ? 'Test Setup' : isAssignment ? 'Lab Setup' : 'Group Setup'}
+        {activityTitle ? `: ${activityTitle}` : ''}
+      </h2>
+      {instanceName && <div className="text-muted mb-2">Instance: {instanceName}</div>}
 
 
       {isTest && (

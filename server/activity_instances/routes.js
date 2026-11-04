@@ -58,7 +58,9 @@ router.get('/:instanceId/active-student', controller.getActiveStudent);
 // ✅ Rotate to next active student
 router.post('/:instanceId/rotate-active-student', controller.rotateActiveStudent);
 router.post('/:instanceId/force-advance', controller.forceAdvanceQuestionGroup);
-router.post('/:instanceId/reopen', controller.reopenEndedInstance);
+// Not '/reopen': that path is the timed-test reopen above, which Express
+// matched first, so this handler was never reached.
+router.post('/:instanceId/reopen-ended', controller.reopenEndedInstance);
 
 // ✅ Submit group answers for a question group
 router.post('/:instanceId/submit-group', controller.submitGroupResponses);

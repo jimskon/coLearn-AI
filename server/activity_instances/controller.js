@@ -3827,6 +3827,11 @@ async function reopenEndedInstance(req, res) {
     return res.status(403).json({ error: 'Forbidden' });
   }
   if (!instanceId) return res.status(400).json({ error: 'Missing instanceId' });
+  // How long the group has to come back before auto-end may end it again.
+  const minutes = Number(req.body?.minutes);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) {
+    return res.status(400).json({ error: 'Enter a whole number of minutes from 1 to 10080 (7 days).' });
+  }
 
   try {
     await ensureEndedAtSchema();
@@ -3839,10 +3844,13 @@ async function reopenEndedInstance(req, res) {
     if (!allowed.length) return res.status(403).json({ error: 'No access to this course' });
     if (!inst.ended_at) return res.json({ ok: true, reopened: false });
 
+    // Record the reopen before clearing ended_at: the auto-end timer reads
+    // this event (and its minutes) to leave the run open for that long, so it
+    // is not ended again in the moment between the two writes.
+    await recordAuditEvent('activity_reopened', { req, activityInstanceId: instanceId, details: { minutes } });
     await db.query('UPDATE activity_instances SET ended_at = NULL WHERE id = ?', [instanceId]);
-    void recordAuditEvent('activity_reopened', { req, activityInstanceId: instanceId });
     global.emitInstanceState?.(instanceId, { ended_at: null });
-    return res.json({ ok: true, reopened: true });
+    return res.json({ ok: true, reopened: true, minutes });
   } catch (err) {
     console.error('❌ reopenEndedInstance:', err);
     return res.status(500).json({ error: 'Failed to reopen the activity' });

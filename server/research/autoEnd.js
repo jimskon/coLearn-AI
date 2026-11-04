@@ -4,7 +4,8 @@
 // for AWAY_MINUTES before finishing is ended: ended_at is set and the turn is
 // cleared, so nobody can answer, submit, or use AI help any more. Students can
 // still open it to review their work and try code in their Local Sandbox. An
-// instructor can reopen it from View Groups (ended_at back to NULL).
+// instructor can reopen it from View Groups (ended_at back to NULL) for a
+// chosen number of minutes; it is not ended again before those minutes pass.
 //
 // Only group activities (\mode{group}, the default): not tests, assignments,
 // demos, playgrounds, demo classes, or sandbox runs. A run must have at least one
@@ -43,9 +44,18 @@ async function findCandidates() {
             -- When students were last here. No heartbeat at all means everyone
             -- logged out under the old logout, which erased it; the run's last
             -- saved response is then the best evidence of when they left.
-            COALESCE(
-              presence.lastHeartbeat,
-              (SELECT MAX(r.submitted_at) FROM responses r WHERE r.activity_instance_id = ai.id)
+            -- An instructor reopen counts as "here", so a run reopened long
+            -- after everyone left is not skipped by the lookback window.
+            GREATEST(
+              COALESCE(
+                presence.lastHeartbeat,
+                (SELECT MAX(r.submitted_at) FROM responses r WHERE r.activity_instance_id = ai.id)
+              ),
+              COALESCE(
+                (SELECT MAX(al.created_at) FROM audit_log al
+                  WHERE al.activity_instance_id = ai.id AND al.event_type = 'activity_reopened'),
+                '1970-01-01'
+              )
             ) AS lastSeen
        FROM activity_instances ai
        JOIN pogil_activities a ON a.id = ai.activity_id
@@ -73,6 +83,27 @@ async function findCandidates() {
     [AWAY_MINUTES, LOOKBACK_HOURS]
   );
   return rows;
+}
+
+/**
+ * True while an instructor reopen is still in force: the instructor chose how
+ * many minutes the group has to come back, and the run is left open until then.
+ */
+async function inReopenWindow(instanceId) {
+  const [[row]] = await db.query(
+    `SELECT details, created_at AS at, NOW() AS now
+       FROM audit_log
+      WHERE activity_instance_id = ? AND event_type = 'activity_reopened'
+      ORDER BY id DESC LIMIT 1`,
+    [instanceId]
+  );
+  if (!row) return false;
+  let minutes = AWAY_MINUTES;
+  try {
+    const m = Number(JSON.parse(row.details || '{}').minutes);
+    if (m > 0) minutes = m;
+  } catch { /* older reopen without minutes */ }
+  return new Date(row.at).getTime() + minutes * 60000 > new Date(row.now).getTime();
 }
 
 async function endRun(row) {
@@ -106,6 +137,7 @@ async function endAbandonedRuns() {
     await ensureDemoModeSchema();
     for (const row of await findCandidates()) {
       if ((await activityType(row)) !== 'group') continue;
+      if (await inReopenWindow(row.instanceId)) continue;
       if (await endRun(row)) {
         ended += 1;
         console.log(`⏹️ auto-end: run ${row.instanceId} ended (everyone away ${AWAY_MINUTES}+ min)`);

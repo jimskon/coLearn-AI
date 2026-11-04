@@ -219,6 +219,7 @@ export default function ViewGroupsPage() {
   const [error, setError] = useState('');
   const [clearing, setClearing] = useState(new Set());
   const [deleting, setDeleting] = useState(new Set());
+  const [confirmReopen, setConfirmReopen] = useState(null); // { instanceId, label, minutes }
   const [dangerModal, setDangerModal] = useState(null); // { instanceId, label, totalGroups, completedGroups, action: null|'clear'|'delete'|'advance' }
   const [advancing, setAdvancing] = useState(new Set());
 
@@ -713,12 +714,14 @@ export default function ViewGroupsPage() {
   };
 
   // Reopen a run ended because everyone left (Ended - incomplete).
-  const reopenGroup = async (instanceId) => {
+  const reopenGroup = async (instanceId, minutes) => {
     setAdvancing((s) => new Set(s).add(instanceId));
     try {
-      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/reopen`, {
+      const res = await fetch(`${API_BASE_URL}/api/activity-instances/${instanceId}/reopen-ended`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
+        body: JSON.stringify({ minutes }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) { alert(data.error || 'Failed to reopen'); return; }
@@ -1204,7 +1207,7 @@ export default function ViewGroupsPage() {
                           variant="outline-success"
                           size="sm"
                           disabled={advancing.has(instanceId)}
-                          onClick={() => reopenGroup(instanceId)}
+                          onClick={() => setConfirmReopen({ instanceId, label: `Group ${group.group_number}`, minutes: '30' })}
                           title="Everyone left for 15+ minutes before finishing, so this run was ended. Reopen lets the group continue."
                         >
                           {advancing.has(instanceId) ? 'Reopening…' : 'Reopen'}
@@ -1631,6 +1634,39 @@ export default function ViewGroupsPage() {
           </Card.Body>
         </Card>
       )}
+      <Modal show={!!confirmReopen} onHide={() => setConfirmReopen(null)} centered>
+        <Modal.Header closeButton>
+          <Modal.Title>Reopen activity</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p>Reopen <strong>{confirmReopen?.label}</strong>? The group can answer and submit again.</p>
+          <Form.Group>
+            <Form.Label>Keep it open for (minutes)</Form.Label>
+            <Form.Control
+              type="number"
+              min={1}
+              max={10080}
+              step={1}
+              value={confirmReopen?.minutes ?? ''}
+              onChange={(e) => setConfirmReopen((p) => ({ ...p, minutes: e.target.value }))}
+            />
+            <Form.Text className="text-muted">
+              It will not be ended before this time is up. After that it ends as usual
+              once everyone has been away for 15 minutes.
+            </Form.Text>
+          </Form.Group>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setConfirmReopen(null)}>Cancel</Button>
+          <Button
+            variant="success"
+            disabled={!(Number.isInteger(Number(confirmReopen?.minutes)) && Number(confirmReopen?.minutes) >= 1 && Number(confirmReopen?.minutes) <= 10080)}
+            onClick={() => { const { instanceId: id, minutes } = confirmReopen; setConfirmReopen(null); reopenGroup(id, Number(minutes)); }}
+          >
+            Reopen
+          </Button>
+        </Modal.Footer>
+      </Modal>
       {/* Danger zone modal */}
       <Modal show={!!dangerModal} onHide={() => setDangerModal(null)} centered>
         <Modal.Header closeButton>

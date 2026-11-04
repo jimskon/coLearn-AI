@@ -105,9 +105,12 @@ export default function RunActivityWorkspace({
   const isAssessmentMode = isTestMode || isAssignmentMode;
   let globalQuestionCounter = 0;
 
-  // Saved \file blocks (shared files, or every editable file in a test). Files
-  // often sit outside question groups, so every renderBlocks call gets this.
+  // Saved \file blocks: every editable file. Files often sit outside question
+  // groups, so every renderBlocks call gets this.
   const savedFiles = {
+    // Group runs share one copy that the active student edits; tests and
+    // assignments save each student's own copy.
+    shared: !isAssessmentMode && !isSandbox,
     editable: isSandbox
       ? canEditAnswers
       : isAssessmentMode

@@ -43,6 +43,24 @@ function clampScore(value, maxPoints) {
   return Math.floor(Math.max(0, Math.min(maxPoints, n)));
 }
 
+// Code files the program uses (\file blocks). The student may have edited one
+// as part of the work, or it may only show what their code builds on.
+const MAX_FILE_CHARS = 12000;
+
+function formatSupportingFiles(files = []) {
+  if (!Array.isArray(files) || !files.length) return "";
+  return files
+    .map((f) => {
+      const content = String(f?.content ?? "");
+      const shown = content.length > MAX_FILE_CHARS
+        ? `${content.slice(0, MAX_FILE_CHARS)}\n... (truncated)`
+        : content;
+      const status = f?.edited ? "edited by the student" : "provided, not changed by the student";
+      return [`File ${f?.name} (${status}):`, "```", shown, "```"].join("\n");
+    })
+    .join("\n\n");
+}
+
 function formatCodeBundle(codeCells = []) {
   return Array.isArray(codeCells)
     ? codeCells
@@ -200,6 +218,7 @@ async function gradeCodeRunBands({
   maxCodePts,
   maxRunPts,
   practice = null,
+  supportingFiles = [],
 }) {
   if (maxCodePts <= 0 && maxRunPts <= 0) {
     return {
@@ -212,10 +231,13 @@ async function gradeCodeRunBands({
 
   const codeBundle = formatCodeBundle(codeCells);
   const cleanOutput = stripHtml(outputText || "").trim();
+  const filesText = formatSupportingFiles(supportingFiles);
 
   const sys = [
     "You grade the code and/or run-output part of one introductory programming assignment question.",
     "Grade only the submitted code and output supplied for this question.",
+    "Supporting code files may be listed. They are part of the student's program: use them to understand what the code builds on.",
+    "If the question asks the student to write or change code in a supporting file, grade that file's contents as part of the code. Do not grade files the question does not ask about.",
     "Functional correctness matters more than presentation, prompt wording, formatting, variable names, comments, or style.",
     "Suggested test values in the question are examples only unless the question explicitly says they must be submitted.",
     "If actual runtime inputs are not available, inspect the submitted code formulas directly instead of comparing output to a suggested example.",
@@ -240,6 +262,7 @@ async function gradeCodeRunBands({
     "Student code submission(s):",
     codeBundle || "(none)",
     "",
+    ...(filesText ? ["Supporting code files:", filesText, ""] : []),
     "Program/run output:",
     cleanOutput || "(none provided)",
     "",
@@ -279,6 +302,7 @@ async function gradeTestQuestion({
   rubric = {},
   detailedFeedback = true,
   practice = null,
+  supportingFiles = [],
 }) {
   const normalizedScores = normalizeScoreBands(scores, rubric);
   const codeBucket = normalizedScores.code || {};
@@ -312,6 +336,7 @@ async function gradeTestQuestion({
       maxCodePts,
       maxRunPts,
       practice,
+      supportingFiles,
     });
 
     const response = await gradeResponseBand({

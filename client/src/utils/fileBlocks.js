@@ -1,12 +1,13 @@
 // Helpers for \file{name, options} blocks. Kept free of React so they can be
 // unit-tested with plain node.
 //
-//   \file{data.txt}             editable, local to each browser (not saved)
+//   \file{data.txt}             editable and saved as the student's work: in
+//                               group runs the active student edits and
+//                               teammates follow; in tests and assignments
+//                               each student's copy is saved
 //   \file{data.txt, readonly}   nobody can edit
-//   \file{List.h, shared}       the active student edits; teammates follow;
-//                               saved with the group's submission
 //
-// In tests every editable file is saved, shared or not.
+// `shared` is still accepted for older activities but changes nothing now.
 
 export const FILE_KEY_PREFIX = 'file:';
 

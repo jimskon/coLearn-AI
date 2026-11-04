@@ -2684,9 +2684,9 @@ export function renderBlocks(blocks, options = {}) {
       const initialContent = block.content || '';
       const fileKey = fileResponseKey(filename);
 
-      // Saved files: \file{..., shared} in group runs, and every editable file
-      // in tests. They use the same response-key path as code cells: live sync
-      // to teammates, draft autosave, and saving with the submission.
+      // Every editable file is saved as the student's work, in every mode.
+      // Files use the same response-key path as code cells: live sync to
+      // teammates, draft autosave, and saving with the submission.
       // `savedFiles` comes from the run page, which passes it to every render
       // area because files often sit outside question groups.
       const savedFiles = options.savedFiles || null;
@@ -2694,7 +2694,6 @@ export function renderBlocks(blocks, options = {}) {
         runMode === 'run' &&
         !isReadonly &&
         !!fileKey &&
-        (isTestMode || !!block.shared) &&
         !!savedFiles;
 
       if (!isSaved) {
@@ -2712,7 +2711,7 @@ export function renderBlocks(blocks, options = {}) {
       }
 
       const activeText = prefill?.[fileKey]?.response ?? initialContent;
-      const allowToggle = !isTestMode && (savedFiles.isObserver || savedFiles.isInstructor);
+      const allowToggle = !!savedFiles.shared && (savedFiles.isObserver || savedFiles.isInstructor);
       const viewMode = savedFiles.codeViewMode?.[fileKey] || 'active'; // 'active' | 'local'
       const showLocal = allowToggle && viewMode === 'local';
       const shownText = showLocal ? (savedFiles.localCode?.[fileKey] ?? activeText) : activeText;
@@ -2735,7 +2734,7 @@ export function renderBlocks(blocks, options = {}) {
               }
               savedFiles.onChange(fileKey, text);
             }}
-            badgeText={isTestMode ? null : 'Shared'}
+            badgeText={savedFiles.shared ? 'Shared' : null}
             headerExtra={allowToggle ? (
               <button
                 type="button"

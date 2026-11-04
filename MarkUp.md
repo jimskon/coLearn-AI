@@ -466,23 +466,19 @@ syntax highlighting chosen from the extension (`.h`, `.hpp`, `.cpp`, `.cc` as C+
 -1
 \endfile
 
-\file{notes.txt}
-# Each student can edit this copy; it is not saved.
-\endfile
-
-\file{LinkedList.h, shared}
-// The group's copy: saved with the submission.
+\file{LinkedList.h}
+// Editable: saved as the student's work.
 \endfile
 ```
 
-| Option | Group activities | Tests |
-|--------|------------------|-------|
-| *(none)* | Each browser has its own copy. Edits are **not saved** and are lost on reload. | Saved with the submission. |
+| Option | Group activities | Tests and assignments |
+|--------|------------------|-----------------------|
+| *(none)* | Only the active student edits. Teammates see edits live and can switch to **Local Sandbox**, like code cells. Saved when the group submits, reloaded on return, and visible to the instructor and the AI code check. | Each student's copy is saved with the submission. |
 | `readonly` | Nobody can edit. | Nobody can edit. |
-| `shared` | Only the active student edits. Teammates see edits live and can switch to **Local Sandbox**, like code cells. Saved when the group submits, reloaded on return, and visible to the instructor and the AI code check. | Saved with the submission. |
 
-Use `shared` when editing the file is part of the task, for example updating a header.
-Shared file names may use only letters, digits, `.`, `_`, and `-`.
+`shared` is still accepted in older activities but no longer changes anything.
+Editable file names may use only letters, digits, `.`, `_`, and `-`; a file with
+any other name is not saved.
 
 ---
 

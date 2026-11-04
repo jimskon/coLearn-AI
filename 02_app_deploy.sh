@@ -358,8 +358,16 @@ write_env_files() {
   write_key_value RUNTIME_FEATURE_REMOTE_PYTHON "${ENABLE_REMOTE_PYTHON/ask/0}" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   local client_env="${APP_DIR}/client/.env"
+  # VITE_API_BASE_URL set in deploy.conf (even empty, for same-origin API calls
+  # on multi-hostname installs) wins; otherwise use the first CLIENT_ORIGIN.
+  local api_base_url
+  if [[ -n "${VITE_API_BASE_URL+set}" ]]; then
+    api_base_url="$VITE_API_BASE_URL"
+  else
+    api_base_url="${CLIENT_ORIGIN%%,*}"
+  fi
   info "Writing client environment to $client_env"
-  write_key_value VITE_API_BASE_URL "$CLIENT_ORIGIN" "$client_env"
+  write_key_value VITE_API_BASE_URL "$api_base_url" "$client_env"
 }
 
 install_app_deps_and_build() {

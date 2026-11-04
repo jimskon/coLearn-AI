@@ -35,7 +35,9 @@ export default function useRunActivitySync({
       return undefined;
     }
 
-    const s = io(API_BASE_URL, {
+    // An empty API_BASE_URL means same-origin; socket.io only falls back to
+    // the page's host for undefined, not ''.
+    const s = io(API_BASE_URL || undefined, {
       transports: ['websocket'],
     });
 

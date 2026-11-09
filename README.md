@@ -188,6 +188,8 @@ Every limit can be set in `server/.env`; restart the server after changing one. 
 
 Raising a limit costs nothing on ordinary calls: the model uses only what it needs. It only allows long answers to finish.
 
+**Token use on graded questions.** Instructors see a small line under each AI-graded score, e.g. `AI tokens: 840/2500` (tokens used by the last AI grade / `GRADING_TOKENS`); it turns red at 80% of the limit. **Grade This Question** shows the same in its preview. Students do not see it. It is saved with the grade as `<qid>AiTokens`, so it appears after the next grade or regrade.
+
 **When a limit is reached**, it is recorded as an `ai_token_limit` event in `audit_log` (with the setting, its value, the model, and the run) and logged on the server as `[ai-token-limit]`. Instructors see it:
 
 - **Graded questions** (tests, assignments, practice): the feedback says the grade did not finish, names the setting to raise, and asks for a regrade, instead of showing a silent 0. A failed grade is never reused as a cached result.

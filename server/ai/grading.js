@@ -128,7 +128,12 @@ async function requestJsonGrade(messages, maxCompletionTokens = GRADING_TOKENS, 
   }
 
   try {
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    // Output tokens used, reasoning included (shown to instructors as used/limit).
+    if (parsed && typeof parsed === "object") {
+      Object.defineProperty(parsed, "_tokensUsed", { value: Number(chat.usage?.completion_tokens) || null });
+    }
+    return parsed;
   } catch (parseErr) {
     console.error("❌ gradeTestQuestion invalid JSON response:", {
       model: MODEL,
@@ -230,6 +235,7 @@ async function gradeResponseBand({
   return {
     responseScore: clampScore(obj.responseScore, maxRespPts),
     responseFeedback: obj.responseFeedback ? String(obj.responseFeedback).trim() : "",
+    responseTokens: obj._tokensUsed ?? null,
   };
 }
 
@@ -314,6 +320,7 @@ async function gradeCodeRunBands({
     codeFeedback: obj.codeFeedback ? String(obj.codeFeedback).trim() : "",
     runScore: clampScore(obj.runScore, maxRunPts),
     runFeedback: obj.runFeedback ? String(obj.runFeedback).trim() : "",
+    codeRunTokens: obj._tokensUsed ?? null,
   };
 }
 
@@ -375,7 +382,10 @@ async function gradeTestQuestion({
       instanceId,
     });
 
-    return { ...codeRun, ...response };
+    // The larger of the (up to two) grading calls: each has the same limit.
+    const used = [codeRun.codeRunTokens, response.responseTokens].filter((n) => n != null);
+    const aiTokens = used.length ? { used: Math.max(...used), limit: GRADING_TOKENS } : null;
+    return { ...codeRun, ...response, aiTokens };
   } catch (err) {
     console.error("❌ gradeTestQuestion OpenAI error:", err);
     // Say so in the feedback: a silent 0 looks like a real grade.
@@ -388,6 +398,7 @@ async function gradeTestQuestion({
       runScore: 0, runFeedback: "",
       responseScore: 0, responseFeedback: onCode ? "" : note,
       gradingFailed: true,
+      aiTokens: err?.code === "AI_TOKEN_LIMIT" ? { used: err.limit, limit: err.limit } : null,
     };
   }
 }

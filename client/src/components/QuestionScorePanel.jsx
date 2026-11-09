@@ -7,6 +7,7 @@ export default function QuestionScorePanel({
   displayNumber,
   scores,
   allowEdit,
+  showAiTokens = false,
   onSave,
 }) {
   const {
@@ -100,6 +101,17 @@ export default function QuestionScorePanel({
             Components: {components.join(' · ')}
           </Card.Subtitle>
         )}
+
+        {/* AI output tokens used / GRADING_TOKENS limit, for instructors. */}
+        {showAiTokens && scores?.aiTokens ? (() => {
+          const [used, limit] = String(scores.aiTokens).split('/').map(Number);
+          const near = used && limit && used >= 0.8 * limit;
+          return (
+            <div className={`small mb-2 ${near ? 'text-danger' : 'text-muted'}`} title="AI output tokens used by the last AI grade / GRADING_TOKENS">
+              AI tokens: {scores.aiTokens}{near ? ' — near the limit; consider raising GRADING_TOKENS' : ''}
+            </div>
+          );
+        })() : null}
 
         {/* WRITTEN / RESPONSE BAND */}
         {(maxResp || 0) > 0 && (

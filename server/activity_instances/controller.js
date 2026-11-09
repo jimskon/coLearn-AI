@@ -3393,6 +3393,7 @@ async function submitTest(req, res) {
       let runFeedback = '';
       let responseScore = 0;
       let responseFeedback = '';
+      let aiTokens = ''; // "used/limit" when the AI grader ran
 
       const shouldUseAiGrader =
         maxCodePts > 0 ||
@@ -3428,6 +3429,7 @@ async function submitTest(req, res) {
         runFeedback = graded.runFeedback || '';
         responseScore = graded.responseScore || 0;
         responseFeedback = graded.responseFeedback || '';
+        aiTokens = graded.aiTokens ? `${graded.aiTokens.used}/${graded.aiTokens.limit}` : '';
       }
 
       if (isMultipleChoice && !isMultipleSelect) {
@@ -3564,6 +3566,14 @@ async function submitTest(req, res) {
         answeredBy: resolvedStudentId,
         allowEmpty: true,
       });
+
+      // AI output tokens used / GRADING_TOKENS, shown to instructors.
+      if (aiTokens) {
+        await appendResponse(conn, instanceId, submitId, `${baseId}AiTokens`, aiTokens, {
+          type: 'text',
+          answeredBy: resolvedStudentId,
+        });
+      }
 
     }
 

@@ -1161,8 +1161,17 @@ export default function ViewGroupsPage() {
           <Row>
           {groups.map((group) => {
             const isComplete = isCompleteFromInstanceRow(group);
-            const timerState = getGroupTimerState(group, timerNowMs);
             const instanceId = Number(group.instance_id);
+            const live = liveByInstance.get(instanceId);
+            // A finished run's clocks stop at the group's last input (submit or
+            // typing), not at the close: auto-end comes 15+ minutes later.
+            const stopAt = (isComplete || !!group.ended_at) && live?.lastActivityAt != null
+              ? live.lastActivityAt
+              : null;
+            const timerState = getGroupTimerState(
+              group,
+              stopAt != null ? Math.min(timerNowMs, stopAt - liveClockOffset) : timerNowMs
+            );
             const connectedMembers = getConnectedMembers(group);
             const activeMember = getActiveMember(group);
             const isEnded = !!group.ended_at && !isComplete;
@@ -1264,8 +1273,8 @@ export default function ViewGroupsPage() {
                       <div className="d-flex gap-3 align-items-start mb-2">
                         <div className="flex-grow-1" style={{ minWidth: 0 }}>
                           <GroupActivityStrip
-                            live={liveByInstance.get(instanceId)}
-                            now={liveNowMs + liveClockOffset}
+                            live={live}
+                            now={stopAt != null ? Math.min(liveNowMs + liveClockOffset, stopAt) : liveNowMs + liveClockOffset}
                             sliceSeconds={liveData?.sliceSeconds || 10}
                             finished={isComplete || isEnded}
                             finishedLabel={isEnded ? 'ended – incomplete' : 'finished'}

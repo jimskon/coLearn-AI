@@ -2,7 +2,11 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { canUseResearch, accessibleCourseIds, filterAccessibleCourses } = require('./access');
-const { computeForCourses, exportDataset, reconstructRun, courseLabel } = require('./service');
+const {
+  computeForCourses, exportDataset, reconstructRun, courseLabel,
+  activitySummary, savedActivityAiSummary, generateActivityAiSummary,
+} = require('./service');
+const { requestJsonGrade } = require('../ai/grading');
 const { DATASETS } = require('./exports');
 const { ensureEndedAtSchema } = require('../utils/instanceEnded');
 const { liveForActivity } = require('./live');
@@ -149,6 +153,50 @@ router.delete('/observations/:id', async (req, res) => {
     if (err instanceof ObservationError) return res.status(err.status).json({ error: err.message });
     console.error('❌ research observation undo:', err);
     res.status(500).json({ error: 'Failed to undo observation' });
+  }
+});
+
+// Instructor summary of one activity's groups in a course (View Groups).
+// GET: statistics plus the last saved AI summary. POST .../ai: generate and save a new AI summary.
+async function summaryScope(req, res) {
+  if (!requireResearchUser(req, res)) return null;
+  const courseId = Number(req.params.courseId);
+  const activityId = Number(req.params.activityId);
+  if (!(courseId > 0) || !(activityId > 0)) {
+    res.status(400).json({ error: 'Invalid course or activity' });
+    return null;
+  }
+  const allowed = await filterAccessibleCourses(db, req.user, [courseId]);
+  if (!allowed.length) {
+    res.status(403).json({ error: 'No access to this course' });
+    return null;
+  }
+  await ensureEndedAtSchema();
+  return { courseId, activityId };
+}
+
+router.get('/summary/:courseId/:activityId', async (req, res) => {
+  try {
+    const scope = await summaryScope(req, res);
+    if (!scope) return;
+    const { _runs, ...summary } = await activitySummary(db, scope.courseId, scope.activityId);
+    const ai = await savedActivityAiSummary(db, scope.courseId, scope.activityId);
+    res.json({ ...summary, ai });
+  } catch (err) {
+    console.error('❌ research summary:', err);
+    res.status(500).json({ error: 'Failed to build the activity summary' });
+  }
+});
+
+router.post('/summary/:courseId/:activityId/ai', async (req, res) => {
+  try {
+    const scope = await summaryScope(req, res);
+    if (!scope) return;
+    res.json(await generateActivityAiSummary(db, req, scope.courseId, scope.activityId, requestJsonGrade));
+  } catch (err) {
+    if (err?.status) return res.status(err.status).json({ error: err.message });
+    console.error('❌ research AI summary:', err);
+    res.status(500).json({ error: 'Failed to generate the AI summary' });
   }
 });
 

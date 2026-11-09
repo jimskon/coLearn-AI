@@ -1019,6 +1019,7 @@ export default function RunActivityPage({
         scores: rubric.scores,
       }),
       rubricSource: rubric.inferred ? 'inferred' : 'explicit',
+      aiTokens: parsed?.aiTokens || null,
     };
   }
 
@@ -3486,6 +3487,8 @@ export default function RunActivityPage({
 
     return {
       hasAnyScore,
+      // "used/limit" AI output tokens from the last AI grade (instructors only).
+      aiTokens: String(existingAnswers[`${qid}AiTokens`]?.response || ''),
       codeScore,
       runScore,
       respScore,

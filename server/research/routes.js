@@ -195,6 +195,7 @@ router.post('/summary/:courseId/:activityId/ai', async (req, res) => {
     res.json(await generateActivityAiSummary(db, req, scope.courseId, scope.activityId, requestJsonGrade));
   } catch (err) {
     if (err?.status) return res.status(err.status).json({ error: err.message });
+    if (err?.code === 'AI_TOKEN_LIMIT') return res.status(503).json({ error: err.message });
     console.error('❌ research AI summary:', err);
     res.status(500).json({ error: 'Failed to generate the AI summary' });
   }

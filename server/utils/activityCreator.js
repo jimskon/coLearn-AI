@@ -2,6 +2,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const OpenAI = require('openai');
 require('dotenv').config();
+const { envTokens } = require('./runtimeFeatures');
+const { recordAiTokenLimit, responseHitLimit } = require('./auditLogger');
 
 const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
 const MARKUP_HOUSE_STYLE_PATH = path.join(__dirname, '..', 'templates', 'activity_markup_house_style.txt');
@@ -1108,7 +1110,7 @@ async function generateWithOpenAI({
     instructions: system,
     input: user,
     text: { format: { type: 'text' } },
-    max_output_tokens: 3500,
+    max_output_tokens: envTokens('CREATOR_DRAFT_TOKENS', 3500),
   };
 
   if (!String(selectedModel || '').startsWith('gpt-5')) {
@@ -1120,6 +1122,10 @@ async function generateWithOpenAI({
     timeoutMs,
     'Creator draft generation'
   );
+  if (responseHitLimit(response)) {
+    // The draft is cut off; the creator sees what came back, and this is logged.
+    recordAiTokenLimit({ setting: 'CREATOR_DRAFT_TOKENS', limit: request.max_output_tokens, model: selectedModel, where: 'activity creator draft' });
+  }
   const raw = response.output_text || '';
   return raw;
 }
@@ -1237,7 +1243,7 @@ async function reviseQuestionWithOpenAI({
     instructions: system,
     input: user,
     text: { format: buildQuestionRevisionResponseFormat() },
-    max_output_tokens: 3200,
+    max_output_tokens: envTokens('CREATOR_REVISION_TOKENS', 3200),
   };
   if (!String(selectedModel || '').startsWith('gpt-5')) request.temperature = 0.35;
   const createResponse = (maxOutputTokens) => withTimeout(
@@ -1252,6 +1258,10 @@ async function reviseQuestionWithOpenAI({
   }
   if (response?.status === 'incomplete') {
     const reason = response?.incomplete_details?.reason || 'unknown reason';
+    if (responseHitLimit(response)) {
+      recordAiTokenLimit({ setting: 'CREATOR_REVISION_TOKENS', limit: request.max_output_tokens * 2, model: selectedModel, where: 'activity creator question revision' });
+      throw new Error(`Question revision ran out of output tokens even at double CREATOR_REVISION_TOKENS (${request.max_output_tokens * 2}). Raise CREATOR_REVISION_TOKENS in server/.env.`);
+    }
     throw new Error(`Question revision output was incomplete after retry (${reason}).`);
   }
 

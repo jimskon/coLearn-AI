@@ -7,6 +7,8 @@ const {
 require("dotenv").config();
 
 const { randomUUID } = require('crypto');
+const { envTokens } = require('../utils/runtimeFeatures');
+const { recordAiTokenLimit, chatHitLimit, responseHitLimit } = require('../utils/auditLogger');
 const db = require("../db");
 const crypto = require("crypto");
 
@@ -57,6 +59,11 @@ const openai = isAiConfigured()
   : createStubOpenAI();
 const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
 const GRADING_MODEL = process.env.OPENAI_GRADING_MODEL || "gpt-5.6-luna";
+// Output-token limits (server/.env; see README, "AI token limits").
+const AI_BLOCK_TOKENS = envTokens('AI_BLOCK_TOKENS', 1600);
+const QUESTION_HELP_TOKENS = envTokens('QUESTION_HELP_TOKENS', 350);
+const GROUP_FEEDBACK_TOKENS = envTokens('GROUP_FEEDBACK_TOKENS', 700);
+const CODE_FEEDBACK_TOKENS = envTokens('CODE_FEEDBACK_TOKENS', 700);
 const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
 const INLINE_AI_ALLOWED_MODELS = new Set([
   'gpt-5-mini',
@@ -341,6 +348,7 @@ async function runInlineAiCompletion({
   studentInput = '',
   conversationHistory = [],
   activityLanguage = '',
+  instanceId = null,
 }) {
   const selectedModel = getInlineAiModel(model);
   const feedbackLanguage = getActivityFeedbackLanguage(activityLanguage);
@@ -408,13 +416,17 @@ async function runInlineAiCompletion({
     instructions: system,
     input: user,
     text: { format: { type: 'text' } },
-    max_output_tokens: selectedModel === 'gpt-5-mini' ? 1600 : 500,
+    // Non-reasoning models need far less; keep their old 500 cap.
+    max_output_tokens: selectedModel === 'gpt-5-mini' ? AI_BLOCK_TOKENS : Math.min(500, AI_BLOCK_TOKENS),
   };
   if (selectedModel === 'gpt-5-mini') {
     request.reasoning = { effort: 'minimal' };
   }
 
   const response = await openai.responses.create(request);
+  if (responseHitLimit(response)) {
+    recordAiTokenLimit({ setting: 'AI_BLOCK_TOKENS', limit: request.max_output_tokens, model: selectedModel, where: 'AI block', activityInstanceId: instanceId });
+  }
 
   const outputText = getResponseOutputText(response);
   if (!outputText) {
@@ -2111,8 +2123,11 @@ async function evaluateStudentResponse(req, res) {
           { role: "user", content: promptParts.user },
         ],
         temperature: 0.1,
-        maxTokens: 350,
+        maxTokens: QUESTION_HELP_TOKENS,
       }));
+      if (chatHitLimit(chat)) {
+        recordAiTokenLimit({ setting: 'QUESTION_HELP_TOKENS', limit: QUESTION_HELP_TOKENS, model: GRADING_MODEL, where: 'student question help', req, activityInstanceId: instanceId });
+      }
 
       const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
       feedback = raw || buildLocalClarifyingHint(questionText, questionAsked, studentAnswer);
@@ -2192,9 +2207,12 @@ async function evaluateStudentResponse(req, res) {
         { role: "user", content: user },
       ],
       temperature: 0.2,
-      maxTokens: 700,
+      maxTokens: GROUP_FEEDBACK_TOKENS,
       responseFormat: { type: "json_object" },
     }));
+    if (chatHitLimit(chat)) {
+      recordAiTokenLimit({ setting: 'GROUP_FEEDBACK_TOKENS', limit: GROUP_FEEDBACK_TOKENS, model: MODEL, where: 'written-answer feedback', req, activityInstanceId: instanceId });
+    }
 
     const raw = (chat.choices?.[0]?.message?.content ?? "").trim();
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
@@ -2736,11 +2754,14 @@ ${rules ? "\n" + rules : ""}
         { role: "user", content: prompt },
       ],
       temperature: 0.2,
-      maxTokens: 700,
+      maxTokens: CODE_FEEDBACK_TOKENS,
     }));
   } catch (err) {
     console.error("❌ OpenAI evaluateCode failed:", err);
     return base;
+  }
+  if (chatHitLimit(chat)) {
+    recordAiTokenLimit({ setting: 'CODE_FEEDBACK_TOKENS', limit: CODE_FEEDBACK_TOKENS, model: MODEL, where: 'code feedback', activityInstanceId: instanceId });
   }
 
   // ✅ define raw BEFORE any logging that references it

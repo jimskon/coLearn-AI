@@ -436,6 +436,9 @@ export default function RunActivityWorkspace({
                         </div>
                         <div className="small text-muted mb-2">
                           Preview only — this does not save anything to the test attempt.
+                          {questionGradePreview.aiTokens ? (
+                            <> · AI tokens {questionGradePreview.aiTokens.used ?? '?'} / {questionGradePreview.aiTokens.limit}</>
+                          ) : null}
                         </div>
                         {questionGradePreview.rubricSource === 'inferred' ? (
                           <div className="small text-info mb-2">
@@ -484,6 +487,7 @@ export default function RunActivityWorkspace({
                         displayNumber={displayNumber}
                         scores={scores}
                         allowEdit={allowEdit}
+                        showAiTokens={isInstructor}
                         onSave={handleSaveQuestionScores}
                       />
                     )}

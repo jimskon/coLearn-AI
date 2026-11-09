@@ -20,6 +20,7 @@ import { FaUserCheck, FaLaptop, FaRandom } from 'react-icons/fa';
 import { formatUtcToLocal, parseUtcDbDatetime } from '../utils/time';
 import GroupActivityStrip, { StripKeyButton } from '../components/research/GroupActivityStrip';
 import ObservationButtons from '../components/research/ObservationButtons';
+import ActivitySummaryModal from '../components/research/ActivitySummaryModal';
 
 function progressLabelFromInstanceRow(g) {
   // For assignments, use submitted_at / has_responses rather than the
@@ -222,6 +223,7 @@ export default function ViewGroupsPage() {
   const [confirmReopen, setConfirmReopen] = useState(null); // { instanceId, label, minutes }
   const [dangerModal, setDangerModal] = useState(null); // { instanceId, label, totalGroups, completedGroups, action: null|'clear'|'delete'|'advance' }
   const [advancing, setAdvancing] = useState(new Set());
+  const [showSummary, setShowSummary] = useState(false);
 
   // Live-edit state
   const [available, setAvailable] = useState([]);
@@ -969,6 +971,15 @@ export default function ViewGroupsPage() {
                 Observation
               </Button>
             </ButtonGroup>
+            {!isSoloMode && ['instructor', 'root', 'creator'].includes(user?.role) && (
+              <Button
+                variant="outline-primary"
+                onClick={() => setShowSummary(true)}
+                title="Time, submits, and outcomes per question and group, with an AI review"
+              >
+                Summary
+              </Button>
+            )}
             <Button
               variant={timerButtonVariant}
               onClick={handleTogglePause}
@@ -1643,6 +1654,15 @@ export default function ViewGroupsPage() {
           </Card.Body>
         </Card>
       )}
+      <ActivitySummaryModal
+        show={showSummary}
+        onHide={() => setShowSummary(false)}
+        courseId={courseId}
+        activityId={activityId}
+        groups={groups}
+        onOpenGroup={(instanceId) => navigate(`/run/${instanceId}`, { state: { courseName } })}
+      />
+
       <Modal show={!!confirmReopen} onHide={() => setConfirmReopen(null)} centered>
         <Modal.Header closeButton>
           <Modal.Title>Reopen activity</Modal.Title>

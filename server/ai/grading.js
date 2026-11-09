@@ -1,6 +1,8 @@
 // server/ai/grading.js
 const OpenAI = require("openai");
 require("dotenv").config();
+const { envTokens } = require("../utils/runtimeFeatures");
+const { AiTokenLimitError, recordAiTokenLimit, chatHitLimit } = require("../utils/auditLogger");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL =
@@ -84,13 +86,34 @@ function formatCodeBundle(codeCells = []) {
     : "";
 }
 
-async function requestJsonGrade(messages, maxCompletionTokens = 700) {
+// Output budget per grading call (GRADING_TOKENS in server/.env). Reasoning
+// models count their reasoning against it, so large answers (code plus files)
+// need room; a call that runs out returns nothing and fails.
+const GRADING_TOKENS = envTokens('GRADING_TOKENS', 2500);
+// Practice-mode hint after a wrong multiple-choice pick (PRACTICE_HINT_TOKENS).
+const PRACTICE_HINT_TOKENS = envTokens('PRACTICE_HINT_TOKENS', 300);
+
+// limitInfo names the .env setting behind maxCompletionTokens, so a cut-off
+// response can be reported: { setting, where, instanceId }.
+async function requestJsonGrade(messages, maxCompletionTokens = GRADING_TOKENS, limitInfo = {}) {
   const chat = await openai.chat.completions.create({
     model: MODEL,
     messages,
     max_completion_tokens: maxCompletionTokens,
     response_format: { type: "json_object" },
   });
+
+  if (chatHitLimit(chat)) {
+    const setting = limitInfo.setting || "GRADING_TOKENS";
+    recordAiTokenLimit({
+      setting,
+      limit: maxCompletionTokens,
+      model: MODEL,
+      where: limitInfo.where || "grading",
+      activityInstanceId: limitInfo.instanceId,
+    });
+    throw new AiTokenLimitError(setting, maxCompletionTokens);
+  }
 
   const choice = chat.choices?.[0];
   const raw = (choice?.message?.content ?? "").trim();
@@ -150,6 +173,7 @@ async function gradeResponseBand({
   responseRubricText,
   maxRespPts,
   practice = null,
+  instanceId = null,
 }) {
   if (maxRespPts <= 0) {
     return { responseScore: 0, responseFeedback: "" };
@@ -201,7 +225,7 @@ async function gradeResponseBand({
   const obj = await requestJsonGrade([
     { name: "response_grader", role: "system", content: sys },
     { role: "user", content: user },
-  ]);
+  ], GRADING_TOKENS, { where: "written-answer grading", instanceId });
 
   return {
     responseScore: clampScore(obj.responseScore, maxRespPts),
@@ -219,6 +243,7 @@ async function gradeCodeRunBands({
   maxRunPts,
   practice = null,
   supportingFiles = [],
+  instanceId = null,
 }) {
   if (maxCodePts <= 0 && maxRunPts <= 0) {
     return {
@@ -282,7 +307,7 @@ async function gradeCodeRunBands({
   const obj = await requestJsonGrade([
     { name: "code_run_grader", role: "system", content: sys },
     { role: "user", content: user },
-  ]);
+  ], GRADING_TOKENS, { where: "code grading", instanceId });
 
   return {
     codeScore: clampScore(obj.codeScore, maxCodePts),
@@ -303,6 +328,7 @@ async function gradeTestQuestion({
   detailedFeedback = true,
   practice = null,
   supportingFiles = [],
+  instanceId = null,
 }) {
   const normalizedScores = normalizeScoreBands(scores, rubric);
   const codeBucket = normalizedScores.code || {};
@@ -337,6 +363,7 @@ async function gradeTestQuestion({
       maxRunPts,
       practice,
       supportingFiles,
+      instanceId,
     });
 
     const response = await gradeResponseBand({
@@ -345,15 +372,22 @@ async function gradeTestQuestion({
       responseRubricText,
       maxRespPts,
       practice,
+      instanceId,
     });
 
     return { ...codeRun, ...response };
   } catch (err) {
     console.error("❌ gradeTestQuestion OpenAI error:", err);
+    // Say so in the feedback: a silent 0 looks like a real grade.
+    const note = err?.code === "AI_TOKEN_LIMIT"
+      ? `⚠ AI grading did not finish: ${err.message} Then regrade this question.`
+      : "⚠ AI grading failed for this question (the AI service returned an error). Please regrade it.";
+    const onCode = maxCodePts + maxRunPts > 0;
     return {
-      codeScore: 0, codeFeedback: "",
+      codeScore: 0, codeFeedback: onCode ? note : "",
       runScore: 0, runFeedback: "",
-      responseScore: 0, responseFeedback: "",
+      responseScore: 0, responseFeedback: onCode ? "" : note,
+      gradingFailed: true,
     };
   }
 }
@@ -438,7 +472,7 @@ async function practiceMultipleChoiceHint({
     const obj = await requestJsonGrade([
       { name: "practice_mc_hint", role: "system", content: sys },
       { role: "user", content: user },
-    ], 300);
+    ], PRACTICE_HINT_TOKENS, { setting: "PRACTICE_HINT_TOKENS", where: "practice hint" });
     return obj?.hint ? String(obj.hint).trim() : "";
   } catch (err) {
     console.error("❌ practiceMultipleChoiceHint failed:", err?.message || err);

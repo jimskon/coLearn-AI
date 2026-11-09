@@ -3303,12 +3303,14 @@ async function submitTest(req, res) {
         }
 
         // Unchanged since the last check: return that result, no AI call.
-        // A blank zero (e.g. the grader failed) is not reused.
+        // A blank zero or a failed grade ("⚠ AI grading ...") is not reused.
         const r = history.last?.result || {};
-        const lastWasGraded =
-          ['CodeFeedback', 'RunFeedback', 'ResponseFeedback'].some((k) => String(r[k] || '').trim()) ||
+        const feedbacks = ['CodeFeedback', 'RunFeedback', 'ResponseFeedback'].map((k) => String(r[k] || '').trim());
+        const lastFailed = feedbacks.some((f) => f.startsWith('⚠ AI grading'));
+        const lastWasGraded = !lastFailed && (
+          feedbacks.some(Boolean) ||
           (Number(r.CodeScore) || 0) + (Number(r.RunScore) || 0) + (Number(r.ResponseScore) || 0) >=
-            maxCodePts + maxRunPts + maxRespPts;
+            maxCodePts + maxRunPts + maxRespPts);
         // Edited code files are not part of the snapshot, so a check after
         // changing only a file must not reuse the old result.
         const filesInPlay = maxCodePts + maxRunPts > 0 && gradingFiles.some((f) => f.edited);
@@ -3417,6 +3419,7 @@ async function submitTest(req, res) {
           rubric: gradingScores,
           practice: practiceContext,
           supportingFiles: maxCodePts + maxRunPts > 0 ? gradingFiles : [],
+          instanceId: Number(instanceId),
         });
 
         codeScore = graded.codeScore || 0;

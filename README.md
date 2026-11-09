@@ -168,6 +168,34 @@ The check runs every minute (`server/research/autoEnd.js`). Events: `activity_en
 
 ---
 
+## AI token limits
+
+Each AI call has a limit on how many tokens the model may produce (its *output tokens*). Reasoning models (the `gpt-5` family) count their hidden reasoning against this limit, so a large input — long code plus supporting files — can use it all up before any answer is written. The call then returns nothing.
+
+Every limit can be set in `server/.env`; restart the server after changing one. A missing value, a value that is not a number, or a value under 100 uses the default.
+
+| Setting | Default | Used for |
+|---|---|---|
+| `GRADING_TOKENS` | 2500 | AI grading of tests, assignments, and practice checks: one call for code and output, one for the written answer. Also **Grade This Question** and **Regrade**. |
+| `PRACTICE_HINT_TOKENS` | 300 | The hint shown in practice mode after a wrong multiple-choice pick. |
+| `GROUP_FEEDBACK_TOKENS` | 700 | Group activities: checking a written answer and writing feedback. |
+| `CODE_FEEDBACK_TOKENS` | 700 | Group activities: checking code (with its output and supporting files) and writing feedback. |
+| `QUESTION_HELP_TOKENS` | 350 | Group activities: answering when a student asks a question instead of answering one. |
+| `AI_BLOCK_TOKENS` | 1600 | `\ai` blocks (the inline AI assistant), for `gpt-5-mini`. `gpt-4o-mini` is capped at 500 or this value, whichever is smaller. |
+| `CREATOR_DRAFT_TOKENS` | 3500 | Activity creator: writing a first draft of an activity. |
+| `CREATOR_REVISION_TOKENS` | 3200 | Activity creator: revising one question. If the result is cut off, it retries once at double the limit. |
+| `ACTIVITY_SUMMARY_TOKENS` | 4000 | View Groups → **Summary** → **Generate AI summary**. |
+
+Raising a limit costs nothing on ordinary calls: the model uses only what it needs. It only allows long answers to finish.
+
+**When a limit is reached**, it is recorded as an `ai_token_limit` event in `audit_log` (with the setting, its value, the model, and the run) and logged on the server as `[ai-token-limit]`. Instructors see it:
+
+- **Graded questions** (tests, assignments, practice): the feedback says the grade did not finish, names the setting to raise, and asks for a regrade, instead of showing a silent 0. A failed grade is never reused as a cached result.
+- **Group activities**: View Groups → **Summary** shows a warning listing how many times each setting ran out during that activity.
+- **Activity creator** and **AI summary**: the error message names the setting.
+
+---
+
 ## Notes
 
 - Fresh installs depend on a current repo-root `schema.sql` snapshot

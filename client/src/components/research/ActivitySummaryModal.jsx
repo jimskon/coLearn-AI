@@ -122,6 +122,20 @@ export default function ActivitySummaryModal({ show, onHide, courseId, activityI
               {' '}idle gaps count at most {data.idleMinutes} min. Submits are evaluated attempts.
             </p>
 
+            {data.tokenLimits?.length ? (
+              <Alert variant="warning" className="small">
+                <strong>The AI ran out of output tokens during this activity</strong>, so some feedback or grades may be missing or cut short:
+                <ul className="mb-1">
+                  {data.tokenLimits.map((t) => (
+                    <li key={`${t.setting}|${t.where}`}>
+                      {t.where || 'AI call'}: {t.count} time{t.count === 1 ? '' : 's'} (<code>{t.setting}</code>{t.limit ? ` = ${t.limit}` : ''})
+                    </li>
+                  ))}
+                </ul>
+                Raise the setting in <code>server/.env</code> and restart the server. Affected graded questions can then be regraded.
+              </Alert>
+            ) : null}
+
             <h5>By question</h5>
             <div className="table-responsive mb-4">
               <Table size="sm" bordered hover className="align-middle small">

@@ -56,7 +56,15 @@ function getRuntimeFeatureConfig(env = process.env) {
   };
 }
 
+// AI output-token limits are set in server/.env (see README, "AI token limits").
+// A missing, non-numeric, or too-small value falls back to the default.
+function envTokens(name, fallback, env = process.env) {
+  const n = Number.parseInt(env?.[name], 10);
+  return Number.isFinite(n) && n >= 100 ? n : fallback;
+}
+
 module.exports = {
+  envTokens,
   DEFAULT_RUNTIME_FEATURES,
   getRuntimeFeatures,
   getRuntimeDefaults,

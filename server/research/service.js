@@ -10,6 +10,7 @@ const { buildDataset, toCsv } = require('./exports');
 const { pseudonym, researchSecret } = require('./pseudonym');
 const { loadActivitySourceById } = require('../utils/activityContent');
 const { recordAuditEvent } = require('../utils/auditLogger');
+const { envTokens } = require('../utils/runtimeFeatures');
 
 const MIN_IDLE_MINUTES = 1;
 const MAX_IDLE_MINUTES = 120;
@@ -240,9 +241,32 @@ async function activitySummary(db, courseId, activityId) {
     }])),
   }));
 
+  // Times an AI call for these groups ran out of output tokens (audit_log).
+  let tokenLimits = [];
+  if (runs.length) {
+    const [rows] = await db.query(
+      `SELECT details, COUNT(*) AS n, MAX(created_at) AS lastAt FROM audit_log
+        WHERE event_type = 'ai_token_limit' AND activity_instance_id IN (?)
+        GROUP BY details`,
+      [runs.map((r) => r.instanceId)]
+    );
+    const bySetting = new Map();
+    for (const row of rows) {
+      let d = {};
+      try { d = JSON.parse(row.details) || {}; } catch { d = {}; }
+      const key = `${d.setting}|${d.where}`;
+      const prev = bySetting.get(key) || { setting: d.setting || 'unknown', where: d.where || '', limit: d.limit ?? null, count: 0 };
+      prev.count += Number(row.n) || 0;
+      if (d.limit != null) prev.limit = Math.max(prev.limit ?? 0, d.limit);
+      bySetting.set(key, prev);
+    }
+    tokenLimits = [...bySetting.values()];
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     activityTitle: activity ? (activity.title || activity.name) : null,
+    tokenLimits,
     idleMinutes: options.idleMinutes,
     sections: meta.sections || [],
     plannedMinutes: meta.plannedMinutes ?? null,
@@ -354,7 +378,10 @@ async function generateActivityAiSummary(db, req, courseId, activityId, requestJ
     },
   ];
 
-  const result = await requestJson(messages, 4000);
+  const result = await requestJson(messages, envTokens('ACTIVITY_SUMMARY_TOKENS', 4000), {
+    setting: 'ACTIVITY_SUMMARY_TOKENS',
+    where: 'activity summary',
+  });
   const saved = {
     generatedAt: new Date().toISOString(),
     groups: runs.length,

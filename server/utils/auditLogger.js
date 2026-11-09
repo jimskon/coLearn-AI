@@ -99,7 +99,38 @@ async function recordAuditEvent(eventType, options = {}) {
   }
 }
 
+// An AI call stopped because it reached its output-token limit (a setting in
+// server/.env). Logged so instructors can see it (View Groups → Summary) and
+// raise the setting. Never throws.
+class AiTokenLimitError extends Error {
+  constructor(setting, limit) {
+    super(`The AI ran out of output tokens (${setting} = ${limit}). Raise ${setting} in server/.env and restart the server.`);
+    this.code = 'AI_TOKEN_LIMIT';
+    this.setting = setting;
+    this.limit = limit;
+  }
+}
+
+function recordAiTokenLimit({ setting, limit, model = null, where = '', req = null, activityInstanceId = null }) {
+  console.warn('[ai-token-limit]', { setting, limit, model, where, activityInstanceId });
+  const id = Number(activityInstanceId);
+  void recordAuditEvent('ai_token_limit', {
+    req,
+    activityInstanceId: Number.isInteger(id) && id > 0 ? id : null,
+    details: { setting, limit, model, where },
+  });
+}
+
+// Chat Completions and Responses API results that were cut off by the limit.
+const chatHitLimit = (chat) => chat?.choices?.[0]?.finish_reason === 'length';
+const responseHitLimit = (response) =>
+  response?.status === 'incomplete' && response?.incomplete_details?.reason === 'max_output_tokens';
+
 module.exports = {
+  AiTokenLimitError,
+  recordAiTokenLimit,
+  chatHitLimit,
+  responseHitLimit,
   recordAuditEvent,
   getAuditContext,
 };

@@ -42,9 +42,9 @@ const toMs = (value) => (value == null ? null : new Date(value).getTime());
 
 /**
  * @param {object} db  mysql2 pool
- * @param {{courseIds:number[], from?:Date, to?:Date}} scope
+ * @param {{courseIds:number[], from?:Date, to?:Date, activityId?:number}} scope
  */
-async function loadResearchTrace(db, { courseIds, from = null, to = null }) {
+async function loadResearchTrace(db, { courseIds, from = null, to = null, activityId = null }) {
   const excluded = {
     tests: 0,
     sandboxRuns: 0,
@@ -70,8 +70,8 @@ async function loadResearchTrace(db, { courseIds, from = null, to = null }) {
             ai.progress_status AS progressStatus, ai.ended_at AS endedAt
        FROM activity_instances ai
        JOIN pogil_activities a ON a.id = ai.activity_id
-      WHERE ai.course_id IN (?)`,
-    [courseIds]
+      WHERE ai.course_id IN (?)${activityId ? ' AND ai.activity_id = ?' : ''}`,
+    activityId ? [courseIds, activityId] : [courseIds]
   );
 
   const demoCourse = new Set(courses.filter((c) => Number(c.demoMode) === 1).map((c) => c.id));

@@ -441,4 +441,4 @@ async function practiceMultipleChoiceHint({
   }
 }
 
-module.exports = { gradeTestQuestion, gradeTestQuestionHttp, practiceMultipleChoiceHint };
+module.exports = { gradeTestQuestion, gradeTestQuestionHttp, practiceMultipleChoiceHint, requestJsonGrade };

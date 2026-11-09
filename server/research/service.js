@@ -8,6 +8,8 @@ const { reconstructInstance, DEFAULT_OPTIONS } = require('./reconstruct');
 const { computeResearchMetrics, sizeBucket } = require('./metrics');
 const { buildDataset, toCsv } = require('./exports');
 const { pseudonym, researchSecret } = require('./pseudonym');
+const { loadActivitySourceById } = require('../utils/activityContent');
+const { recordAuditEvent } = require('../utils/auditLogger');
 
 const MIN_IDLE_MINUTES = 1;
 const MAX_IDLE_MINUTES = 120;
@@ -173,4 +175,196 @@ async function reconstructRun(db, courseId, instanceId, params = {}) {
   };
 }
 
-module.exports = { computeForCourses, exportDataset, reconstructRun, buildRuns, applyFilters, parseOptions, courseLabel };
+
+// ---- Instructor activity summary (View Groups) ----
+
+const SUMMARY_EVENT = 'activity_summary_ai';
+
+function describe(values) {
+  const v = values.filter((x) => x != null && Number.isFinite(x)).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const mid = Math.floor(v.length / 2);
+  return {
+    n: v.length,
+    min: v[0],
+    median: v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2,
+    mean: v.reduce((sum, x) => sum + x, 0) / v.length,
+    max: v[v.length - 1],
+  };
+}
+
+const reached = (q) => q.enteredAt != null || q.attempts.length > 0 || q.outcome !== 'not_attempted';
+
+// Per-question and per-group statistics for one activity in one course.
+// Uses the research reconstruction (same rules as the statistics page);
+// tests, sandbox runs, and groups with no students are excluded.
+async function activitySummary(db, courseId, activityId) {
+  const options = parseOptions({});
+  const trace = await loadResearchTrace(db, { courseIds: [courseId], activityId });
+  const runs = buildRuns(trace, options.reconstruct);
+  const activity = trace.activities.get(activityId);
+  const meta = activity?.meta || { questions: new Map(), sections: [], groups: [] };
+
+  const questions = [...meta.questions.values()].map((mq) => {
+    const perRun = runs
+      .map((r) => r.rec.questions.find((q) => q.qid === mq.qid))
+      .filter((q) => q && reached(q));
+    const count = (pred) => perRun.filter(pred).length;
+    return {
+      qid: mq.qid,
+      groupNum: mq.groupNum,
+      sectionIndex: mq.sectionIndex,
+      questionType: mq.questionType,
+      hasCode: !!mq.hasCode,
+      isSurvey: !!mq.isSurvey,
+      reached: perRun.length,
+      seconds: describe(perRun.map((q) => (q.durationMs == null ? null : q.durationMs / 1000))),
+      submits: describe(perRun.map((q) => q.attempts.length)),
+      firstTryAccepted: count((q) => q.firstDecision === 'accepted'),
+      accepted: count((q) => q.outcome === 'ai_accepted'),
+      continued: count((q) => q.outcome === 'continued'),
+      instructorAdvanced: count((q) => q.outcome === 'instructor_advanced'),
+      unresolved: count((q) => q.outcome === 'unresolved'),
+    };
+  });
+
+  const groups = runs.map((r) => ({
+    instanceId: r.instanceId,
+    status: r.status,
+    groupSize: r.groupSize,
+    totalSeconds: r.rec.timing?.durationMs == null ? null : r.rec.timing.durationMs / 1000,
+    questions: Object.fromEntries(r.rec.questions.filter(reached).map((q) => [q.qid, {
+      seconds: q.durationMs == null ? null : q.durationMs / 1000,
+      submits: q.attempts.length,
+      outcome: q.outcome,
+    }])),
+  }));
+
+  return {
+    generatedAt: new Date().toISOString(),
+    activityTitle: activity ? (activity.title || activity.name) : null,
+    idleMinutes: options.idleMinutes,
+    sections: meta.sections || [],
+    plannedMinutes: meta.plannedMinutes ?? null,
+    groupTotalSeconds: describe(groups.map((g) => g.totalSeconds)),
+    questions,
+    groups,
+    excluded: trace.excluded,
+    _runs: runs, // used by the AI summary; removed before sending
+  };
+}
+
+async function savedActivityAiSummary(db, courseId, activityId) {
+  const [[row]] = await db.query(
+    `SELECT details, created_at AS createdAt FROM audit_log
+      WHERE event_type = ? AND course_id = ? AND activity_id = ?
+      ORDER BY id DESC LIMIT 1`,
+    [SUMMARY_EVENT, courseId, activityId]
+  );
+  if (!row) return null;
+  try {
+    return JSON.parse(row.details);
+  } catch {
+    return null;
+  }
+}
+
+const MAX_SOURCE_CHARS = 24000;
+const FEEDBACK_SAMPLES = 6;
+
+// AI review of the whole activity: where groups struggled and what could be
+// improved. No student names or ids are sent. Saved as an audit_log event so
+// it can be shown again without regenerating.
+async function generateActivityAiSummary(db, req, courseId, activityId, requestJson) {
+  const summary = await activitySummary(db, courseId, activityId);
+  const runs = summary._runs;
+  if (!runs.length) throw Object.assign(new Error('No student groups to summarize'), { status: 400 });
+
+  const source = await loadActivitySourceById(db, activityId).catch(() => null);
+  let sourceText = String(source?.text || '');
+  if (sourceText.length > MAX_SOURCE_CHARS) sourceText = `${sourceText.slice(0, MAX_SOURCE_CHARS)}\n…(truncated)`;
+
+  const round = (x) => (x == null ? null : Math.round(x));
+  const stat = (d) => (d ? { min: round(d.min), median: round(d.median), mean: round(d.mean), max: round(d.max) } : null);
+  const questionStats = summary.questions.map((q) => {
+    const feedback = [];
+    for (const r of runs) {
+      const rq = r.rec.questions.find((x) => x.qid === q.qid);
+      for (const a of rq?.attempts || []) {
+        if (a.decision === 'rejected' && a.feedback && feedback.length < FEEDBACK_SAMPLES) {
+          feedback.push(a.feedback.slice(0, 400));
+        }
+      }
+    }
+    return {
+      question: q.qid,
+      type: q.isSurvey ? 'survey' : q.questionType,
+      hasCode: q.hasCode,
+      groupsReached: q.reached,
+      seconds: stat(q.seconds),
+      submits: stat(q.submits),
+      acceptedFirstTry: q.firstTryAccepted,
+      acceptedEventually: q.accepted,
+      skippedWithContinue: q.continued,
+      advancedByInstructor: q.instructorAdvanced,
+      unresolved: q.unresolved,
+      sampleAiFeedbackOnRejectedAnswers: feedback,
+    };
+  });
+
+  const data = {
+    groups: runs.length,
+    groupsCompleted: runs.filter((r) => r.status === 'completed').length,
+    plannedMinutes: summary.plannedMinutes,
+    sections: summary.sections,
+    groupTotalMinutes: stat(summary.groupTotalSeconds && {
+      min: summary.groupTotalSeconds.min / 60,
+      median: summary.groupTotalSeconds.median / 60,
+      mean: summary.groupTotalSeconds.mean / 60,
+      max: summary.groupTotalSeconds.max / 60,
+    }),
+    questions: questionStats,
+  };
+
+  const messages = [
+    {
+      role: 'system',
+      content: [
+        'You help an instructor review how student groups did on a POGIL-style group activity.',
+        'Groups answer questions; an AI checks each answer and either accepts it or sends it back with feedback.',
+        'Groups may skip a question with a Continue button after enough attempts, or the instructor may advance them.',
+        'Times are seconds of active work (idle gaps are capped). Submits are evaluated attempts per group.',
+        'Base every claim on the statistics and feedback samples given. Name questions by id (e.g. 2a).',
+        'Be concrete and brief. Suggest improvements to the activity (wording, hints, scaffolding, ordering, timing), not to the students.',
+        'Return JSON: {"overview": string, "struggles": [{"question": string, "observation": string}],',
+        '"improvements": [{"question": string|null, "suggestion": string}], "timing": string}.',
+      ].join(' '),
+    },
+    {
+      role: 'user',
+      content: [
+        'Activity markup:',
+        '```',
+        sourceText || '(not available)',
+        '```',
+        '',
+        'Statistics (JSON):',
+        JSON.stringify(data),
+      ].join('\n'),
+    },
+  ];
+
+  const result = await requestJson(messages, 4000);
+  const saved = {
+    generatedAt: new Date().toISOString(),
+    groups: runs.length,
+    overview: String(result?.overview || ''),
+    struggles: Array.isArray(result?.struggles) ? result.struggles : [],
+    improvements: Array.isArray(result?.improvements) ? result.improvements : [],
+    timing: String(result?.timing || ''),
+  };
+  await recordAuditEvent(SUMMARY_EVENT, { req, courseId, activityId, details: saved });
+  return saved;
+}
+
+module.exports = { activitySummary, savedActivityAiSummary, generateActivityAiSummary, computeForCourses, exportDataset, reconstructRun, buildRuns, applyFilters, parseOptions, courseLabel };

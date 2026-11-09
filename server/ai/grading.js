@@ -362,6 +362,10 @@ async function gradeTestQuestion({
 async function gradeTestQuestionHttp(req, res) {
   try {
     const { questionText, scores, responseText, codeCells, outputText, rubric } = req.body || {};
+    const supportingFiles = (Array.isArray(req.body?.supportingFiles) ? req.body.supportingFiles : [])
+      .filter((f) => f && typeof f.name === "string" && typeof f.content === "string")
+      .slice(0, 20)
+      .map((f) => ({ name: f.name.slice(0, 200), content: f.content, edited: !!f.edited }));
 
     if (!questionText || !scores) {
       return res.status(400).json({ error: "Missing questionText or scores" });
@@ -374,6 +378,7 @@ async function gradeTestQuestionHttp(req, res) {
       codeCells: Array.isArray(codeCells) ? codeCells : [],
       outputText: outputText || "",
       rubric: rubric || scores,
+      supportingFiles,
     });
 
     return res.json(result);

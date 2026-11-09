@@ -957,6 +957,24 @@ export default function RunActivityPage({
     return { scores, inferred: true };
   }
 
+  // Code files as the grader should see them (same rule as the server's
+  // buildGradingFiles): the saved copy when there is one, else the starter.
+  function gradingFilesForPreview() {
+    const starters = collectStarterFiles(preamble, groups);
+    const names = new Set(Object.keys(starters));
+    for (const key of Object.keys(existingAnswers || {})) {
+      if (isFileResponseKey(key)) names.add(key.slice('file:'.length));
+    }
+    return [...names]
+      .filter((name) => /\.(py|c|cc|cpp|cxx|h|hh|hpp|hxx)$/i.test(name))
+      .map((name) => {
+        const starter = String(starters[name] ?? '');
+        const saved = existingAnswers?.[`file:${name}`]?.response;
+        const content = saved != null ? String(saved) : starter;
+        return { name, content, edited: saved != null && content.trimEnd() !== starter.trimEnd() };
+      });
+  }
+
   async function fetchQuestionGradePreview(block) {
     const qid = `${block.groupId}${block.id}`;
     const payloadContainer = document;
@@ -977,6 +995,7 @@ export default function RunActivityPage({
         codeCells: payload.codeCells || [],
         outputText: payload.outputText || '',
         rubric: rubric.scores || payload.scores || block.scores || {},
+        supportingFiles: gradingFilesForPreview(),
       }),
     });
 
@@ -3109,6 +3128,8 @@ export default function RunActivityPage({
 
         questions.push({ qid, questionText, scores: block.scores || {}, responseText, codeCells, outputText });
       }
+      // The student's saved \file copies; without them the grader sees the starters.
+      addSavedFileAnswers(answers);
 
       const submissionEndpoint = isAssignmentMode ? 'submit-assignment' : 'submit-test';
       console.log('[REGRD] about to POST', {

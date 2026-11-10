@@ -119,7 +119,10 @@ export default function ActivitySummaryModal({ show, onHide, courseId, activityI
               {' · '}group time: median {fmtTime(data.groupTotalSeconds?.median)}, range {fmtTime(data.groupTotalSeconds?.min)}–{fmtTime(data.groupTotalSeconds?.max)}
               {data.plannedMinutes ? ` (planned ${data.plannedMinutes} min)` : ''}.
               {' '}Time is active work from when a group reaches a question until it is accepted or left;
-              {' '}idle gaps count at most {data.idleMinutes} min. Submits are evaluated attempts.
+              {' '}idle gaps count at most {data.idleMinutes} min. Only in-class work counts: work after a break
+              {' '}of more than {data.breakMinutes ?? 30} min, or more than {data.maxSessionMinutes ?? 60} min after a group started, is not counted
+              {data.groupsWithAfterClassWork ? ` (${data.groupsWithAfterClassWork} group${data.groupsWithAfterClassWork === 1 ? '' : 's'} had after-class work)` : ''}.
+              {' '}Submits are evaluated attempts.
             </p>
 
             {data.tokenLimits?.length ? (

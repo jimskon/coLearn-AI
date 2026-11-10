@@ -14,12 +14,22 @@ const { envTokens } = require('../utils/runtimeFeatures');
 
 const MIN_IDLE_MINUTES = 1;
 const MAX_IDLE_MINUTES = 120;
+const BREAK_MINUTES = { min: 5, max: 24 * 60 };
+const SESSION_MINUTES = { min: 10, max: 24 * 60 };
+
+function minutesOption(value, { min, max }, defaultMs) {
+  const n = Number(value);
+  return Number.isFinite(n) && value !== '' && value != null ? Math.min(max, Math.max(min, n)) : defaultMs / 60000;
+}
 
 function parseOptions(params = {}) {
   const idle = Number(params.idleMinutes);
   const idleMinutes = Number.isFinite(idle)
     ? Math.min(MAX_IDLE_MINUTES, Math.max(MIN_IDLE_MINUTES, idle))
     : DEFAULT_OPTIONS.idleThresholdMs / 60000;
+  // In-class window (see reconstruct.js inClassWindow).
+  const breakMinutes = minutesOption(params.breakMinutes, BREAK_MINUTES, DEFAULT_OPTIONS.sessionBreakMs);
+  const maxSessionMinutes = minutesOption(params.maxSessionMinutes, SESSION_MINUTES, DEFAULT_OPTIONS.maxSessionMs);
   const date = (value) => {
     if (!value) return null;
     const d = new Date(value);
@@ -35,8 +45,14 @@ function parseOptions(params = {}) {
     })(),
     groupSize: ['2', '3', '4', 'other'].includes(String(params.groupSize)) ? String(params.groupSize) : 'all',
     questionType: params.questionType ? String(params.questionType) : 'all',
-    reconstruct: { idleThresholdMs: idleMinutes * 60000 },
+    reconstruct: {
+      idleThresholdMs: idleMinutes * 60000,
+      sessionBreakMs: breakMinutes * 60000,
+      maxSessionMs: maxSessionMinutes * 60000,
+    },
     idleMinutes,
+    breakMinutes,
+    maxSessionMinutes,
   };
 }
 
@@ -103,6 +119,8 @@ async function computeForCourses(db, courseIds, params = {}) {
       groupSize: options.groupSize,
       questionType: options.questionType,
       idleMinutes: options.idleMinutes,
+      breakMinutes: options.breakMinutes,
+      maxSessionMinutes: options.maxSessionMinutes,
     },
     activitiesWithoutMetadata: metadataMissing,
     ...computeResearchMetrics(runs, { excluded: trace.excluded, courseLabels, activityTitles }),
@@ -142,6 +160,7 @@ async function reconstructRun(db, courseId, instanceId, params = {}) {
     groupSize: run.groupSize,
     studentIds: [...run.studentIds],
     turnCoverage: rec.turnCoverage,
+    inClass: { ...rec.inClass, startAt: iso(rec.inClass?.startAt), endAt: iso(rec.inClass?.endAt) },
     timing: {
       ...rec.timing,
       startAt: iso(rec.timing.startAt),
@@ -268,6 +287,9 @@ async function activitySummary(db, courseId, activityId) {
     activityTitle: activity ? (activity.title || activity.name) : null,
     tokenLimits,
     idleMinutes: options.idleMinutes,
+    breakMinutes: options.breakMinutes,
+    maxSessionMinutes: options.maxSessionMinutes,
+    groupsWithAfterClassWork: runs.filter((r) => r.rec.inClass?.afterClassActivity).length,
     sections: meta.sections || [],
     plannedMinutes: meta.plannedMinutes ?? null,
     groupTotalSeconds: describe(groups.map((g) => g.totalSeconds)),
@@ -357,7 +379,7 @@ async function generateActivityAiSummary(db, req, courseId, activityId, requestJ
         'You help an instructor review how student groups did on a POGIL-style group activity.',
         'Groups answer questions; an AI checks each answer and either accepts it or sends it back with feedback.',
         'Groups may skip a question with a Continue button after enough attempts, or the instructor may advance them.',
-        'Times are seconds of active work (idle gaps are capped). Submits are evaluated attempts per group.',
+        'Times are seconds of active in-class work (idle gaps are capped; work after class, after a long break or past the class length, is not counted). Submits are evaluated attempts per group.',
         'Base every claim on the statistics and feedback samples given. Name questions by id (e.g. 2a).',
         'Be concrete and brief. Suggest improvements to the activity (wording, hints, scaffolding, ordering, timing), not to the students.',
         'Return JSON: {"overview": string, "struggles": [{"question": string, "observation": string}],',

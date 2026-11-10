@@ -76,6 +76,7 @@ function run(trace, events = [], options = {}) {
   });
 }
 const question = (result, qid) => result.questions.find((q) => q.qid === qid);
+const NO_WINDOW = { sessionBreakMs: Infinity, maxSessionMs: Infinity };
 
 // ---------------------------------------------------------------------------
 // Activity metadata
@@ -249,7 +250,8 @@ test('question duration is measured from group entry, with idle gaps capped', ()
   t.submit({ group: 1, user: 101, at: 0, advanced: true, answers: { '1a': 'a', '1aFM': 'accepted', '1b': 'b', '1bFM': 'accepted' } });
   // Group 2 entered at minute 0; accepted at minute 40 after a 40-minute gap.
   t.submit({ group: 2, user: 102, at: 40, advanced: true, answers: { '2acode1': 'x', '2aCodeAccepted': 'true', '2b': 'Hard', '2bFM': 'accepted' } });
-  const q = question(run(t), '2a');
+  // No in-class window here: this test is about the idle cap alone.
+  const q = question(run(t, [], NO_WINDOW), '2a');
   assert.equal(q.enteredAt, T0);
   assert.equal(q.durationMs, 10 * MIN); // capped at the 10-minute idle threshold
 });

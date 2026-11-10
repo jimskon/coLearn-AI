@@ -32,6 +32,12 @@ const DEFAULT_OPTIONS = Object.freeze({
   // Instructor rotations closer together than this are one intervention
   // (an instructor clicking rotate repeatedly to reach a particular student).
   rotationBurstMs: 10 * 1000,
+  // In-class window. Work after class (students reopening the run to review or
+  // change answers) is not in-class work and is set aside. The class session
+  // ends at the last activity before the first gap longer than sessionBreakMs,
+  // and never later than maxSessionMs after the session starts.
+  sessionBreakMs: 30 * 60 * 1000,
+  maxSessionMs: 60 * 60 * 1000,
 });
 
 const STATE_KEY = /^(\d+)state$/;
@@ -173,8 +179,100 @@ function compareVersions(before, after, hasCode) {
 // activity: counting them credited groups with time after they had left.
 const ACTIVITY_TURN_REASONS = new Set(['claimed', 'solo_join', 'rotation_after_submit', 'instructor_rotate']);
 
-function reconstructInstance({ instance, members = [], rows = [], events = [], slices = [], meta, options = {} }) {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
+// The in-class session of a run. Activity points from the session start are
+// split wherever nothing happened for longer than sessionBreakMs; the class
+// session is the first stretch that contains a group submit (an earlier
+// stretch with no submit, such as a student opening the activity before class,
+// is not the session). It ends at that stretch's last activity, or at the last
+// activity within maxSessionMs of the start if the stretch runs longer.
+// Everything after the end is after-class work.
+function inClassWindow({ submits, turnEvents, forceAdvances, slices, endedAt }, opts) {
+  const points = activityPointsOf(submits, slices, turnEvents, forceAdvances, endedAt);
+  const firstSubmitAt = submits[0]?.at ?? null;
+  const fullTurnData = turnEvents.length > 0 && (firstSubmitAt == null || turnEvents[0].at <= firstSubmitAt);
+  const firstStart = fullTurnData ? turnEvents[0].at : (points[0] ?? null);
+  if (firstStart == null) return { startAt: null, endAt: null, endReason: null, startMoved: false };
+
+  const marks = [firstStart, ...points.filter((t) => t > firstStart)];
+  const stretches = [[marks[0]]];
+  for (let i = 1; i < marks.length; i += 1) {
+    if (marks[i] - marks[i - 1] > opts.sessionBreakMs) stretches.push([marks[i]]);
+    else stretches[stretches.length - 1].push(marks[i]);
+  }
+  let index = stretches.findIndex((st) => submits.some((s) => s.at >= st[0] && s.at <= st[st.length - 1]));
+  if (index < 0) index = 0;
+  const stretch = stretches[index];
+  const startAt = index === 0 ? firstStart : stretch[0];
+  const limitAt = startAt + opts.maxSessionMs;
+  const lastAt = stretch[stretch.length - 1];
+  if (lastAt > limitAt) {
+    const within = stretch.filter((t) => t <= limitAt);
+    return { startAt, endAt: within[within.length - 1] ?? startAt, endReason: 'max_session', startMoved: index > 0 };
+  }
+  return {
+    startAt,
+    endAt: lastAt,
+    endReason: index < stretches.length - 1 ? 'break' : 'last_activity',
+    startMoved: index > 0,
+  };
+}
+
+function activityPointsOf(submits, slices, turnEvents, forceAdvances, endedAt) {
+  return [
+    ...submits.map((s) => s.at),
+    // After a run is ended (Ended - incomplete), students may still open it and
+    // try code in their Local Sandbox; that is not activity time.
+    ...slices.filter((t) => endedAt == null || t <= endedAt),
+    ...turnEvents.filter((e) => ACTIVITY_TURN_REASONS.has(e.details?.reason)).map((e) => e.at),
+    ...forceAdvances.map((e) => e.at),
+  ].sort((a, b) => a - b);
+}
+
+function reconstructInstance(input) {
+  const opts = { ...DEFAULT_OPTIONS, ...(input.options || {}) };
+  const { instance, rows = [], events = [], slices = [] } = input;
+  const submits = buildSubmits([...rows].sort((a, b) => a.id - b.id));
+  const sortedEvents = [...events].sort((a, b) => a.at - b.at || a.id - b.id);
+  const window = inClassWindow({
+    submits,
+    turnEvents: sortedEvents.filter((e) => e.type === 'active_student_changed'),
+    forceAdvances: sortedEvents.filter((e) => e.type === 'instructor_force_advance'),
+    slices,
+    endedAt: instance?.endedAt ?? null,
+  }, opts);
+
+  const endAt = window.endAt;
+  const lateSubmits = endAt == null ? [] : submits.filter((s) => s.at > endAt);
+  const lateIds = new Set(lateSubmits.map((s) => s.submitId));
+  const inClass = (t) => endAt == null || t <= endAt;
+  const rec = reconstructWithin({
+    ...input,
+    rows: rows.filter((r) => !lateIds.has(r.submitId || `row:${r.id}`) && inClass(r.at)),
+    events: events.filter((e) => inClass(e.at)),
+    slices: slices.filter(inClass),
+  }, opts, window);
+  rec.inClass = {
+    startAt: window.startAt,
+    endAt,
+    // 'last_activity' (nothing later), 'break' (later work after a long gap),
+    // or 'max_session' (activity went past the longest class session).
+    endReason: window.endReason,
+    startMoved: window.startMoved,
+    afterClassSubmits: lateSubmits.length,
+    afterClassActivity: endAt != null && (
+      lateSubmits.length > 0 ||
+      slices.some((t) => t > endAt && (instance?.endedAt == null || t <= instance.endedAt)) ||
+      events.some((e) => e.at > endAt && (
+        e.type === 'instructor_force_advance' ||
+        (e.type === 'active_student_changed' && ACTIVITY_TURN_REASONS.has(e.details?.reason))
+      ))
+    ),
+  };
+  return rec;
+}
+
+// Reconstruction of the in-class part of a run (inputs already cut to the window).
+function reconstructWithin({ instance, members = [], rows = [], events = [], slices = [], meta }, opts, window) {
   const sortedRows = [...rows].sort((a, b) => a.id - b.id);
   const submits = buildSubmits(sortedRows);
   const sortedEvents = [...events].sort((a, b) => a.at - b.at || a.id - b.id);
@@ -183,15 +281,8 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], s
   const forceAdvances = sortedEvents.filter((e) => e.type === 'instructor_force_advance');
   const studentIds = new Set(members.filter((m) => m.isStudent).map((m) => m.studentId));
 
-  // After a run is ended (Ended - incomplete), students may still open it and
-  // try code in their Local Sandbox; that is not activity time.
   const endedAt = instance?.endedAt ?? null;
-  const activityPoints = [
-    ...submits.map((s) => s.at),
-    ...slices.filter((t) => endedAt == null || t <= endedAt),
-    ...turnEvents.filter((e) => ACTIVITY_TURN_REASONS.has(e.details?.reason)).map((e) => e.at),
-    ...forceAdvances.map((e) => e.at),
-  ].sort((a, b) => a - b);
+  const activityPoints = activityPointsOf(submits, slices, turnEvents, forceAdvances, endedAt);
 
   // Time no student was in the activity (from arrival/leave events), merged
   // with instructor pauses: neither is ever counted as time spent.
@@ -211,7 +302,9 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], s
     ? 'none'
     : (firstSubmitAt == null || turnEvents[0].at <= firstSubmitAt ? 'full' : 'partial');
   const fullTurnData = turnCoverage === 'full';
-  const sessionStartAt = fullTurnData ? turnEvents[0].at : (activityPoints[0] ?? null);
+  // Normally the first turn event (or first activity); later when the in-class
+  // window skipped an earlier stretch with no submits (see inClassWindow).
+  const sessionStartAt = window?.startAt ?? (fullTurnData ? turnEvents[0].at : (activityPoints[0] ?? null));
   const firstActivityAt = activityPoints[0] ?? null;
   const lastActivityAt = activityPoints[activityPoints.length - 1] ?? null;
 
@@ -231,7 +324,7 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], s
   // is known only from turn events; without them its entry time is unknown
   // (null), not the first submit, which would make its timing look like zero.
   const groupEntry = (g) => {
-    if (g === groupNums[0] || g === 1) return fullTurnData ? turnEvents[0].at : null;
+    if (g === groupNums[0] || g === 1) return fullTurnData ? sessionStartAt : null;
     return groupExit.get(g - 1)?.at ?? null;
   };
 
@@ -462,4 +555,4 @@ function reconstructInstance({ instance, members = [], rows = [], events = [], s
   };
 }
 
-module.exports = { reconstructInstance, buildSubmits, cappedSpan, compareVersions, DEFAULT_OPTIONS };
+module.exports = { reconstructInstance, inClassWindow, buildSubmits, cappedSpan, compareVersions, DEFAULT_OPTIONS };

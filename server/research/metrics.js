@@ -233,7 +233,17 @@ function timeMetrics(runs, questions) {
   const firstAcceptedMedian = durationSummary(firstAccepted).median;
   const firstRejectedMedian = durationSummary(firstRejected).median;
 
+  const withWindow = runs.filter((r) => r.rec.inClass?.endAt != null);
   return [
+    metric('runs_with_after_class_work', 'Runs with after-class work (set aside)',
+      'Runs with activity after the in-class session ended (after a long break, or past the longest class session). That work is not counted in any statistic.',
+      rate(withWindow.filter((r) => r.rec.inClass.afterClassActivity).length, withWindow.length)),
+    metric('after_class_submits', 'Group submits after class (set aside)',
+      'Group submits after the in-class session ended. Not counted in any statistic.',
+      count(runs.reduce((n, r) => n + (r.rec.inClass?.afterClassSubmits || 0), 0))),
+    metric('runs_cut_at_max_session', 'Runs cut at the longest class session',
+      'Runs still active when the longest class session ran out; time after that is not counted.',
+      count(withWindow.filter((r) => r.rec.inClass.endReason === 'max_session').length)),
     metric('activity_duration', 'Activity duration (active time)', 'Per run with turn data, session start (first student taking the turn) to last activity, with idle gaps capped at the idle threshold.', summary(runs.filter((r) => r.rec.timing.startKnown).map((r) => seconds(r.rec.timing.durationMs)), 'seconds')),
     metric('activity_wall_clock', 'Activity duration (wall clock)', 'Per run with turn data, session start to last activity, uncapped, without instructor pauses or time when no student was in the activity.', summary(runs.filter((r) => r.rec.timing.startKnown).map((r) => seconds(r.rec.timing.wallClockMs)), 'seconds')),
     metric('activity_submit_span', 'First to last submit (all runs)', 'Per run, first group submit to last group submit, idle-capped. Available for runs before turn logging; misses time before the first submit.', summary(runs.map((r) => seconds(r.rec.timing.submitSpanMs)), 'seconds')),

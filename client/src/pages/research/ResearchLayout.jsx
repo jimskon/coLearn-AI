@@ -31,6 +31,8 @@ function readSelection(params) {
     groupSize: params.get('size') || 'all',
     questionType: params.get('qtype') || 'all',
     idleMinutes: params.get('idle') || '10',
+    breakMinutes: params.get('break') || '30',
+    maxSessionMinutes: params.get('session') || '60',
   };
 }
 
@@ -46,6 +48,8 @@ function writeSelection(params, selection) {
   set('size', selection.groupSize, 'all');
   set('qtype', selection.questionType, 'all');
   set('idle', String(selection.idleMinutes), '10');
+  set('break', String(selection.breakMinutes), '30');
+  set('session', String(selection.maxSessionMinutes), '60');
   return next;
 }
 
@@ -238,7 +242,7 @@ export default function ResearchLayout() {
                 <option value="other">Other sizes</option>
               </Form.Select>
             </Col>
-            <Col xs={6} md={3}>
+            <Col xs={6} md={2}>
               <Form.Label className="small mb-0">Question type</Form.Label>
               <Form.Select size="sm" value={draft.questionType} onChange={(e) => setDraft((d) => ({ ...d, questionType: e.target.value }))}>
                 <option value="all">All</option>
@@ -249,7 +253,15 @@ export default function ResearchLayout() {
               <Form.Label className="small mb-0" title="Gaps longer than this count only up to this many minutes toward time on task">Idle (min)</Form.Label>
               <Form.Control size="sm" type="number" min={1} max={120} value={draft.idleMinutes} onChange={(e) => setDraft((d) => ({ ...d, idleMinutes: e.target.value }))} />
             </Col>
-            <Col xs={6} md={2} className="d-grid">
+            <Col xs={6} md={1}>
+              <Form.Label className="small mb-0" title="The class session ends at the last activity before a gap this long; later work (after class) is not counted">Break (min)</Form.Label>
+              <Form.Control size="sm" type="number" min={5} max={1440} value={draft.breakMinutes} onChange={(e) => setDraft((d) => ({ ...d, breakMinutes: e.target.value }))} />
+            </Col>
+            <Col xs={6} md={1}>
+              <Form.Label className="small mb-0" title="No class session counts past this many minutes from its start">Class (min)</Form.Label>
+              <Form.Control size="sm" type="number" min={10} max={1440} value={draft.maxSessionMinutes} onChange={(e) => setDraft((d) => ({ ...d, maxSessionMinutes: e.target.value }))} />
+            </Col>
+            <Col xs={6} md={1} className="d-grid">
               <Button size="sm" onClick={generate} disabled={!draft.courseIds.length || busy}>
                 {busy ? <Spinner size="sm" animation="border" className="me-1" /> : null}
                 Generate

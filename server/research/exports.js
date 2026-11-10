@@ -192,6 +192,10 @@ function groupParticipationRow(run, ctx) {
     paused_seconds: rec.pauses.length
       ? secs(pausedWithin(rec.pauses, rec.timing.startAt ?? rec.timing.firstActivityAt, lastAt, lastAt))
       : 0,
+    in_class_end: rec.inClass?.endAt != null ? new Date(rec.inClass.endAt).toISOString() : '',
+    in_class_end_reason: rec.inClass?.endReason ?? '',
+    after_class_activity: rec.inClass?.afterClassActivity ? 1 : 0,
+    after_class_submits_set_aside: rec.inClass?.afterClassSubmits ?? 0,
   };
 }
 

@@ -38,6 +38,7 @@ const EXCLUSION_LABELS = {
   noStudentMembers: 'Groups with no student members',
   outsideDateRange: 'Runs outside the date range',
   duplicateRows: 'Duplicate trace rows',
+  activityTypeNotSelected: 'Runs of activity types not selected',
 };
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,10 @@ export function OverviewPage() {
                     </tr>
                     <tr><td>Group submits after class (set aside)</td><td className="text-end">{afterClassSubmits?.value ?? '—'}</td></tr>
                     <tr><td>Runs cut at the longest class session</td><td className="text-end">{cutAtMax?.value ?? '—'}</td></tr>
+                    <tr>
+                      <td>Runs by activity type (before selection)</td>
+                      <td className="text-end">{Object.entries(r.runsByActivityType || {}).map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}</td>
+                    </tr>
                     <tr><td>Activities whose markup could not be read</td><td className="text-end">{r.activitiesWithoutMetadata}</td></tr>
                   </tbody>
                 </Table>
@@ -95,6 +100,7 @@ export function OverviewPage() {
               </Section>
               <div className="small text-muted">
                 Generated {new Date(r.generatedAt).toLocaleString()} · idle threshold {r.filters.idleMinutes} min · break {r.filters.breakMinutes ?? 30} min · class {r.filters.maxSessionMinutes ?? 60} min
+                {r.filters.activityTypes ? ` · activity types ${r.filters.activityTypes.join(', ')}` : ''}
                 {r.filters.groupSize !== 'all' ? ` · group size ${r.filters.groupSize}` : ''}
                 {r.filters.questionType !== 'all' ? ` · question type ${r.filters.questionType}` : ''}
               </div>

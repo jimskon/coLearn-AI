@@ -93,3 +93,31 @@ test('break and session length are options', () => {
   assert.equal(wider.inClass.afterClassSubmits, 0);
   assert.equal(q1a(wider).outcome, 'ai_accepted');
 });
+
+// ---------------------------------------------------------------------------
+// Run status follows the same in-class window.
+// ---------------------------------------------------------------------------
+const { runStatus } = require('../research/service');
+
+test('a run finished only after class is not finished in class', () => {
+  const t = makeTrace();
+  t.submit({ user: 101, at: 20, advanced: false, sentBack: ['1a'], answers: { '1a': 'x', '1aFM': 'needsRevision', '1b': 'ok', '1bFM': 'accepted' } });
+  t.submit({ user: 102, at: 300, advanced: true, answers: { '1a': 'xy', '1aFM': 'accepted' } });
+  const r = rebuild(t, [turn(1, 0, null, 101, 'claimed')], [...slicesEvery(0, 25), ...slicesEvery(295, 300)]);
+  assert.equal(r.finishedInClass, false);
+  // Live state says completed (it was finished that evening); research says not in class.
+  assert.equal(runStatus(r, { progressStatus: 'completed' }), 'not_finished');
+});
+
+test('a run finished in class is completed, whatever the live state says', () => {
+  const t = makeTrace();
+  t.submit({ user: 101, at: 20, advanced: true, answers: { '1a': 'x', '1aFM': 'accepted', '1b': 'ok', '1bFM': 'accepted' } });
+  const r = rebuild(t, [turn(1, 0, null, 101, 'claimed')], slicesEvery(0, 20));
+  assert.equal(r.finishedInClass, true);
+  assert.equal(runStatus(r, { progressStatus: 'in_progress' }), 'completed');
+});
+
+test('a run that was opened but never submitted has no submits', () => {
+  const r = rebuild(makeTrace(), [turn(1, 0, null, 101, 'claimed')], slicesEvery(0, 5));
+  assert.equal(runStatus(r, { progressStatus: 'in_progress' }), 'no_submits');
+});

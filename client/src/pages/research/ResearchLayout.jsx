@@ -7,6 +7,15 @@ import activityGrammar from '../../../../shared/activityGrammar.cjs';
 
 const RESEARCH_ROLES = ['root', 'instructor', 'creator'];
 const QUESTION_TYPES = [...activityGrammar.ENUMS.questiontype, 'unknown'];
+// Authored \mode of an activity. Research studies group activities by default.
+const ACTIVITY_TYPES = [
+  { key: 'group', label: 'Group' },
+  { key: 'assignment', label: 'Assignment' },
+  { key: 'practice', label: 'Practice' },
+  { key: 'demo', label: 'Demo' },
+  { key: 'playground', label: 'Playground' },
+];
+const DEFAULT_TYPES = 'group';
 
 export const RESEARCH_TABS = [
   { path: '', label: 'Overview' },
@@ -28,6 +37,7 @@ function readSelection(params) {
     courseIds: (params.get('courses') || '').split(',').map(Number).filter((n) => Number.isInteger(n) && n > 0),
     from: params.get('from') || '',
     to: params.get('to') || '',
+    activityTypes: (params.get('types') || DEFAULT_TYPES).split(',').filter((t) => ACTIVITY_TYPES.some((x) => x.key === t)),
     groupSize: params.get('size') || 'all',
     questionType: params.get('qtype') || 'all',
     idleMinutes: params.get('idle') || '10',
@@ -45,6 +55,7 @@ function writeSelection(params, selection) {
   set('courses', selection.courseIds.join(','), '');
   set('from', selection.from, '');
   set('to', selection.to, '');
+  set('types', ACTIVITY_TYPES.map((t) => t.key).filter((k) => selection.activityTypes.includes(k)).join(','), DEFAULT_TYPES);
   set('size', selection.groupSize, 'all');
   set('qtype', selection.questionType, 'all');
   set('idle', String(selection.idleMinutes), '10');
@@ -223,6 +234,25 @@ export default function ResearchLayout() {
           </>
         )}
         <Card.Footer>
+          <div className="d-flex flex-wrap align-items-center gap-3 mb-2 small">
+            <span className="text-muted" title="Only runs of the checked activity types (the activity's \mode) are included; the rest are counted under Excluded">Activity types:</span>
+            {ACTIVITY_TYPES.map((t) => (
+              <Form.Check
+                key={t.key}
+                inline
+                className="mb-0 me-0"
+                id={`research-type-${t.key}`}
+                label={t.label}
+                checked={draft.activityTypes.includes(t.key)}
+                onChange={(e) => setDraft((d) => ({
+                  ...d,
+                  activityTypes: e.target.checked
+                    ? [...new Set([...d.activityTypes, t.key])]
+                    : d.activityTypes.filter((k) => k !== t.key),
+                }))}
+              />
+            ))}
+          </div>
           <Row className="g-2 align-items-end">
             <Col xs={6} md={2}>
               <Form.Label className="small mb-0">From</Form.Label>
@@ -262,7 +292,7 @@ export default function ResearchLayout() {
               <Form.Control size="sm" type="number" min={10} max={1440} value={draft.maxSessionMinutes} onChange={(e) => setDraft((d) => ({ ...d, maxSessionMinutes: e.target.value }))} />
             </Col>
             <Col xs={6} md={1} className="d-grid">
-              <Button size="sm" onClick={generate} disabled={!draft.courseIds.length || busy}>
+              <Button size="sm" onClick={generate} disabled={!draft.courseIds.length || !draft.activityTypes.length || busy}>
                 {busy ? <Spinner size="sm" animation="border" className="me-1" /> : null}
                 Generate
               </Button>

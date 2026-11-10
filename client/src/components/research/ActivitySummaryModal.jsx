@@ -19,7 +19,7 @@ const OUTCOME = {
   not_attempted: { label: 'Not attempted', short: '–', variant: 'light' },
 };
 
-const STATUS = { completed: 'Completed', ended_incomplete: 'Ended (incomplete)', in_progress: 'In progress' };
+const STATUS = { completed: 'Completed in class', not_finished: 'Not finished in class', no_submits: 'No submits' };
 
 function fmtTime(seconds) {
   if (seconds == null || !Number.isFinite(seconds)) return '—';
@@ -115,7 +115,7 @@ export default function ActivitySummaryModal({ show, onHide, courseId, activityI
           <>
             <p className="text-muted small mb-3">
               {data.groups.length} group{data.groups.length === 1 ? '' : 's'}
-              {' · '}{data.groups.filter((g) => g.status === 'completed').length} completed
+              {' · '}{data.groups.filter((g) => g.status === 'completed').length} completed in class
               {' · '}group time: median {fmtTime(data.groupTotalSeconds?.median)}, range {fmtTime(data.groupTotalSeconds?.min)}–{fmtTime(data.groupTotalSeconds?.max)}
               {data.plannedMinutes ? ` (planned ${data.plannedMinutes} min)` : ''}.
               {' '}Time is active work from when a group reaches a question until it is accepted or left;

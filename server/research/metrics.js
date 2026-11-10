@@ -57,9 +57,9 @@ function allQuestions(runs) {
 // Sections
 // ---------------------------------------------------------------------------
 function runStatusCounts(runs) {
-  const counts = { completed: 0, ended_incomplete: 0, in_progress: 0 };
+  const counts = { completed: 0, not_finished: 0, no_submits: 0 };
   for (const run of runs) {
-    const key = run.status in counts ? run.status : 'in_progress';
+    const key = run.status in counts ? run.status : 'not_finished';
     counts[key] += 1;
   }
   return counts;
@@ -79,7 +79,7 @@ function scaleMetrics(runs, questions) {
     metric('questions_answered', 'Questions answered', 'Question instances (question x run) with at least one submitted answer, excluding surveys.', count(answeredQuestions(questions).length)),
     metric('runs_by_group_size', 'Runs by group size', 'Student members per run: 2, 3, 4, or other.', { kind: 'distribution', values: bySize }),
     metric('runs_by_status', 'Runs by status',
-      'Completed; ended incomplete (every student away 15+ minutes before finishing, so the run was closed); or still in progress.',
+      'In-class work only: completed (last question group finished within the in-class session); not finished in class (group submits, but the activity was not finished); or no submits (opened, never submitted).',
       { kind: 'distribution', values: runStatusCounts(runs) }),
   ];
 }

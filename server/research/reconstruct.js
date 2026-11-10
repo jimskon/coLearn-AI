@@ -532,6 +532,11 @@ function reconstructWithin({ instance, members = [], rows = [], events = [], sli
     questions,
     turns,
     turnCoverage, // 'none' | 'partial' | 'full'
+    // Finished in class: the last question group was left (accepted, Continue,
+    // or instructor advance) within the in-class window -- the same rule the
+    // live activity uses for 'completed'. null when the activity's questions
+    // could not be read.
+    finishedInClass: groupNums.length ? groupExit.has(groupNums[groupNums.length - 1]) : null,
     pauses,
     away, // [] when the run has no arrival/leave data
     turnsRecorded: fullTurnData,

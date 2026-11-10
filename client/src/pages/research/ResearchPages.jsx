@@ -38,6 +38,7 @@ const EXCLUSION_LABELS = {
   noStudentMembers: 'Groups with no student members',
   outsideDateRange: 'Runs outside the date range',
   duplicateRows: 'Duplicate trace rows',
+  activityTypeNotSelected: 'Runs of activity types not selected',
 };
 
 // ---------------------------------------------------------------------------
@@ -47,6 +48,9 @@ export function OverviewPage() {
       {(r) => {
         const coverage = find(r.sections.participation, 'turn_instrumented_runs');
         const partial = find(r.sections.participation, 'turn_partial_runs');
+        const afterClass = find(r.sections.time, 'runs_with_after_class_work');
+        const afterClassSubmits = find(r.sections.time, 'after_class_submits');
+        const cutAtMax = find(r.sections.time, 'runs_cut_at_max_session');
         return (
           <Row className="g-3">
             <Col lg={7}>
@@ -62,7 +66,7 @@ export function OverviewPage() {
             <Col lg={5}>
               <Section
                 title="Data coverage"
-                note="Turn, session-start, and intervention-rate statistics need turn logging for the whole run. Submit-based statistics use every run."
+                note={`Turn, session-start, and intervention-rate statistics need turn logging for the whole run. Submit-based statistics use every run. Only in-class work counts: a run's session ends at the last activity before a gap of more than ${r.filters.breakMinutes ?? 30} min, and never later than ${r.filters.maxSessionMinutes ?? 60} min after it starts.`}
               >
                 <Table className="mb-0" size="sm">
                   <tbody>
@@ -71,6 +75,16 @@ export function OverviewPage() {
                       <td className="text-end">{formatMetric(coverage).main}<div className="small text-muted">{formatMetric(coverage).detail}</div></td>
                     </tr>
                     <tr><td>Runs with partial turn data (set aside)</td><td className="text-end">{partial?.value ?? '—'}</td></tr>
+                    <tr>
+                      <td>Runs with after-class work (set aside)</td>
+                      <td className="text-end">{formatMetric(afterClass).main}<div className="small text-muted">{formatMetric(afterClass).detail}</div></td>
+                    </tr>
+                    <tr><td>Group submits after class (set aside)</td><td className="text-end">{afterClassSubmits?.value ?? '—'}</td></tr>
+                    <tr><td>Runs cut at the longest class session</td><td className="text-end">{cutAtMax?.value ?? '—'}</td></tr>
+                    <tr>
+                      <td>Runs by activity type (before selection)</td>
+                      <td className="text-end">{Object.entries(r.runsByActivityType || {}).map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}</td>
+                    </tr>
                     <tr><td>Activities whose markup could not be read</td><td className="text-end">{r.activitiesWithoutMetadata}</td></tr>
                   </tbody>
                 </Table>
@@ -85,7 +99,8 @@ export function OverviewPage() {
                 </Table>
               </Section>
               <div className="small text-muted">
-                Generated {new Date(r.generatedAt).toLocaleString()} · idle threshold {r.filters.idleMinutes} min
+                Generated {new Date(r.generatedAt).toLocaleString()} · idle threshold {r.filters.idleMinutes} min · break {r.filters.breakMinutes ?? 30} min · class {r.filters.maxSessionMinutes ?? 60} min
+                {r.filters.activityTypes ? ` · activity types ${r.filters.activityTypes.join(', ')}` : ''}
                 {r.filters.groupSize !== 'all' ? ` · group size ${r.filters.groupSize}` : ''}
                 {r.filters.questionType !== 'all' ? ` · question type ${r.filters.questionType}` : ''}
               </div>
@@ -153,7 +168,7 @@ export function TimePage() {
       {(r) => (
         <Section
           title="Time"
-          note={`Gaps longer than the idle threshold (${r.filters.idleMinutes} min) count only up to the threshold. Medians are shown first because timing is skewed. Activity duration needs full turn data; "first to last submit" covers every run.`}
+          note={`Gaps longer than the idle threshold (${r.filters.idleMinutes} min) count only up to the threshold. Only in-class work counts: work after a break of more than ${r.filters.breakMinutes ?? 30} min, or more than ${r.filters.maxSessionMinutes ?? 60} min after the session started, is set aside. Medians are shown first because timing is skewed. Activity duration needs full turn data; "first to last submit" covers every run.`}
         >
           <MetricTable metrics={r.sections.time} />
         </Section>

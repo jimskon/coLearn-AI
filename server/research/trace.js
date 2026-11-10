@@ -6,6 +6,7 @@
 
 const { extractActivityResearchMeta } = require('../../shared/activityResearchMeta.cjs');
 const { linesFromStoredText, loadActivitySourceLines } = require('../utils/activityContent');
+const { inferAuthoredModeFromLines } = require('../utils/activityType');
 
 // Response keys the analytics read. Everything else (drafts, AI chat turns,
 // table cells, retry bookkeeping) is not loaded.
@@ -22,7 +23,7 @@ const AUDIT_TYPES = [
 const metaCache = new Map();
 
 async function loadMeta(activity) {
-  const key = `${activity.id}:${activity.source_revision ?? ''}:${activity.source_updated_at ?? ''}`;
+  const key = `${activity.id}:${activity.source_revision ?? ''}:${activity.source_updated_at ?? ''}:${activity.is_test ?? ''}`;
   if (metaCache.has(key)) return metaCache.get(key);
   let lines = [];
   let available = true;
@@ -33,7 +34,13 @@ async function loadMeta(activity) {
   } catch {
     available = false;
   }
-  const meta = { ...extractActivityResearchMeta(lines), available: available && lines.length > 0 };
+  const meta = {
+    ...extractActivityResearchMeta(lines),
+    available: available && lines.length > 0,
+    // Authored \mode{...}: group (the default), assignment, practice, demo,
+    // playground, or test. Unreadable markup falls back like the live app does.
+    activityType: inferAuthoredModeFromLines(lines, { fallbackIsTest: Number(activity.is_test) === 1 }),
+  };
   metaCache.set(key, meta);
   return meta;
 }
@@ -178,13 +185,14 @@ async function loadResearchTrace(db, { courseIds, from = null, to = null, activi
 
   const activityIds = [...new Set(instances.map((i) => i.activityId))];
   const [activityRows] = await db.query(
-    `SELECT id, name, title, sheet_url, source_type, content_text, source_revision, source_updated_at
+    `SELECT id, name, title, sheet_url, source_type, content_text, source_revision, source_updated_at, is_test
        FROM pogil_activities WHERE id IN (?)`,
     [activityIds]
   );
   const activities = new Map();
   for (const a of activityRows) {
-    activities.set(a.id, { id: a.id, name: a.name, title: a.title, meta: await loadMeta(a) });
+    const meta = await loadMeta(a);
+    activities.set(a.id, { id: a.id, name: a.name, title: a.title, activityType: meta.activityType, meta });
   }
 
   const userIds = new Set();

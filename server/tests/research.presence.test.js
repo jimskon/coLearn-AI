@@ -52,7 +52,11 @@ test('away: no arrival data covering the start of the run means nothing is remov
   assert.deepEqual(awayIntervals([joined(1, 101, 30, 29)], STUDENTS, at(1)), []);
 });
 
-function unfinishedThenReturn({ withPresence }) {
+// With the in-class window turned off, so these tests see presence and the
+// idle cap alone (the window would set the next-day return aside).
+const NO_WINDOW = { sessionBreakMs: Infinity, maxSessionMs: Infinity };
+
+function unfinishedThenReturn({ withPresence, options = NO_WINDOW }) {
   const t = makeTrace({ instanceId: 1 });
   t.submit({ user: 101, at: 20, advanced: false, sentBack: ['1a'], answers: { '1a': 'x', '1aFM': 'needsRevision', '1b': 'ok', '1bFM': 'accepted' } });
   t.submit({ user: 102, at: DAY / MIN + 5, advanced: true, answers: { '1a': 'xy', '1aFM': 'accepted' } });
@@ -67,7 +71,7 @@ function unfinishedThenReturn({ withPresence }) {
   }
   // Working continuously 0-25 min, then 1-5 min after returning.
   const slices = [...slicesEvery(0, 25), ...slicesEvery(DAY / MIN, DAY / MIN + 5)];
-  return reconstructInstance({ instance: { id: 1 }, members, rows: t.rows, events, slices, meta: META });
+  return reconstructInstance({ instance: { id: 1 }, members, rows: t.rows, events, slices, meta: META, options });
 }
 
 test('time away from an unfinished activity is not counted', () => {

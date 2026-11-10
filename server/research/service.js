@@ -14,12 +14,48 @@ const { envTokens } = require('../utils/runtimeFeatures');
 
 const MIN_IDLE_MINUTES = 1;
 const MAX_IDLE_MINUTES = 120;
+const BREAK_MINUTES = { min: 5, max: 24 * 60 };
+const SESSION_MINUTES = { min: 10, max: 24 * 60 };
+// Activity types (authored \mode) a study can include. Group activities only by
+// default. Tests are never included (they are also excluded by the is_test flag).
+const ACTIVITY_TYPES = ['group', 'assignment', 'practice', 'demo', 'playground'];
+const DEFAULT_ACTIVITY_TYPES = ['group'];
+
+function parseActivityTypes(value) {
+  const list = Array.isArray(value) ? value : String(value ?? '').split(',');
+  const picked = ACTIVITY_TYPES.filter((t) => list.map((x) => String(x).trim().toLowerCase()).includes(t));
+  return picked.length ? picked : [...DEFAULT_ACTIVITY_TYPES];
+}
+
+// Keeps only runs of the selected activity types. Runs left out are counted,
+// in total and by type, never dropped silently.
+function selectActivityTypes(trace, activityTypes) {
+  const allowed = new Set(activityTypes);
+  const byType = {};
+  let left = 0;
+  const instances = trace.instances.filter((i) => {
+    const type = trace.activities.get(i.activityId)?.activityType || 'group';
+    byType[type] = (byType[type] || 0) + 1;
+    if (allowed.has(type)) return true;
+    left += 1;
+    return false;
+  });
+  return { ...trace, instances, excluded: { ...trace.excluded, activityTypeNotSelected: left }, runsByActivityType: byType };
+}
+
+function minutesOption(value, { min, max }, defaultMs) {
+  const n = Number(value);
+  return Number.isFinite(n) && value !== '' && value != null ? Math.min(max, Math.max(min, n)) : defaultMs / 60000;
+}
 
 function parseOptions(params = {}) {
   const idle = Number(params.idleMinutes);
   const idleMinutes = Number.isFinite(idle)
     ? Math.min(MAX_IDLE_MINUTES, Math.max(MIN_IDLE_MINUTES, idle))
     : DEFAULT_OPTIONS.idleThresholdMs / 60000;
+  // In-class window (see reconstruct.js inClassWindow).
+  const breakMinutes = minutesOption(params.breakMinutes, BREAK_MINUTES, DEFAULT_OPTIONS.sessionBreakMs);
+  const maxSessionMinutes = minutesOption(params.maxSessionMinutes, SESSION_MINUTES, DEFAULT_OPTIONS.maxSessionMs);
   const date = (value) => {
     if (!value) return null;
     const d = new Date(value);
@@ -33,11 +69,34 @@ function parseOptions(params = {}) {
       if (d && /^\d{4}-\d{2}-\d{2}$/.test(String(params.to))) d.setUTCHours(23, 59, 59, 999);
       return d;
     })(),
+    activityTypes: parseActivityTypes(params.activityTypes),
     groupSize: ['2', '3', '4', 'other'].includes(String(params.groupSize)) ? String(params.groupSize) : 'all',
     questionType: params.questionType ? String(params.questionType) : 'all',
-    reconstruct: { idleThresholdMs: idleMinutes * 60000 },
+    reconstruct: {
+      idleThresholdMs: idleMinutes * 60000,
+      sessionBreakMs: breakMinutes * 60000,
+      maxSessionMs: maxSessionMinutes * 60000,
+    },
     idleMinutes,
+    breakMinutes,
+    maxSessionMinutes,
   };
+}
+
+// A run's status, judged from in-class work only (the same window every other
+// statistic uses), not from the live run state: a group that finished the
+// activity after class did not finish it in class, and the live 'ended' flag
+// exists only for runs after auto-end was deployed.
+//   completed      the last question group was left within the in-class session
+//   not_finished   group submits in class, but the activity was not finished
+//   no_submits     opened but never submitted (no in-class session)
+function runStatus(rec, instance) {
+  if (!rec.submits.length) return 'no_submits';
+  if (rec.finishedInClass != null) return rec.finishedInClass ? 'completed' : 'not_finished';
+  // Activity markup unreadable: trust the live state only if nothing happened after class.
+  return String(instance.progressStatus || '') === 'completed' && !rec.inClass?.afterClassSubmits
+    ? 'completed'
+    : 'not_finished';
 }
 
 /** Reconstruct every included run in a loaded trace. */
@@ -63,10 +122,7 @@ function buildRuns(trace, reconstructOptions = {}) {
       startAt: instance.startAt,
       groupSize: studentIds.size,
       studentIds,
-      // completed | ended_incomplete (everyone left before finishing) | in_progress
-      status: String(instance.progressStatus || '') === 'completed'
-        ? 'completed'
-        : (instance.endedAt != null ? 'ended_incomplete' : 'in_progress'),
+      status: runStatus(rec, instance),
       rec,
     });
   }
@@ -89,7 +145,7 @@ function courseLabel(c) {
 
 async function computeForCourses(db, courseIds, params = {}) {
   const options = parseOptions(params);
-  const trace = await loadResearchTrace(db, { courseIds, from: options.from, to: options.to });
+  const trace = selectActivityTypes(await loadResearchTrace(db, { courseIds, from: options.from, to: options.to }), options.activityTypes);
   const runs = applyFilters(buildRuns(trace, options.reconstruct), options);
   const courseLabels = new Map(trace.courses.map((c) => [c.id, courseLabel(c)]));
   const activityTitles = new Map([...trace.activities.values()].map((a) => [a.id, a.title || a.name]));
@@ -100,11 +156,15 @@ async function computeForCourses(db, courseIds, params = {}) {
       courseIds,
       from: options.from?.toISOString() ?? null,
       to: options.to?.toISOString() ?? null,
+      activityTypes: options.activityTypes,
       groupSize: options.groupSize,
       questionType: options.questionType,
       idleMinutes: options.idleMinutes,
+      breakMinutes: options.breakMinutes,
+      maxSessionMinutes: options.maxSessionMinutes,
     },
     activitiesWithoutMetadata: metadataMissing,
+    runsByActivityType: trace.runsByActivityType,
     ...computeResearchMetrics(runs, { excluded: trace.excluded, courseLabels, activityTitles }),
   };
 }
@@ -114,7 +174,7 @@ async function computeForCourses(db, courseIds, params = {}) {
 async function exportDataset(db, courseIds, dataset, params = {}) {
   const secret = researchSecret();
   const options = parseOptions(params);
-  const trace = await loadResearchTrace(db, { courseIds, from: options.from, to: options.to });
+  const trace = selectActivityTypes(await loadResearchTrace(db, { courseIds, from: options.from, to: options.to }), options.activityTypes);
   const runs = applyFilters(buildRuns(trace, options.reconstruct), options);
   const rows = buildDataset(dataset, runs, {
     courseLabels: new Map(trace.courses.map((c) => [c.id, courseLabel(c)])),
@@ -142,6 +202,7 @@ async function reconstructRun(db, courseId, instanceId, params = {}) {
     groupSize: run.groupSize,
     studentIds: [...run.studentIds],
     turnCoverage: rec.turnCoverage,
+    inClass: { ...rec.inClass, startAt: iso(rec.inClass?.startAt), endAt: iso(rec.inClass?.endAt) },
     timing: {
       ...rec.timing,
       startAt: iso(rec.timing.startAt),
@@ -268,6 +329,9 @@ async function activitySummary(db, courseId, activityId) {
     activityTitle: activity ? (activity.title || activity.name) : null,
     tokenLimits,
     idleMinutes: options.idleMinutes,
+    breakMinutes: options.breakMinutes,
+    maxSessionMinutes: options.maxSessionMinutes,
+    groupsWithAfterClassWork: runs.filter((r) => r.rec.inClass?.afterClassActivity).length,
     sections: meta.sections || [],
     plannedMinutes: meta.plannedMinutes ?? null,
     groupTotalSeconds: describe(groups.map((g) => g.totalSeconds)),
@@ -357,7 +421,7 @@ async function generateActivityAiSummary(db, req, courseId, activityId, requestJ
         'You help an instructor review how student groups did on a POGIL-style group activity.',
         'Groups answer questions; an AI checks each answer and either accepts it or sends it back with feedback.',
         'Groups may skip a question with a Continue button after enough attempts, or the instructor may advance them.',
-        'Times are seconds of active work (idle gaps are capped). Submits are evaluated attempts per group.',
+        'Times are seconds of active in-class work (idle gaps are capped; work after class, after a long break or past the class length, is not counted). Submits are evaluated attempts per group.',
         'Base every claim on the statistics and feedback samples given. Name questions by id (e.g. 2a).',
         'Be concrete and brief. Suggest improvements to the activity (wording, hints, scaffolding, ordering, timing), not to the students.',
         'Return JSON: {"overview": string, "struggles": [{"question": string, "observation": string}],',
@@ -394,4 +458,4 @@ async function generateActivityAiSummary(db, req, courseId, activityId, requestJ
   return saved;
 }
 
-module.exports = { activitySummary, savedActivityAiSummary, generateActivityAiSummary, computeForCourses, exportDataset, reconstructRun, buildRuns, applyFilters, parseOptions, courseLabel };
+module.exports = { ACTIVITY_TYPES, selectActivityTypes, parseActivityTypes, runStatus, activitySummary, savedActivityAiSummary, generateActivityAiSummary, computeForCourses, exportDataset, reconstructRun, buildRuns, applyFilters, parseOptions, courseLabel };

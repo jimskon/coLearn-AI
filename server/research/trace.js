@@ -37,6 +37,8 @@ async function loadMeta(activity) {
   const meta = {
     ...extractActivityResearchMeta(lines),
     available: available && lines.length > 0,
+    // Full markup, for exports that show students' answers in context.
+    sourceText: lines.map((l) => String(l ?? '')).join('\n'),
     // Authored \mode{...}: group (the default), assignment, practice, demo,
     // playground, or test. Unreadable markup falls back like the live app does.
     activityType: inferAuthoredModeFromLines(lines, { fallbackIsTest: Number(activity.is_test) === 1 }),

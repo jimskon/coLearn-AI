@@ -4,7 +4,7 @@ const test = require('node:test');
 
 const { extractActivityResearchMeta } = require('../../shared/activityResearchMeta.cjs');
 const { reconstructInstance } = require('../research/reconstruct');
-const { buildDataset, toCsv, DATASETS } = require('../research/exports');
+const { buildDataset, toCsv, toJsonl, DATASETS, JSONL_DATASETS } = require('../research/exports');
 const { pseudonym } = require('../research/pseudonym');
 const { MIN, T0, ACTIVITY, makeTrace } = require('./fixtures/researchTrace');
 
@@ -40,12 +40,14 @@ const runA = makeRun(1, [101, 102], (t) => {
 const ctx = {
   courseLabels: new Map([[10, 'COMP 118 · Fall 2026']]),
   activityTitles: new Map([[20, 'Fixture']]),
+  activityMeta: new Map([[20, { ...META, sourceText: ACTIVITY }]]),
   pseudonym: (kind, id) => pseudonym(kind, id, SECRET),
 };
 
 test('no dataset contains raw user or run IDs', () => {
   for (const dataset of DATASETS) {
-    const csv = toCsv(buildDataset(dataset, [runA], ctx));
+    const rows = buildDataset(dataset, [runA], ctx);
+    const csv = JSONL_DATASETS.has(dataset) ? toJsonl(rows) : toCsv(rows);
     assert.doesNotMatch(csv, /\b10[12]\b/, dataset);
     assert.match(csv, /G-[0-9a-f]{12}/, dataset);
   }
@@ -100,4 +102,25 @@ test('student_longitudinal: one row per student per run', () => {
 
 test('unknown dataset is rejected', () => {
   assert.throws(() => buildDataset('names', [runA], ctx), /Unknown dataset/);
+});
+
+test('response_history: activity markup first, then each question with every version and decision in order', () => {
+  const rows = buildDataset('response_history', [runA], ctx);
+  assert.equal(rows[0].record, 'activity');
+  assert.equal(rows[0].activity_markup, ACTIVITY);
+  const q = rows.find((r) => r.record === 'question_history' && r.qid === '1a');
+  assert.match(q.question_markup, /^\\question\{First question\}/);
+  assert.equal(q.outcome, 'ai_accepted');
+  assert.deepEqual(q.history.map((h) => [h.version, h.answer_text, h.ai_decision]), [[1, 'x', 'rejected'], [2, 'xy', 'accepted']]);
+  assert.equal(q.history[0].ai_feedback, 'Say more, "why"?');
+  assert.equal(q.history[0].submitted_by, pseudonym('student', 101, SECRET));
+  assert.equal(q.history[1].submitted_by, pseudonym('student', 102, SECRET));
+  assert.equal(q.history[1].seconds_since_previous, 120);
+  // 1b was accepted at once and not changed again.
+  const b = rows.find((r) => r.qid === '1b');
+  assert.deepEqual(b.history.map((h) => [h.answer_changed, h.ai_decision]), [[true, 'accepted']]);
+  // One JSON object per line.
+  const lines = toJsonl(rows).trim().split('\n');
+  assert.equal(lines.length, rows.length);
+  for (const line of lines) JSON.parse(line);
 });

@@ -85,10 +85,10 @@ router.post('/exports/:dataset', async (req, res) => {
     const courseIds = await filterAccessibleCourses(db, req.user, requested);
     if (!courseIds.length) return res.status(403).json({ error: 'No access to the selected courses' });
     await ensureEndedAtSchema();
-    const { rows, csv } = await exportDataset(db, courseIds, dataset, req.body);
-    res.set('Content-Type', 'text/csv; charset=utf-8');
+    const { rows, body, format } = await exportDataset(db, courseIds, dataset, req.body);
+    res.set('Content-Type', format === 'jsonl' ? 'application/x-ndjson; charset=utf-8' : 'text/csv; charset=utf-8');
     res.set('X-Row-Count', String(rows));
-    res.send(csv);
+    res.send(body);
   } catch (err) {
     console.error('❌ research export:', err);
     res.status(500).json({ error: 'Failed to build the export' });

@@ -24,8 +24,8 @@ function braceArgs(line) {
 /**
  * @param {string[]|string} source  activity markup (lines or text)
  * @returns {{
- *   questions: Map<string, {qid, groupNum, letter, sectionIndex, questionType, hasCode, isSurvey}>,
- *   groups: Array<{groupNum, sectionIndex}>,
+ *   questions: Map<string, {qid, groupNum, letter, sectionIndex, questionType, hasCode, isSurvey, source}>,
+ *   groups: Array<{groupNum, sectionIndex, intro}>,
  *   sections: Array<{index, title, minutes}>,
  *   plannedMinutes: number|null,
  * }}
@@ -45,6 +45,8 @@ function extractActivityResearchMeta(source) {
   const finishQuestion = () => {
     if (!current) return;
     current.isSurvey = !!mc && !mc.correct && !mc.scored && mc.choices >= 2;
+    current.source = current.sourceLines.join('\n').trim();
+    delete current.sourceLines;
     questions.set(current.qid, current);
     current = null;
     mc = null;
@@ -52,6 +54,10 @@ function extractActivityResearchMeta(source) {
 
   for (const raw of lines) {
     const line = String(raw || '').trim();
+    // Raw markup of the current question, and of each group's text before its
+    // first question (shown with response histories for coding answers).
+    if (current) current.sourceLines.push(String(raw ?? ''));
+    else if (groups.length && groups[groups.length - 1].collectingIntro) groups[groups.length - 1].introLines.push(String(raw ?? ''));
     if (!line.startsWith('\\')) continue;
 
     if (/^\\section\*?\{/.test(line)) {
@@ -71,7 +77,7 @@ function extractActivityResearchMeta(source) {
       finishQuestion();
       groupNum += 1;
       letterCode = 97;
-      groups.push({ groupNum, sectionIndex });
+      groups.push({ groupNum, sectionIndex, introLines: [], collectingIntro: true });
       continue;
     }
 
@@ -83,6 +89,11 @@ function extractActivityResearchMeta(source) {
 
     if (/^\\question\{/.test(line)) {
       finishQuestion();
+      const group = groups[groups.length - 1];
+      if (group?.collectingIntro) {
+        group.introLines.pop(); // this \question line
+        group.collectingIntro = false;
+      }
       const letter = String.fromCharCode(letterCode);
       letterCode += 1;
       current = {
@@ -93,6 +104,7 @@ function extractActivityResearchMeta(source) {
         questionType: 'unknown',
         hasCode: false,
         isSurvey: false,
+        sourceLines: [String(raw ?? '')],
       };
       continue;
     }
@@ -123,6 +135,11 @@ function extractActivityResearchMeta(source) {
   }
   finishQuestion();
 
+  for (const g of groups) {
+    g.intro = g.introLines.join('\n').trim();
+    delete g.introLines;
+    delete g.collectingIntro;
+  }
   const timed = sections.filter((s) => s.minutes != null);
   return {
     questions,

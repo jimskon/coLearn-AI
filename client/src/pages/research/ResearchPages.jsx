@@ -1,5 +1,5 @@
 import React from 'react';
-import { Alert, Button, ButtonGroup, Card, Col, Row, Table } from 'react-bootstrap';
+import { Alert, Button, ButtonGroup, Card, Col, Form, Row, Table } from 'react-bootstrap';
 import { useOutletContext, useSearchParams } from 'react-router-dom';
 import { BreakdownTable, MetricTable } from './ResearchTables';
 import { formatMetric, toAggregateCsv } from '../../utils/researchFormat';
@@ -257,8 +257,8 @@ export function InterventionsPage() {
   );
 }
 
-function download(filename, text) {
-  const blob = new Blob([text], { type: 'text/csv' });
+function download(filename, text, type = 'text/csv') {
+  const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -272,9 +272,10 @@ const RESEARCH_DATASETS = [
   ['feedback_revision_pairs', 'One row per answer the AI sent back: the answer, the feedback, the next answer, how much it changed, and the next decision. Contains answer text.'],
   ['group_participation', 'One row per run: group size, submit and turn balance, skipped turns, interventions, question outcomes, and time.'],
   ['student_longitudinal', 'One row per student per run: submits, share of the group\'s submits, attempts and decisions, and turns.'],
+  ['response_history', 'JSON Lines for coding answers (by hand or with an AI). One activity record with the full markup, then one record per question per group: the question\'s markup and the text before it in its question group, then every submitted version, AI decision, and AI feedback in order. In-class work only; surveys left out. Contains answer text: students may have written names, so review before sharing.', 'jsonl'],
 ];
 
-function DatasetButton({ dataset, selection, stamp }) {
+function DatasetButton({ dataset, selection, stamp, format = 'csv' }) {
   const [state, setState] = React.useState({ busy: false, error: '', rows: null });
   const run = async () => {
     setState({ busy: true, error: '', rows: null });
@@ -290,7 +291,7 @@ function DatasetButton({ dataset, selection, stamp }) {
         throw new Error(json?.error || 'Export failed');
       }
       const text = await res.text();
-      download(`${dataset}_${stamp}.csv`, text);
+      download(`${dataset}_${stamp}.${format}`, text, format === 'jsonl' ? 'application/x-ndjson' : 'text/csv');
       setState({ busy: false, error: '', rows: Number(res.headers.get('X-Row-Count')) });
     } catch (err) {
       setState({ busy: false, error: err?.message || 'Export failed', rows: null });
@@ -300,16 +301,58 @@ function DatasetButton({ dataset, selection, stamp }) {
     <>
       <Button size="sm" onClick={run} disabled={state.busy}>{state.busy ? 'Building…' : 'Download'}</Button>
       {state.error ? <div className="small text-danger mt-1">{state.error}</div> : null}
-      {state.rows != null && Number.isFinite(state.rows) ? <div className="small text-muted mt-1">{state.rows.toLocaleString()} rows</div> : null}
+      {state.rows != null && Number.isFinite(state.rows) ? <div className="small text-muted mt-1">{state.rows.toLocaleString()} {format === 'jsonl' ? 'records' : 'rows'}</div> : null}
     </>
+  );
+}
+
+// Which activities the row-level exports include (all by default).
+function ExportActivityPicker({ activities, picked, setPicked }) {
+  const all = picked == null;
+  const isOn = (id) => all || picked.includes(id);
+  const toggle = (id) => {
+    const current = all ? activities.map((a) => a.id) : picked;
+    const next = current.includes(id) ? current.filter((x) => x !== id) : [...current, id];
+    setPicked(next.length === activities.length ? null : next);
+  };
+  return (
+    <Section
+      title="Activities to export"
+      note="Row-level exports include only the checked activities. The statistics pages always use every activity in the selection above."
+    >
+      <div className="px-3 py-2 small border-bottom">
+        <Button size="sm" variant="link" className="p-0 me-3" onClick={() => setPicked(null)}>Select all</Button>
+        <Button size="sm" variant="link" className="p-0" onClick={() => setPicked([])}>Clear</Button>
+        <span className="text-muted ms-3">{all ? activities.length : picked.length} of {activities.length} selected</span>
+      </div>
+      <div style={{ maxHeight: 260, overflowY: 'auto' }}>
+        <Table size="sm" className="mb-0">
+          <tbody>
+            {activities.map((a) => (
+              <tr key={a.id} onClick={() => toggle(a.id)} style={{ cursor: 'pointer' }}>
+                <td style={{ width: 36 }}>
+                  <Form.Check checked={isOn(a.id)} onChange={() => toggle(a.id)} onClick={(e) => e.stopPropagation()} aria-label={`Export ${a.title}`} />
+                </td>
+                <td>{a.title}</td>
+                <td className="small text-muted">{a.firstRunAt ? new Date(a.firstRunAt).toLocaleDateString() : ''}</td>
+                <td className="small text-muted text-end">{a.runs} run{a.runs === 1 ? '' : 's'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </div>
+    </Section>
   );
 }
 
 export function ExportsPage() {
   const { selection } = useResearch();
+  const [picked, setPicked] = React.useState(null); // null = every activity
   return (
     <NeedsResult>
       {(r) => (
+        <>
+        {r.activities?.length ? <ExportActivityPicker activities={r.activities} picked={picked} setPicked={setPicked} /> : null}
         <Section
           title="Exports"
           note="Exports use the courses and filters selected above. In the row-level datasets, students, groups, and instructors appear only as pseudonymous IDs (stable across exports); names and emails are never included. Times are UTC."
@@ -327,20 +370,30 @@ export function ExportsPage() {
                   </Button>
                 </td>
               </tr>
-              {RESEARCH_DATASETS.map(([name, description]) => (
+              {RESEARCH_DATASETS.map(([name, description, format = 'csv']) => (
                 <tr key={name}>
                   <td>
-                    <div>{name}.csv</div>
+                    <div>{name}.{format}</div>
                     <div className="small text-muted">{description}</div>
                   </td>
                   <td className="text-end">
-                    <DatasetButton dataset={name} selection={selection} stamp={r.generatedAt.slice(0, 10)} />
+                    {picked != null && !picked.length ? (
+                      <span className="small text-muted">No activities checked</span>
+                    ) : (
+                      <DatasetButton
+                        dataset={name}
+                        format={format}
+                        selection={picked == null ? selection : { ...selection, exportActivityIds: picked }}
+                        stamp={r.generatedAt.slice(0, 10)}
+                      />
+                    )}
                   </td>
                 </tr>
               ))}
             </tbody>
           </Table>
         </Section>
+        </>
       )}
     </NeedsResult>
   );

@@ -4,13 +4,17 @@
 // Pure functions: the caller supplies the runs, labels, and a pseudonym
 // function. Students, groups (runs), and instructors appear only as
 // pseudonymous IDs (./pseudonym.js); names and emails are never exported.
-// Answer and feedback text is exported only in feedback_revision_pairs.
+// Answer and feedback text is exported only in feedback_revision_pairs and
+// response_history (JSON Lines, one record per question per group, for coding
+// answers by hand or with an AI).
 
 const { balanceIndex } = require('../stats/compute');
 const { compareVersions } = require('./reconstruct');
 const { pausedWithin } = require('./pauses');
 
-const DATASETS = ['question_attempts', 'feedback_revision_pairs', 'group_participation', 'student_longitudinal'];
+const DATASETS = ['question_attempts', 'feedback_revision_pairs', 'group_participation', 'student_longitudinal', 'response_history'];
+// Datasets exported as JSON Lines (nested, long text) rather than CSV.
+const JSONL_DATASETS = new Set(['response_history']);
 
 const iso = (ms) => (ms == null ? '' : new Date(ms).toISOString());
 const secs = (ms) => (ms == null ? '' : Math.round(ms / 100) / 10);
@@ -226,11 +230,93 @@ function studentLongitudinalRows(run, ctx) {
   });
 }
 
+// One record per question per group run: the question's markup, then every
+// submitted version and AI decision in order. In-class work only (the same
+// window as every statistic). Surveys and questions never answered are left out.
+function responseHistoryRows(run, ctx) {
+  const base = runColumns(run, ctx);
+  const meta = ctx.activityMeta?.get(run.activityId);
+  const submitOrder = new Map(run.rec.submits.map((s, i) => [s.submitId, i]));
+  const rows = [];
+  for (const q of run.rec.questions) {
+    if (q.isSurvey || (!q.versions.length && !q.attempts.length)) continue;
+    const mq = meta?.questions?.get(q.qid);
+    const group = meta?.groups?.find((g) => g.groupNum === q.groupNum);
+    const attemptBySubmit = new Map(q.attempts.map((a) => [a.submitId, a]));
+    const versionBySubmit = new Map(q.versions.map((v, i) => [v.submitId, { ...v, number: i + 1 }]));
+    const submitIds = [...new Set([...q.versions.map((v) => v.submitId), ...q.attempts.map((a) => a.submitId)])]
+      .sort((a, b) => (submitOrder.get(a) ?? 0) - (submitOrder.get(b) ?? 0));
+    let previousAt = null;
+    let currentVersion = null;
+    const history = submitIds.map((id) => {
+      const v = versionBySubmit.get(id);
+      const a = attemptBySubmit.get(id);
+      const at = a?.at ?? v?.at ?? null;
+      const changed = !!v;
+      if (v) currentVersion = v;
+      const step = {
+        submit: (submitOrder.get(id) ?? 0) + 1,
+        at: iso(at),
+        seconds_since_previous: previousAt != null && at != null ? secs(at - previousAt) : null,
+        submitted_by: personId(ctx, run, a?.userId ?? v?.userId),
+        answer_changed: changed,
+        version: currentVersion?.number ?? null,
+        answer_text: currentVersion?.text ?? null,
+        answer_code: currentVersion?.code ?? null,
+        program_output: currentVersion?.output ?? null,
+        ai_decision: a?.decision ?? null,
+        ai_feedback: a?.feedback ?? null,
+      };
+      previousAt = at;
+      return step;
+    });
+    rows.push({
+      record: 'question_history',
+      ...base,
+      qid: q.qid,
+      question_group: q.groupNum,
+      question_type: q.questionType,
+      has_code: q.hasCode,
+      question_markup: mq?.source ?? null,
+      question_group_context: group?.intro || null,
+      outcome: q.outcome,
+      first_decision: q.firstDecision,
+      attempts: q.attempts.length,
+      attempts_to_acceptance: q.attemptsToAcceptance,
+      versions: q.versions.length,
+      history,
+    });
+  }
+  return rows;
+}
+
+// One record per activity with its full markup, ahead of its question histories.
+function activityRecords(runs, ctx) {
+  const seen = new Set();
+  const out = [];
+  for (const run of runs) {
+    if (seen.has(run.activityId)) continue;
+    seen.add(run.activityId);
+    const meta = ctx.activityMeta?.get(run.activityId);
+    out.push({
+      record: 'activity',
+      course_id: run.courseId,
+      course: ctx.courseLabels.get(run.courseId) || '',
+      activity_id: run.activityId,
+      activity: ctx.activityTitles.get(run.activityId) || '',
+      activity_seq: ctx.sequence.get(`${run.courseId}|${run.activityId}`) ?? '',
+      activity_markup: meta?.sourceText || null,
+    });
+  }
+  return out;
+}
+
 const BUILDERS = {
   question_attempts: questionAttemptRows,
   feedback_revision_pairs: feedbackRevisionRows,
   group_participation: (run, ctx) => [groupParticipationRow(run, ctx)],
   student_longitudinal: studentLongitudinalRows,
+  response_history: responseHistoryRows,
 };
 
 /**
@@ -238,12 +324,25 @@ const BUILDERS = {
  * @param {Array} runs  from service.buildRuns (+ applyFilters)
  * @param {{courseLabels:Map, activityTitles:Map, pseudonym:(kind,id)=>string}} ctx
  */
-function buildDataset(dataset, runs, { courseLabels = new Map(), activityTitles = new Map(), pseudonym }) {
+function buildDataset(dataset, runs, { courseLabels = new Map(), activityTitles = new Map(), activityMeta = new Map(), pseudonym }) {
   const build = BUILDERS[dataset];
   if (!build) throw new Error(`Unknown dataset: ${dataset}`);
   const ordered = [...runs].sort((a, b) => (a.startAt ?? 0) - (b.startAt ?? 0) || a.instanceId - b.instanceId);
-  const ctx = { courseLabels, activityTitles, pseudonym, sequence: activitySequence(runs) };
-  return ordered.flatMap((run) => build(run, ctx));
+  const ctx = { courseLabels, activityTitles, activityMeta, pseudonym, sequence: activitySequence(runs) };
+  const rows = ordered.flatMap((run) => build(run, ctx));
+  if (dataset !== 'response_history') return rows;
+  // Activity records first, then question histories grouped by activity.
+  const order = (r) => [ctx.sequence.get(`${r.course_id}|${r.activity_id}`) ?? 0, r.record === 'activity' ? 0 : 1];
+  return [...activityRecords(ordered, ctx), ...rows].sort((a, b) => {
+    const [sa, ra] = order(a);
+    const [sb, rb] = order(b);
+    return a.course_id - b.course_id || sa - sb || ra - rb;
+  });
+}
+
+/** Records -> JSON Lines text (one JSON object per line). */
+function toJsonl(rows) {
+  return rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : '');
 }
 
 function csvCell(value) {
@@ -256,4 +355,4 @@ function toCsv(rows, columns = rows[0] ? Object.keys(rows[0]) : []) {
   return [columns.join(','), ...rows.map((r) => columns.map((c) => csvCell(r[c])).join(','))].join('\n');
 }
 
-module.exports = { DATASETS, buildDataset, toCsv, activitySequence };
+module.exports = { DATASETS, JSONL_DATASETS, buildDataset, toCsv, toJsonl, activitySequence };

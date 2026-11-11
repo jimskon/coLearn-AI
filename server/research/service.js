@@ -6,7 +6,7 @@
 const { loadResearchTrace } = require('./trace');
 const { reconstructInstance, DEFAULT_OPTIONS } = require('./reconstruct');
 const { computeResearchMetrics, sizeBucket } = require('./metrics');
-const { buildDataset, toCsv } = require('./exports');
+const { buildDataset, toCsv, toJsonl, JSONL_DATASETS } = require('./exports');
 const { pseudonym, researchSecret } = require('./pseudonym');
 const { loadActivitySourceById } = require('../utils/activityContent');
 const { recordAuditEvent } = require('../utils/auditLogger');
@@ -164,6 +164,13 @@ async function computeForCourses(db, courseIds, params = {}) {
       maxSessionMinutes: options.maxSessionMinutes,
     },
     activitiesWithoutMetadata: metadataMissing,
+    // Activities in the selection (for choosing which to export).
+    activities: [...new Set(runs.map((r) => r.activityId))].map((id) => ({
+      id,
+      title: activityTitles.get(id) || `Activity ${id}`,
+      runs: runs.filter((r) => r.activityId === id).length,
+      firstRunAt: Math.min(...runs.filter((r) => r.activityId === id).map((r) => r.startAt ?? Infinity)),
+    })).sort((a, b) => a.firstRunAt - b.firstRunAt).map(({ firstRunAt, ...a }) => ({ ...a, firstRunAt: Number.isFinite(firstRunAt) ? new Date(firstRunAt).toISOString() : null })),
     runsByActivityType: trace.runsByActivityType,
     ...computeResearchMetrics(runs, { excluded: trace.excluded, courseLabels, activityTitles }),
   };
@@ -175,13 +182,21 @@ async function exportDataset(db, courseIds, dataset, params = {}) {
   const secret = researchSecret();
   const options = parseOptions(params);
   const trace = selectActivityTypes(await loadResearchTrace(db, { courseIds, from: options.from, to: options.to }), options.activityTypes);
-  const runs = applyFilters(buildRuns(trace, options.reconstruct), options);
+  let runs = applyFilters(buildRuns(trace, options.reconstruct), options);
+  // Optional: only these activities (exports only; statistics use every activity).
+  const activityIds = (Array.isArray(params.exportActivityIds) ? params.exportActivityIds : [])
+    .map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  if (activityIds.length) runs = runs.filter((r) => activityIds.includes(r.activityId));
   const rows = buildDataset(dataset, runs, {
     courseLabels: new Map(trace.courses.map((c) => [c.id, courseLabel(c)])),
     activityTitles: new Map([...trace.activities.values()].map((a) => [a.id, a.title || a.name])),
+    activityMeta: new Map([...trace.activities.values()].map((a) => [a.id, a.meta])),
     pseudonym: (kind, id) => pseudonym(kind, id, secret),
   });
-  return { rows: rows.length, csv: toCsv(rows) };
+  if (JSONL_DATASETS.has(dataset)) {
+    return { rows: rows.filter((r) => r.record !== 'activity').length, body: toJsonl(rows), format: 'jsonl' };
+  }
+  return { rows: rows.length, body: toCsv(rows), format: 'csv' };
 }
 
 // One run's reconstruction, for checking the rules against what happened in

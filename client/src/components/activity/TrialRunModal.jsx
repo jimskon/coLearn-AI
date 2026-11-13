@@ -228,7 +228,36 @@ async function postJson(path, body, step) {
   throw new Error(`${step} failed${tries > 1 ? ' (tried twice)' : ''}: ${lastError}`);
 }
 
-export default function TrialRunModal({ show, onHide, sourceText = '', features = {} }) {
+const clipText = (t, n = 700) => {
+  const x = String(t || '').trim();
+  return x.length > n ? `${x.slice(0, n)}…` : x;
+};
+
+// The request sent to "AI Revise This Question" for a failed row: what the
+// trial did and what went wrong, so the revision targets the actual problem.
+function buildFixRequest(r, mode, graded) {
+  const lines = [
+    `A Trial Run of this question failed in ${mode} mode (${graded ? 'scored grading' : 'group Check'}).`,
+    'Revise the question so the AI grading works as intended. Prefer fixing \\sampleresponses, \\feedbackprompt, and the \\score rubric;',
+    'change the question wording only if it is ambiguous or does not ask for what the grading expects.',
+    'Do not change code inside code blocks. Keep every existing tag and the question in place.',
+    '',
+    'What went wrong:',
+  ];
+  if (r.detail) lines.push(`- ${r.detail}`);
+  for (const c of r.checks || []) if (!c.ok) lines.push(`- ${c.text}`);
+  if (r.mistake) lines.push(`- The near miss had this mistake: ${r.mistake}`);
+  for (const a of r.attempts || []) {
+    lines.push('', `${a.label} (${a.score}):`);
+    if (a.answer?.responseText) lines.push(`Answer: ${clipText(a.answer.responseText)}`);
+    if (a.answer?.code) lines.push(`Code:\n${clipText(a.answer.code, 1200)}`);
+    if (a.output) lines.push(`Output: ${clipText(a.output, 400)}`);
+    if (a.feedback) lines.push(`Grader feedback: ${clipText(a.feedback)}`);
+  }
+  return lines.join('\n');
+}
+
+export default function TrialRunModal({ show, onHide, sourceText = '', features = {}, onFixQuestion = null }) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0, current: '' });
   const [results, setResults] = useState([]);
@@ -580,6 +609,32 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
     setRunning(false);
   }
 
+  // Re-run one row (for example after applying a fix), with the current text.
+  async function rerunOne(qid) {
+    const q = questions.find((x) => `${x.groupId}${x.id}` === qid);
+    if (!q) return;
+    if (!ctxRef.current) {
+      const starters = starterFiles(blocks);
+      ctxRef.current = {
+        headers: headerValues(blocks),
+        starters,
+        files: Object.fromEntries(Object.entries(starters).map(([n, f]) => [n, { ...f }])),
+      };
+    }
+    stopRef.current = false;
+    setRunning(true);
+    setProgress({ done: 0, total: 1, current: qid });
+    let r;
+    try {
+      r = await trialQuestion(q, ctxRef.current);
+    } catch (err) {
+      r = { qid, status: 'error', detail: err?.message || String(err) };
+    }
+    setResults((prev) => prev.map((x) => (x.qid === qid ? r : x)));
+    setProgress({ done: 1, total: 1, current: '' });
+    setRunning(false);
+  }
+
   const close = () => {
     stopRef.current = true;
     onHide();
@@ -722,6 +777,26 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
                     ))}
                     {r.tokens?.limit && (
                       <div className="small text-muted">Answer tokens: {r.tokens.used ?? '?'}/{r.tokens.limit}</div>
+                    )}
+                    {r.status !== 'skip' && !running && (
+                      <div className="d-flex gap-2 mt-2">
+                        {r.status === 'fail' && onFixQuestion && (
+                          <Button
+                            size="sm"
+                            variant="outline-primary"
+                            title="Select this question in the editor and ask AI Revise This Question for a fix based on this result"
+                            onClick={() => {
+                              const q = questions.find((x) => `${x.groupId}${x.id}` === r.qid);
+                              if (q) onFixQuestion({ groupId: q.groupId, id: q.id, request: buildFixRequest(r, mode, graded) });
+                            }}
+                          >
+                            Fix with AI
+                          </Button>
+                        )}
+                        <Button size="sm" variant="outline-secondary" onClick={() => rerunOne(r.qid)}>
+                          Re-run
+                        </Button>
+                      </div>
                     )}
                   </td>
                 </tr>

@@ -243,6 +243,8 @@ For each question, the AI writes a correct answer (using `\sampleresponses`, `\f
 
 The report lists each check, the planted mistake, and both attempts with their feedback.
 
+**Fixing a failed question.** Each failed row has **Fix with AI**. It closes the report, selects that question, fills **AI Revise This Question** (in the Question Panel) with what the trial found -- the failed checks, the answers, their output, and the grader's feedback -- and proposes a revision. **Apply Revision** accepts it (nothing is saved until **Save**; **Undo** reverses it). To change it instead, edit the request text and propose again, or edit the question in the panel. Reopen **Trial Run** -- the results are still there -- and use **Re-run** on that row to check the fix. **Re-run** works on any row.
+
 Multiple-choice questions are scored without AI and only checked for a keyed answer. Turtle drawings run but are not checked. The report shows each question's result, the grader's feedback, and the answer and output used. Each question costs one AI call for the answer and one for grading (correct answers), or one for the answers, two for grading, and one feedback check (near miss).
 
 ---

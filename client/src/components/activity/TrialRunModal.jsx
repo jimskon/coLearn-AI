@@ -190,18 +190,42 @@ function runRemote(box, code, files, stdinLines) {
   })();
 }
 
-async function postJson(path, body) {
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(body),
-  });
-  const raw = await res.text();
-  let data = {};
-  try { data = raw ? JSON.parse(raw) : {}; } catch { data = { error: raw.slice(0, 200) }; }
-  if (!res.ok) throw new Error(data?.error || `${path} failed (${res.status})`);
-  return data;
+// One request for one step ("writing the answer", "grading"). A request
+// that gets no answer, or a 502/504 from the proxy, is tried once more; the
+// error then names the step, the cause, and how long it took.
+const RETRY_STATUS = new Set([502, 504]);
+
+async function postJson(path, body, step) {
+  let lastError = '';
+  let tries = 0;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    tries = attempt;
+    const t0 = Date.now();
+    const secs = () => `${Math.round((Date.now() - t0) / 1000)}s`;
+    let res;
+    try {
+      res = await fetch(`${API_BASE_URL}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(body),
+      });
+    } catch {
+      lastError = `no answer from the server after ${secs()} (network drop, server restart, or a proxy time limit)`;
+      if (attempt === 1) { await new Promise((r) => setTimeout(r, 2000)); continue; }
+      break;
+    }
+    const raw = await res.text();
+    let data = {};
+    try { data = raw ? JSON.parse(raw) : {}; } catch { data = { error: '' }; }
+    if (res.ok) return data;
+    lastError = res.status === 504
+      ? `the server took too long (504 after ${secs()}; likely a proxy time limit)`
+      : `${data?.error || `HTTP ${res.status}`} (after ${secs()})`;
+    if (attempt === 1 && RETRY_STATUS.has(res.status)) { await new Promise((r) => setTimeout(r, 2000)); continue; }
+    break;
+  }
+  throw new Error(`${step} failed${tries > 1 ? ' (tried twice)' : ''}: ${lastError}`);
 }
 
 export default function TrialRunModal({ show, onHide, sourceText = '', features = {} }) {
@@ -210,6 +234,7 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
   const [results, setResults] = useState([]);
   const [error, setError] = useState('');
   const stopRef = useRef(false);
+  const ctxRef = useRef(null); // file state at the end of the last run, for retries
 
   const parsed = useMemo(
     () => (show ? parseSheetToBlocks(String(sourceText).split('\n'), { returnIssues: true }) : null),
@@ -265,7 +290,7 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
       feedbackPrompt: q.feedback?.[0] || '',
       scores: q.scores || {},
       files: fileList,
-    });
+    }, 'Writing the answer');
 
     // Edits to files stay in place for later questions, as they do for students.
     for (const [name, content] of Object.entries(answer.files || {})) {
@@ -287,11 +312,15 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
       } else if (box.runner === 'cpp' && features.remoteCpp === false) {
         note = 'Not run: remote C++ is turned off on this server.';
       } else {
-        const ran = box.runner === 'skulpt' || box.runner === 'turtle'
-          ? await runSkulpt(box, answer.code, contents, answer.stdin || [])
-          : await runRemote(box, answer.code, contents, answer.stdin || []);
-        output = String(ran.output || '').trim();
-        note = ran.note;
+        try {
+          const ran = box.runner === 'skulpt' || box.runner === 'turtle'
+            ? await runSkulpt(box, answer.code, contents, answer.stdin || [])
+            : await runRemote(box, answer.code, contents, answer.stdin || []);
+          output = String(ran.output || '').trim();
+          note = ran.note ? `Running the code: ${ran.note}` : '';
+        } catch (err) {
+          note = `Running the code failed: ${err?.message || err}. Graded without output.`;
+        }
       }
     }
 
@@ -309,7 +338,7 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
         codeCells,
         outputText: output,
         supportingFiles: codeRunPts > 0 ? supportingFiles : [],
-      });
+      }, 'Grading');
       const earned = (Number(g.codeScore) || 0) + (Number(g.runScore) || 0) + (Number(g.responseScore) || 0);
       const feedback = [g.codeFeedback, g.runFeedback, g.responseFeedback].map((s) => String(s || '').trim()).filter(Boolean).join('\n\n');
       if (g.gradingFailed) return { ...shown, status: 'error', score: `${earned}/${max}`, feedback, detail: 'The grader did not finish.' };
@@ -350,7 +379,7 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
           studentLevel: ctx.headers.studentlevel || 'intro',
         },
         codeContext: (q.codeBlocks || []).map((b) => b.content).filter(Boolean).join('\n\n'),
-      });
+      }, 'Grading (group Check)');
     } else {
       if (sameCode(answer.code, box.starter)) {
         return {
@@ -367,7 +396,7 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
         isCodeOnly: true,
         outputText: output,
         supportingFiles: supportingFiles.filter((f) => f.content.trim()),
-      });
+      }, 'Grading (group code Check)');
     }
     const feedback = [g.feedback || g.comment, g.followup || g.followupQuestion]
       .map((s) => String(s || '').trim()).filter(Boolean).join('\n\n');
@@ -392,6 +421,7 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
       starters,
       files: Object.fromEntries(Object.entries(starters).map(([n, f]) => [n, { ...f }])),
     };
+    ctxRef.current = ctx;
     const out = [];
     for (let i = 0; i < questions.length; i += 1) {
       if (stopRef.current) break;
@@ -408,6 +438,31 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
       setResults([...out]);
     }
     setProgress((p) => ({ ...p, done: out.length, current: '' }));
+    setRunning(false);
+  }
+
+  // Re-run only the rows that errored, in place, with the files as the run left them.
+  async function retryErrors() {
+    const ctx = ctxRef.current;
+    if (!ctx) return;
+    stopRef.current = false;
+    setRunning(true);
+    const out = [...results];
+    const todo = out.map((r, i) => (r.status === 'error' ? i : -1)).filter((i) => i >= 0);
+    for (let n = 0; n < todo.length; n += 1) {
+      if (stopRef.current) break;
+      const i = todo[n];
+      const q = questions.find((x) => `${x.groupId}${x.id}` === out[i].qid);
+      if (!q) continue;
+      setProgress({ done: n, total: todo.length, current: out[i].qid });
+      try {
+        out[i] = await trialQuestion(q, ctx);
+      } catch (err) {
+        out[i] = { qid: out[i].qid, status: 'error', detail: err?.message || String(err) };
+      }
+      setResults([...out]);
+    }
+    setProgress({ done: todo.length, total: todo.length, current: '' });
     setRunning(false);
   }
 
@@ -530,6 +585,11 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
         ) : (
           <>
             <Button variant="secondary" onClick={close}>Close</Button>
+            {counts.error > 0 && ctxRef.current && (
+              <Button variant="outline-warning" onClick={retryErrors}>
+                Retry {counts.error} failed
+              </Button>
+            )}
             <Button variant="primary" onClick={start} disabled={!questions.length}>
               {results.length ? 'Run again' : 'Start'}
             </Button>

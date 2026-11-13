@@ -491,4 +491,102 @@ async function practiceMultipleChoiceHint({
   }
 }
 
-module.exports = { gradeTestQuestion, gradeTestQuestionHttp, practiceMultipleChoiceHint, requestJsonGrade };
+// ---------------- TRIAL RUN: write a correct student answer ----------------
+// Instructor tool (Trial Run in the activity editor). Writes the answer a
+// strong student would give to one question, so the editor can run it and
+// send it to the same graders students use. Nothing is saved.
+const TRIAL_ANSWER_TOKENS = envTokens('TRIAL_ANSWER_TOKENS', 4000);
+const TRIAL_ROLES = new Set(["instructor", "root", "creator"]);
+
+async function trialAnswerHttp(req, res) {
+  if (!TRIAL_ROLES.has(String(req.user?.role || "").toLowerCase())) {
+    return res.status(403).json({ error: "Trial Run is for instructors." });
+  }
+
+  const b = req.body || {};
+  const clip = (s, n = 6000) => String(s ?? "").slice(0, n);
+  const questionText = clip(stripHtml(b.questionText || ""));
+  if (!questionText.trim()) {
+    return res.status(400).json({ error: "questionText is required" });
+  }
+
+  const files = (Array.isArray(b.files) ? b.files : [])
+    .filter((f) => f && typeof f.name === "string")
+    .slice(0, 20);
+  const code = b.code && typeof b.code === "object" ? b.code : null;
+  const bands = ["code", "output", "response"]
+    .map((k) => {
+      const band = b.scores?.[k];
+      const pts = bucketPoints(band);
+      return pts > 0 ? `- ${k} (${pts} pts): ${bucketRubricText(band)}` : "";
+    })
+    .filter(Boolean);
+
+  const sys = [
+    "You are testing a classroom activity before students see it.",
+    "Write the answer a strong student would submit for ONE question.",
+    "The answer must be fully correct and complete, follow every instruction in the question, and agree with the sample answer and grading guidance when they are given.",
+    "Write at the level of the stated students: correct, clear, and no more advanced than the question needs.",
+    "Return only JSON.",
+  ].join("\n");
+
+  const user = [
+    b.activityContext ? `Activity: ${clip(stripHtml(b.activityContext), 1000)}` : "",
+    b.studentLevel ? `Student level: ${clip(stripHtml(b.studentLevel), 200)}` : "",
+    b.language ? `Write the written answer in: ${clip(b.language, 50)}` : "",
+    "",
+    "Question:",
+    questionText,
+    "",
+    "The student answers with:",
+    b.wantsText ? "- a written answer" : "",
+    b.tableText ? `- a filled-in table (return it as a markdown table with every cell filled):\n${clip(b.tableText, 3000)}` : "",
+    code ? `- ${code.lang === "cpp" ? "C++" : "Python"} code in the question's code box. Starter code:\n${clip(code.starter || "(empty)")}` : "",
+    "",
+    ...(Array.isArray(b.samples) && b.samples.length
+      ? ["Instructor's sample answer:", ...b.samples.map((s) => clip(stripHtml(s), 3000)), ""]
+      : []),
+    b.feedbackPrompt ? `Instructor's grading guidance: ${clip(stripHtml(b.feedbackPrompt), 2000)}\n` : "",
+    bands.length ? `Rubric:\n${bands.join("\n")}\n` : "",
+    ...(files.length
+      ? [
+          "Files in the activity (the code can import or read them):",
+          ...files.map((f) => `--- ${f.name}${f.readonly ? " (read-only)" : " (the student may edit it)"} ---\n${clip(f.content)}`),
+          "",
+        ]
+      : []),
+    "Return strict JSON only:",
+    "{",
+    '  "responseText": string,   // the written answer, or the markdown table; "" if neither is asked for',
+    '  "code": string,           // the complete code for the code box, built from the starter code; "" if there is no code box',
+    '  "stdin": [string],        // input lines the program reads, in order; [] if none',
+    '  "files": { "name": string } // full new contents of editable files the question asks the student to change; {} if none',
+    "}",
+  ].filter((line) => line !== "").join("\n");
+
+  try {
+    const obj = await requestJsonGrade([
+      { role: "system", content: sys },
+      { role: "user", content: user },
+    ], TRIAL_ANSWER_TOKENS, { setting: "TRIAL_ANSWER_TOKENS", where: "trial run answer" });
+
+    const editable = new Set(files.filter((f) => !f.readonly).map((f) => f.name));
+    const outFiles = {};
+    for (const [name, content] of Object.entries(obj?.files || {})) {
+      if (editable.has(name) && typeof content === "string") outFiles[name] = content;
+    }
+    return res.json({
+      responseText: typeof obj?.responseText === "string" ? obj.responseText : "",
+      code: typeof obj?.code === "string" ? obj.code : "",
+      stdin: Array.isArray(obj?.stdin) ? obj.stdin.map(String).slice(0, 200) : [],
+      files: outFiles,
+      aiTokens: { used: obj?._tokensUsed ?? null, limit: TRIAL_ANSWER_TOKENS },
+    });
+  } catch (err) {
+    console.error("❌ trialAnswerHttp failed:", err?.message || err);
+    const status = err?.code === "AI_TOKEN_LIMIT" ? 503 : 500;
+    return res.status(status).json({ error: err?.message || "Could not write a trial answer." });
+  }
+}
+
+module.exports = { gradeTestQuestion, gradeTestQuestionHttp, practiceMultipleChoiceHint, requestJsonGrade, trialAnswerHttp };

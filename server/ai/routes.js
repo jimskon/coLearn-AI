@@ -71,6 +71,9 @@ router.post('/evaluate-cpp-code', evaluateCppCode);
 
 // ✅ Test-mode grading – calls into controller.js
 router.post('/grade-test-question', gradeTestQuestionHttp);
+
+// Trial Run (activity editor): write a correct answer for one question.
+router.post('/trial-answer', require('./grading').trialAnswerHttp);
 router.post('/assist', assistInlineActivity);
 // Persisted, active-student-gated AI help inside a live activity instance.
 router.post('/activity-assist', assistActivityAi);

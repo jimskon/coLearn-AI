@@ -213,6 +213,7 @@ Every limit can be set in `server/.env`; restart the server after changing one. 
 | `CREATOR_DRAFT_TOKENS` | 3500 | Activity creator: writing a first draft of an activity. |
 | `CREATOR_REVISION_TOKENS` | 3200 | Activity creator: revising one question. If the result is cut off, it retries once at double the limit. |
 | `ACTIVITY_SUMMARY_TOKENS` | 4000 | View Groups → **Summary** → **Generate AI summary**. |
+| `TRIAL_ANSWER_TOKENS` | 4000 | Activity editor → **Trial Run**: writing the correct answer (and code) for one question. |
 
 Raising a limit costs nothing on ordinary calls: the model uses only what it needs. It only allows long answers to finish.
 
@@ -223,6 +224,17 @@ Raising a limit costs nothing on ordinary calls: the model uses only what it nee
 - **Graded questions** (tests, assignments, practice): the feedback says the grade did not finish, names the setting to raise, and asks for a regrade, instead of showing a silent 0. A failed grade is never reused as a cached result.
 - **Group activities**: View Groups → **Summary** shows a warning listing how many times each setting ran out during that activity.
 - **Activity creator** and **AI summary**: the error message names the setting.
+
+## Trial Run (activity editor)
+
+**Trial Run** in the activity editor tests an activity before students see it. It uses the text in the editor (unsaved changes included) and saves nothing.
+
+For each question, the AI writes a correct answer (using `\sampleresponses`, `\feedbackprompt`, and the rubric when present). If the question has code, the code is run the way a student's **Run** button runs it: in the browser for `\python` and `\pythonturtle`, or on the remote runner for `\pythonremote` and `\cpp`, with any input the program reads. Edits the answer makes to `\file` blocks carry over to later questions. The answer and output then go to the grader for the activity's mode:
+
+- **Group** (and demo, playground): the group **Check**. It passes if the answer is accepted.
+- **Test, practice, assignment**: the scored grading used on submit. It passes with full marks. Questions without `\score` are not graded and are skipped.
+
+Multiple-choice questions are scored without AI and only checked for a keyed answer. Turtle drawings run but are not checked. The report shows each question's result, the grader's feedback, and the answer and output used. Each question costs one AI call for the answer and one or two for grading.
 
 ---
 

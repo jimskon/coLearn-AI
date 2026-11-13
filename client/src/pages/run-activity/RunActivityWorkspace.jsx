@@ -318,6 +318,12 @@ export default function RunActivityWorkspace({
                   mode: 'run',
                   prefill: existingAnswers,
                   currentGroupIndex: index,
+                  // Each block is rendered alone, so give free-standing code
+                  // blocks their position; otherwise all of them are <group>code1.
+                  standaloneCodeStart: 1 + group.content
+                    .slice(0, bIndex)
+                    .filter((b) => ['python', 'pythonremote', 'pythonturtle', 'cpp'].includes(b?.type) && !b.localOnly)
+                    .length,
                   textFeedbackShown,
                   unansweredShown,
                   socket,

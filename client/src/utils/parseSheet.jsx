@@ -2429,7 +2429,10 @@ export function renderBlocks(blocks, options = {}) {
     activityLanguage = '',
   } = options;
 
-  let standaloneCodeCounter = 1;
+  // Code blocks that sit in a group but outside a question are saved as
+  // <group>code<n>. A caller that renders one block at a time passes
+  // standaloneCodeStart so each block keeps its own n.
+  let standaloneCodeCounter = Number(options.standaloneCodeStart) || 1;
   let infoBubbleSequence = 1;
   const hiddenTypes = ['sampleresponses', 'feedbackprompt', 'followupprompt'];
   const canEditTable =

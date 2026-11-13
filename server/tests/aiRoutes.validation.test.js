@@ -172,9 +172,13 @@ test('inline AI uses an allowed per-block model and defaults unsupported values 
     assert.equal(fallback.status, 200);
     assert.equal(explicit.body.response, 'Try tracing the value through the loop.');
     assert.equal(requests[0].model, 'gpt-4o-mini');
-    assert.equal(requests[1].model, 'gpt-5-mini');
+    // An unlisted model falls back to the first of AI_BLOCK_MODELS.
+    assert.equal(requests[1].model, 'gpt-6-luna');
     assert.equal(requests[1].max_output_tokens, 1600);
-    assert.deepEqual(requests[1].reasoning, { effort: 'minimal' });
+    assert.deepEqual(requests[1].reasoning, { effort: 'low' });
+    // gpt-4o-mini is not a reasoning model: no reasoning effort, 500-token cap.
+    assert.equal(requests[0].reasoning, undefined);
+    assert.equal(requests[0].max_output_tokens, 500);
   } finally {
     __testHooks.openai.responses.create = originalCreate;
     process.env.OPENAI_API_KEY = originalApiKey;

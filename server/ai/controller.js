@@ -7,7 +7,9 @@ const {
 require("dotenv").config();
 
 const { randomUUID } = require('crypto');
-const { envTokens } = require('../utils/runtimeFeatures');
+const {
+  envTokens, getAiModels, pickModel, isReasoningModel, envReasoningEffort,
+} = require('../utils/runtimeFeatures');
 const { recordAiTokenLimit, chatHitLimit, responseHitLimit } = require('../utils/auditLogger');
 const db = require("../db");
 const crypto = require("crypto");
@@ -57,34 +59,31 @@ function createStubOpenAI() {
 const openai = isAiConfigured()
   ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
   : createStubOpenAI();
-const MODEL = process.env.OPENAI_MODEL || "gpt-5.6-luna";
-const GRADING_MODEL = process.env.OPENAI_GRADING_MODEL || "gpt-5.6-luna";
+// Models and reasoning effort (server/.env; see README, "AI models").
+const AI_MODELS = getAiModels();
+const MODEL = AI_MODELS.feedback;
+const GRADING_MODEL = AI_MODELS.grading;
+const FEEDBACK_REASONING_EFFORT = envReasoningEffort('FEEDBACK_REASONING_EFFORT');
+const GRADING_REASONING_EFFORT = envReasoningEffort('GRADING_REASONING_EFFORT');
+const AI_BLOCK_REASONING_EFFORT = envReasoningEffort('AI_BLOCK_REASONING_EFFORT', 'low');
 // Output-token limits (server/.env; see README, "AI token limits").
 const AI_BLOCK_TOKENS = envTokens('AI_BLOCK_TOKENS', 1600);
 const QUESTION_HELP_TOKENS = envTokens('QUESTION_HELP_TOKENS', 350);
 const GROUP_FEEDBACK_TOKENS = envTokens('GROUP_FEEDBACK_TOKENS', 700);
 const CODE_FEEDBACK_TOKENS = envTokens('CODE_FEEDBACK_TOKENS', 700);
-const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
-const INLINE_AI_ALLOWED_MODELS = new Set([
-  'gpt-5-mini',
-  'gpt-4o-mini',
-]);
-
-function isGpt5FamilyModel(model) {
-  return /^gpt-5(?:[.\-]|$)/i.test(String(model || '').trim());
-}
-
 function buildChatCompletionOptions({
   model,
   messages,
   temperature = 0.2,
   maxTokens = 700,
   responseFormat = null,
+  reasoningEffort = '',
 }) {
   const request = { model, messages };
 
-  if (isGpt5FamilyModel(model)) {
+  if (isReasoningModel(model)) {
     request.max_completion_tokens = maxTokens;
+    if (reasoningEffort) request.reasoning_effort = reasoningEffort;
   } else {
     request.max_tokens = maxTokens;
     if (temperature != null) request.temperature = temperature;
@@ -94,9 +93,9 @@ function buildChatCompletionOptions({
   return request;
 }
 
+// An \aimodel{} not in AI_BLOCK_MODELS (e.g. a retired model) uses the default.
 function getInlineAiModel(value) {
-  const model = String(value || '').trim();
-  return INLINE_AI_ALLOWED_MODELS.has(model) ? model : INLINE_AI_DEFAULT_MODEL;
+  return pickModel(value, AI_MODELS.aiBlock);
 }
 
 // An activity that names no language falls through to the deployment default
@@ -407,20 +406,20 @@ async function runInlineAiCompletion({
     `Student input:\n${cleanedInput}`,
   ].filter(Boolean).join('\n\n');
 
-  // GPT-5 mini is a reasoning model.  A 500-token total allowance can be
-  // consumed entirely by reasoning before it emits visible text, which the
-  // API reports as incomplete/max_output_tokens.  Inline classroom help is
-  // short and direct, so use minimal reasoning with room for an answer.
+  // Reasoning models count reasoning against the output limit, so a small
+  // allowance can be used up before any visible text. Inline classroom help is
+  // short and direct: low reasoning effort (AI_BLOCK_REASONING_EFFORT) with
+  // room for an answer. Non-reasoning models keep the old 500 cap.
+  const reasoning = isReasoningModel(selectedModel);
   const request = {
     model: selectedModel,
     instructions: system,
     input: user,
     text: { format: { type: 'text' } },
-    // Non-reasoning models need far less; keep their old 500 cap.
-    max_output_tokens: selectedModel === 'gpt-5-mini' ? AI_BLOCK_TOKENS : Math.min(500, AI_BLOCK_TOKENS),
+    max_output_tokens: reasoning ? AI_BLOCK_TOKENS : Math.min(500, AI_BLOCK_TOKENS),
   };
-  if (selectedModel === 'gpt-5-mini') {
-    request.reasoning = { effort: 'minimal' };
+  if (reasoning && AI_BLOCK_REASONING_EFFORT) {
+    request.reasoning = { effort: AI_BLOCK_REASONING_EFFORT };
   }
 
   const response = await openai.responses.create(request);
@@ -2124,6 +2123,7 @@ async function evaluateStudentResponse(req, res) {
         ],
         temperature: 0.1,
         maxTokens: QUESTION_HELP_TOKENS,
+        reasoningEffort: GRADING_REASONING_EFFORT,
       }));
       if (chatHitLimit(chat)) {
         recordAiTokenLimit({ setting: 'QUESTION_HELP_TOKENS', limit: QUESTION_HELP_TOKENS, model: GRADING_MODEL, where: 'student question help', req, activityInstanceId: instanceId });
@@ -2209,6 +2209,7 @@ async function evaluateStudentResponse(req, res) {
       temperature: 0.2,
       maxTokens: GROUP_FEEDBACK_TOKENS,
       responseFormat: { type: "json_object" },
+      reasoningEffort: FEEDBACK_REASONING_EFFORT,
     }));
     if (chatHitLimit(chat)) {
       recordAiTokenLimit({ setting: 'GROUP_FEEDBACK_TOKENS', limit: GROUP_FEEDBACK_TOKENS, model: MODEL, where: 'written-answer feedback', req, activityInstanceId: instanceId });
@@ -2755,6 +2756,7 @@ ${rules ? "\n" + rules : ""}
       ],
       temperature: 0.2,
       maxTokens: CODE_FEEDBACK_TOKENS,
+      reasoningEffort: FEEDBACK_REASONING_EFFORT,
     }));
   } catch (err) {
     console.error("❌ OpenAI evaluateCode failed:", err);

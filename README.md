@@ -168,9 +168,37 @@ The check runs every minute (`server/research/autoEnd.js`). Events: `activity_en
 
 ---
 
+## AI models
+
+Every AI model the system uses is set in `server/.env`; restart the server after changing one. Model names change as OpenAI retires them, so update these lists rather than the code. A missing setting uses the default shown.
+
+| Setting | Default | Used for |
+|---|---|---|
+| `OPENAI_MODEL` | `gpt-6-luna` | Group activities: checking written answers and code (**Check**). |
+| `OPENAI_GRADING_MODEL` | `OPENAI_MODEL` | Grading tests, assignments, and practice checks (including **Grade This Question** and **Regrade**); answering a student's question in a group activity; the **Summary** AI review. |
+| `AI_BLOCK_MODELS` | `gpt-6-luna,gpt-4o-mini` | Models an `\ai` block may use, comma-separated. The **first is the default**. |
+| `CREATOR_MODELS` | `gpt-6-luna,gpt-6.1-terra` | The activity creator's model menu, comma-separated. The **first is the default**, and the only choice for demo creators. |
+
+**Lists and retired models.** The editor and creator menus show these lists (from `/api/runtime/config`). An activity's `\aimodel{...}`, or a creator choice, that is **not in the list** — for example a model OpenAI has retired — quietly uses the list's first model, so old activities keep working. New activities leave out `\aimodel` unless the author picks a non-default model.
+
+**Reasoning effort.** Reasoning models accept a `reasoning effort` that trades thinking (time, cost, output tokens) for quality. The accepted values depend on the model: `gpt-6` models take `none`, `low`, `medium`, `high`, `xhigh`, `max` (default `medium`); `gpt-5` models take `minimal`, `low`, `medium`, `high`. Blank means not sent (the model's own default). A value a model does not accept makes its calls fail, so check the model's page when changing models.
+
+| Setting | Default | Used for |
+|---|---|---|
+| `AI_BLOCK_REASONING_EFFORT` | `low` | `\ai` blocks: short classroom help. |
+| `FEEDBACK_REASONING_EFFORT` | blank | Group **Check** feedback (`OPENAI_MODEL`). |
+| `GRADING_REASONING_EFFORT` | blank | Everything that uses `OPENAI_GRADING_MODEL`. |
+| `CREATOR_REASONING_EFFORT` | blank | The activity creator. |
+
+Older models (GPT-4 and earlier, e.g. `gpt-4o-mini`) are not reasoning models: they get no reasoning effort and use a temperature instead.
+
+**Changing models** may call for new token limits (below): a model that reasons more needs more output tokens. The `AI tokens: used/limit` line on graded questions and the warnings in View Groups → **Summary** show when a limit is close or reached.
+
+---
+
 ## AI token limits
 
-Each AI call has a limit on how many tokens the model may produce (its *output tokens*). Reasoning models (the `gpt-5` family) count their hidden reasoning against this limit, so a large input — long code plus supporting files — can use it all up before any answer is written. The call then returns nothing.
+Each AI call has a limit on how many tokens the model may produce (its *output tokens*). Reasoning models (everything newer than GPT-4: the `gpt-5` and `gpt-6` families and `o` models) count their hidden reasoning against this limit, so a large input — long code plus supporting files — can use it all up before any answer is written. The call then returns nothing.
 
 Every limit can be set in `server/.env`; restart the server after changing one. A missing value, a value that is not a number, or a value under 100 uses the default.
 
@@ -181,7 +209,7 @@ Every limit can be set in `server/.env`; restart the server after changing one. 
 | `GROUP_FEEDBACK_TOKENS` | 700 | Group activities: checking a written answer and writing feedback. |
 | `CODE_FEEDBACK_TOKENS` | 700 | Group activities: checking code (with its output and supporting files) and writing feedback. |
 | `QUESTION_HELP_TOKENS` | 350 | Group activities: answering when a student asks a question instead of answering one. |
-| `AI_BLOCK_TOKENS` | 1600 | `\ai` blocks (the inline AI assistant), for `gpt-5-mini`. `gpt-4o-mini` is capped at 500 or this value, whichever is smaller. |
+| `AI_BLOCK_TOKENS` | 1600 | `\ai` blocks (the inline AI assistant), for reasoning models. Older models such as `gpt-4o-mini` are capped at 500 or this value, whichever is smaller. |
 | `CREATOR_DRAFT_TOKENS` | 3500 | Activity creator: writing a first draft of an activity. |
 | `CREATOR_REVISION_TOKENS` | 3200 | Activity creator: revising one question. If the result is cut off, it retries once at double the limit. |
 | `ACTIVITY_SUMMARY_TOKENS` | 4000 | View Groups → **Summary** → **Generate AI summary**. |

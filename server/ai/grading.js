@@ -1,14 +1,13 @@
 // server/ai/grading.js
 const OpenAI = require("openai");
 require("dotenv").config();
-const { envTokens } = require("../utils/runtimeFeatures");
+const { envTokens, getAiModels, isReasoningModel, envReasoningEffort } = require("../utils/runtimeFeatures");
 const { AiTokenLimitError, recordAiTokenLimit, chatHitLimit } = require("../utils/auditLogger");
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL =
-  process.env.OPENAI_GRADING_MODEL ||
-  process.env.OPENAI_MODEL ||
-  "gpt-5.6-luna";
+// OPENAI_GRADING_MODEL, else OPENAI_MODEL (server/.env; see README, "AI models").
+const MODEL = getAiModels().grading;
+const GRADING_REASONING_EFFORT = envReasoningEffort("GRADING_REASONING_EFFORT");
 
 function stripHtml(s = "") {
   return String(s)
@@ -101,6 +100,7 @@ async function requestJsonGrade(messages, maxCompletionTokens = GRADING_TOKENS, 
     messages,
     max_completion_tokens: maxCompletionTokens,
     response_format: { type: "json_object" },
+    ...(GRADING_REASONING_EFFORT && isReasoningModel(MODEL) ? { reasoning_effort: GRADING_REASONING_EFFORT } : {}),
   });
 
   if (chatHitLimit(chat)) {

@@ -78,11 +78,9 @@ const SUPPORTED_INFO_TARGETS = new Set([
   'aifeedback',
 ]);
 
-export const INLINE_AI_DEFAULT_MODEL = 'gpt-5-mini';
-export const INLINE_AI_MODEL_OPTIONS = [
-  { value: 'gpt-5-mini', label: 'GPT-5 mini — standard' },
-  { value: 'gpt-4o-mini', label: 'GPT-4o mini — fast and economical' },
-];
+// \aimodel{} is kept as written; '' means the deployment default. The server
+// checks it against AI_BLOCK_MODELS (server/.env) and uses the default for any
+// model not listed there, such as a retired one.
 
 export const INLINE_AI_MODE_GUIDE = [
   {
@@ -107,12 +105,6 @@ export const INLINE_AI_MODE_GUIDE = [
   },
 ];
 
-const normalizeInlineAiModel = (value) => {
-  const model = String(value || '').trim();
-  return INLINE_AI_MODEL_OPTIONS.some((option) => option.value === model)
-    ? model
-    : INLINE_AI_DEFAULT_MODEL;
-};
 
 const parseInfoSeconds = (value) => {
   const seconds = Number.parseInt(String(value || '').trim(), 10);
@@ -2087,7 +2079,7 @@ export function parseSheetToBlocks(lines, options = {}) {
           ? `ai:${currentQuestion.groupId}:${currentQuestion.id}:${aiIndex}`
           : `ai:${groupNumber}:standalone:${aiIndex}`,
         mode,
-        model: INLINE_AI_DEFAULT_MODEL,
+        model: '',
         title: format('AI Coach'),
         prompt: '',
         guardrail: '',
@@ -2121,12 +2113,8 @@ export function parseSheetToBlocks(lines, options = {}) {
     if (currentAiBlock) {
       const modelMatch = trimmed.match(/^\\aimodel\{([\s\S]*?)\}\s*$/);
       if (modelMatch) {
-        const requestedModel = String(modelMatch[1] || '').trim();
-        currentAiBlock.model = normalizeInlineAiModel(requestedModel);
+        currentAiBlock.model = String(modelMatch[1] || '').trim();
         currentAiBlock.sourceMeta.modelLine = lineNo;
-        if (requestedModel && requestedModel !== currentAiBlock.model) {
-          pushIssue('warn', lineNo, `Unsupported AI model "${requestedModel}"; using ${INLINE_AI_DEFAULT_MODEL}.`, line);
-        }
         continue;
       }
 

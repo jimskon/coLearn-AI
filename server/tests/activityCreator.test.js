@@ -144,7 +144,7 @@ test('renderFallbackTemplate omits section markup for test drafts', () => {
     title: 'Final Exam',
     mode: 'test',
     durationMinutes: 60,
-    selectedModel: 'gpt-5-mini',
+    selectedModel: 'gpt-6-luna',
     majorSections: ['Learning Objectives', 'Exploration'],
     timedSections: [
       { title: 'Learning Objectives', minutes: 20 },
@@ -168,7 +168,7 @@ test('renderFallbackTemplate omits section markup for assignment drafts', () => 
     title: 'Lab Project',
     mode: 'assignment',
     durationMinutes: 90,
-    selectedModel: 'gpt-5-mini',
+    selectedModel: 'gpt-6-luna',
     majorSections: ['Learning Objectives', 'Exploration'],
     timedSections: [
       { title: 'Learning Objectives', minutes: 30 },

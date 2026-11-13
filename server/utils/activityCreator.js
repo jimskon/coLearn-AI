@@ -2,9 +2,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const OpenAI = require('openai');
 require('dotenv').config();
-const { envTokens } = require('./runtimeFeatures');
+const { envTokens, getAiModels, isReasoningModel, envReasoningEffort } = require('./runtimeFeatures');
 const { recordAiTokenLimit, responseHitLimit } = require('./auditLogger');
 
+// Creator reasoning effort (server/.env; see README, "AI models"). Blank = model default.
+const CREATOR_REASONING_EFFORT = envReasoningEffort('CREATOR_REASONING_EFFORT');
 const CREATOR_TEMPLATE_PATH = path.join(__dirname, '..', 'templates', 'activity_creator_template.txt');
 const MARKUP_HOUSE_STYLE_PATH = path.join(__dirname, '..', 'templates', 'activity_markup_house_style.txt');
 const DEFAULT_CREATOR_OPENAI_TIMEOUT_MS = 45000;
@@ -49,7 +51,7 @@ function buildActivityGenerationInstructions(modeOrFlag) {
   return [
     'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
     'Return only valid activity markup. Do not use Markdown code fences. Do not add commentary before or after the markup.',
-    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\language{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\questiontype{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aimodel{gpt-5-mini}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
+    'Use these commands when appropriate: \\title{...}, \\mode{...}, \\language{...}, \\studentlevel{...}, \\activitycontext{...}, \\retries{n}, \\section{...}, \\section{...}{minutes}, \\questiongroup{...}, \\question{...}, \\textresponse{n}, \\info{target,seconds}{...}, \\sampleresponses{...}, \\feedbackprompt{...}, \\followupprompt{...}, \\questiontype{...}, \\python ... \\endpython, \\pythonremote ... \\endpythonremote, \\cpp ... \\endcpp, \\ai{mode}, \\aititle{...}, \\aiprompt{...}, \\aiguardrail{...}, \\aicontext{...}, \\aiinput{n}, \\endai, \\endquestion, \\endquestiongroup.',
     'Only include \\info blocks if the creator explicitly asks for them.',
     'If you use \\info, only use these targets: questiongroup, question, textresponse, coderesponse, submitbutton, and aifeedback. Never use \\info{instructor,...}.',
     isTestMode
@@ -79,7 +81,7 @@ function buildActivityGenerationInstructions(modeOrFlag) {
     'If the creator specifies language constraints or allowed constructs, obey them exactly. Do not introduce unrelated syntax, libraries, or data structures.',
     'If you include multiple-choice questions, use \\multiplechoice{answer} only for questions with a real correct answer. For survey or opinion questions, keep \\multiplechoice{} blank and never invent a placeholder answer to satisfy validation.',
     'Do not use \\ai blocks unless the creator explicitly asks for inline AI interaction inside the activity.',
-    'If you do use an \\ai block, place it directly inside a \\questiongroup (between questions), not inside a \\question. If the model places it inside a question, move the whole AI block so it sits between questions before returning the draft. It is a learning tool, not a response: do not add \\textresponse, samples, feedback prompts, scores, or retries for the AI block itself. Keep it tightly scoped, include a guardrail, and use \\aimodel{gpt-5-mini} unless the creator requests the faster \\aimodel{gpt-4o-mini}.',
+    'If you do use an \\ai block, place it directly inside a \\questiongroup (between questions), not inside a \\question. If the model places it inside a question, move the whole AI block so it sits between questions before returning the draft. It is a learning tool, not a response: do not add \\textresponse, samples, feedback prompts, scores, or retries for the AI block itself. Keep it tightly scoped and include a guardrail. Do not add \\aimodel: the deployment default AI model is used.',
     'Use the compact house-style rules below as syntax guidance.',
     'For mode=group, use collaborative prompts and progression.',
     'For mode=playground, write an experimentation-first prompt sequence for instructor-led demonstration and student exploration. Playground work should feel saved and revisitable.',
@@ -173,7 +175,7 @@ function renderFallbackTemplate({
     .replace('__CLASS_LEVEL__', sanitizeHeaderValue(classLevel, 'Not specified'))
     .replace('__CLASS_TOPIC_DOMAIN__', sanitizeHeaderValue(classTopicDomain, 'Not specified'))
     .replace('__DURATION_MINUTES__', String(durationMinutes))
-    .replace('__SELECTED_MODEL__', sanitizeHeaderValue(selectedModel, 'gpt-5-mini'))
+    .replace('__SELECTED_MODEL__', sanitizeHeaderValue(selectedModel, getAiModels().creator[0]))
     .replace('__RETRIES_REQUIRED__', String(Math.max(0, Math.round(Number(retriesRequired) || 0))))
     .replace('__MAJOR_SECTIONS_BLOCK__', normalizeTextBlock(renderedMajorSections.join(', '), isSectionlessMode ? 'No sections requested.' : 'Not specified.'))
     .replace('__TIMED_SECTIONS_BLOCK__', normalizeTextBlock(
@@ -1113,8 +1115,10 @@ async function generateWithOpenAI({
     max_output_tokens: envTokens('CREATOR_DRAFT_TOKENS', 3500),
   };
 
-  if (!String(selectedModel || '').startsWith('gpt-5')) {
+  if (!isReasoningModel(selectedModel)) {
     request.temperature = 0.7;
+  } else if (CREATOR_REASONING_EFFORT) {
+    request.reasoning = { effort: CREATOR_REASONING_EFFORT };
   }
 
   const response = await withTimeout(
@@ -1245,7 +1249,8 @@ async function reviseQuestionWithOpenAI({
     text: { format: buildQuestionRevisionResponseFormat() },
     max_output_tokens: envTokens('CREATOR_REVISION_TOKENS', 3200),
   };
-  if (!String(selectedModel || '').startsWith('gpt-5')) request.temperature = 0.35;
+  if (!isReasoningModel(selectedModel)) request.temperature = 0.35;
+  else if (CREATOR_REASONING_EFFORT) request.reasoning = { effort: CREATOR_REASONING_EFFORT };
   const createResponse = (maxOutputTokens) => withTimeout(
     openai.responses.create({ ...request, max_output_tokens: maxOutputTokens }),
     timeoutMs,
@@ -1348,7 +1353,7 @@ async function reviseQuestionDraft(input) {
     const raw = await reviseQuestionWithOpenAI({
       questionMarkup,
       revisionRequest,
-      selectedModel: input.selectedModel || 'gpt-5-mini',
+      selectedModel: input.selectedModel || getAiModels().creator[0],
       title: input.title,
       classLevel: input.classLevel,
       classTopicDomain: input.classTopicDomain,

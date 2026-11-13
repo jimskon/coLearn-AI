@@ -694,10 +694,26 @@ export default function FileBlock({
   }, [savedMode, filename, initialContent, fileContents, setFileContents]);
 
   // Saved mode: the runner must compile the version on screen (the active
-  // student's, or this observer's sandbox copy).
+  // student's, or this observer's sandbox copy). When a run writes the file,
+  // fileContents changes to something we never synced: save that as the
+  // student's text instead of overwriting it.
+  const syncedRef = useRef(null); // { value } last seen in fileContents
   useEffect(() => {
     if (!savedMode || !setFileContents) return;
-    if (fileContents && fileContents[filename] === effective) return;
+    const current = fileContents?.[filename];
+    const last = syncedRef.current;
+    syncedRef.current = { value: current };
+    if (
+      editable &&
+      last &&
+      current !== undefined &&
+      current !== last.value &&
+      current !== effective
+    ) {
+      onTextChange(current);
+      return;
+    }
+    if (current === effective) return;
     setFileContents(prev => (
       prev && prev[filename] === effective ? prev : { ...prev, [filename]: effective }
     ));

@@ -6,7 +6,7 @@
 //   group / demo / playground  -> group Check (/evaluate-response, /evaluate-code)
 //   test / practice / assignment -> scored grading (/grade-test-question)
 import React, { useMemo, useRef, useState } from 'react';
-import { Modal, Button, Table, Badge, Alert, ProgressBar } from 'react-bootstrap';
+import { Modal, Button, ButtonGroup, Table, Badge, Alert, ProgressBar } from 'react-bootstrap';
 import { parseSheetToBlocks } from '../../utils/parseSheet';
 import { runSkulptCode } from '../../utils/runSkulptCode';
 import { API_BASE_URL } from '../../config';
@@ -234,6 +234,7 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
   const [results, setResults] = useState([]);
   const [error, setError] = useState('');
   const stopRef = useRef(false);
+  const [kind, setKind] = useState('correct'); // 'correct' | 'nearmiss'
   const ctxRef = useRef(null); // file state at the end of the last run, for retries
 
   const parsed = useMemo(
@@ -247,63 +248,50 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
   const questions = blocks.filter((b) => b.type === 'question');
   const parseErrors = (parsed?.issues || []).filter((i) => i.severity === 'error');
 
-  async function trialQuestion(q, ctx) {
+  // What a question needs, or a finished row when it is not checked.
+  function prepare(q) {
     const qid = `${q.groupId}${q.id}`;
-    const base = { qid, status: 'skip', detail: '', answer: null, output: '', note: '', feedback: '', score: '' };
+    const base = { qid, status: 'skip', detail: '', feedback: '', score: '', attempts: [] };
     const max = maxPoints(q.scores);
 
     if (q.multipleChoice?.choices?.length) {
       const mc = q.multipleChoice;
       if (!mc.correctAnswer && !mc.hasChoiceScores) {
-        return { ...base, detail: 'Survey question (no keyed answer); not checked.' };
+        return { done: { ...base, detail: 'Survey question (no keyed answer); not checked.' } };
       }
-      if (graded && max <= 0) return { ...base, detail: 'No \\score, so it is not graded in this mode.' };
+      if (graded && max <= 0) return { done: { ...base, detail: 'No \\score, so it is not graded in this mode.' } };
       return {
-        ...base,
-        status: 'pass',
-        detail: mc.correctAnswer
-          ? `Multiple choice, keyed to "${mc.correctAnswer}". Scored without AI.`
-          : `Multiple choice, scored by choice points (best: ${mc.maxChoicePoints}). Scored without AI.`,
+        done: {
+          ...base,
+          status: 'pass',
+          detail: mc.correctAnswer
+            ? `Multiple choice, keyed to "${mc.correctAnswer}". Scored without AI.`
+            : `Multiple choice, scored by choice points (best: ${mc.maxChoicePoints}). Scored without AI.`,
+        },
       };
     }
-    if (graded && max <= 0) return { ...base, detail: 'No \\score, so it is not graded in this mode.' };
+    if (graded && max <= 0) return { done: { ...base, detail: 'No \\score, so it is not graded in this mode.' } };
 
     const box = codeBoxFor(q);
     const wantsText = wantsTextFor(q);
     const tableText = q.hasTableResponse ? tableTextFor(q) : '';
     if (!box && !wantsText && !tableText) {
-      return { ...base, detail: 'Nothing for a student to answer here (for example, an AI conversation); not checked.' };
+      return { done: { ...base, detail: 'Nothing for a student to answer here (for example, an AI conversation); not checked.' } };
     }
+    return { qid, base, max, box, wantsText, tableText, questionText: stripHtml(q.prompt) || `Question ${qid}` };
+  }
 
-    // 1) A correct answer.
-    const questionText = stripHtml(q.prompt) || `Question ${qid}`;
-    const fileList = Object.entries(ctx.files).map(([name, f]) => ({ name, content: f.content, readonly: f.readonly }));
-    const answer = await postJson('/api/ai/trial-answer', {
-      questionText,
-      activityContext: ctx.headers.activitycontext || ctx.headers.title || '',
-      studentLevel: ctx.headers.studentlevel || '',
-      language: meta.language || '',
-      wantsText,
-      tableText,
-      code: box ? { lang: box.lang, starter: box.starter } : null,
-      samples: q.samples || [],
-      feedbackPrompt: q.feedback?.[0] || '',
-      scores: q.scores || {},
-      files: fileList,
-    }, 'Writing the answer');
-
-    // Edits to files stay in place for later questions, as they do for students.
-    for (const [name, content] of Object.entries(answer.files || {})) {
-      if (ctx.files[name]) ctx.files[name] = { ...ctx.files[name], content };
-    }
-    const contents = Object.fromEntries(Object.entries(ctx.files).map(([n, f]) => [n, f.content]));
-    const supportingFiles = Object.entries(ctx.files).map(([name, f]) => ({
+  // Run one answer's code like the Run button and send it to this mode's
+  // grader. files: the activity files as this answer leaves them.
+  async function runAndGrade(q, prep, ctx, answer, files) {
+    const { qid, box, max, wantsText, questionText } = prep;
+    const contents = Object.fromEntries(Object.entries(files).map(([n, f]) => [n, f.content]));
+    const supportingFiles = Object.entries(files).map(([name, f]) => ({
       name,
       content: f.content,
       edited: f.content.trimEnd() !== (ctx.starters[name]?.content || '').trimEnd(),
     }));
 
-    // 2) Run the code like the Run button.
     let output = '';
     let note = '';
     if (box && answer.code) {
@@ -323,10 +311,8 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
         }
       }
     }
+    const att = { answer, output, note };
 
-    const shown = { ...base, answer, output, note, tokens: answer.aiTokens };
-
-    // 3) Grade it with this mode's grader.
     if (graded) {
       const codeCells = box && answer.code ? [{ code: answer.code, lang: box.lang, label: `${qid}code1` }] : [];
       const codeRunPts = bandPoints(q.scores?.code) + bandPoints(q.scores?.output);
@@ -340,15 +326,13 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
         supportingFiles: codeRunPts > 0 ? supportingFiles : [],
       }, 'Grading');
       const earned = (Number(g.codeScore) || 0) + (Number(g.runScore) || 0) + (Number(g.responseScore) || 0);
-      const feedback = [g.codeFeedback, g.runFeedback, g.responseFeedback].map((s) => String(s || '').trim()).filter(Boolean).join('\n\n');
-      if (g.gradingFailed) return { ...shown, status: 'error', score: `${earned}/${max}`, feedback, detail: 'The grader did not finish.' };
-      const pass = earned >= max;
       return {
-        ...shown,
-        status: pass ? 'pass' : 'fail',
+        ...att,
+        earned,
+        full: earned >= max,
         score: `${earned}/${max}`,
-        feedback,
-        detail: pass ? 'A correct answer earned full marks.' : `A correct answer earned only ${earned} of ${max}.`,
+        failed: !!g.gradingFailed,
+        feedback: [g.codeFeedback, g.runFeedback, g.responseFeedback].map((x) => String(x || '').trim()).filter(Boolean).join('\n\n'),
       };
     }
 
@@ -380,14 +364,16 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
         },
         codeContext: (q.codeBlocks || []).map((b) => b.content).filter(Boolean).join('\n\n'),
       }, 'Grading (group Check)');
+    } else if (sameCode(answer.code, box.starter)) {
+      // The run page refuses unchanged starter code before any AI call.
+      return {
+        ...att,
+        accepted: false,
+        starterUnchanged: true,
+        score: 'not accepted',
+        feedback: 'Modify the starter program to solve the task, then submit again.',
+      };
     } else {
-      if (sameCode(answer.code, box.starter)) {
-        return {
-          ...shown,
-          status: 'fail',
-          detail: 'The correct answer leaves the starter code unchanged, but the group Check requires students to change the code.',
-        };
-      }
       g = await postJson('/api/ai/evaluate-code', {
         ...common,
         studentCode: answer.code,
@@ -398,17 +384,145 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
         supportingFiles: supportingFiles.filter((f) => f.content.trim()),
       }, 'Grading (group code Check)');
     }
-    const feedback = [g.feedback || g.comment, g.followup || g.followupQuestion]
-      .map((s) => String(s || '').trim()).filter(Boolean).join('\n\n');
     const accepted = g.accepted === true;
     return {
-      ...shown,
-      status: accepted ? 'pass' : 'fail',
+      ...att,
+      accepted,
       score: accepted ? 'accepted' : 'not accepted',
-      feedback,
-      detail: accepted ? 'A correct answer was accepted.' : 'A correct answer was not accepted.',
+      feedback: [g.feedback || g.comment, g.followup || g.followupQuestion]
+        .map((x) => String(x || '').trim()).filter(Boolean).join('\n\n'),
     };
   }
+
+  function answerRequest(prep, q, ctx, kind) {
+    const { box, wantsText, tableText, questionText } = prep;
+    return postJson('/api/ai/trial-answer', {
+      kind,
+      questionText,
+      activityContext: ctx.headers.activitycontext || ctx.headers.title || '',
+      studentLevel: ctx.headers.studentlevel || '',
+      language: meta.language || '',
+      wantsText,
+      tableText,
+      code: box ? { lang: box.lang, starter: box.starter } : null,
+      samples: q.samples || [],
+      feedbackPrompt: q.feedback?.[0] || '',
+      scores: q.scores || {},
+      files: Object.entries(ctx.files).map(([name, f]) => ({ name, content: f.content, readonly: f.readonly })),
+    }, kind === 'nearmiss' ? 'Writing the answers' : 'Writing the answer');
+  }
+
+  // The activity files with an answer's edits applied (ctx is not changed).
+  function filesWith(ctx, answer) {
+    const files = Object.fromEntries(Object.entries(ctx.files).map(([n, f]) => [n, { ...f }]));
+    for (const [name, content] of Object.entries(answer.files || {})) {
+      if (files[name]) files[name] = { ...files[name], content };
+    }
+    return files;
+  }
+
+  // Mode 1: one correct answer must pass.
+  async function trialCorrect(q, ctx) {
+    const prep = prepare(q);
+    if (prep.done) return prep.done;
+    const answer = await answerRequest(prep, q, ctx, 'correct');
+    // A correct answer's file edits stay for later questions, as for students.
+    ctx.files = filesWith(ctx, answer);
+    const r = await runAndGrade(q, prep, ctx, answer, ctx.files);
+    const attempts = [{ label: 'Correct answer', ...r }];
+    const row = { ...prep.base, attempts, tokens: answer.aiTokens, score: r.score, feedback: r.feedback };
+
+    if (graded) {
+      if (r.failed) return { ...row, status: 'error', detail: 'The grader did not finish.' };
+      return {
+        ...row,
+        status: r.full ? 'pass' : 'fail',
+        detail: r.full ? 'A correct answer earned full marks.' : `A correct answer earned only ${r.earned} of ${prep.max}.`,
+      };
+    }
+    if (r.starterUnchanged) {
+      return { ...row, status: 'fail', detail: 'The correct answer leaves the starter code unchanged, but the group Check requires students to change the code.' };
+    }
+    return {
+      ...row,
+      status: r.accepted ? 'pass' : 'fail',
+      detail: r.accepted ? 'A correct answer was accepted.' : 'A correct answer was not accepted.',
+    };
+  }
+
+  // Mode 2: a near miss must be caught with feedback that points at the
+  // mistake (without giving the answer where feedback scaffolds), and the
+  // corrected answer must then pass.
+  async function trialNearMiss(q, ctx) {
+    const prep = prepare(q);
+    if (prep.done) return prep.done;
+    const pair = await answerRequest(prep, q, ctx, 'nearmiss');
+
+    const wrong = await runAndGrade(q, prep, ctx, pair.nearMiss, filesWith(ctx, pair.nearMiss));
+    ctx.files = filesWith(ctx, pair.correct);
+    const right = await runAndGrade(q, prep, ctx, pair.correct, ctx.files);
+
+    const scaffolds = !graded || mode === 'practice';
+    const caught = graded ? !wrong.full : !wrong.accepted;
+    const passedFix = graded ? right.full : right.accepted;
+
+    let judge = null;
+    if (caught && !wrong.starterUnchanged) {
+      judge = await postJson('/api/ai/trial-judge', {
+        questionText: prep.questionText,
+        mistake: pair.mistake,
+        answerText: pair.nearMiss.responseText,
+        answerCode: pair.nearMiss.code,
+        feedback: wrong.feedback,
+      }, 'Checking the feedback');
+    }
+
+    const checks = [
+      {
+        ok: caught,
+        text: graded
+          ? (caught ? `Near miss lost points (${wrong.score}).` : `Near miss got full marks (${wrong.score}); the grading is too lenient.`)
+          : (caught ? 'Near miss was not accepted.' : 'Near miss was accepted; the Check is too lenient.'),
+      },
+    ];
+    if (judge) {
+      checks.push({
+        ok: judge.pointsAtMistake,
+        text: judge.pointsAtMistake ? 'Feedback points at the mistake.' : `Feedback misses the mistake. ${judge.reason}`,
+      });
+      if (scaffolds) {
+        checks.push({
+          ok: !judge.revealsAnswer,
+          text: judge.revealsAnswer ? `Feedback gives the answer away. ${judge.reason}` : 'Feedback does not give the answer away.',
+        });
+      }
+    }
+    checks.push({
+      ok: passedFix && !right.starterUnchanged,
+      text: right.starterUnchanged
+        ? 'The fixed answer leaves the starter code unchanged, which the group Check refuses.'
+        : graded
+          ? (passedFix ? `Fixed answer earned full marks (${right.score}).` : `Fixed answer earned only ${right.score}.`)
+          : (passedFix ? 'Fixed answer was accepted.' : 'Fixed answer was not accepted.'),
+    });
+
+    const failedGrade = wrong.failed || right.failed;
+    return {
+      ...prep.base,
+      status: failedGrade ? 'error' : checks.every((c) => c.ok) ? 'pass' : 'fail',
+      score: `${wrong.score} → ${right.score}`,
+      detail: failedGrade ? 'The grader did not finish.' : '',
+      checks,
+      mistake: pair.mistake,
+      tokens: pair.aiTokens,
+      attempts: [
+        { label: 'Near miss', ...wrong },
+        { label: 'Fixed answer', ...right },
+      ],
+    };
+  }
+
+  const trialQuestion = (q, ctx) => (kind === 'nearmiss' ? trialNearMiss(q, ctx) : trialCorrect(q, ctx));
 
   async function start() {
     stopRef.current = false;
@@ -477,14 +591,43 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
   return (
     <Modal show={show} onHide={close} size="xl" backdrop={running ? 'static' : true}>
       <Modal.Header closeButton={!running}>
-        <Modal.Title>Trial Run: correct answers</Modal.Title>
+        <Modal.Title>Trial Run</Modal.Title>
       </Modal.Header>
       <Modal.Body>
+        <ButtonGroup size="sm" className="mb-2">
+          <Button
+            variant={kind === 'correct' ? 'primary' : 'outline-primary'}
+            onClick={() => { setKind('correct'); setResults([]); }}
+            disabled={running}
+          >
+            Correct answers
+          </Button>
+          <Button
+            variant={kind === 'nearmiss' ? 'primary' : 'outline-primary'}
+            onClick={() => { setKind('nearmiss'); setResults([]); }}
+            disabled={running}
+          >
+            Near miss, then fixed
+          </Button>
+        </ButtonGroup>
         <p className="mb-2">
-          The AI answers every question correctly, runs any code, and sends the answer to the
-          {graded
-            ? ` scored grading used in ${mode} mode. Each question should get full marks.`
-            : ' group Check. Each answer should be accepted.'}
+          {kind === 'correct' ? (
+            <>
+              The AI answers every question correctly, runs any code, and sends the answer to the
+              {graded
+                ? ` scored grading used in ${mode} mode. Each question should get full marks.`
+                : ' group Check. Each answer should be accepted.'}
+            </>
+          ) : (
+            <>
+              For each question the AI first submits a near miss (one realistic mistake), then the fixed answer.
+              {graded
+                ? ' The near miss should lose points, with feedback that points at the mistake'
+                : ' The near miss should not be accepted, and its feedback should point at the mistake'}
+              {graded && mode !== 'practice' ? '.' : ' without giving the answer away.'}
+              {graded ? ' The fixed answer should get full marks.' : ' The fixed answer should be accepted.'}
+            </>
+          )}
           {' '}Uses the text in the editor. Nothing is saved.
         </p>
         <p className="text-muted small mb-3">
@@ -538,34 +681,47 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
                   </td>
                   <td>{r.score}</td>
                   <td>
-                    <div>{r.detail}</div>
-                    {r.note && <div className="small text-warning-emphasis">{r.note}</div>}
-                    {r.feedback && (
+                    {r.detail && <div>{r.detail}</div>}
+                    {r.checks?.map((c, i) => (
+                      <div key={i} className={c.ok ? 'text-success' : 'text-danger'}>
+                        {c.ok ? '✓' : '✗'} {c.text}
+                      </div>
+                    ))}
+                    {r.mistake && <div className="small text-muted mt-1">Planted mistake: {r.mistake}</div>}
+                    {(r.attempts || []).length === 1 && r.feedback && (
                       <div className="small mt-1" style={{ whiteSpace: 'pre-wrap' }}>
                         <strong>Grader feedback:</strong> {r.feedback}
                       </div>
                     )}
-                    {r.answer && (
-                      <details className="small mt-1">
-                        <summary>Answer used{r.output ? ' and output' : ''}</summary>
-                        {r.answer.responseText && (
-                          <pre className="bg-light p-2 mb-1" style={{ whiteSpace: 'pre-wrap' }}>{r.answer.responseText}</pre>
+                    {(r.attempts || []).map((a, i) => (
+                      <details key={i} className="small mt-1" open={r.attempts.length > 1 && i === 0 && r.status === 'fail'}>
+                        <summary>
+                          {a.label}: {a.score}
+                          {a.note ? ` · ${a.note}` : ''}
+                        </summary>
+                        {r.attempts.length > 1 && a.feedback && (
+                          <div className="mb-1" style={{ whiteSpace: 'pre-wrap' }}>
+                            <strong>Grader feedback:</strong> {a.feedback}
+                          </div>
                         )}
-                        {r.answer.code && <pre className="bg-light p-2 mb-1">{r.answer.code}</pre>}
-                        {r.answer.stdin?.length > 0 && <div>Input: {r.answer.stdin.join(' ⏎ ')}</div>}
-                        {Object.keys(r.answer.files || {}).length > 0 && (
-                          <div>Edited files: {Object.keys(r.answer.files).join(', ')}</div>
+                        {a.answer?.responseText && (
+                          <pre className="bg-light p-2 mb-1" style={{ whiteSpace: 'pre-wrap' }}>{a.answer.responseText}</pre>
                         )}
-                        {r.output && (
+                        {a.answer?.code && <pre className="bg-light p-2 mb-1">{a.answer.code}</pre>}
+                        {a.answer?.stdin?.length > 0 && <div>Input: {a.answer.stdin.join(' ⏎ ')}</div>}
+                        {Object.keys(a.answer?.files || {}).length > 0 && (
+                          <div>Edited files: {Object.keys(a.answer.files).join(', ')}</div>
+                        )}
+                        {a.output && (
                           <>
                             <div className="mt-1">Output:</div>
-                            <pre className="bg-dark text-light p-2 mb-1">{r.output}</pre>
+                            <pre className="bg-dark text-light p-2 mb-1">{a.output}</pre>
                           </>
                         )}
-                        {r.tokens?.limit && (
-                          <div className="text-muted">Answer tokens: {r.tokens.used ?? '?'}/{r.tokens.limit}</div>
-                        )}
                       </details>
+                    ))}
+                    {r.tokens?.limit && (
+                      <div className="small text-muted">Answer tokens: {r.tokens.used ?? '?'}/{r.tokens.limit}</div>
                     )}
                   </td>
                 </tr>

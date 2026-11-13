@@ -491,23 +491,53 @@ async function practiceMultipleChoiceHint({
   }
 }
 
-// ---------------- TRIAL RUN: write a correct student answer ----------------
-// Instructor tool (Trial Run in the activity editor). Writes the answer a
-// strong student would give to one question, so the editor can run it and
-// send it to the same graders students use. Nothing is saved.
+// ---------------- TRIAL RUN (instructor tool in the Creator Workbench) ----------------
+// Writes answers to one question so the browser can run them and send them to
+// the graders students use. kind "correct": one correct answer. kind
+// "nearmiss": a realistic wrong answer (one mistake) plus the correct one.
+// trialJudgeHttp then judges the feedback the near miss got. Nothing is saved.
 const TRIAL_ANSWER_TOKENS = envTokens('TRIAL_ANSWER_TOKENS', 4000);
 const TRIAL_ROLES = new Set(["instructor", "root", "creator"]);
 
-async function trialAnswerHttp(req, res) {
+function trialAuthError(req, res) {
   if (!req.user) {
-    return res.status(401).json({ error: "Trial Run: the server did not see a signed-in user on this request." });
+    res.status(401).json({ error: "Trial Run: the server did not see a signed-in user on this request." });
+    return true;
   }
   if (!TRIAL_ROLES.has(String(req.user.role || "").toLowerCase())) {
-    return res.status(403).json({ error: `Trial Run is for instructors (your role: ${req.user.role || "none"}).` });
+    res.status(403).json({ error: `Trial Run is for instructors (your role: ${req.user.role || "none"}).` });
+    return true;
   }
+  return false;
+}
+
+const clip = (s, n = 6000) => String(s ?? "").slice(0, n);
+
+function trialAiError(res, err, what) {
+  console.error(`❌ ${what} failed:`, err?.message || err);
+  const status = err?.code === "AI_TOKEN_LIMIT" ? 503 : 500;
+  return res.status(status).json({ error: err?.message || `Could not finish: ${what}.` });
+}
+
+// One answer from the model's JSON, keeping only editable files.
+function cleanTrialAnswer(obj, editable) {
+  const files = {};
+  for (const [name, content] of Object.entries(obj?.files || {})) {
+    if (editable.has(name) && typeof content === "string") files[name] = content;
+  }
+  return {
+    responseText: typeof obj?.responseText === "string" ? obj.responseText : "",
+    code: typeof obj?.code === "string" ? obj.code : "",
+    stdin: Array.isArray(obj?.stdin) ? obj.stdin.map(String).slice(0, 200) : [],
+    files,
+  };
+}
+
+async function trialAnswerHttp(req, res) {
+  if (trialAuthError(req, res)) return;
 
   const b = req.body || {};
-  const clip = (s, n = 6000) => String(s ?? "").slice(0, n);
+  const nearMiss = b.kind === "nearmiss";
   const questionText = clip(stripHtml(b.questionText || ""));
   if (!questionText.trim()) {
     return res.status(400).json({ error: "questionText is required" });
@@ -527,10 +557,24 @@ async function trialAnswerHttp(req, res) {
 
   const sys = [
     "You are testing a classroom activity before students see it.",
-    "Write the answer a strong student would submit for ONE question.",
-    "The answer must be fully correct and complete, follow every instruction in the question, and agree with the sample answer and grading guidance when they are given.",
+    nearMiss
+      ? "Write TWO answers a student might submit for ONE question: first a near miss, then the fully correct answer."
+      : "Write the answer a strong student would submit for ONE question.",
+    nearMiss
+      ? "The near miss must be something a real student at this level would plausibly submit: mostly right, with exactly ONE realistic mistake (a common misconception, an off-by-one, a wrong operator or condition, a missing step, or an incomplete or partly wrong explanation). It must be wrong enough that a careful grader should not give full credit, but not absurd or blank. If there is code, the mistake should usually be in the code."
+      : "",
+    "The correct answer must be fully correct and complete, follow every instruction in the question, and agree with the sample answer and grading guidance when they are given.",
     "Write at the level of the stated students: correct, clear, and no more advanced than the question needs.",
     "Return only JSON.",
+  ].filter(Boolean).join("\n");
+
+  const answerShape = [
+    "{",
+    '    "responseText": string,   // the written answer, or the markdown table; "" if neither is asked for',
+    '    "code": string,           // the complete code for the code box, built from the starter code; "" if there is no code box',
+    '    "stdin": [string],        // input lines the program reads, in order; [] if none',
+    '    "files": { "name": string } // full new contents of editable files the question asks the student to change; {} if none',
+    "  }",
   ].join("\n");
 
   const user = [
@@ -559,37 +603,90 @@ async function trialAnswerHttp(req, res) {
         ]
       : []),
     "Return strict JSON only:",
-    "{",
-    '  "responseText": string,   // the written answer, or the markdown table; "" if neither is asked for',
-    '  "code": string,           // the complete code for the code box, built from the starter code; "" if there is no code box',
-    '  "stdin": [string],        // input lines the program reads, in order; [] if none',
-    '  "files": { "name": string } // full new contents of editable files the question asks the student to change; {} if none',
-    "}",
+    nearMiss
+      ? [
+          "{",
+          '  "mistake": string,  // one sentence: the single mistake in the near miss',
+          `  "nearMiss": ${answerShape},`,
+          `  "correct": ${answerShape}`,
+          "}",
+        ].join("\n")
+      : answerShape.replace(/^ {2}/gm, ""),
+  ].filter((line) => line !== "").join("\n");
+
+  // A near miss writes two answers, so it gets twice the room.
+  const limit = nearMiss ? TRIAL_ANSWER_TOKENS * 2 : TRIAL_ANSWER_TOKENS;
+  try {
+    const obj = await requestJsonGrade([
+      { role: "system", content: sys },
+      { role: "user", content: user },
+    ], limit, { setting: "TRIAL_ANSWER_TOKENS", where: "trial run answer" });
+
+    const editable = new Set(files.filter((f) => !f.readonly).map((f) => f.name));
+    const aiTokens = { used: obj?._tokensUsed ?? null, limit };
+    if (nearMiss) {
+      return res.json({
+        mistake: typeof obj?.mistake === "string" ? obj.mistake : "",
+        nearMiss: cleanTrialAnswer(obj?.nearMiss, editable),
+        correct: cleanTrialAnswer(obj?.correct, editable),
+        aiTokens,
+      });
+    }
+    return res.json({ ...cleanTrialAnswer(obj, editable), aiTokens });
+  } catch (err) {
+    return trialAiError(res, err, "trial run answer");
+  }
+}
+
+// Judges the feedback a near miss received: does it point at the planted
+// mistake, and (where feedback must scaffold) does it give the answer away?
+async function trialJudgeHttp(req, res) {
+  if (trialAuthError(req, res)) return;
+
+  const b = req.body || {};
+  const feedback = clip(stripHtml(b.feedback || ""), 4000).trim();
+  if (!feedback) {
+    return res.json({ pointsAtMistake: false, revealsAnswer: false, reason: "The near miss got no feedback." });
+  }
+
+  const sys = [
+    "You review the feedback an automatic grader gave a student, to check the grader before students use it.",
+    "You are told the question, the one mistake the student's answer contains, the student's answer, and the feedback.",
+    "Decide two things:",
+    "1. pointsAtMistake: does the feedback steer the student toward that specific mistake (naming it, or asking a question or giving a hint about it)? Generic encouragement or comments about other things do not count.",
+    "2. revealsAnswer: does the feedback give the correct answer away, for example by stating the corrected code, the right value, or the full correct explanation, instead of letting the student find it?",
+    "Return only JSON.",
+  ].join("\n");
+
+  const user = [
+    "Question:",
+    clip(stripHtml(b.questionText || ""), 4000),
+    "",
+    `The mistake: ${clip(b.mistake, 1000) || "(not stated)"}`,
+    "",
+    "Student's answer:",
+    clip(b.answerText, 4000) || "(none)",
+    b.answerCode ? `\nStudent's code:\n${clip(b.answerCode)}` : "",
+    "",
+    "Feedback the student received:",
+    feedback,
+    "",
+    'Return strict JSON only: { "pointsAtMistake": boolean, "revealsAnswer": boolean, "reason": string }  // reason: one short sentence',
   ].filter((line) => line !== "").join("\n");
 
   try {
     const obj = await requestJsonGrade([
       { role: "system", content: sys },
       { role: "user", content: user },
-    ], TRIAL_ANSWER_TOKENS, { setting: "TRIAL_ANSWER_TOKENS", where: "trial run answer" });
-
-    const editable = new Set(files.filter((f) => !f.readonly).map((f) => f.name));
-    const outFiles = {};
-    for (const [name, content] of Object.entries(obj?.files || {})) {
-      if (editable.has(name) && typeof content === "string") outFiles[name] = content;
-    }
+    ], TRIAL_ANSWER_TOKENS, { setting: "TRIAL_ANSWER_TOKENS", where: "trial run feedback check" });
     return res.json({
-      responseText: typeof obj?.responseText === "string" ? obj.responseText : "",
-      code: typeof obj?.code === "string" ? obj.code : "",
-      stdin: Array.isArray(obj?.stdin) ? obj.stdin.map(String).slice(0, 200) : [],
-      files: outFiles,
-      aiTokens: { used: obj?._tokensUsed ?? null, limit: TRIAL_ANSWER_TOKENS },
+      pointsAtMistake: obj?.pointsAtMistake === true,
+      revealsAnswer: obj?.revealsAnswer === true,
+      reason: typeof obj?.reason === "string" ? obj.reason : "",
     });
   } catch (err) {
-    console.error("❌ trialAnswerHttp failed:", err?.message || err);
-    const status = err?.code === "AI_TOKEN_LIMIT" ? 503 : 500;
-    return res.status(status).json({ error: err?.message || "Could not write a trial answer." });
+    return trialAiError(res, err, "trial run feedback check");
   }
 }
 
-module.exports = { gradeTestQuestion, gradeTestQuestionHttp, practiceMultipleChoiceHint, requestJsonGrade, trialAnswerHttp };
+module.exports = { gradeTestQuestion, gradeTestQuestionHttp, practiceMultipleChoiceHint, requestJsonGrade, trialAnswerHttp, trialJudgeHttp };

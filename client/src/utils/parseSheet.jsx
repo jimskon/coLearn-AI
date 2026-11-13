@@ -649,8 +649,12 @@ export default function FileBlock({
   headerExtra = null,
 }) {
   const savedMode = typeof onTextChange === 'function';
+  // Saved mode: text a program run wrote that this viewer can't save
+  // (observers, instructors following). Shown until the saved text changes.
+  const [runText, setRunText] = useState(null);
+  const savedText = value ?? initialContent;
   const effective = savedMode
-    ? (value ?? initialContent)
+    ? (runText ?? savedText)
     : (fileContents && Object.prototype.hasOwnProperty.call(fileContents, filename)
       ? fileContents[filename]
       : initialContent);
@@ -694,10 +698,27 @@ export default function FileBlock({
   }, [savedMode, filename, initialContent, fileContents, setFileContents]);
 
   // Saved mode: the runner must compile the version on screen (the active
-  // student's, or this observer's sandbox copy).
+  // student's, or this observer's sandbox copy). When a run writes the file,
+  // fileContents changes to something we never synced: save that as the
+  // student's text instead of overwriting it.
+  const syncedRef = useRef(null); // { value } last seen in fileContents
+  useEffect(() => { setRunText(null); }, [savedText]);
   useEffect(() => {
     if (!savedMode || !setFileContents) return;
-    if (fileContents && fileContents[filename] === effective) return;
+    const current = fileContents?.[filename];
+    const last = syncedRef.current;
+    syncedRef.current = { value: current };
+    if (
+      last &&
+      current !== undefined &&
+      current !== last.value &&
+      current !== effective
+    ) {
+      if (editable) onTextChange(current);
+      else setRunText(current);
+      return;
+    }
+    if (current === effective) return;
     setFileContents(prev => (
       prev && prev[filename] === effective ? prev : { ...prev, [filename]: effective }
     ));

@@ -499,8 +499,11 @@ const TRIAL_ANSWER_TOKENS = envTokens('TRIAL_ANSWER_TOKENS', 4000);
 const TRIAL_ROLES = new Set(["instructor", "root", "creator"]);
 
 async function trialAnswerHttp(req, res) {
-  if (!TRIAL_ROLES.has(String(req.user?.role || "").toLowerCase())) {
-    return res.status(403).json({ error: "Trial Run is for instructors." });
+  if (!req.user) {
+    return res.status(401).json({ error: "Trial Run: the server did not see a signed-in user on this request." });
+  }
+  if (!TRIAL_ROLES.has(String(req.user.role || "").toLowerCase())) {
+    return res.status(403).json({ error: `Trial Run is for instructors (your role: ${req.user.role || "none"}).` });
   }
 
   const b = req.body || {};

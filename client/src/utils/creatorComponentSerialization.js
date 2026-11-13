@@ -294,10 +294,13 @@ export function serializeQuestionComponent(sourceText, block, edits, selectedCod
   return replaceRange(sourceText, meta.questionLine, meta.endQuestionLine, serialized);
 }
 
-export function serializeAiComponent(sourceText, block, edits, defaultModel, allowedModels) {
+// allowedModels: AI_BLOCK_MODELS from the server. '' (default) writes no
+// \aimodel line; the block's existing model is kept even if no longer listed.
+export function serializeAiComponent(sourceText, block, edits, allowedModels = []) {
   const meta = block?.sourceMeta;
   if (!meta?.aiLine || !meta?.endAiLine) return sourceText;
-  const model = allowedModels.some((option) => option.value === edits?.model) ? edits.model : defaultModel;
+  const requested = String(edits?.model || '').trim();
+  const model = allowedModels.includes(requested) || requested === String(block?.model || '') ? requested : '';
   const title = String(edits?.title || '').trim();
   const prompt = String(edits?.prompt || '').trim();
   const guardrail = String(edits?.guardrail || '').trim();
@@ -308,7 +311,7 @@ export function serializeAiComponent(sourceText, block, edits, defaultModel, all
   const mode = String(edits?.mode || 'explain').trim().toLowerCase() || 'explain';
   const serialized = [
     `\\ai{${mode}}`,
-    ...(meta.modelLine || model !== block?.model ? [`\\aimodel{${model}}`] : []),
+    ...(model && (meta.modelLine || model !== block?.model) ? [`\\aimodel{${model}}`] : []),
     ...(title && (meta.titleLine || title !== String(block?.title || '').trim()) ? [`\\aititle{${title}}`] : []),
     ...(prompt || meta.promptLine ? [`\\aiprompt{${prompt}}`] : []),
     ...(guardrail || meta.guardrailLine ? [`\\aiguardrail{${guardrail}}`] : []),

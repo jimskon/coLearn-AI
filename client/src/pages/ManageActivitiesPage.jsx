@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useUser } from '../context/UserContext';
 import { API_BASE_URL } from '../config';
+import useRuntimeFeatures, { modelMenuOptions } from '../hooks/useRuntimeFeatures';
 import {
   Alert,
   Badge,
@@ -39,7 +40,7 @@ const emptyCreateDraft = {
   title: '',
   duration_minutes: '45',
   mode: 'group',
-  selected_model: 'gpt-5-mini',
+  selected_model: '', // '' = first of CREATOR_MODELS (server/.env)
   use_timed_sections: false,
   retries_required: '3',
   major_sections: [
@@ -59,13 +60,6 @@ const emptyCreateDraft = {
   description: '',
 };
 
-const creatorModelOptions = [
-  { value: 'gpt-4o-mini', label: 'gpt-4o-mini', note: 'Fastest, lowest cost' },
-  { value: 'gpt-5-mini', label: 'gpt-5-mini', note: 'Better reasoning, moderate cost' },
-  { value: 'gpt-4o', label: 'gpt-4o', note: 'Strong general model, higher cost' },
-  { value: 'gpt-5.1', label: 'gpt-5.1', note: 'High-quality reasoning, higher cost' },
-  { value: 'gpt-5.2', label: 'gpt-5.2', note: 'Best quality, highest cost' },
-];
 
 const majorSectionOptions = [
   'Learning Objectives',
@@ -166,6 +160,7 @@ function cloneActivityDefaults(activity) {
 
 export default function ManageActivitiesPage() {
   const { id: classId } = useParams();
+  const { models: runtimeModels } = useRuntimeFeatures();
   const { user } = useUser();
   const navigate = useNavigate();
   const location = useLocation();
@@ -1211,9 +1206,9 @@ export default function ManageActivitiesPage() {
               value={createDraft.selected_model}
               onChange={handleCreateDraftFieldChange}
             >
-              {creatorModelOptions.map((option) => (
+              {modelMenuOptions(runtimeModels.creator, createDraft.selected_model).map((option) => (
                 <option key={option.value} value={option.value}>
-                  {option.label} — {option.note}
+                  {option.label}
                 </option>
               ))}
             </Form.Select>

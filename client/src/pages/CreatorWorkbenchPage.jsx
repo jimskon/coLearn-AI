@@ -30,11 +30,9 @@ import {
 import { useUser } from '../context/UserContext';
 import { formatLocalDateTime } from '../utils/time';
 import { API_BASE_URL } from '../config';
-import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
+import useRuntimeFeatures, { modelMenuOptions } from '../hooks/useRuntimeFeatures';
 import {
-  INLINE_AI_DEFAULT_MODEL,
   INLINE_AI_MODE_GUIDE,
-  INLINE_AI_MODEL_OPTIONS,
   parseSheetToBlocks,
   renderBlocks,
 } from '../utils/parseSheet';
@@ -62,7 +60,7 @@ const emptyDraft = {
   title: '',
   duration_minutes: '45',
   mode: 'group',
-  selected_model: 'gpt-5-mini',
+  selected_model: '', // '' = first of CREATOR_MODELS (server/.env)
   major_sections: [
     'Learning Objectives',
     'Exploration',
@@ -73,13 +71,6 @@ const emptyDraft = {
   description: '',
 };
 
-const creatorModelOptions = [
-  { value: 'gpt-4o-mini', label: 'gpt-4o-mini', note: 'fast' },
-  { value: 'gpt-5-mini', label: 'gpt-5-mini', note: 'balanced' },
-  { value: 'gpt-4o', label: 'gpt-4o', note: 'strong' },
-  { value: 'gpt-5.1', label: 'gpt-5.1', note: 'high quality' },
-  { value: 'gpt-5.2', label: 'gpt-5.2', note: 'highest quality' },
-];
 
 const emptyAdvancedDraft = {
   // Filled from the deployment default once /api/runtime/config answers. A
@@ -329,9 +320,7 @@ function buildQuestionGroupInspectorDraft(block, sourceText) {
 function buildAiInspectorDraft(block) {
   return {
     mode: String(block?.mode || 'explain').trim().toLowerCase() || 'explain',
-    model: INLINE_AI_MODEL_OPTIONS.some((option) => option.value === block?.model)
-      ? block.model
-      : INLINE_AI_DEFAULT_MODEL,
+    model: String(block?.model || ''), // '' = first of AI_BLOCK_MODELS
     title: htmlToEditorText(block?.title || 'AI Coach'),
     prompt: htmlToEditorText(block?.prompt),
     guardrail: htmlToEditorText(block?.guardrail),
@@ -644,7 +633,7 @@ export default function CreatorWorkbenchPage() {
   const [activity, setActivity] = useState(null);
   const [draft, setDraft] = useState(() => cloneEmptyDraft({
     duration_minutes: isDemoCreator ? '10' : emptyDraft.duration_minutes,
-    selected_model: isDemoCreator ? 'gpt-5-mini' : emptyDraft.selected_model,
+    selected_model: emptyDraft.selected_model,
   }));
   const [advancedDraft, setAdvancedDraft] = useState(() => cloneEmptyAdvancedDraft());
   const [rawText, setRawText] = useState('');
@@ -668,7 +657,7 @@ export default function CreatorWorkbenchPage() {
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
   const [fileContents, setFileContents] = useState({});
-  const { features: runtimeFeatures, defaults: runtimeDefaults } = useRuntimeFeatures();
+  const { features: runtimeFeatures, defaults: runtimeDefaults, models: runtimeModels } = useRuntimeFeatures();
 
   // What a new activity is stamped with when the author does not choose. The
   // server owns this (DEFAULT_ACTIVITY_LANGUAGE); 'English' only covers the
@@ -773,11 +762,12 @@ export default function CreatorWorkbenchPage() {
     setFileContents((prev) => updaterFn(prev));
   }, []);
 
+  // Demo creators get only the default (first, and normally cheapest) model.
   const creatorModelChoices = useMemo(() => (
     isDemoCreator
-      ? creatorModelOptions.filter((option) => ['gpt-5-mini', 'gpt-4o-mini'].includes(option.value))
-      : creatorModelOptions
-  ), [isDemoCreator]);
+      ? modelMenuOptions(runtimeModels.creator.slice(0, 1))
+      : modelMenuOptions(runtimeModels.creator, draft.selected_model)
+  ), [isDemoCreator, runtimeModels.creator, draft.selected_model]);
 
   useEffect(() => {
     if (sourceGutterRef.current && sourceTextareaRef.current) {
@@ -1086,10 +1076,10 @@ export default function CreatorWorkbenchPage() {
   }, [activity?.id, canManage]);
 
   useEffect(() => {
-    if (isDemoCreator && !['gpt-5-mini', 'gpt-4o-mini'].includes(draft.selected_model)) {
+    if (isDemoCreator && draft.selected_model) {
       setDraft((prev) => ({
         ...prev,
-        selected_model: 'gpt-5-mini',
+        selected_model: '',
       }));
     }
   }, [draft.selected_model, isDemoCreator]);
@@ -2057,8 +2047,7 @@ export default function CreatorWorkbenchPage() {
       rawText,
       selectedAiBlock,
       aiInspectorDraft,
-      INLINE_AI_DEFAULT_MODEL,
-      INLINE_AI_MODEL_OPTIONS,
+      runtimeModels.aiBlock,
     );
     return applyVisualSource(nextText, 'updating AI block settings');
   };
@@ -2499,7 +2488,7 @@ export default function CreatorWorkbenchPage() {
                   <Form.Label>Model</Form.Label>
                   <Form.Select value={draft.selected_model} onChange={(event) => handleDraftChange('selected_model', event.target.value)}>
                     {creatorModelChoices.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label} · {option.note}</option>
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </Form.Select>
                 </Form.Group>
@@ -2652,7 +2641,7 @@ export default function CreatorWorkbenchPage() {
                     disabled={revisionBusy || !!proposal}
                   >
                     {creatorModelChoices.map((option) => (
-                      <option key={option.value} value={option.value}>{option.label} · {option.note}</option>
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </Form.Select>
                 </Form.Group>
@@ -3015,11 +3004,11 @@ export default function CreatorWorkbenchPage() {
                               <Form.Group className="mb-3">
                                 <Form.Label>AI Model</Form.Label>
                                 <Form.Select
-                                  value={aiInspectorDraft?.model || INLINE_AI_DEFAULT_MODEL}
+                                  value={aiInspectorDraft?.model || ''}
                                   disabled={!aiInspectorDraft || !!proposal}
                                   onChange={(event) => setAiInspectorDraft((prev) => ({ ...(prev || {}), model: event.target.value }))}
                                 >
-                                  {INLINE_AI_MODEL_OPTIONS.map((option) => (
+                                  {modelMenuOptions(runtimeModels.aiBlock, aiInspectorDraft?.model).map((option) => (
                                     <option key={option.value} value={option.value}>{option.label}</option>
                                   ))}
                                 </Form.Select>

@@ -8,13 +8,10 @@ const { ensureDemoModeSchema } = require('../utils/demoModeSchema');
 const { ensureActivitySourceSchema } = require('../utils/activitySourceSchema');
 const { recordAuditEvent } = require('../utils/auditLogger');
 
-const CREATOR_MODEL_OPTIONS = new Set([
-  'gpt-4o-mini',
-  'gpt-5-mini',
-  'gpt-4o',
-  'gpt-5.1',
-  'gpt-5.2',
-]);
+// Creator models come from CREATOR_MODELS in server/.env (first = default).
+// A missing or unlisted model (e.g. a retired one) uses the default.
+const { getAiModels, pickModel } = require('../utils/runtimeFeatures');
+const creatorModel = (requested) => pickModel(requested, getAiModels().creator);
 
 const CREATOR_MAJOR_SECTION_OPTIONS = [
   'Learning Objectives',
@@ -737,7 +734,7 @@ exports.createCreatorDraft = async (req, res) => {
     duration_minutes,
     mode = 'group',
     description,
-    selected_model = 'gpt-5-mini',
+    selected_model = '',
     major_sections = CREATOR_MAJOR_SECTION_OPTIONS,
     use_timed_sections = false,
     timed_sections = [],
@@ -750,7 +747,7 @@ exports.createCreatorDraft = async (req, res) => {
   const normalizedDescription = String(description || '').trim();
   const durationMinutes = Number(duration_minutes);
   const normalizedMode = String(mode || 'group').trim().toLowerCase();
-  const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
+  const normalizedSelectedModel = creatorModel(selected_model);
   const normalizedSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
   const normalizedMajorSections = normalizedSectionlessMode
     ? []
@@ -785,9 +782,6 @@ exports.createCreatorDraft = async (req, res) => {
     return res.status(400).json({ error: 'mode must be group, playground, demo, assignment, or test.' });
   }
 
-  if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
-    return res.status(400).json({ error: 'selected_model is not supported.' });
-  }
 
   if (!normalizedSectionlessMode && !normalizedMajorSections.length) {
     return res.status(400).json({ error: 'major_sections must include at least one supported section.' });
@@ -893,21 +887,18 @@ exports.reviseCreatorQuestion = async (req, res) => {
   const {
     request,
     question_markup,
-    selected_model = 'gpt-5-mini',
+    selected_model = '',
     group_title = '',
   } = req.body || {};
   const revisionRequest = String(request || '').trim();
   const questionMarkup = String(question_markup || '').trim();
-  const normalizedSelectedModel = String(selected_model || 'gpt-5-mini').trim();
+  const normalizedSelectedModel = creatorModel(selected_model);
 
   if (!classId || !activityId) {
     return res.status(400).json({ error: 'Valid class and activity ids are required.' });
   }
   if (!revisionRequest || !questionMarkup) {
     return res.status(400).json({ error: 'request and question_markup are required.' });
-  }
-  if (!CREATOR_MODEL_OPTIONS.has(normalizedSelectedModel)) {
-    return res.status(400).json({ error: 'selected_model is not supported.' });
   }
 
   try {

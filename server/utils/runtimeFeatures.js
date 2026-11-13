@@ -49,10 +49,65 @@ function getRuntimeDefaults(env = process.env) {
   };
 }
 
+// ---- AI models (server/.env; see README, "AI models") ----
+// Model names change as providers retire them, so none is fixed in code
+// beyond these defaults. Lists are comma-separated; the first is the default.
+const DEFAULT_AI_MODELS = Object.freeze({
+  feedback: 'gpt-6-luna',
+  aiBlock: Object.freeze(['gpt-6-luna', 'gpt-4o-mini']),
+  creator: Object.freeze(['gpt-6-luna', 'gpt-6.1-terra']),
+});
+
+function envModel(name, fallback, env = process.env) {
+  const value = String(env?.[name] ?? '').trim();
+  return value || fallback;
+}
+
+function envModelList(name, fallback, env = process.env) {
+  const list = [...new Set(String(env?.[name] ?? '').split(',').map((m) => m.trim()).filter(Boolean))];
+  return list.length ? list : [...fallback];
+}
+
+function getAiModels(env = process.env) {
+  const feedback = envModel('OPENAI_MODEL', DEFAULT_AI_MODELS.feedback, env);
+  return {
+    feedback, // group Check feedback (written answers and code)
+    grading: envModel('OPENAI_GRADING_MODEL', feedback, env), // tests, assignments, practice, question help, summary
+    aiBlock: envModelList('AI_BLOCK_MODELS', DEFAULT_AI_MODELS.aiBlock, env),
+    creator: envModelList('CREATOR_MODELS', DEFAULT_AI_MODELS.creator, env),
+  };
+}
+
+/** The requested model if it is in the list, otherwise the list's default (first). */
+function pickModel(requested, allowed) {
+  const model = String(requested || '').trim();
+  return allowed.includes(model) ? model : allowed[0];
+}
+
+// GPT-4 and older take max_tokens and temperature; everything newer (gpt-5,
+// gpt-6, o-series) is a reasoning model: max_completion_tokens, no temperature,
+// optional reasoning effort.
+function isReasoningModel(model) {
+  return !/^gpt-(3|4)/i.test(String(model || '').trim());
+}
+
+// Reasoning effort per job (*_REASONING_EFFORT). Accepted values differ by
+// model (gpt-6 models: none, low, medium, high, xhigh, max; gpt-5: minimal,
+// low, medium, high). Blank or unknown = not sent (the model's default).
+const REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+function envReasoningEffort(name, fallback = '', env = process.env) {
+  const raw = env?.[name];
+  const value = String(raw == null ? fallback : raw).trim().toLowerCase();
+  return REASONING_EFFORTS.has(value) ? value : '';
+}
+
 function getRuntimeFeatureConfig(env = process.env) {
+  const models = getAiModels(env);
   return {
     features: getRuntimeFeatures(env),
     defaults: getRuntimeDefaults(env),
+    // Menus in the editor and creator; the first of each is the default.
+    models: { aiBlock: models.aiBlock, creator: models.creator },
   };
 }
 
@@ -65,6 +120,10 @@ function envTokens(name, fallback, env = process.env) {
 
 module.exports = {
   envTokens,
+  getAiModels,
+  pickModel,
+  isReasoningModel,
+  envReasoningEffort,
   DEFAULT_RUNTIME_FEATURES,
   getRuntimeFeatures,
   getRuntimeDefaults,

@@ -557,7 +557,7 @@ test('creator draft route creates a local draft from the template and class meta
         duration_minutes: 35,
         mode: 'demo',
         description: 'Introduce insertion sort with a small trace and one reflection prompt.',
-        selected_model: 'gpt-5-mini',
+        selected_model: 'gpt-6-luna',
         major_sections: ['Learning Objectives', 'Application', 'Reflection'],
         use_timed_sections: true,
         timed_sections: [
@@ -575,7 +575,7 @@ test('creator draft route creates a local draft from the template and class meta
     assert.equal(create.body.source_type, 'local');
     assert.equal(create.body.mode, 'demo');
     assert.equal(create.body.duration_minutes, 35);
-    assert.equal(create.body.selected_model, 'gpt-5-mini');
+    assert.equal(create.body.selected_model, 'gpt-6-luna');
     assert.deepEqual(create.body.major_sections, ['Learning Objectives', 'Application', 'Reflection']);
     assert.equal(create.body.use_timed_sections, true);
     assert.deepEqual(create.body.timed_sections, [
@@ -650,7 +650,7 @@ test('creator draft route creates a test draft without section requirements', as
         duration_minutes: 60,
         mode: 'test',
         description: 'Create a full test without section structure.',
-        selected_model: 'gpt-5-mini',
+        selected_model: 'gpt-6-luna',
         major_sections: [],
         use_timed_sections: false,
         timed_sections: [],
@@ -719,7 +719,7 @@ test('creator draft route creates an assignment draft without section requiremen
         duration_minutes: 90,
         mode: 'assignment',
         description: 'Create a project-style lab assignment.',
-        selected_model: 'gpt-5-mini',
+        selected_model: 'gpt-6-luna',
         major_sections: [],
         use_timed_sections: false,
         timed_sections: [],

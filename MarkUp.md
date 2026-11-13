@@ -187,7 +187,6 @@ guidance taking precedence.
 
 ```text
 \ai{explain}
-\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{Ask the AI for help understanding what this code does.}
 \aiguardrail{Help the student reason about the code without giving away the whole worksheet answer.}
@@ -205,7 +204,7 @@ them between questions.
 | Syntax | Description | Example |
 |--------|-------------|---------|
 | `\ai{mode}` | Starts an inline AI help block | `\ai{explain}` |
-| `\aimodel{model}` | Model for this AI interaction; defaults to `gpt-5-mini` | `\aimodel{gpt-4o-mini}` |
+| `\aimodel{model}` | Model for this AI interaction (optional); defaults to the server's default AI block model | `\aimodel{gpt-4o-mini}` |
 | `\aititle{...}` | Visible card title | `\aititle{AI Coach}` |
 | `\aiprompt{...}` | Student-facing instructions | `\aiprompt{Ask the AI for help interpreting the loop.}` |
 | `\aiguardrail{...}` | Creator-facing AI restriction / scope | `\aiguardrail{Guide the student but do not provide the final worksheet answer.}` |
@@ -222,9 +221,9 @@ them between questions.
 
 ### Supported Models
 
-- `gpt-5-mini` is the default for new and existing AI blocks.
-- `gpt-4o-mini` is available when a faster, lower-cost response is preferred.
-- Any other `\aimodel` value safely falls back to `gpt-5-mini`.
+- The models an AI block may use are set on the server (`AI_BLOCK_MODELS` in `server/.env`); the first is the default. The editor's AI Model menu lists them.
+- Leave out `\aimodel` to use the default. This is recommended: models are retired over time, and the default is updated on the server.
+- Any `\aimodel` value not in the server's list (for example a retired model) safely falls back to the default.
 
 ### Supported Initial Context Sources
 
@@ -247,7 +246,6 @@ for i in range(5):
 \endquestion
 
 \ai{explain}
-\aimodel{gpt-5-mini}
 \aititle{AI Coach}
 \aiprompt{If you are unsure, ask the AI for help understanding the loop.}
 \aiguardrail{Explain the behavior of the code and guide the student toward the pattern. Do not give away broader worksheet answers.}

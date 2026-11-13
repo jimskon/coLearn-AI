@@ -108,6 +108,9 @@ app.use(express.static(path.join(__dirname, '../public')));
 app.use(express.static(staticDir));
 
 // ✅ Register API routes
+// Trial Run (activity editor) needs the signed-in user, so it is mounted here,
+// after the session, unlike the other /api/ai routes above.
+app.post('/api/ai/trial-answer', require('./ai/grading').trialAnswerHttp);
 app.use('/api/auth', require('./auth/routes'));
 app.use('/api/users', require('./users/routes'));
 app.use('/api/courses', require('./courses/routes'));

@@ -6,7 +6,6 @@ import { API_BASE_URL } from '../config';
 import useRuntimeFeatures from '../hooks/useRuntimeFeatures';
 import { createInfoBubbleSession } from '../utils/infoBubbleSession';
 import { VisualEditorPanel } from './visual-editor';
-import TrialRunModal from '../components/activity/TrialRunModal';
 
 export default function ActivityEditor() {
   const { activityId } = useParams();
@@ -23,7 +22,6 @@ export default function ActivityEditor() {
   const [sourceRevision, setSourceRevision] = useState(0);
   const [sandboxBusy, setSandboxBusy] = useState(false);
   const [sandboxError, setSandboxError] = useState('');
-  const [trialOpen, setTrialOpen] = useState(false);
   const [previewKey, setPreviewKey] = useState(Date.now());
   const [autoCompileEnabled, setAutoCompileEnabled] = useState(true);
 
@@ -741,16 +739,6 @@ export default function ActivityEditor() {
           </Button>
 
           <Button
-            variant="outline-success"
-            className="me-2"
-            onClick={() => setTrialOpen(true)}
-            disabled={busy || !rawText.trim()}
-            title="Answer every question correctly, run the code, and grade it. Nothing is saved."
-          >
-            Trial Run
-          </Button>
-
-          <Button
             variant="secondary"
             className="me-2"
             onClick={handleCopy}
@@ -1039,13 +1027,6 @@ export default function ActivityEditor() {
           </Button>
         </Modal.Footer>
       </Modal>
-
-      <TrialRunModal
-        show={trialOpen}
-        onHide={() => setTrialOpen(false)}
-        sourceText={rawText}
-        features={runtimeFeatures}
-      />
     </Container>
   );
 }

@@ -31,6 +31,7 @@ import { useUser } from '../context/UserContext';
 import { formatLocalDateTime } from '../utils/time';
 import { API_BASE_URL } from '../config';
 import useRuntimeFeatures, { modelMenuOptions } from '../hooks/useRuntimeFeatures';
+import TrialRunModal from '../components/activity/TrialRunModal';
 import {
   INLINE_AI_MODE_GUIDE,
   parseSheetToBlocks,
@@ -670,6 +671,7 @@ export default function CreatorWorkbenchPage() {
   const [saveBusy, setSaveBusy] = useState(false);
   const [revisionBusy, setRevisionBusy] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
+  const [trialOpen, setTrialOpen] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -2734,6 +2736,15 @@ export default function CreatorWorkbenchPage() {
               >
                 <ArrowCounterclockwise className="me-1" /> Undo
               </Button>
+              <Button
+                size="sm"
+                variant="outline-success"
+                onClick={() => setTrialOpen(true)}
+                disabled={!rawText.trim() || !!proposal}
+                title="Answer every question correctly, run the code, and grade it. Uses the text in the editor; nothing is saved."
+              >
+                <PlayCircle className="me-1" /> Trial Run
+              </Button>
               {isAssignmentDraft ? (
                 <Button
                   size="sm"
@@ -2782,6 +2793,12 @@ export default function CreatorWorkbenchPage() {
               </Button>
             </div>
           </div>
+          <TrialRunModal
+            show={trialOpen}
+            onHide={() => setTrialOpen(false)}
+            sourceText={rawText}
+            features={runtimeFeatures}
+          />
           {isDemoCreator ? (
             <div className="px-3 py-2 border-top bg-light text-muted small">
               Creator demo mode: Save is disabled. Model choices are limited to the demo set.

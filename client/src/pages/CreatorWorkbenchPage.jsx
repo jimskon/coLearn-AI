@@ -31,6 +31,7 @@ import { useUser } from '../context/UserContext';
 import { formatLocalDateTime } from '../utils/time';
 import { API_BASE_URL } from '../config';
 import useRuntimeFeatures, { modelMenuOptions } from '../hooks/useRuntimeFeatures';
+import TrialRunModal from '../components/activity/TrialRunModal';
 import {
   INLINE_AI_MODE_GUIDE,
   parseSheetToBlocks,
@@ -670,6 +671,8 @@ export default function CreatorWorkbenchPage() {
   const [saveBusy, setSaveBusy] = useState(false);
   const [revisionBusy, setRevisionBusy] = useState(false);
   const [sandboxBusy, setSandboxBusy] = useState(false);
+  const [trialOpen, setTrialOpen] = useState(false);
+  const [trialFixTarget, setTrialFixTarget] = useState(null); // { previewKey, request }
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -2015,6 +2018,36 @@ export default function CreatorWorkbenchPage() {
     }
   };
 
+  // Trial Run → "Fix with AI": select the failed question, fill in the
+  // revision request with what the trial found, and propose a revision once
+  // the selection and request are in place. Apply/Discard work as usual.
+  const fixQuestionFromTrial = ({ groupId, id, request }) => {
+    const block = activeBlocks.find((b) => b?.type === 'question' && b.groupId === groupId && b.id === id);
+    if (!block) {
+      setError(`Question ${groupId}${id} is not in the current text.`);
+      return;
+    }
+    setTrialOpen(false);
+    setRightMode('preview');
+    setShowPreviewInspector(true);
+    setSelectedPreviewKey(block.previewKey);
+    setNotice(`Trial Run: proposing a fix for question ${groupId}${id}. Review it under "AI Revise This Question" in the Question Panel.`);
+    setTimeout(() => setNotice(''), 6000);
+    setQuestionRevisionProposal(null);
+    setQuestionRevisionRequest(request);
+    setTrialFixTarget({ previewKey: block.previewKey, request });
+  };
+
+  useEffect(() => {
+    if (!trialFixTarget || questionRevisionBusy) return;
+    if (selectedQuestionBlock?.previewKey !== trialFixTarget.previewKey) return;
+    if (questionRevisionRequest !== trialFixTarget.request) return;
+    setTrialFixTarget(null);
+    requestQuestionRevision();
+  // requestQuestionRevision reads the state checked above.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trialFixTarget, selectedQuestionBlock, questionRevisionRequest, questionRevisionBusy]);
+
   const applyQuestionRevision = () => {
     if (!selectedQuestionBlock || !questionRevisionProposal?.proposedMarkup || proposal) return;
     if (!selectedComponentIsCurrent(selectedQuestionBlock)) return;
@@ -2734,6 +2767,15 @@ export default function CreatorWorkbenchPage() {
               >
                 <ArrowCounterclockwise className="me-1" /> Undo
               </Button>
+              <Button
+                size="sm"
+                variant="outline-success"
+                onClick={() => setTrialOpen(true)}
+                disabled={!rawText.trim() || !!proposal}
+                title="Answer every question correctly, run the code, and grade it. Uses the text in the editor; nothing is saved."
+              >
+                <PlayCircle className="me-1" /> Trial Run
+              </Button>
               {isAssignmentDraft ? (
                 <Button
                   size="sm"
@@ -2782,6 +2824,13 @@ export default function CreatorWorkbenchPage() {
               </Button>
             </div>
           </div>
+          <TrialRunModal
+            show={trialOpen}
+            onHide={() => setTrialOpen(false)}
+            sourceText={rawText}
+            features={runtimeFeatures}
+            onFixQuestion={proposal || editLockedByAnotherUser ? null : fixQuestionFromTrial}
+          />
           {isDemoCreator ? (
             <div className="px-3 py-2 border-top bg-light text-muted small">
               Creator demo mode: Save is disabled. Model choices are limited to the demo set.

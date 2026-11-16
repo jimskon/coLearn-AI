@@ -2549,7 +2549,10 @@ export function renderBlocks(blocks, options = {}) {
       if (block.tag === 'aicodeguidance' && (isInstructor || isPreview)) {
         const text = (block.content || '')
           .replace(/<br\s*\/?>/gi, '\n')
-          .replace(/<\/?[^>]+>/g, '');
+          .replace(/<\/?[^>]+>/g, '')
+          .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+          .replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+          .replace(/&amp;/g, '&');
         return (
           <div key={`guidance-${index}`} className="alert alert-info my-2">
             <strong>{label}:</strong>

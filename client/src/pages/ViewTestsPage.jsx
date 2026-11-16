@@ -34,6 +34,10 @@ export default function ViewTestsPage() {
   // Danger zone modal state
   const [dangerModal, setDangerModal] = useState(null); // { instanceId, studentLabel, action: null|'clear'|'delete' }
 
+  // Reset: delete every attempt so the test can be set up again
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
 
 
   const toLocalInputValue = (utcString) => {
@@ -169,6 +173,31 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
         return next;
       });
     }
+  };
+
+  const resetAllAttempts = async () => {
+    setResetting(true);
+    const failed = [];
+    for (const t of tests) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/activity-instances/${t.instance_id}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.ok) throw new Error(data?.error || `HTTP ${response.status}`);
+      } catch (err) {
+        failed.push(`${t.members?.[0]?.name || `attempt ${t.instance_id}`}: ${err?.message || err}`);
+      }
+    }
+    setResetting(false);
+    setResetOpen(false);
+    if (failed.length) {
+      alert(`Some attempts could not be deleted:\n${failed.join('\n')}`);
+      await fetchTests();
+      return;
+    }
+    navigate(`/test-setup/${courseId}/${activityId}`, { state: { courseName } });
   };
 
   const openReopenModal = (t) => {
@@ -398,6 +427,41 @@ console.log('test_start_at raw:', data.groups?.[0]?.test_start_at);
           </tbody>
         </Table>
       )}
+      {!loading && !error && tests.length > 0 && (
+        <div className="d-flex justify-content-end mt-3 mb-4">
+          <Button variant="outline-danger" onClick={() => setResetOpen(true)}>
+            Reset test…
+          </Button>
+        </div>
+      )}
+
+      <Modal show={resetOpen} onHide={() => !resetting && setResetOpen(false)} centered>
+        <Modal.Header closeButton={!resetting}>
+          <Modal.Title>Reset this test?</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <div className="alert alert-danger mb-0">
+            This permanently deletes <strong>all {tests.length} attempts</strong> for this test,
+            including every student's saved answers, submissions, scores, and feedback
+            {tests.some((t) => t.submitted_at) ? (
+              <> — <strong>some students have already submitted</strong></>
+            ) : null}.
+            This cannot be undone.
+            <div className="mt-2">
+              Afterwards you will go to Test Setup to schedule it again.
+            </div>
+          </div>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setResetOpen(false)} disabled={resetting}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={resetAllAttempts} disabled={resetting}>
+            {resetting ? 'Deleting…' : `Yes, delete all ${tests.length} attempts`}
+          </Button>
+        </Modal.Footer>
+      </Modal>
+
       {/* Reopen test modal */}
       <Modal show={!!reopenModal} onHide={() => setReopenModal(null)} centered>
         <Modal.Header closeButton>

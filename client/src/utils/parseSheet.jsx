@@ -3133,7 +3133,7 @@ export function renderBlocks(blocks, options = {}) {
       const tableBaseKey = `table${index}`;
       return (
         <div key={`table-${index}`} className="my-4">
-          <h4 className="mb-2">{block.title}</h4>
+          <h4 className="mb-2" dangerouslySetInnerHTML={{ __html: block.title }} />
           <table className="table table-bordered">
             <tbody>
               {block.rows.map((row, i) => (
@@ -3517,7 +3517,7 @@ export function renderBlocks(blocks, options = {}) {
 
           {block.tableBlocks?.map((table, i) => (
             <div key={`q-table-${index}-${i}`} className="my-3">
-              <h5>{table.title}</h5>
+              <h5 dangerouslySetInnerHTML={{ __html: table.title }} />
               <table className="table table-bordered">
                 <tbody>
                   {table.rows.map((row, ri) => (

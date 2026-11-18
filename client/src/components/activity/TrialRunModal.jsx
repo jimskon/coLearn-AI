@@ -95,6 +95,13 @@ function filesForRunner(files, includeList, codeExt) {
   return out;
 }
 
+// Trial runs stop much sooner than a student's run: a correct program for an
+// exercise finishes well within this, and a planted infinite loop must not
+// hold the trial for the activity's full time limit or flood the grader.
+const TRIAL_RUN_MS = 2000;
+const TRIAL_OUTPUT_MAX = 4000;
+const LOOP_NOTE = 'likely an infinite loop';
+
 async function runSkulpt(box, code, files, stdinLines) {
   if (!window.Sk || !window.Sk.configure) return { output: '', note: 'Python (Skulpt) is not loaded.' };
   let prelude = '';
@@ -109,7 +116,7 @@ async function runSkulpt(box, code, files, stdinLines) {
     fileContents: { ...files },
     setOutput: (v) => { output = typeof v === 'function' ? v(output) : v; },
     setFileContents: null,
-    execLimit: box.timeLimit,
+    execLimit: Math.min(box.timeLimit, TRIAL_RUN_MS),
     turtleTargetId: box.runner === 'turtle' ? TURTLE_TARGET_ID : null,
     turtleWidth: box.width || 600,
     turtleHeight: box.height || 400,
@@ -121,17 +128,21 @@ async function runSkulpt(box, code, files, stdinLines) {
       },
     },
   });
-  return {
-    output,
-    note: box.runner === 'turtle' ? 'Turtle drawing ran; the drawing itself was not checked.' : '',
-  };
+  let note = box.runner === 'turtle' ? 'Turtle drawing ran; the drawing itself was not checked.' : '';
+  if (output.length > TRIAL_OUTPUT_MAX) {
+    output = output.slice(0, TRIAL_OUTPUT_MAX);
+    note = `Output cut off after ${TRIAL_OUTPUT_MAX} characters (${LOOP_NOTE}).`;
+  } else if (/TimeLimitError/.test(output)) {
+    note = `Stopped at the ${TRIAL_RUN_MS} ms trial time limit (${LOOP_NOTE}).`;
+  }
+  return { output, note };
 }
 
 function runRemote(box, code, files, stdinLines) {
   const base = box.runner === 'cpp' ? '/cxx-run' : '/py-run';
   const codeExt = box.runner === 'cpp' ? /\.(cpp|cc|cxx|c)$/i : /\.py$/i;
   const selected = filesForRunner(files, box.includeFiles, codeExt);
-  const timeLimit = box.timeLimit;
+  const timeLimit = Math.min(box.timeLimit, TRIAL_RUN_MS);
 
   return (async () => {
     const controller = new AbortController();
@@ -168,18 +179,28 @@ function runRemote(box, code, files, stdinLines) {
       let note = '';
       const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${window.location.host}${base}/session/ws/${data.sessionId}`);
-      const limit = setTimeout(() => {
-        note = `Stopped at the time limit (${timeLimit} ms).`;
+      const stop = (why) => {
+        if (note) return;
+        note = why;
         try { ws.send('\u0003'); } catch { /* ignore */ }
         setTimeout(() => { try { ws.close(); } catch { /* ignore */ } }, 250);
-      }, timeLimit);
+      };
+      const limit = setTimeout(
+        () => stop(`Stopped at the ${timeLimit} ms trial time limit (${LOOP_NOTE}).`),
+        timeLimit,
+      );
       ws.onopen = () => {
         // The program's terminal buffers input, so all lines can go at once.
         for (const line of stdinLines) ws.send(`${line}\n`);
       };
       ws.onmessage = (ev) => {
         const msg = typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data);
-        if (!msg.startsWith('[FILES]')) output += msg;
+        if (msg.startsWith('[FILES]') || output.length >= TRIAL_OUTPUT_MAX) return;
+        output += msg;
+        if (output.length >= TRIAL_OUTPUT_MAX) {
+          output = output.slice(0, TRIAL_OUTPUT_MAX);
+          stop(`Output cut off after ${TRIAL_OUTPUT_MAX} characters (${LOOP_NOTE}).`);
+        }
       };
       ws.onerror = () => { note = note || 'Connection to the runner failed.'; };
       ws.onclose = () => {
@@ -335,6 +356,7 @@ export default function TrialRunModal({ show, onHide, sourceText = '', features 
             : await runRemote(box, answer.code, contents, answer.stdin || []);
           output = String(ran.output || '').trim();
           note = ran.note ? `Running the code: ${ran.note}` : '';
+          if (ran.note && ran.note.includes(LOOP_NOTE)) output += `\n[Program stopped: ${ran.note}]`;
         } catch (err) {
           note = `Running the code failed: ${err?.message || err}. Graded without output.`;
         }

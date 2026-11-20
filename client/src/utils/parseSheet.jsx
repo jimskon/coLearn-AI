@@ -880,6 +880,7 @@ export function parseSheetToBlocks(lines, options = {}) {
     if (mode === 'playground') return 'playground';
     if (mode === 'assignment') return 'assignment';
     if (mode === 'practice') return 'practice';
+    if (mode === 'survey') return 'survey';
     if (mode === 'group' || mode === 'normal') return 'group';
 
     return 'group';

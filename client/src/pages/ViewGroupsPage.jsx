@@ -21,6 +21,7 @@ import { formatUtcToLocal, parseUtcDbDatetime } from '../utils/time';
 import GroupActivityStrip, { StripKeyButton } from '../components/research/GroupActivityStrip';
 import ObservationButtons from '../components/research/ObservationButtons';
 import ActivitySummaryModal from '../components/research/ActivitySummaryModal';
+import SurveyResultsModal from '../components/activity/SurveyResultsModal';
 
 function progressLabelFromInstanceRow(g) {
   // For assignments, use submitted_at / has_responses rather than the
@@ -224,6 +225,10 @@ export default function ViewGroupsPage() {
   const [dangerModal, setDangerModal] = useState(null); // { instanceId, label, totalGroups, completedGroups, action: null|'clear'|'delete'|'advance' }
   const [advancing, setAdvancing] = useState(new Set());
   const [showSummary, setShowSummary] = useState(false);
+  // Surveys (\mode{survey}): results are shown only in aggregate, without
+  // names, so individual answers are not opened from this page.
+  const [isSurvey, setIsSurvey] = useState(false);
+  const [showSurveyResults, setShowSurveyResults] = useState(false);
 
   // Live-edit state
   const [available, setAvailable] = useState([]);
@@ -362,6 +367,7 @@ export default function ViewGroupsPage() {
       setCourseName(data.courseName || incomingCourseName || '');
       setActivityTitle(data.activityTitle || '');
       if (data.activityType) setActivityType(data.activityType);
+      setIsSurvey(data.authoredMode === 'survey');
       // Tag each row so helper functions can branch on assignment vs other modes
       // without threading activityType as an argument everywhere.
       const taggedGroups = (data.groups || []).map((g) => ({
@@ -971,6 +977,15 @@ export default function ViewGroupsPage() {
                 Observation
               </Button>
             </ButtonGroup>
+            {isSurvey && ['instructor', 'root', 'creator'].includes(user?.role) && (
+              <Button
+                variant="primary"
+                onClick={() => setShowSurveyResults(true)}
+                title="Anonymous results, CSV download, and an AI summary"
+              >
+                Survey Results
+              </Button>
+            )}
             {!isSoloMode && ['instructor', 'root', 'creator'].includes(user?.role) && (
               <Button
                 variant="outline-primary"
@@ -1122,12 +1137,14 @@ export default function ViewGroupsPage() {
                         </td>
                         <td className="text-end">
                           <div className="d-flex gap-1 justify-content-end flex-wrap">
-                            <Button
-                              variant="primary" size="sm"
-                              onClick={() => navigate(`/run/${group.instance_id}`, { state: { courseName } })}
-                            >
-                              {isComplete ? 'Review' : 'View'}
-                            </Button>
+                            {!isSurvey && (
+                              <Button
+                                variant="primary" size="sm"
+                                onClick={() => navigate(`/run/${group.instance_id}`, { state: { courseName } })}
+                              >
+                                {isComplete ? 'Review' : 'View'}
+                              </Button>
+                            )}
                             {!isDemoInstructor && (
                               <Button
                                 variant="outline-danger" size="sm"
@@ -1253,13 +1270,15 @@ export default function ViewGroupsPage() {
                           )}
                         </Button>
                       ) : null}
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={() => navigate(`/run/${group.instance_id}`, { state: { courseName } })}
-                      >
-                        {isComplete ? 'Review Activity' : 'View Activity'}
-                      </Button>
+                      {!isSurvey && (
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => navigate(`/run/${group.instance_id}`, { state: { courseName } })}
+                        >
+                          {isComplete ? 'Review Activity' : 'View Activity'}
+                        </Button>
+                      )}
 
                       {!isDemoInstructor ? (
                         <Button
@@ -1654,6 +1673,13 @@ export default function ViewGroupsPage() {
           </Card.Body>
         </Card>
       )}
+      <SurveyResultsModal
+        show={showSurveyResults}
+        onHide={() => setShowSurveyResults(false)}
+        courseId={courseId}
+        activityId={activityId}
+      />
+
       <ActivitySummaryModal
         show={showSummary}
         onHide={() => setShowSummary(false)}

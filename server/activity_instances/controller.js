@@ -2,7 +2,7 @@
 const db = require('../db');
 const { google } = require('googleapis');
 const { authorize } = require('../utils/googleAuth');
-const { inferActivityTypeFromActivity, inferActivityTypeFromLines, inferAuthoredModeFromLines } = require('../utils/activityType');
+const { inferActivityTypeFromActivity, inferActivityTypeFromLines, inferAuthoredModeFromLines, inferAuthoredModeFromActivity } = require('../utils/activityType');
 const { loadActivitySourceLines } = require('../utils/activityContent');
 const { gradeTestQuestion } = require('../ai/controller');
 const { practiceMultipleChoiceHint } = require('../ai/grading');
@@ -2363,6 +2363,11 @@ async function getInstancesForActivityInCourse(req, res) {
     // same columns, which this query already selected but never consulted), so
     // the two cannot disagree about what counts as a test.
     const rosterActivityType = await inferActivityTypeFromActivity(activity || {});
+    // Practice and survey run as assignments; the page needs the authored mode
+    // to tell them apart (a survey shows results only in aggregate).
+    const rosterAuthoredMode = rosterActivityType === 'assignment'
+      ? await inferAuthoredModeFromActivity(activity || {})
+      : rosterActivityType;
     const unscheduledPlaceholderFilter =
       rosterActivityType === 'test'
         ? 'AND test_start_at IS NOT NULL AND test_duration_minutes > 0'
@@ -2547,7 +2552,7 @@ async function getInstancesForActivityInCourse(req, res) {
       });
     }
 
-    res.json({ courseName, activityTitle, activityType: rosterActivityType, groups });
+    res.json({ courseName, activityTitle, activityType: rosterActivityType, authoredMode: rosterAuthoredMode, groups });
   } catch (err) {
     console.error("❌ getInstancesForActivityInCourse:", err);
     res.status(500).json({ error: 'Failed to fetch instances' });

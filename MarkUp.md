@@ -44,6 +44,7 @@ All interactive content must appear inside a `\questiongroup`.
 | `\mode{test}` | Graded assessment mode. Same behavior as `\test`. | `\mode{test}` |
 | `\mode{demo}` | In-class demonstration mode. All question groups are visible, there is no submit button, and each student edits their own saved sandbox. | `\mode{demo}` |
 | `\mode{practice}` | Individual practice with feedback. Scored like a test, but students can check any question, or all of them, as often as they like. | `\mode{practice}` |
+| `\mode{survey}` | Anonymous survey. Each student answers alone and submits once; answers then lock. No grading or AI feedback. Instructors see results only in aggregate, without names (View Groups → **Survey Results**: choice counts, written answers, CSV download, AI summary), plus a completion list of who submitted. | `\mode{survey}` |
 | `\test` | Marks activity as graded assessment | `\test` |
 | `\section{...}` | Structural heading (non-interactive) | `\section{Introduction}` |
 
@@ -53,6 +54,7 @@ Notes:
 - `\mode{group}` is the normal collaborative activity mode: each question group must be submitted before the next one opens.
 - `\mode{test}` switches the activity into grading mode. `\test` is still supported as a legacy alias.
 - `\mode{demo}` opens every question group at once, hides submit controls, and saves each student's answers/code separately.
+- `\mode{survey}` is set up like an assignment (one run per student; set it up with **Setup Groups** as for an assignment). Use text responses, `\multiplechoice{}` (single choice, no answer key), `\multiplechoice{multiple}`, and tables; leave out `\score`. Anonymity is in what instructors are shown: answers are still stored with the student's account, but the results page, CSV, and AI summary never show names, and the per-student **View** buttons are hidden.
 - `\mode{practice}` is set up like an assignment (one run per student). Every question with a `\score` gets a **Check** button, and **Check All** at the bottom checks everything; neither submits or locks the activity. Feedback is a hint or a directed question, never the answer (the question's `\feedbackprompt` guides it), and multiple choice is scored without AI. A progress bar shows the points from each question's latest check. Every check is kept in the history.
 - `\aicodeguidance` controls follow-ups, scope restrictions, checker tolerance, etc.
 - `\aimode` controls AI feedback display and evaluator guidance. Its values are comma-separated so that new options can be added later. The default is `no-positive`; an accepted answer advances without an extra AI message. Use `\aimode{positive}` when you want a short affirmative AI message shown in green before the activity advances.

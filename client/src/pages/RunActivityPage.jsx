@@ -344,7 +344,11 @@ export default function RunActivityPage({
   const isPlaygroundMode = activityMode === 'demo' || activityMode === 'playground';
   // Practice runs like an assignment, plus repeatable per-question checks.
   const isPracticeMode = activityMode === 'practice';
-  const isAssignmentMode = activityMode === 'assignment' || isPracticeMode;
+  // A survey runs like an assignment (one copy per student, locked after
+  // submit) with no grading; its results are shown to instructors only in
+  // aggregate, without names.
+  const isSurveyMode = activityMode === 'survey';
+  const isAssignmentMode = activityMode === 'assignment' || isPracticeMode || isSurveyMode;
   const [practiceCheckingQid, setPracticeCheckingQid] = useState(null);
   const [gradingQuestionQid, setGradingQuestionQid] = useState(null);
   const [gradingAllQuestions, setGradingAllQuestions] = useState(false);
@@ -2200,7 +2204,7 @@ export default function RunActivityPage({
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           alert(
-          `${isAssignmentMode ? 'Lab' : 'Test'} submission failed: ${err.error || 'Unknown error submitting this activity.'
+          `${isSurveyMode ? 'Survey' : isAssignmentMode ? 'Lab' : 'Test'} submission failed: ${err.error || 'Unknown error submitting this activity.'
             }`
           );
           setIsSubmitting(false);
@@ -2210,7 +2214,9 @@ export default function RunActivityPage({
         // console.log('[RUNDBG] after submit, about to reload', { loading: loadingRef.current, t: Date.now() });
         await loadActivity();
         //console.log('[RUNDBG] after submit, reload done');
-        alert(`${isAssignmentMode ? 'Lab' : 'Test'} submitted. Your answers have been recorded.`);
+        alert(isSurveyMode
+          ? 'Survey submitted. Thank you! Your answers are reported to the instructor without your name.'
+          : `${isAssignmentMode ? 'Lab' : 'Test'} submitted. Your answers have been recorded.`);
       } catch (err) {
         console.error('❌ Assessment submission failed:', err);
         alert(`An error occurred submitting the ${isAssignmentMode ? 'lab' : 'test'}.`);
@@ -3683,6 +3689,7 @@ export default function RunActivityPage({
             isTestMode={isTestMode}
             isAssignmentMode={isAssignmentMode}
             isPracticeMode={isPracticeMode}
+            isSurveyMode={isSurveyMode}
             practiceCheckingQid={practiceCheckingQid}
             handlePracticeCheck={handlePracticeCheck}
             isStudent={isStudent}

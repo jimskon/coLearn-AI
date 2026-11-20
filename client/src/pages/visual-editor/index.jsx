@@ -539,6 +539,7 @@ function PreambleForm({ values, set }) {
             <option value="demo">demo</option>
             <option value="assignment">assignment</option>
             <option value="practice">practice</option>
+            <option value="survey">survey (anonymous results)</option>
           </Form.Select>
         </Form.Group>
       </Col>

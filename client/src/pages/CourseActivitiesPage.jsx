@@ -12,6 +12,7 @@ const TYPE_LABELS = {
   playground: 'Playground',
   assignment: 'Assignment',
   practice: 'Practice',
+  survey: 'Survey',
 };
 
 const TYPE_BADGE_VARIANTS = {
@@ -21,6 +22,7 @@ const TYPE_BADGE_VARIANTS = {
   playground: 'info',
   assignment: 'success',
   practice: 'primary',
+  survey: 'dark',
 };
 
 

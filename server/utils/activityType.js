@@ -9,6 +9,8 @@ function normalizeActivityType(rawMode) {
   if (mode === 'assignment') return 'assignment';
   // Practice runs per student like an assignment; only the runner tells them apart.
   if (mode === 'practice') return 'assignment';
+  // A survey is answered by each student alone, like an assignment, but is never graded.
+  if (mode === 'survey') return 'assignment';
   if (mode === 'group' || mode === 'normal') return 'group';
 
   return null;
@@ -22,6 +24,7 @@ function normalizeAuthoredMode(rawMode) {
   if (mode === 'playground') return 'playground';
   if (mode === 'assignment') return 'assignment';
   if (mode === 'practice') return 'practice';
+  if (mode === 'survey') return 'survey';
   if (mode === 'group' || mode === 'normal') return 'group';
 
   return null;

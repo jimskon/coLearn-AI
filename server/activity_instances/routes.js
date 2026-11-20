@@ -76,6 +76,10 @@ router.get('/:instanceId/groups', controller.getInstanceGroups);
 
 // ✅ List all activity_instances for a given course + activity
 router.get('/by-activity/:courseId/:activityId', controller.getInstancesForActivityInCourse);
+// Survey results: anonymous answers, completion list, and AI summary.
+const survey = require('./survey');
+router.get('/survey-results/:courseId/:activityId', survey.getSurveyResults);
+router.post('/survey-results/:courseId/:activityId/ai', survey.generateSurveySummary);
 router.delete('/by-activity/:courseId/:activityId/demo-roster', controller.clearDemoActivityRoster);
 router.post('/by-activity/:courseId/:activityId/timer-pause', controller.setTimerPauseForActivity);
 router.post('/by-activity/:courseId/:activityId/active-rotation-mode', controller.setActiveRotationModeForActivity);

@@ -1209,7 +1209,8 @@ async function getCourseHWResults(req, res) {
     for (const row of allNonTestHwRows) {
       const aType = await inferActivityTypeFromActivity(row);
       // Practice runs as an assignment but is not graded work.
-      if (aType === 'assignment' && (await inferAuthoredModeFromActivity(row)) !== 'practice') {
+      const authored = aType === 'assignment' ? await inferAuthoredModeFromActivity(row) : '';
+      if (aType === 'assignment' && authored !== 'practice' && authored !== 'survey') {
         hwRows.push(row);
       }
     }

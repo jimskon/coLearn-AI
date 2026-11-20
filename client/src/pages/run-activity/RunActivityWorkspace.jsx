@@ -50,6 +50,7 @@ export default function RunActivityWorkspace({
   isTestMode,
   isAssignmentMode,
   isPracticeMode = false,
+  isSurveyMode = false,
   practiceCheckingQid = null,
   handlePracticeCheck,
   isCreatorTestRun,
@@ -381,6 +382,7 @@ export default function RunActivityWorkspace({
                   isInstructor &&
                   isSubmitted;
                 const showScorePanel =
+                  !isSurveyMode &&
                   isAssessmentMode &&
                   (isSubmitted || (isPracticeMode && scores.hasAnyScore)) &&
                   (isInstructor || isStudent);
@@ -620,13 +622,23 @@ export default function RunActivityWorkspace({
         {canSubmitAssignment && isAssignmentMode && !isPracticeMode && !isSandbox && isStudent && !isSubmitted && (
           <div className="mt-3">
             <Button onClick={() => handleSubmit(false)} disabled={isSubmitting}>
-              {isSubmitting ? <><Spinner animation="border" size="sm" className="me-2" />Submitting…</> : 'Submit Lab'}
+              {isSubmitting ? <><Spinner animation="border" size="sm" className="me-2" />Submitting…</> : isSurveyMode ? 'Submit Survey' : 'Submit Lab'}
             </Button>
-            <span className="text-muted small ms-2">This records your final draft for preliminary grading and instructor review.</span>
+            <span className="text-muted small ms-2">
+              {isSurveyMode
+                ? 'Once submitted, your answers cannot be changed. Your instructor sees results without names.'
+                : 'This records your final draft for preliminary grading and instructor review.'}
+            </span>
           </div>
         )}
 
-        {canRegradeTests && isAssessmentMode && isInstructor && !isSandbox && isSubmitted && (
+        {isSurveyMode && isStudent && isSubmitted && (
+          <Alert variant="success" className="mt-3">
+            Survey submitted. Thank you! Your answers are locked and are reported without your name.
+          </Alert>
+        )}
+
+        {canRegradeTests && !isSurveyMode && isAssessmentMode && isInstructor && !isSandbox && isSubmitted && (
           <div className="mt-3 d-flex align-items-center gap-2 flex-wrap">
             <Button
               variant="warning"

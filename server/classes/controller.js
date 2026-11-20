@@ -748,7 +748,7 @@ exports.createCreatorDraft = async (req, res) => {
   const durationMinutes = Number(duration_minutes);
   const normalizedMode = String(mode || 'group').trim().toLowerCase();
   const normalizedSelectedModel = creatorModel(selected_model);
-  const normalizedSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const normalizedSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment' || normalizedMode === 'survey';
   const normalizedMajorSections = normalizedSectionlessMode
     ? []
     : Array.isArray(major_sections)
@@ -778,8 +778,8 @@ exports.createCreatorDraft = async (req, res) => {
     });
   }
 
-  if (!['group', 'playground', 'demo', 'test', 'assignment'].includes(normalizedMode)) {
-    return res.status(400).json({ error: 'mode must be group, playground, demo, assignment, or test.' });
+  if (!['group', 'playground', 'demo', 'test', 'assignment', 'survey'].includes(normalizedMode)) {
+    return res.status(400).json({ error: 'mode must be group, playground, demo, assignment, survey, or test.' });
   }
 
 

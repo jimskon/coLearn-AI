@@ -46,7 +46,7 @@ function buildActivityGenerationInstructions(modeOrFlag) {
   const normalizedMode = normalizeCreatorMode(modeOrFlag);
   const isTestMode = normalizedMode === 'test';
   const isAssignmentMode = normalizedMode === 'assignment';
-  const isSectionlessMode = isTestMode || isAssignmentMode;
+  const isSectionlessMode = isTestMode || isAssignmentMode || normalizedMode === 'survey';
 
   return [
     'You are an expert instructional designer creating editable activity markup for coLearn-AI.',
@@ -58,7 +58,9 @@ function buildActivityGenerationInstructions(modeOrFlag) {
       ? 'For mode=test, create one continuous assessment with no \\section commands and no section timers. Every question must include an explicit \\score{points,type} rubric block that matches how it will be graded.'
       : isAssignmentMode
         ? 'For mode=assignment, create a project-style lab assignment with a clear project goal, a small sequence of milestone tasks, optional checkpoints, and a final assembled solution. Do not require a linear worksheet flow or section headings.'
-        : 'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
+        : normalizedMode === 'survey'
+          ? 'For mode=survey, create one anonymous, ungraded survey with no \\section commands and no section timers. Use one or more \\questiongroup blocks of opinion questions only.'
+          : 'Always produce a complete first-pass activity draft with at least one \\section and at least one \\questiongroup.',
     'Prefer 2-3 question groups for a first-pass draft. Keep the scope realistic for the requested duration.',
     'Keep each question concise. Keep sample responses and feedback prompts short.',
     'Do not echo the creator brief, requested sections, diagnostics, or planning notes into the activity body.',
@@ -94,6 +96,7 @@ function buildActivityGenerationInstructions(modeOrFlag) {
     'For mode=playground, use guided observation, prediction, and explanation prompts suitable for instructor demonstration and student experimentation. Playground work should be saved and revisitable.',
     'For mode=demo, use concise temporary demo-style prompts for short-lived conference/demo flows.',
     'For mode=test, use concise, direct prompts suitable for individual completion and avoid collaborative wording.',
+    'For mode=survey, write short, neutral questions each student answers alone: \\textresponse for open answers and \\multiplechoice{} (always blank) with \\choice lines for ratings or options. Do not include \\score, \\sampleresponses, \\feedbackprompt, \\followupprompt, \\ai blocks, or code blocks, and set \\retries{0}. Never ask for names or other identifying details.',
     'Make the activity reflect the creator brief, not generic filler.',
     '',
     CREATOR_HOUSE_STYLE_SUMMARY,
@@ -165,7 +168,7 @@ function renderFallbackTemplate({
 }) {
   const template = fs.readFileSync(CREATOR_TEMPLATE_PATH, 'utf8');
   const normalizedMode = String(mode || '').trim().toLowerCase();
-  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment' || normalizedMode === 'survey';
   const renderedMajorSections = isSectionlessMode ? [] : (majorSections || []);
   const renderedTimedSections = isSectionlessMode ? [] : timedSections;
 
@@ -805,7 +808,7 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
   }
 
   const normalizedMode = String(fallbackInput?.mode || '').trim().toLowerCase();
-  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment' || normalizedMode === 'survey';
   const normalizedSections = isSectionlessMode
     ? []
     : Array.isArray(fallbackInput?.majorSections) && fallbackInput.majorSections.length
@@ -988,7 +991,7 @@ function coercePlaintextActivityToMarkup(text, fallbackInput) {
 
 function normalizeGeneratedDraft(text, fallbackInput) {
   const normalizedMode = String(fallbackInput?.mode || '').trim().toLowerCase();
-  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment';
+  const isSectionlessMode = normalizedMode === 'test' || normalizedMode === 'assignment' || normalizedMode === 'survey';
   const normalizedFallbackInput = isSectionlessMode
     ? {
       ...fallbackInput,
@@ -1080,7 +1083,7 @@ async function generateWithOpenAI({
   const normalizedMode = String(mode || 'group').trim().toLowerCase();
   const isTestMode = normalizedMode === 'test';
   const isAssignmentMode = normalizedMode === 'assignment';
-  const isSectionlessMode = isTestMode || isAssignmentMode;
+  const isSectionlessMode = isTestMode || isAssignmentMode || normalizedMode === 'survey';
   const timeoutMs = getCreatorOpenAiTimeoutMs();
 
   const system = buildActivityGenerationInstructions(normalizedMode);

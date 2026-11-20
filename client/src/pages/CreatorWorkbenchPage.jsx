@@ -645,7 +645,7 @@ export default function CreatorWorkbenchPage() {
   const normalizedDraftMode = declaredSourceMode || String(draft.mode || '').trim().toLowerCase();
   const isTestDraft = normalizedDraftMode === 'test';
   const isAssignmentDraft = normalizedDraftMode === 'assignment';
-  const isSectionlessDraft = normalizedDraftMode === 'test' || normalizedDraftMode === 'assignment';
+  const isSectionlessDraft = normalizedDraftMode === 'test' || normalizedDraftMode === 'assignment' || normalizedDraftMode === 'survey';
   const currentModeLabel = isAssignmentDraft
     ? 'Lab Assignment'
     : isTestDraft
@@ -654,7 +654,11 @@ export default function CreatorWorkbenchPage() {
         ? 'Playground'
         : normalizedDraftMode === 'demo'
           ? 'Demo'
-          : 'Group Activity';
+          : normalizedDraftMode === 'survey'
+            ? 'Survey'
+            : normalizedDraftMode === 'practice'
+              ? 'Practice'
+              : 'Group Activity';
   const [blocks, setBlocks] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
   const [fileContents, setFileContents] = useState({});
@@ -1289,7 +1293,7 @@ export default function CreatorWorkbenchPage() {
     setDraft((prev) => {
       if (field === 'mode') {
         const nextMode = String(value || '').trim().toLowerCase();
-        const nextIsSectionless = nextMode === 'test' || nextMode === 'assignment';
+        const nextIsSectionless = nextMode === 'test' || nextMode === 'assignment' || nextMode === 'survey';
         return {
           ...prev,
           mode: nextMode,
@@ -1301,7 +1305,7 @@ export default function CreatorWorkbenchPage() {
 
     if (field === 'duration_minutes' || field === 'mode') {
       setAdvancedDraft((prev) => {
-        if (field === 'mode' && (String(value || '').trim().toLowerCase() === 'test' || String(value || '').trim().toLowerCase() === 'assignment')) {
+        if (field === 'mode' && (['test', 'assignment', 'survey'].includes(String(value || '').trim().toLowerCase()))) {
           return {
             ...prev,
             include_timing: false,
@@ -2142,6 +2146,30 @@ export default function CreatorWorkbenchPage() {
     navigate(destination);
   };
 
+  // Changes the activity's mode by rewriting (or adding) its \mode{...} line.
+  const changeActivityMode = (nextMode) => {
+    if (proposal || editLockedByAnotherUser || !nextMode || nextMode === normalizedDraftMode) return;
+    if (!window.confirm(
+      `Change this activity to ${nextMode} mode?\n\nIf students have already started it, their saved work may not carry over (for example, group answers do not become individual ones). Save to apply the change.`
+    )) return;
+
+    const lines = String(rawText || '').split('\n');
+    const modeIndex = lines.findIndex((line) => /^\s*\\mode\{[^}]*\}\s*$/i.test(line));
+    if (modeIndex >= 0) {
+      lines[modeIndex] = `\\mode{${nextMode}}`;
+    } else {
+      const titleIndex = lines.findIndex((line) => /^\s*\\(title|name)\{/i.test(line));
+      lines.splice(titleIndex >= 0 ? titleIndex + 1 : 0, 0, `\\mode{${nextMode}}`);
+    }
+    const nextText = lines.join('\n');
+    recordVisualEdit('changing the mode');
+    setRawText(nextText);
+    setSandboxUrl('');
+    compileText(nextText);
+    setNotice(`Mode changed to ${nextMode}. Save to apply it.`);
+    setTimeout(() => setNotice(''), 3000);
+  };
+
   const removeQuestionGroup = (groupId, { skipConfirmation = false } = {}) => {
     if (proposal) return;
     const group = blocks.find((block) => block?.type === 'groupIntro' && block?.groupId === groupId);
@@ -2450,7 +2478,22 @@ export default function CreatorWorkbenchPage() {
           <Badge bg={isAssignmentDraft ? 'success' : isTestDraft ? 'warning' : 'secondary'} text={isTestDraft ? 'dark' : undefined}>
             CURRENT MODE
           </Badge>
-          <strong>{currentModeLabel}</strong>
+          <Form.Select
+            size="sm"
+            style={{ width: 'auto' }}
+            aria-label="Activity mode"
+            value={normalizedDraftMode && normalizedDraftMode !== 'normal' ? normalizedDraftMode : 'group'}
+            disabled={!!proposal || editLockedByAnotherUser}
+            onChange={(event) => changeActivityMode(event.target.value)}
+          >
+            <option value="group">Group</option>
+            <option value="playground">Playground</option>
+            <option value="demo">Demo</option>
+            <option value="test">Test</option>
+            <option value="assignment">Assignment</option>
+            <option value="practice">Practice</option>
+            <option value="survey">Survey</option>
+          </Form.Select>
           {isAssignmentDraft ? (
             <span className="small">All milestones are visible; students save drafts and submit the lab once at the end.</span>
           ) : null}
@@ -2509,6 +2552,7 @@ export default function CreatorWorkbenchPage() {
                         <option value="demo">Demo</option>
                         <option value="test">Test</option>
                         <option value="assignment">Assignment</option>
+                        <option value="survey">Survey</option>
                       </Form.Select>
                       <div className="text-muted small mt-1">
                         Assignment mode is for project-style labs and does not require section structure.

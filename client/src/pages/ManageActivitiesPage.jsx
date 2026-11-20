@@ -129,7 +129,9 @@ function ModeBadge({ activity }) {
           ? 'Assignment'
           : normalizedMode === 'practice'
             ? 'Practice'
-            : 'Group';
+            : normalizedMode === 'survey'
+              ? 'Survey'
+              : 'Group';
   const variant = normalizedMode === 'test'
     ? 'danger'
     : normalizedMode === 'playground'
@@ -140,7 +142,9 @@ function ModeBadge({ activity }) {
           ? 'success'
           : normalizedMode === 'practice'
             ? 'primary'
-            : 'secondary';
+            : normalizedMode === 'survey'
+              ? 'dark'
+              : 'secondary';
 
   return <Badge bg={variant}>{label}</Badge>;
 }
@@ -273,7 +277,7 @@ export default function ManageActivitiesPage() {
 
       if (name === 'mode') {
         const nextMode = String(value || '').trim().toLowerCase();
-        const nextIsSectionlessMode = nextMode === 'test' || nextMode === 'assignment';
+        const nextIsSectionlessMode = nextMode === 'test' || nextMode === 'assignment' || nextMode === 'survey';
         const nextMajorSections = [...majorSectionOptions];
         return {
           ...prev,
@@ -299,7 +303,7 @@ export default function ManageActivitiesPage() {
   };
 
   const createDraftMode = String(createDraft.mode || '').trim().toLowerCase();
-  const isCreateDraftSectionlessMode = createDraftMode === 'test' || createDraftMode === 'assignment';
+  const isCreateDraftSectionlessMode = createDraftMode === 'test' || createDraftMode === 'assignment' || createDraftMode === 'survey';
 
   const handleSectionMinutesChange = (sectionName, value) => {
     setCreateDraft((prev) => ({
@@ -1166,6 +1170,7 @@ export default function ManageActivitiesPage() {
                   <option value="demo">Demo</option>
                   <option value="test">Test</option>
                   <option value="assignment">Assignment</option>
+                  <option value="survey">Survey</option>
                 </Form.Select>
                 <div className="text-muted small mt-2">
                   Assignment mode is best for project-style labs and does not require section structure.
